@@ -1,0 +1,13 @@
+[package]
+name = "sidereon_nif"
+version = "0.1.0"
+authors = []
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37.3"
+chrono = "0.4"
+sidereon-core = { git = "https://github.com/neilberkman/sidereon.git", tag = "v0.8.0" }

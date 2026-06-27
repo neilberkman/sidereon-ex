@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "description": "RTKLIB precise-mode epoch-2 ambiguity diagnostics for the WTZR/WTZZ 2020-06-25 L1 short-baseline arc.",
+  "source_trace": "/tmp/orbis-rtklib-precise-qb2/l1_precise_qb_enu.pos.trace",
+  "rtklib_commit": "71db0ff",
+  "epoch_index": 1,
+  "epoch": "2020-06-25T00:00:30",
+  "double_difference_basis": [
+    "G05-G07",
+    "G05-G09",
+    "G05-G13",
+    "G05-G15",
+    "G05-G28",
+    "G05-G30"
+  ],
+  "residual_reference_satellite_id": "G30",
+  "ambiguity_reference_satellite_id": "G05",
+  "float_cycles": [12.466, 5.327, -1.228, 161.994, -8.011, 5.925],
+  "covariance_cycles": [
+    [8.568998, 8.746723, 1.897097, 3.447954, 1.503876, 3.353928],
+    [8.746723, 16.296003, 2.146072, 7.500141, 9.040518, 2.238270],
+    [1.897097, 2.146072, 4.404885, 9.027037, -1.339867, -0.860159],
+    [3.447954, 7.500141, 9.027037, 20.246026, 0.796347, -2.506309],
+    [1.503876, 9.040518, -1.339867, 0.796346, 8.809655, 0.125106],
+    [3.353928, 2.238270, -0.860159, -2.506309, 0.125106, 2.123501]
+  ],
+  "best_candidate_cycles": [14, 8, 0, 165, -7, 6],
+  "second_candidate_cycles": [13, 5, -3, 158, -8, 7],
+  "best_score": 0.81,
+  "second_best_score": 2.66,
+  "ratio": 3.29
+}

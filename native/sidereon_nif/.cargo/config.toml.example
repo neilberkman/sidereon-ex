@@ -1,0 +1,14 @@
+# Local-development override for the sidereon-core crate.
+#
+# sidereon_nif/Cargo.toml pins sidereon-core to its release version. While
+# developing the next release before that version exists on crates.io, copy this
+# file to `config.toml` in this directory and set the path to your checkout.
+#
+# `config.toml` is gitignored — never commit a path override, or CI/external
+# builds break again.
+#
+#   cp config.toml.example config.toml
+#   # then edit the path below to your local sidereon-core workspace
+#
+[patch.crates-io]
+sidereon-core = { path = "/absolute/path/to/sidereon/astro/crates/sidereon-core" }

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    env:
+      SIDEREON_BUILD: "1"
+      ASTRODYNAMICS_BUILD: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.19"
+            otp: "28"
+            os: ubuntu-latest
+          - elixir: "1.19"
+            otp: "28"
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('mix.lock') }}
+
+      - name: Cache Rust target
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+            native/sidereon_nif/target
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rust-
+
+      - run: mix deps.get
+
+      - run: mix compile --warnings-as-errors
+
+      - run: mix test
+
+      - run: mix test --include skyfield_parity --exclude spk_file
+
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: mix format --check-formatted

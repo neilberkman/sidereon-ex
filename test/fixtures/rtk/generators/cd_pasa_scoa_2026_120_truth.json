@@ -1,0 +1,86 @@
+{
+  "frame": "ITRF2020 ECEF metres propagated to 2026-04-30T11:00:00 GPST; ENU baseline at SCOA00FRA ARP, metres",
+  "source": {
+    "product": "EPN C2385 multi-year position and velocity solution",
+    "url": "https://epncb.oma.be/pub/product/referenceframe/C2385/EUR0OPSSNX_1996001_2025270_00U_SOL.SSC",
+    "sha256": "8101d31ebb047a7e25ce69495a82b4728b53798dc21c09aa9e2e030b0334b3f8",
+    "coordinate_epoch": "2020-01-01T00:00:00",
+    "observation_midpoint_gpst": "2026-04-30T11:00:00",
+    "years_since_coordinate_epoch": 6.32842801734
+  },
+  "frame_handling": "Station coordinates are the latest C2385 ITRF2020 rows valid on 2026-04-30. X/Y/Z were propagated from epoch 2020-01-01 to the arc midpoint using the published C2385 velocities and a 365.25-day Julian year. Both station logs and RINEX headers report zero marker-to-ARP eccentricities for the active antennas, so marker and ARP coordinates are identical here. No extra plate model was applied beyond the published ITRF2020 velocities; over the 2 h arc, intraday linear motion is negligible for this oracle.",
+  "base_station": {
+    "id": "SCOA00FRA",
+    "name": "Ciboure, France",
+    "domes": "10088M002",
+    "antenna": "TRM55971.00     NONE",
+    "receiver": "LEICA GR50",
+    "station_log": "https://epncb.oma.be/pub/station/log/scoa00fra_20251209.log",
+    "station_log_sha256": "882e035a6a0b95b9f299772580f9e79e95c939466bad122bc29c7bd32bfd4320",
+    "marker_to_arp_enu_m": {
+      "east": 0.0,
+      "north": 0.0,
+      "up": 0.0
+    },
+    "c2385_itrf2020_at_epoch_m": {
+      "x": 4639940.5055,
+      "y": -136224.9318,
+      "z": 4359552.4338
+    },
+    "c2385_itrf2020_velocity_m_per_y": {
+      "x": -0.012,
+      "y": 0.019,
+      "z": 0.0109
+    },
+    "marker_ecef_m": {
+      "x": 4639940.429559,
+      "y": -136224.81156,
+      "z": 4359552.50278
+    },
+    "geodetic_deg_m": {
+      "latitude": 43.39523792933,
+      "longitude": -1.68167360745,
+      "height": 59.457653
+    }
+  },
+  "rover_station": {
+    "id": "PASA00ESP",
+    "name": "Pasaia, Spain",
+    "domes": "19351S001",
+    "antenna": "LEIAR20         LEIM",
+    "receiver": "LEICA GR30",
+    "station_log": "https://epncb.oma.be/pub/station/log/pasa00esp_20251003.log",
+    "station_log_sha256": "8aa1bc31a67a1a6830104143d05191bc09df650405db4c6c17840435be3fe88c",
+    "marker_to_arp_enu_m": {
+      "east": 0.0,
+      "north": 0.0,
+      "up": 0.0
+    },
+    "c2385_itrf2020_at_epoch_m": {
+      "x": 4644909.056,
+      "y": -156645.0592,
+      "z": 4353623.0839
+    },
+    "c2385_itrf2020_velocity_m_per_y": {
+      "x": -0.0109,
+      "y": 0.0193,
+      "z": 0.0118
+    },
+    "marker_ecef_m": {
+      "x": 4644908.98702,
+      "y": -156644.937061,
+      "z": 4353623.158575
+    }
+  },
+  "baseline_ecef_m": {
+    "x": 4968.557461,
+    "y": -20420.125501,
+    "z": -5929.344204
+  },
+  "baseline_length_km": 21.836327792,
+  "antenna_baseline_enu_m": {
+    "east": -20265.52060276001,
+    "north": -8132.221127240546,
+    "up": -29.422321279917
+  }
+}
