@@ -1,0 +1,65 @@
+name: precompiled-nifs
+
+# Build the sidereon_nif Rustler NIF for all supported targets on native runners
+# and upload the rustler_precompiled-named .tar.gz artifacts to the GitHub release
+# for the pushed tag. After this completes, run locally:
+#   mix rustler_precompiled.download Sidereon.NIF --all --print
+# to regenerate checksum-Elixir.Sidereon.NIF.exs, then publish to hex.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            || gh release create "${{ github.ref_name }}" \
+                 --repo "${{ github.repository }}" \
+                 --title "${{ github.ref_name }}" \
+                 --notes "Precompiled NIFs for ${{ github.ref_name }}"
+
+  build:
+    needs: create-release
+    name: ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        nif: ["2.15"]
+        job:
+          - { target: aarch64-apple-darwin,      os: macos-14 }
+          - { target: x86_64-apple-darwin,       os: macos-13 }
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
+          - { target: x86_64-pc-windows-msvc,    os: windows-2022 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Build precompiled NIF
+        id: build
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          project-name: sidereon_nif
+          project-version: ${{ steps.v.outputs.version }}
+          target: ${{ matrix.job.target }}
+          nif-version: ${{ matrix.nif }}
+          use-cross: ${{ matrix.job.use-cross }}
+          project-dir: native/sidereon_nif
+      - name: Upload artifact to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.build.outputs.file-path }}
