@@ -2,17 +2,19 @@
 
 ```elixir
 Mix.install([
-  {:sidereon, "~> 0.22"}
+  {:sidereon, "~> 0.9"}
 ])
 ```
 
 ## Introduction
 
-This Livebook demonstrates how to use Sidereon to assess the risk of a satellite conjunction using the CCSDS Conjunction Data Message (CDM) standard.
+This notebook shows how to assess the risk of a satellite conjunction using the
+CCSDS Conjunction Data Message (CDM) standard: parse a CDM, convert it to
+collision parameters, and compute the probability of collision (Pc).
 
 ## Load a CDM fixture
 
-We'll use a sample CDM in KVN (Keyword=Value Notation) format.
+We use a sample CDM in KVN (Keyword = Value Notation) format.
 
 ```elixir
 cdm_kvn = """
@@ -64,40 +66,67 @@ CN_N                          = 7.105E+01 [m**2]
 
 ## Assess the Risk
 
-We convert the CDM to collision parameters and compute the probability of collision (Pc).
+Convert the CDM to collision parameters and compute Pc with both Foster methods.
 
 ```elixir
-# Assume a combined hard-body radius of 20 meters
+# Assume a combined hard-body radius of 20 meters.
 cdm_with_hbr = %{cdm | hard_body_radius_m: 20.0}
 params = Sidereon.CCSDS.CDM.to_collision_params(cdm_with_hbr)
 
-# Compute Pc using both methods
+# Compute Pc using both methods.
 {:ok, res_ea} = Sidereon.Collision.probability(params, method: :equal_area)
 {:ok, res_num} = Sidereon.Collision.probability(params, method: :numerical)
 
-IO.puts("Miss distance: #{res_ea.miss_km} km")
+IO.puts("Miss distance: #{Float.round(res_ea.miss_km, 4)} km")
 IO.puts("Equal-area Pc: #{res_ea.pc}")
 IO.puts("Numerical Pc:  #{res_num.pc}")
 ```
 
-## Catalog Screening
+## Screen two orbits over a window
 
-Sidereon can also screen entire catalogs of objects for potential risk at a common epoch.
+`Sidereon.Conjunction.find_tca_conjunctions/8` propagates two TLEs over a time
+window, finds the time of closest approach (TCA), and computes the miss distance,
+relative speed, and Pc at that point. The window is given as Julian dates split
+into a whole part and a fractional part. We build them from a UTC instant.
 
 ```elixir
-# Let's create a small synthetic catalog
-objects = [
-  %{id: "ISS", r: {2570.0, 2244.6, 6281.5}, v: {4.4, 4.8, -3.5}, cov: params.cov1, hard_body_radius_km: 0.05},
-  %{id: "DEB1", r: {2569.5, 2245.1, 6281.6}, v: {-2.9, -6.0, 3.3}, cov: params.cov2, hard_body_radius_km: 0.01},
-  %{id: "DEB2", r: {2571.0, 2243.0, 6280.0}, v: {-3.0, -5.5, 3.0}, cov: params.cov2, hard_body_radius_km: 0.01}
-]
+# Two real ISS-era element sets, screened over a one-day window.
+primary = {
+  "1 25544U 98067A   24001.50000000  .00016717  00000-0  10270-3 0  9009",
+  "2 25544  51.6400 208.8657 0002644 250.3037 109.7782 15.49560812999990"
+}
 
-# Screen with a 10km miss threshold
-results = Sidereon.Screening.screen_catalog(objects, miss_threshold_km: 10.0)
+secondary = {
+  "1 25544U 98067A   24001.50000000  .00016717  00000-0  10270-3 0  9009",
+  "2 25544  51.6400 208.8657 0002644 250.3037 109.7782 15.49560820000000"
+}
 
-# Display results
-for res <- results do
-  %{candidate: cand, collision: col} = res
-  IO.puts("Conjunction: #{cand.id1} vs #{cand.id2} | Pc: #{col.pc} | Miss: #{cand.miss_km} km")
+# Julian date for the UTC window bounds, as {whole, fraction} tuples.
+to_jd = fn dt ->
+  jd = DateTime.to_unix(dt) / 86_400.0 + 2_440_587.5
+  whole = Float.floor(jd)
+  {whole, jd - whole}
+end
+
+window_start = to_jd.(~U[2024-01-01 00:00:00Z])
+window_end = to_jd.(~U[2024-01-02 00:00:00Z])
+
+{p1, p2} = primary
+{s1, s2} = secondary
+
+# Combined hard-body radius of 20 meters (0.02 km).
+{:ok, conjunctions} =
+  Sidereon.Conjunction.find_tca_conjunctions(p1, p2, s1, s2, window_start, window_end, 0.02)
+
+for c <- conjunctions do
+  %{
+    seconds_into_window: Float.round(c.candidate.tca_seconds_since_window_start, 1),
+    miss_km: Float.round(c.miss_km, 6),
+    relative_speed_km_s: Float.round(c.relative_speed_km_s, 6),
+    pc: c.pc
+  }
 end
 ```
+
+`Sidereon.Conjunction.screen_tca_conjunctions/7` extends this to screen one
+primary against a whole catalog of secondaries by a miss-distance threshold.

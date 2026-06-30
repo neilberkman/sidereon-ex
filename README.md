@@ -1,148 +1,151 @@
 # sidereon
 
+[![Hex.pm](https://img.shields.io/hexpm/v/sidereon.svg)](https://hex.pm/packages/sidereon)
+[![HexDocs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/sidereon)
+[![Run in Livebook](https://livebook.dev/badge/v1/blue.svg)](https://livebook.dev/run?url=https://github.com/neilberkman/sidereon-ex/blob/main/sidereon.livemd)
+
 GNSS and astrodynamics for Elixir: propagate satellites, predict passes, solve
-precise positions (SPP / RTK / PPP), and convert between coordinate frames and
-time scales — checked against the references the field trusts (Vallado, Skyfield,
-IGS, IERS).
+precise positions (SPP / RTK / PPP / DGNSS), screen for conjunctions, and
+convert between coordinate frames and time scales.
 
-The numerics run in a Rust engine that ships as a **precompiled NIF** — adding
-the dependency downloads a prebuilt binary for your platform, so there's no Rust
-toolchain to install and nothing to compile. You write ordinary Elixir.
+This is the Elixir interface to **sidereon**, a GNSS and astrodynamics engine
+written in Rust. The numerics run in that engine and ship to you as a
+[Rustler](https://github.com/rusterlium/rustler) **precompiled NIF**: adding the
+dependency downloads a prebuilt binary for your platform, so there is no Rust
+toolchain to install and nothing to compile. You write ordinary Elixir, with
+plain `DateTime` and map structures in and typed structs out.
 
-[![Run in Livebook](https://livebook.dev/badge/v1/blue.svg)](https://livebook.dev/run?url=https://github.com/neilberkman/sidereon/blob/main/examples/iss_tracker.livemd)
+The engine is reference-validated. The SGP4 propagator is a port of David
+Vallado's reference implementation, bit-exact to it; frames and time are checked
+against Skyfield and IERS; the positioning stack is checked against IGS products.
 
 ## Install
 
+Add `:sidereon` to your dependencies in `mix.exs`:
+
 ```elixir
 def deps do
-  [{:sidereon, "~> 0.8"}]
+  [{:sidereon, "~> 0.9"}]
 end
 ```
 
-Published on Hex. Releases ship precompiled NIFs for common Linux, macOS, and
-Windows targets and download automatically — no Rust build. (Set
-`SIDEREON_BUILD=1` to compile from source instead.)
+Releases ship precompiled NIFs for common Linux, macOS, and Windows targets and
+download automatically, so no Rust build is needed. (Set `SIDEREON_BUILD=1` to
+compile from source instead.)
 
-## Quickstart: when does the ISS fly over you?
+## Example: track a satellite
 
-No data files, no setup — give it a two-line element set and a ground station,
-and ask when the satellite is above the horizon.
+Parse a two-line element set, run SGP4, and take a look angle from a ground
+station. No data files and no setup: give it the elements and a station, and it
+returns azimuth, elevation, and slant range.
 
 ```elixir
-# Real orbital elements for the ISS (grab fresh ones from CelesTrak any time).
-{:ok, iss} =
-  Sidereon.parse_tle(
-    "1 25544U 98067A   26178.50947090  .00006280  00000+0  12016-3 0  9996",
-    "2 25544  51.6322 248.9966 0004278 238.4942 121.5629 15.49454046573359"
-  )
+line1 = "1 25544U 98067A   24001.50000000  .00016717  00000-0  10270-3 0  9009"
+line2 = "2 25544  51.6400 208.8657 0002644 250.3037 109.7782 15.49560812999990"
+station = %{latitude: 51.5, longitude: -0.1, altitude_m: 10.0}
 
-# A ground station: latitude/longitude in degrees, altitude in meters.
-berkeley = %{latitude: 37.87, longitude: -122.27, altitude_m: 0.0}
-
-# Every pass that peaks above 10° over the next 24 hours.
-now = DateTime.utc_now()
-
-{:ok, passes} =
-  Sidereon.predict_passes(iss, berkeley, now, DateTime.add(now, 1, :day),
-    min_elevation: 10.0
-  )
-
-for p <- passes do
-  rise = Calendar.strftime(p.rise, "%H:%M")
-  mins = Float.round(p.duration_seconds / 60, 1)
-  IO.puts("#{rise} UTC · #{mins} min · peak #{round(p.max_elevation)}°")
+with {:ok, tle} <- Sidereon.parse_tle(line1, line2),
+     {:ok, look} <- Sidereon.look_angle(tle, ~U[2024-01-01 12:00:00Z], station) do
+  look.azimuth      # degrees
+  look.elevation    # degrees
+  look.range_km     # slant range
 end
 ```
 
-```
-08:28 UTC · 10.9 min · peak 88°
-10:06 UTC · 9.7 min · peak 16°
-13:22 UTC · 9.3 min · peak 13°
-14:59 UTC · 10.9 min · peak 56°
-16:36 UTC · 9.2 min · peak 14°
-```
+The same parsed elements feed `Sidereon.propagate/2` (TEME position and
+velocity), `Sidereon.geodetic/2` (the sub-satellite point), and
+`Sidereon.predict_passes/5` (every pass above a minimum elevation over a window).
 
-Each `%Sidereon.Pass{}` carries `rise`, `set`, `max_elevation`,
-`max_elevation_time`, and `duration_seconds`. The same parsed elements feed
-`Sidereon.propagate/2` (TEME position/velocity), `Sidereon.geodetic/2` (the
-sub-satellite point), and `Sidereon.look_angle/3` (azimuth/elevation/range from a
-station). Times are plain `DateTime` structs in, `DateTime` structs out.
+## Example: solve a position
 
-## Precise positioning
-
-The positioning engine is the other half of the library: feed it pseudoranges
-and a precise-ephemeris product and it returns a least-squares fix.
+The positioning engine is the other half of the library. Feed it pseudoranges
+and a precise-ephemeris product and it returns a least-squares fix with ECEF and
+geodetic positions plus geometry diagnostics.
 
 ```elixir
-{:ok, sp3} = Sidereon.GNSS.SP3.load("igs_product.sp3")
+# GPS L1 pseudoranges (meters) for the satellites in view at the epoch.
+observations = [
+  {"G08", 23_825_519.8},
+  {"G10", 22_717_690.1},
+  {"G16", 20_478_653.4},
+  {"G18", 21_768_335.2},
+  {"G20", 21_248_327.7},
+  {"G21", 20_808_709.8}
+]
 
-observations = [{"G07", 24_602_022.18}, {"G08", 23_676_569.52}, {"E05", 27_038_058.35}]
-
-{:ok, sol} =
-  Sidereon.GNSS.Positioning.solve(sp3, observations, ~N[2020-06-24 12:00:00],
-    ionosphere: true,
-    troposphere: true
-  )
-
-sol.position    # %{x_m: ..., y_m: ..., z_m: ...} — ITRF/IGS ECEF meters
-sol.geodetic    # %{lat_rad: ..., lon_rad: ..., height_m: ...}
-sol.dop.pdop    # position dilution of precision
-sol.used_sats   # satellites that contributed to the fix
+# `sp3_data` is a precise SP3 ephemeris (a string, or load one with
+# `Sidereon.GNSS.SP3.load/1`).
+with {:ok, sp3} <- Sidereon.GNSS.SP3.parse(sp3_data),
+     {:ok, solution} <-
+       Sidereon.GNSS.Positioning.solve(sp3, observations, ~N[2020-06-24 12:00:00],
+         initial_guess: [4_500_000.0, 500_000.0, 4_500_000.0, 0.0]) do
+  solution.position     # %{x_m, y_m, z_m} ITRF/IGS ECEF meters
+  solution.geodetic     # %{lat_rad, lon_rad, height_m}
+  solution.rx_clock_s   # receiver clock bias, seconds
+  solution.dop.pdop     # position dilution of precision
+  solution.used_sats    # satellites that contributed to the fix
+end
 ```
 
-`Sidereon.GNSS.RTK` and the PPP solvers follow the same shape — observations and
-a product in, a typed solution with ECEF/geodetic positions and geometry
-diagnostics out. Need the products? `Sidereon.GNSS.Data` fetches and caches SP3,
-RINEX, and IONEX from the public archives.
+`Sidereon.GNSS.RTK` and the PPP and DGNSS solvers follow the same shape:
+observations and a product in, a typed solution out.
+
+A runnable [`sidereon.livemd`](sidereon.livemd) walks through propagation,
+positioning, and conjunction screening; more notebooks live under
+[`examples/`](examples).
 
 ## What's in the box
 
-Elixir is sidereon's **broadest** interface — the full engine is exposed:
+- **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical force-model
+  propagation, ground track, sub-satellite point, eclipse, Sun and Moon angles,
+  and Doppler. See `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`.
+- **GNSS positioning** single-point positioning (SPP), RTK (float,
+  integer-fixed, fix-and-hold), PPP, DGNSS, RAIM with fault detection and
+  exclusion, dilution of precision, and receiver velocity from Doppler. See
+  `Sidereon.GNSS.Positioning`, `Sidereon.GNSS.RTK`, `Sidereon.GNSS.PrecisePositioning`,
+  `Sidereon.GNSS.DGNSS`, `Sidereon.GNSS.QC`.
+- **GNSS data and observations** SP3 (read, multi-center merge, write), broadcast
+  navigation (RINEX 3.x / 4.x), IONEX, ANTEX, CLK, RINEX 3 observations with
+  Hatanaka / CRINEX decoding, carrier-phase combinations, cycle-slip detection,
+  Hatch smoothing, ionosphere-free combination, and GPS L1 C/A signal
+  generation, acquisition, and LNAV decode. See `Sidereon.GNSS.SP3`,
+  `Sidereon.GNSS.Broadcast`, `Sidereon.GNSS.CarrierPhase`, `Sidereon.GNSS.RTCM`.
+- **Ephemeris and time** JPL SPK / `.bsp` kernels for Sun, Moon, and planets;
+  TEME, GCRS, ITRS, geodetic, ECEF, and topocentric frames with IAU2000A
+  nutation and IAU2006 precession; UTC / TAI / TT / TDB / UT1 scales. See
+  `Sidereon.Ephemeris`, `Sidereon.Coordinates`, `Sidereon.GNSS.Time`.
+- **Geometry and events** pass prediction, look angles, conjunction and TCA
+  screening, collision probability (Foster equal-area and numerical), CCSDS CDM
+  parsing, covariance propagation, initial orbit determination (Gibbs,
+  Herrick-Gibbs, Gauss angles-only), Lambert and Battin transfers, and orbital
+  element conversions. See `Sidereon.Passes`, `Sidereon.Conjunction`,
+  `Sidereon.Collision`, `Sidereon.IOD`, `Sidereon.Lambert`, `Sidereon.OrbitalElements`.
+- **Atmosphere** Klobuchar and Galileo NeQuick-G ionospheric delay, IONEX grids,
+  tropospheric zenith delay and mapping, and NRLMSISE-00 neutral density. See
+  `Sidereon.GNSS.Ionosphere`, `Sidereon.GNSS.Troposphere`, `Sidereon.Atmosphere`.
+- **RF link budget** free-space path loss, EIRP, C/N0, dish gain, and link
+  margin. See `Sidereon.RF`.
+- **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
+  CCSDS OPM / OEM / CDM, and the GNSS products above. See `Sidereon.Format.TLE`,
+  `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`.
 
-- **Orbits** — SGP4/SDP4 and TLE/OMM, numerical force-model propagation, passes,
-  look angles, ground track, eclipse, Sun/Moon angles, Doppler
-- **Frames & time** — TEME ↔ GCRS ↔ ITRS, geodetic ↔ ECEF, topocentric, with
-  IAU2000A nutation / IAU2006 precession and UTC/TAI/TT/TDB/UT1 conversions
-- **Ephemeris** — JPL SPK / `.bsp` kernels for Sun, Moon, and planets
-- **GNSS positioning** — SPP, RTK (float / integer-fixed / fix-and-hold), PPP,
-  RAIM + FDE, DOP, receiver velocity from Doppler
-- **GNSS data & observations** — SP3 (read, multi-center merge, write), broadcast
-  navigation (RINEX 3.x/4.x), IONEX, ANTEX, CLK; RINEX 3 observations with
-  Hatanaka/CRINEX decoding; carrier-phase combinations, cycle-slip detection,
-  Hatch smoothing, ionosphere-free combination, DGNSS; GPS L1 C/A signal
-  generation, acquisition, and LNAV decode
-- **Space situational awareness** — conjunction / TCA screening, collision
-  probability (Foster equal-area and numerical), CCSDS CDM parsing, catalog
-  screening, covariance propagation
-- **Atmosphere** — NRLMSISE-00 density, surface to ~1000 km
-- **Initial orbit determination** — Gibbs / Herrick-Gibbs, Gauss angles-only,
-  Lambert/Battin transfers
-- **RF** — link budget (FSPL, EIRP, C/N₀, link margin, dish gain)
-- **Real-time** — `Sidereon.Tracker` GenServer with PubSub-compatible broadcasts
-- **Live data** — CelesTrak TLE/OMM fetch, constellation loading, name search
-- **Batch** — Nx-powered tensorized geometry, visibility, and RF (GPU-ready via
-  EXLA / Torchx)
-
-Every result is exactly what the engine computes, returned as plain Elixir
-structs and maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
-[HexDocs](https://hexdocs.pm/sidereon), with runnable Livebooks under
-[`examples/`](https://github.com/neilberkman/sidereon-ex/tree/main/examples).
+Every result is what the engine computes, returned as plain Elixir structs and
+maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
+[HexDocs](https://hexdocs.pm/sidereon).
 
 ## Other languages
 
-sidereon is one validated engine with first-class interfaces in **Rust**,
-**Python**, **C**, **Elixir**, and **WebAssembly** — same numbers everywhere.
-See the live demo and docs at [sidereon.dev](https://sidereon.dev).
-
-## How it's validated
-
-The SGP4 propagator is a Rust port of David Vallado's reference implementation,
-bit-exact to it. Frames and time are checked against Skyfield and IERS; the
-positioning stack is checked against IGS products. Detailed agreement results are
-in [guides/accuracy.md](guides/accuracy.md).
+sidereon is one validated engine with first-class interfaces in several
+languages: Rust ([sidereon](https://github.com/neilberkman/sidereon)), Python
+([sidereon-python](https://github.com/neilberkman/sidereon-python)), C
+([sidereon-c](https://github.com/neilberkman/sidereon-c)), Elixir (this
+package), and WebAssembly
+([sidereon-wasm](https://github.com/neilberkman/sidereon-wasm)). The same numbers
+come out everywhere. See the live demo and docs at
+[sidereon.dev](https://sidereon.dev).
 
 ## License
 
-MIT. The engine's SGP4 propagation is a Rust port of David Vallado's reference
-implementation (credit: David Vallado, AIAA 2006); see the `sidereon-core` crate
-for full attribution.
+MIT. The engine's SGP4 propagation is a port of David Vallado's reference
+implementation (credit: David Vallado, AIAA 2006); see the core
+[sidereon](https://github.com/neilberkman/sidereon) crate for full attribution.

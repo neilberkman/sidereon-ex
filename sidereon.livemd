@@ -1,4 +1,4 @@
-# GNSS Positioning
+# sidereon: GNSS and astrodynamics in Elixir
 
 ```elixir
 Mix.install([
@@ -6,15 +6,91 @@ Mix.install([
 ])
 ```
 
-## Load a precise ephemeris
+## About
 
-A precise SP3 product (from an IGS or MGEX analysis center) gives each
-satellite's position and clock on a fixed time grid. Here it is embedded as a
-string so this notebook runs offline; in practice you would download one from a
-public archive and load it with `Sidereon.GNSS.SP3.load/1`. This trimmed product
-holds six GPS satellites on 2020-06-24.
+[sidereon](https://hex.pm/packages/sidereon) is the Elixir interface to a GNSS
+and astrodynamics engine written in Rust. The numerics run in that engine and
+ship as a precompiled NIF, so there is nothing to compile: this notebook runs as
+written. Every cell below is self-contained and uses only data embedded here.
+
+## Propagate a satellite and take a look angle
+
+Parse a two-line element set (these are real elements for the ISS), run SGP4 to
+get the sub-satellite point, and compute the azimuth, elevation, and range from a
+ground station.
 
 ```elixir
+line1 = "1 25544U 98067A   24001.50000000  .00016717  00000-0  10270-3 0  9009"
+line2 = "2 25544  51.6400 208.8657 0002644 250.3037 109.7782 15.49560812999990"
+
+{:ok, iss} = Sidereon.parse_tle(line1, line2)
+
+epoch = ~U[2024-01-01 12:00:00Z]
+{:ok, geo} = Sidereon.geodetic(iss, epoch)
+
+%{
+  catalog_number: iss.catalog_number,
+  sub_lat_deg: Float.round(geo.latitude, 3),
+  sub_lon_deg: Float.round(geo.longitude, 3),
+  altitude_km: Float.round(geo.altitude_km, 1)
+}
+```
+
+```elixir
+# London ground station: latitude and longitude in degrees, altitude in meters.
+station = %{latitude: 51.5, longitude: -0.1, altitude_m: 10.0}
+
+{:ok, look} = Sidereon.look_angle(iss, epoch, station)
+
+%{
+  azimuth_deg: Float.round(look.azimuth, 2),
+  elevation_deg: Float.round(look.elevation, 2),
+  range_km: Float.round(look.range_km, 1)
+}
+```
+
+## Predict passes over a station
+
+`Sidereon.predict_passes/5` returns every pass that rises above a minimum
+elevation in the window, each with rise and set times, peak elevation, and
+duration.
+
+```elixir
+window_start = ~U[2024-01-01 00:00:00Z]
+window_end = DateTime.add(window_start, 1, :day)
+
+{:ok, passes} =
+  Sidereon.predict_passes(iss, station, window_start, window_end, min_elevation: 10.0)
+
+for p <- passes do
+  %{
+    rise: Calendar.strftime(p.rise, "%H:%M:%S"),
+    set: Calendar.strftime(p.set, "%H:%M:%S"),
+    peak_elevation_deg: Float.round(p.max_elevation, 1),
+    duration_min: Float.round(p.duration_seconds / 60, 1)
+  }
+end
+```
+
+## Solve a position from pseudoranges
+
+Single-point positioning. Feed `Sidereon.GNSS.Positioning.solve/4` a set of
+pseudoranges and a precise SP3 ephemeris and it returns a least-squares fix:
+ECEF and geodetic position, the receiver clock bias, and geometry diagnostics.
+The SP3 product below is embedded so the cell runs offline; in practice you would
+load one with `Sidereon.GNSS.SP3.load/1`.
+
+```elixir
+# GPS L1 pseudoranges (meters) for the satellites in view at the epoch.
+observations = [
+  {"G08", 23_825_519.8},
+  {"G10", 22_717_690.1},
+  {"G16", 20_478_653.4},
+  {"G18", 21_768_335.2},
+  {"G20", 21_248_327.7},
+  {"G21", 20_808_709.8}
+]
+
 sp3_data = """
 #cP2020  6 24  9 45  0.00000000      19 TRACK IGb14 FIT GRGS
 ## 2111 259200.00000000   900.00000000 59024 0.0000000000000
@@ -175,74 +251,111 @@ EOF
 """
 
 {:ok, sp3} = Sidereon.GNSS.SP3.parse(sp3_data)
-```
 
-## Query satellite positions
-
-`Sidereon.GNSS.SP3.position/3` interpolates the grid to any epoch. Positions are
-ITRF/IGS ECEF meters.
-
-```elixir
-{:ok, state} = Sidereon.GNSS.SP3.position(sp3, "G08", ~N[2020-06-24 12:00:00])
-
-radius_km =
-  :math.sqrt(state.x_m ** 2 + state.y_m ** 2 + state.z_m ** 2) / 1000.0
-
-%{
-  position_m: {state.x_m, state.y_m, state.z_m},
-  clock_s: state.clock_s,
-  radius_km: Float.round(radius_km, 1)
-}
-```
-
-The radius lands near the ~26,560 km GPS orbit. Sweep an arc to watch the
-satellite move:
-
-```elixir
-base = ~N[2020-06-24 12:00:00]
-
-for minutes <- 0..60//15 do
-  epoch = NaiveDateTime.add(base, minutes * 60, :second)
-  {:ok, s} = Sidereon.GNSS.SP3.position(sp3, "G08", epoch)
-
-  {epoch, Float.round(s.x_m / 1000.0, 1), Float.round(s.y_m / 1000.0, 1),
-   Float.round(s.z_m / 1000.0, 1)}
-end
-```
-
-## Single-point positioning
-
-`Sidereon.GNSS.Positioning.solve/4` recovers a receiver position from one epoch
-of pseudoranges against the SP3 product (or a parsed broadcast navigation
-source). A mixed-constellation observation set is solved together with one
-receiver clock per system; the ionosphere and troposphere corrections, the
-elevation mask, and satellite rejection are all configurable.
-
-```elixir
-# GPS L1 pseudoranges (meters), one per satellite in view.
-observations = [
-  {"G08", 23_825_519.8},
-  {"G10", 22_717_690.1},
-  {"G16", 20_478_653.4},
-  {"G18", 21_768_335.2},
-  {"G20", 21_248_327.7},
-  {"G21", 20_808_709.8}
-]
-
-{:ok, sol} =
+{:ok, solution} =
   Sidereon.GNSS.Positioning.solve(sp3, observations, ~N[2020-06-24 12:00:00],
     initial_guess: [4_500_000.0, 500_000.0, 4_500_000.0, 0.0]
   )
 
 %{
-  position_ecef_m: sol.position,
-  geodetic: sol.geodetic,
-  rx_clock_s: sol.rx_clock_s,
-  pdop: Float.round(sol.dop.pdop, 2),
-  used_sats: sol.used_sats
+  position_ecef_m: solution.position,
+  rx_clock_s: solution.rx_clock_s,
+  pdop: Float.round(solution.dop.pdop, 2),
+  used_sats: solution.used_sats
 }
 ```
 
-See `Sidereon.GNSS.Positioning` for the full option list and the solution
-fields, and `Sidereon.GNSS.RTK`, `Sidereon.GNSS.PrecisePositioning`, and
-`Sidereon.GNSS.DGNSS` for the RTK, PPP, and DGNSS solvers.
+## Screen a conjunction and compute collision probability
+
+Parse a CCSDS Conjunction Data Message (CDM), convert it to collision
+parameters, and compute the probability of collision (Pc) with the Foster method.
+
+```elixir
+cdm_kvn = """
+CCSDS_CDM_VERS                = 1.0
+CREATION_DATE                 = 2010-03-12T22:31:12.000
+ORIGINATOR                    = JSPOC
+MESSAGE_ID                    = 201113719185
+TCA                           = 2010-03-13T22:37:52.618
+MISS_DISTANCE                 = 715 [m]
+RELATIVE_SPEED                = 14762 [m/s]
+OBJECT                        = OBJECT1
+OBJECT_DESIGNATOR             = 12345
+OBJECT_NAME                   = SATELLITE A
+REF_FRAME                     = EME2000
+X                             = 2570.097065 [km]
+Y                             = 2244.654904 [km]
+Z                             = 6281.497978 [km]
+X_DOT                         = 4.418769571 [km/s]
+Y_DOT                         = 4.833547743 [km/s]
+Z_DOT                         = -3.526774282 [km/s]
+CR_R                          = 4.142E+01 [m**2]
+CT_R                          = -8.579E+00 [m**2]
+CT_T                          = 2.533E+03 [m**2]
+CN_R                          = -2.313E+01 [m**2]
+CN_T                          = 1.336E+01 [m**2]
+CN_N                          = 7.098E+01 [m**2]
+OBJECT                        = OBJECT2
+OBJECT_DESIGNATOR             = 30337
+OBJECT_NAME                   = FENGYUN 1C DEB
+REF_FRAME                     = EME2000
+X                             = 2569.540800 [km]
+Y                             = 2245.093614 [km]
+Z                             = 6281.599946 [km]
+X_DOT                         = -2.888612500 [km/s]
+Y_DOT                         = -6.007247516 [km/s]
+Z_DOT                         = 3.328770172 [km/s]
+CR_R                          = 1.337E+03 [m**2]
+CT_R                          = -4.806E+04 [m**2]
+CT_T                          = 2.492E+06 [m**2]
+CN_R                          = -3.298E+01 [m**2]
+CN_T                          = -7.5888E+02 [m**2]
+CN_N                          = 7.105E+01 [m**2]
+"""
+
+{:ok, cdm} = Sidereon.CCSDS.CDM.parse(cdm_kvn)
+
+# Combined hard-body radius of 20 meters.
+cdm = %{cdm | hard_body_radius_m: 20.0}
+params = Sidereon.CCSDS.CDM.to_collision_params(cdm)
+
+{:ok, equal_area} = Sidereon.Collision.probability(params, method: :equal_area)
+{:ok, numerical} = Sidereon.Collision.probability(params, method: :numerical)
+
+%{
+  miss_km: Float.round(equal_area.miss_km, 4),
+  pc_equal_area: equal_area.pc,
+  pc_numerical: numerical.pc
+}
+```
+
+## RF link budget
+
+Size a UHF amateur-radio link to the satellite at the look angle computed above:
+free-space path loss, EIRP, and the resulting link margin.
+
+```elixir
+fspl_db = Sidereon.RF.fspl(look.range_km, 437.0)
+eirp_dbw = Sidereon.RF.eirp(30.0, 10.0)
+
+margin_db =
+  Sidereon.RF.link_margin(%{
+    eirp_dbw: eirp_dbw,
+    fspl_db: fspl_db,
+    receiver_gt_dbk: -20.0,
+    other_losses_db: 3.0,
+    required_cn0_dbhz: 30.0
+  })
+
+%{
+  fspl_db: Float.round(fspl_db, 1),
+  eirp_dbw: Float.round(eirp_dbw, 1),
+  link_margin_db: Float.round(margin_db, 1)
+}
+```
+
+## Where to next
+
+Full signatures live on [HexDocs](https://hexdocs.pm/sidereon). More notebooks,
+including a ground-track map and a GNSS positioning walkthrough, live under
+[`examples/`](https://github.com/neilberkman/sidereon-ex/tree/main/examples).
