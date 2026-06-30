@@ -1,0 +1,7 @@
+# Revisions to skip in `git blame` (bulk reformatting, no behavioral change).
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honors this file automatically.
+
+# Format the native Rust with rustfmt
+db91c0b2c863dee0647e062db7830fe50422b1f9

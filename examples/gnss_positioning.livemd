@@ -1,0 +1,83 @@
+# GNSS Positioning
+
+```elixir
+Mix.install([
+  {:sidereon, "~> 0.22"},
+  # Optional: only needed for fetching products over HTTPS via Sidereon.GNSS.Data.
+  {:req, "~> 0.5"}
+])
+```
+
+## Fetch a precise ephemeris
+
+`Sidereon.GNSS.Data` resolves a product's canonical name and archive URL from a
+small catalog, downloads it (HTTPS or FTP), verifies and caches it with a
+provenance sidecar, and decompresses it — all behind one call. Here we pull a
+GFZ rapid SP3 orbit product for 2020-06-24 and load it into a handle.
+
+```elixir
+product = Sidereon.GNSS.Data.mgex_sp3(:gfz, ~D[2020-06-24])
+{:ok, sp3} = Sidereon.GNSS.Data.sp3(product)
+```
+
+A second call is served from the local cache with no network access. Pass
+`offline: true` to require the cache and never touch the network.
+
+## Query satellite positions
+
+An SP3 product samples each satellite's position and clock on a fixed grid;
+`Sidereon.GNSS.SP3.position/3` interpolates to any epoch. Positions are ITRF/IGS ECEF
+meters.
+
+```elixir
+{:ok, state} = Sidereon.GNSS.SP3.position(sp3, "G01", ~N[2020-06-24 12:00:00])
+
+radius_km =
+  :math.sqrt(state.x_m ** 2 + state.y_m ** 2 + state.z_m ** 2) / 1000.0
+
+%{position_m: {state.x_m, state.y_m, state.z_m}, clock_s: state.clock_s, radius_km: radius_km}
+```
+
+The radius lands near the ~26,560 km GPS orbit. Sweep an arc to see the
+satellite move:
+
+```elixir
+base = ~N[2020-06-24 12:00:00]
+
+for minutes <- 0..60//15 do
+  epoch = NaiveDateTime.add(base, minutes * 60, :second)
+  {:ok, s} = Sidereon.GNSS.SP3.position(sp3, "G01", epoch)
+  {epoch, Float.round(s.x_m / 1000.0, 1), Float.round(s.y_m / 1000.0, 1), Float.round(s.z_m / 1000.0, 1)}
+end
+```
+
+## Broadcast navigation and single-point positioning
+
+Broadcast products are loaded the same way. `Sidereon.GNSS.Broadcast` parses
+RINEX 3.x/4.xx navigation (GPS, Galileo, BeiDou, GLONASS), and
+`Sidereon.GNSS.Positioning.solve/4` recovers a receiver position from one epoch of
+pseudoranges against either an SP3 or a broadcast source:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+{:ok, eph} = Sidereon.GNSS.Data.broadcast(Sidereon.GNSS.Data.mgex_nav(:igs, ~D[2020-06-25]))
+
+# Pseudoranges (meters) come from a receiver / RINEX observation file.
+observations = [{"G07", 24_602_022.18}, {"G08", 23_676_569.52}, {"E05", 27_038_058.35}]
+
+{:ok, sol} =
+  Sidereon.GNSS.Positioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+    ionosphere: true,
+    troposphere: true
+  )
+
+sol.position         # %{x_m: ..., y_m: ..., z_m: ...} — ITRF ECEF meters
+sol.dop.pdop         # position dilution of precision
+sol.system_clocks_s  # one receiver clock per GNSS, e.g. %{"G" => ..., "E" => ...}
+```
+
+A mixed-constellation observation set is solved together with one receiver clock
+per system; the ionosphere and troposphere corrections, the elevation mask, and
+satellite rejection are all configurable. See `Sidereon.GNSS.Positioning` for the
+full option list and the solution fields.

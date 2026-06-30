@@ -1,0 +1,103 @@
+# Conjunction Risk Assessment
+
+```elixir
+Mix.install([
+  {:sidereon, "~> 0.22"}
+])
+```
+
+## Introduction
+
+This Livebook demonstrates how to use Sidereon to assess the risk of a satellite conjunction using the CCSDS Conjunction Data Message (CDM) standard.
+
+## Load a CDM fixture
+
+We'll use a sample CDM in KVN (Keyword=Value Notation) format.
+
+```elixir
+cdm_kvn = """
+CCSDS_CDM_VERS                = 1.0
+CREATION_DATE                 = 2010-03-12T22:31:12.000
+ORIGINATOR                    = JSPOC
+MESSAGE_ID                    = 201113719185
+TCA                           = 2010-03-13T22:37:52.618
+MISS_DISTANCE                 = 715 [m]
+RELATIVE_SPEED                = 14762 [m/s]
+COLLISION_PROBABILITY         = 4.835E-05
+COLLISION_PROBABILITY_METHOD  = FOSTER-1992
+OBJECT                        = OBJECT1
+OBJECT_DESIGNATOR             = 12345
+OBJECT_NAME                   = SATELLITE A
+REF_FRAME                     = EME2000
+X                             = 2570.097065 [km]
+Y                             = 2244.654904 [km]
+Z                             = 6281.497978 [km]
+X_DOT                         = 4.418769571 [km/s]
+Y_DOT                         = 4.833547743 [km/s]
+Z_DOT                         = -3.526774282 [km/s]
+CR_R                          = 4.142E+01 [m**2]
+CT_R                          = -8.579E+00 [m**2]
+CT_T                          = 2.533E+03 [m**2]
+CN_R                          = -2.313E+01 [m**2]
+CN_T                          = 1.336E+01 [m**2]
+CN_N                          = 7.098E+01 [m**2]
+OBJECT                        = OBJECT2
+OBJECT_DESIGNATOR             = 30337
+OBJECT_NAME                   = FENGYUN 1C DEB
+REF_FRAME                     = EME2000
+X                             = 2569.540800 [km]
+Y                             = 2245.093614 [km]
+Z                             = 6281.599946 [km]
+X_DOT                         = -2.888612500 [km/s]
+Y_DOT                         = -6.007247516 [km/s]
+Z_DOT                         = 3.328770172 [km/s]
+CR_R                          = 1.337E+03 [m**2]
+CT_R                          = -4.806E+04 [m**2]
+CT_T                          = 2.492E+06 [m**2]
+CN_R                          = -3.298E+01 [m**2]
+CN_T                          = -7.5888E+02 [m**2]
+CN_N                          = 7.105E+01 [m**2]
+"""
+
+{:ok, cdm} = Sidereon.CCSDS.CDM.parse(cdm_kvn)
+```
+
+## Assess the Risk
+
+We convert the CDM to collision parameters and compute the probability of collision (Pc).
+
+```elixir
+# Assume a combined hard-body radius of 20 meters
+cdm_with_hbr = %{cdm | hard_body_radius_m: 20.0}
+params = Sidereon.CCSDS.CDM.to_collision_params(cdm_with_hbr)
+
+# Compute Pc using both methods
+{:ok, res_ea} = Sidereon.Collision.probability(params, method: :equal_area)
+{:ok, res_num} = Sidereon.Collision.probability(params, method: :numerical)
+
+IO.puts("Miss distance: #{res_ea.miss_km} km")
+IO.puts("Equal-area Pc: #{res_ea.pc}")
+IO.puts("Numerical Pc:  #{res_num.pc}")
+```
+
+## Catalog Screening
+
+Sidereon can also screen entire catalogs of objects for potential risk at a common epoch.
+
+```elixir
+# Let's create a small synthetic catalog
+objects = [
+  %{id: "ISS", r: {2570.0, 2244.6, 6281.5}, v: {4.4, 4.8, -3.5}, cov: params.cov1, hard_body_radius_km: 0.05},
+  %{id: "DEB1", r: {2569.5, 2245.1, 6281.6}, v: {-2.9, -6.0, 3.3}, cov: params.cov2, hard_body_radius_km: 0.01},
+  %{id: "DEB2", r: {2571.0, 2243.0, 6280.0}, v: {-3.0, -5.5, 3.0}, cov: params.cov2, hard_body_radius_km: 0.01}
+]
+
+# Screen with a 10km miss threshold
+results = Sidereon.Screening.screen_catalog(objects, miss_threshold_km: 10.0)
+
+# Display results
+for res <- results do
+  %{candidate: cand, collision: col} = res
+  IO.puts("Conjunction: #{cand.id1} vs #{cand.id2} | Pc: #{col.pc} | Miss: #{cand.miss_km} km")
+end
+```

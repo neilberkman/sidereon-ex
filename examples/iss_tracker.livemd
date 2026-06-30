@@ -1,0 +1,207 @@
+# ISS Tracker
+
+```elixir
+Mix.install([
+  {:sidereon, "~> 0.22"},
+  {:kino, "~> 0.14"},
+  {:kino_maplibre, "~> 0.1"}
+])
+```
+
+## Fetch the ISS
+
+```elixir
+{:ok, [iss]} = Sidereon.CelesTrak.fetch_tle(25544)
+IO.puts("Catalog: #{iss.catalog_number}")
+IO.puts("Epoch: #{iss.epoch}")
+IO.puts("Period: #{Float.round(1440 / iss.mean_motion, 1)} minutes")
+```
+
+## Where Is It Right Now?
+
+```elixir
+now = DateTime.utc_now()
+{:ok, geo} = Sidereon.geodetic(iss, now)
+
+Kino.Markdown.new("""
+### ISS Position at #{Calendar.strftime(now, "%H:%M:%S UTC")}
+
+| | |
+|---|---|
+| **Latitude** | #{Float.round(geo.latitude, 4)}° |
+| **Longitude** | #{Float.round(geo.longitude, 4)}° |
+| **Altitude** | #{Float.round(geo.altitude_km, 1)} km |
+""")
+```
+
+## Plot the Ground Track
+
+Propagate the ISS over one full orbit (~93 minutes) and plot the ground track:
+
+```elixir
+# Propagate every 30 seconds for one orbit
+points =
+  for i <- 0..186 do
+    dt = DateTime.add(now, i * 30, :second)
+    {:ok, geo} = Sidereon.geodetic(iss, dt)
+    %{lat: geo.latitude, lon: geo.longitude, alt: geo.altitude_km, time: dt}
+  end
+
+# Current position
+current = hd(points)
+
+# Build GeoJSON for the track
+track_coords = Enum.map(points, fn p -> [p.lon, p.lat] end)
+
+MapLibre.new(
+  style: :street,
+  center: {current.lon, current.lat},
+  zoom: 2
+)
+|> MapLibre.add_source("track",
+  type: :geojson,
+  data: %{
+    type: "Feature",
+    geometry: %{type: "LineString", coordinates: track_coords}
+  }
+)
+|> MapLibre.add_layer(
+  id: "track-line",
+  type: :line,
+  source: "track",
+  paint: %{"line-color" => "#ff4444", "line-width" => 2}
+)
+|> MapLibre.add_source("iss-now",
+  type: :geojson,
+  data: %{
+    type: "Feature",
+    geometry: %{type: "Point", coordinates: [current.lon, current.lat]},
+    properties: %{title: "ISS"}
+  }
+)
+|> MapLibre.add_layer(
+  id: "iss-marker",
+  type: :circle,
+  source: "iss-now",
+  paint: %{
+    "circle-radius" => 8,
+    "circle-color" => "#ff0000",
+    "circle-stroke-width" => 2,
+    "circle-stroke-color" => "#ffffff"
+  }
+)
+```
+
+## Look Angles from Your Location
+
+```elixir
+# Change these to your location!
+my_station = %{latitude: 40.7128, longitude: -74.006, altitude_m: 10.0}
+
+{:ok, look} = Sidereon.look_angle(iss, now, my_station)
+
+status =
+  if look.elevation > 0 do
+    "🟢 **ABOVE HORIZON** — go outside and look!"
+  else
+    "🔴 Below horizon (#{Float.round(look.elevation, 1)}°)"
+  end
+
+Kino.Markdown.new("""
+### ISS from New York City
+
+| | |
+|---|---|
+| **Azimuth** | #{Float.round(look.azimuth, 1)}° |
+| **Elevation** | #{Float.round(look.elevation, 1)}° |
+| **Range** | #{Float.round(look.range_km, 0)} km |
+| **Status** | #{status} |
+""")
+```
+
+## Next Passes
+
+```elixir
+tomorrow = DateTime.add(now, 86400, :second)
+
+{:ok, passes} = Sidereon.Passes.predict(iss, my_station, now, tomorrow, min_elevation: 10.0)
+
+rows =
+  Enum.map(passes, fn pass ->
+    duration = DateTime.diff(pass.set, pass.rise)
+
+    %{
+      rise: Calendar.strftime(pass.rise, "%H:%M:%S"),
+      set: Calendar.strftime(pass.set, "%H:%M:%S"),
+      max_el: "#{Float.round(pass.max_elevation, 1)}°",
+      duration: "#{duration}s"
+    }
+  end)
+
+Kino.DataTable.new(rows, name: "ISS Passes (next 24h, >10° elevation)")
+```
+
+## RF Link Budget
+
+What signal would you get from a 437 MHz amateur radio contact?
+
+```elixir
+if look.elevation > 0 do
+  fspl = Sidereon.RF.fspl(look.range_km, 437.0)
+  eirp = Sidereon.RF.eirp(30.0, 10.0)  # 1W + 10 dBi Yagi
+
+  margin = Sidereon.RF.link_margin(%{
+    eirp_dbw: eirp,
+    fspl_db: fspl,
+    receiver_gt_dbk: -20.0,
+    other_losses_db: 3.0,
+    required_cn0_dbhz: 30.0
+  })
+
+  Kino.Markdown.new("""
+  ### UHF Link Budget (437 MHz)
+
+  | | |
+  |---|---|
+  | **EIRP** | #{Float.round(eirp, 1)} dBW |
+  | **Path Loss** | #{Float.round(fspl, 1)} dB |
+  | **Link Margin** | #{Float.round(margin, 1)} dB |
+  | **Link** | #{if margin > 0, do: "✅ Closes", else: "❌ Does not close"} |
+  """)
+else
+  Kino.Markdown.new("*ISS is below the horizon — link budget not applicable.*")
+end
+```
+
+## Real-Time Tracking
+
+Start live tracking with 2-second updates:
+
+```elixir
+frame = Kino.Frame.new()
+
+{:ok, tracker} = Sidereon.Tracker.start_link(iss, interval_ms: 2000)
+Sidereon.Tracker.subscribe(tracker)
+
+Kino.listen(tracker, fn {:sidereon_tracker, _pid, state} ->
+  geo = state.geodetic
+
+  content =
+    Kino.Markdown.new("""
+    **#{Calendar.strftime(state.time, "%H:%M:%S UTC")}** —
+    #{Float.round(abs(geo.latitude), 2)}°#{if geo.latitude >= 0, do: "N", else: "S"},
+    #{Float.round(abs(geo.longitude), 2)}°#{if geo.longitude >= 0, do: "E", else: "W"},
+    #{Float.round(geo.altitude_km, 1)} km
+    """)
+
+  Kino.Frame.render(frame, content)
+end)
+
+frame
+```
+
+To stop tracking:
+
+```elixir
+Sidereon.Tracker.stop(tracker)
+```
