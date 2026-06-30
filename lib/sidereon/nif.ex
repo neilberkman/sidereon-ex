@@ -1151,4 +1151,124 @@ defmodule Sidereon.NIF do
 
   def rtk_solve_moving_baseline(_epoch_terms, _opts, _receiver_antenna_corrections),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- generic data-driven trust-region least squares ----------------
+
+  def trls_solve(
+        _kind,
+        _a,
+        _b,
+        _m,
+        _n,
+        _t,
+        _y,
+        _degree,
+        _x0,
+        _loss,
+        _f_scale,
+        _x_scale_kind,
+        _x_scale_values,
+        _max_nfev,
+        _ftol,
+        _xtol,
+        _gtol,
+        _backend
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def trls_solve_drop_one(
+        _kind,
+        _a,
+        _b,
+        _m,
+        _n,
+        _t,
+        _y,
+        _degree,
+        _x0,
+        _loss,
+        _f_scale,
+        _x_scale_kind,
+        _x_scale_values,
+        _max_nfev,
+        _ftol,
+        _xtol,
+        _gtol,
+        _backend
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- covariance / geometry from a Jacobian -------------------------
+
+  def covariance_normal_covariance(_jacobian, _variance_scale), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance_hessian_trace(_jacobian), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance_from_jacobian(_jacobian, _cost), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance_error_ellipse_2x2(_covariance_2x2, _confidence), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- DOP convention ------------------------------------------------
+
+  def geometry_dop_with_convention(_rows, _receiver_lat_rad, _receiver_lon_rad, _convention),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- residual-distribution diagnostics -----------------------------
+
+  def normality_skewness(_x, _bias), do: :erlang.nif_error(:nif_not_loaded)
+
+  def normality_kurtosis(_x, _fisher, _bias), do: :erlang.nif_error(:nif_not_loaded)
+
+  def normality_moments(_x, _fisher, _bias), do: :erlang.nif_error(:nif_not_loaded)
+
+  def normality_jarque_bera(_x), do: :erlang.nif_error(:nif_not_loaded)
+
+  def normality_shapiro_wilk(_x), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- batch observable prediction -----------------------------------
+
+  def sp3_predict_batch(_handle, _requests, _carrier_hz, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- leap-second accessors -----------------------------------------
+
+  def gps_utc_offset_s(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tai_utc_offset_s(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- EGM96 geoid ---------------------------------------------------
+
+  def egm96_undulation_rad(_lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def egm96_orthometric_height(_ellipsoidal_height, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def egm96_ellipsoidal_height(_orthometric_height, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- ground-observer Sun/Moon geometry -----------------------------
+
+  def bodies_sun_az_el(_lat_deg, _lon_deg, _alt_km, _datetime), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_moon_az_el(_lat_deg, _lon_deg, _alt_km, _datetime), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_moon_illumination(_lat_deg, _lon_deg, _alt_km, _datetime), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_moon_elevation_deg(_lat_deg, _lon_deg, _alt_km, _datetime), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_find_moon_elevation_crossings(
+        _lat_deg,
+        _lon_deg,
+        _alt_km,
+        _start_datetime,
+        _end_datetime,
+        _elevation_threshold_deg,
+        _step_seconds,
+        _time_tolerance_seconds
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_find_moon_transits(
+        _lat_deg,
+        _lon_deg,
+        _alt_km,
+        _start_datetime,
+        _end_datetime,
+        _step_seconds,
+        _time_tolerance_seconds
+      ), do: :erlang.nif_error(:nif_not_loaded)
 end

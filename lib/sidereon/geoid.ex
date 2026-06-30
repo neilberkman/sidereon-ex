@@ -52,6 +52,37 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Geoid undulation `N` (metres) at a geodetic position in radians, from the
+  embedded genuine EGM96 1-degree global grid.
+
+  This is the recommended zero-setup default for metre-class datum work: its
+  bilinear lookup agrees with the full 15-arcminute EGM96 grid to ~0.4 m RMS,
+  far better than the coarse 30-degree built-in `undulation/2`.
+  """
+  @spec egm96_undulation(number(), number()) :: float()
+  def egm96_undulation(lat_rad, lon_rad) do
+    NIF.egm96_undulation_rad(lat_rad / 1.0, lon_rad / 1.0)
+  end
+
+  @doc """
+  Orthometric height `H = h - N` (metres) from an ellipsoidal height, using the
+  embedded genuine EGM96 1-degree model. Position in radians.
+  """
+  @spec egm96_orthometric_height_m(number(), number(), number()) :: float()
+  def egm96_orthometric_height_m(ellipsoidal_height_m, lat_rad, lon_rad) do
+    NIF.egm96_orthometric_height(ellipsoidal_height_m / 1.0, lat_rad / 1.0, lon_rad / 1.0)
+  end
+
+  @doc """
+  Ellipsoidal height `h = H + N` (metres) from an orthometric height, using the
+  embedded genuine EGM96 1-degree model. Position in radians.
+  """
+  @spec egm96_ellipsoidal_height_m(number(), number(), number()) :: float()
+  def egm96_ellipsoidal_height_m(orthometric_height_m, lat_rad, lon_rad) do
+    NIF.egm96_ellipsoidal_height(orthometric_height_m / 1.0, lat_rad / 1.0, lon_rad / 1.0)
+  end
+
+  @doc """
   Parse a geoid grid in the crate's documented text format into a handle.
 
   The format is whitespace-delimited with `#` comments: a six-field header

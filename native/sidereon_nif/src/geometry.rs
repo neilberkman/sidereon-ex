@@ -9,8 +9,9 @@ use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, Term};
 use sidereon_core::astro::math::linear::invert_4x4_cofactor;
 use sidereon_core::geometry::{
-    dop, dop_at_epoch, dop_series, passes, visibility_series, visible, DopError, DopOptions,
-    DopWeighting, LineOfSight, VisibilityOptions, Wgs84Geodetic,
+    dop, dop_at_epoch, dop_series, dop_with_convention, passes, visibility_series, visible,
+    DopError, DopOptions, DopWeighting, EnuConvention, LineOfSight, VisibilityOptions,
+    Wgs84Geodetic,
 };
 use sidereon_core::observables::j2000_seconds_from_split;
 use sidereon_core::{GnssSatelliteId, GnssSystem};
@@ -57,6 +58,40 @@ pub fn geometry_dop<'a>(
     };
 
     match dop(&los, &weights, receiver) {
+        Ok(d) => (atoms::ok(), (d.gdop, d.pdop, d.hdop, d.vdop, d.tdop)).encode(env),
+        Err(DopError::TooFewSatellites) => {
+            (atoms::error(), atoms::too_few_satellites()).encode(env)
+        }
+        Err(DopError::Singular) => (atoms::error(), atoms::singular_geometry()).encode(env),
+        Err(DopError::InvalidInput { .. }) => {
+            (atoms::error(), atoms::invalid_geometry_input()).encode(env)
+        }
+    }
+}
+
+#[rustler::nif]
+pub fn geometry_dop_with_convention<'a>(
+    env: Env<'a>,
+    rows: Vec<DopRowTerm>,
+    receiver_lat_rad: f64,
+    receiver_lon_rad: f64,
+    convention: String,
+) -> Term<'a> {
+    let convention = match convention.as_str() {
+        "geodetic_normal" => EnuConvention::GeodeticNormal,
+        "geocentric_radial" => EnuConvention::GeocentricRadial,
+        _ => return (atoms::error(), atoms::invalid_geometry_input()).encode(env),
+    };
+    let los: Vec<LineOfSight> = rows
+        .iter()
+        .map(|((x, y, z), _)| LineOfSight::new(*x, *y, *z))
+        .collect();
+    let weights: Vec<f64> = rows.iter().map(|(_, weight)| *weight).collect();
+    let Ok(receiver) = Wgs84Geodetic::new(receiver_lat_rad, receiver_lon_rad, 0.0) else {
+        return (atoms::error(), atoms::invalid_receiver()).encode(env);
+    };
+
+    match dop_with_convention(&los, &weights, receiver, convention) {
         Ok(d) => (atoms::ok(), (d.gdop, d.pdop, d.hdop, d.vdop, d.tdop)).encode(env),
         Err(DopError::TooFewSatellites) => {
             (atoms::error(), atoms::too_few_satellites()).encode(env)

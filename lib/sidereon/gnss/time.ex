@@ -64,8 +64,8 @@ defmodule Sidereon.GNSS.Time do
   (TAI/TT/GPST/GST/QZSST/BDT) whose mutual offset is a constant.
 
   Returns `{:error, {:epoch_required, scale}}` for the UTC-based scales (UTC and
-  GLONASST) whose offset carries the leap-second count — use
-  `timescale_offset_at/3` with an epoch — and `{:error, {:unsupported, "TDB"}}`
+  GLONASST) whose offset carries the leap-second count (use
+  `timescale_offset_at/3` with an epoch), and `{:error, {:unsupported, "TDB"}}`
   for TDB (its offset from TT is an epoch-dependent periodic term).
 
       iex> Sidereon.GNSS.Time.timescale_offset(:gpst, :tai)
@@ -112,6 +112,31 @@ defmodule Sidereon.GNSS.Time do
   @spec leap_seconds(integer(), integer(), integer()) :: float()
   def leap_seconds(year, month, day) when is_integer(year) and is_integer(month) and is_integer(day) do
     NIF.leap_seconds(year, month, day)
+  end
+
+  @doc """
+  GPS minus UTC, in seconds, in effect at a UTC calendar date.
+
+  This is the IS-GPS-200 quantity broadcast in the navigation message (the leap
+  seconds a GPS receiver applies): 18 s from 2017. It is `leap_seconds/3` minus
+  the constant 19 s `TAI - GPST`, so it is the value to use whenever you mean
+  "GPS - UTC", not `leap_seconds/3` (which is `TAI - UTC`).
+  """
+  @spec gps_utc_offset_s(integer(), integer(), integer()) :: float()
+  def gps_utc_offset_s(year, month, day) when is_integer(year) and is_integer(month) and is_integer(day) do
+    NIF.gps_utc_offset_s(year, month, day)
+  end
+
+  @doc """
+  TAI minus UTC, in seconds, in effect at a UTC calendar date.
+
+  The unambiguously named alias of `leap_seconds/3` (the IERS Bulletin C
+  quantity, 37 s from 2017); it returns the identical value. Use
+  `gps_utc_offset_s/3` for the GNSS "GPS - UTC" offset instead.
+  """
+  @spec tai_utc_offset_s(integer(), integer(), integer()) :: float()
+  def tai_utc_offset_s(year, month, day) when is_integer(year) and is_integer(month) and is_integer(day) do
+    NIF.tai_utc_offset_s(year, month, day)
   end
 
   @doc """

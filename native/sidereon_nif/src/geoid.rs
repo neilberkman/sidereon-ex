@@ -9,7 +9,8 @@
 
 use rustler::{Encoder, Env, ResourceArc, Term};
 use sidereon_core::geoid::{
-    ellipsoidal_height_m, geoid_undulation, orthometric_height_m, GeoidGrid,
+    egm96_ellipsoidal_height_m, egm96_orthometric_height_m, egm96_undulation, ellipsoidal_height_m,
+    geoid_undulation, orthometric_height_m, GeoidGrid,
 };
 
 mod atoms {
@@ -50,6 +51,27 @@ fn geoid_orthometric_height_m(ellipsoidal_height: f64, lat_rad: f64, lon_rad: f6
 #[rustler::nif]
 fn geoid_ellipsoidal_height_m(orthometric_height: f64, lat_rad: f64, lon_rad: f64) -> f64 {
     ellipsoidal_height_m(orthometric_height, lat_rad, lon_rad)
+}
+
+/// Geoid undulation `N` (metres) at a geodetic position in radians, from the
+/// embedded genuine EGM96 1-degree global grid (metre-class, ~0.4 m RMS).
+#[rustler::nif]
+fn egm96_undulation_rad(lat_rad: f64, lon_rad: f64) -> f64 {
+    egm96_undulation(lat_rad, lon_rad)
+}
+
+/// Orthometric height `H = h - N` (metres) from an ellipsoidal height, using the
+/// embedded genuine EGM96 1-degree model. Position in radians.
+#[rustler::nif]
+fn egm96_orthometric_height(ellipsoidal_height: f64, lat_rad: f64, lon_rad: f64) -> f64 {
+    egm96_orthometric_height_m(ellipsoidal_height, lat_rad, lon_rad)
+}
+
+/// Ellipsoidal height `h = H + N` (metres) from an orthometric height, using the
+/// embedded genuine EGM96 1-degree model. Position in radians.
+#[rustler::nif]
+fn egm96_ellipsoidal_height(orthometric_height: f64, lat_rad: f64, lon_rad: f64) -> f64 {
+    egm96_ellipsoidal_height_m(orthometric_height, lat_rad, lon_rad)
 }
 
 /// Parse a geoid grid in the crate's documented text format into a handle.

@@ -8,18 +8,24 @@ use crate::broadcast::BroadcastResource;
 use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, ResourceArc, Term};
 use sidereon_core::observables::{
-    j2000_seconds_from_split, predict, ObservablesError, PredictOptions, PredictedObservables,
+    j2000_seconds_from_split, predict, predict_batch, ObservablesError, PredictOptions,
+    PredictedObservables, PredictRequest,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 
 type Vec3 = (f64, f64, f64);
+/// One batch request from Elixir: `{system_letter, prn, jd_whole, jd_fraction,
+/// receiver_ecef_m}`. The receive epoch is split Julian-date, matching the
+/// single-shot `sp3_observables` boundary.
+type BatchRequestTerm = (String, u8, f64, f64, Vec3);
 
 mod atoms {
     rustler::atoms! {
         ok,
         error,
         no_ephemeris,
-        invalid_input
+        invalid_input,
+        prediction_missing
     }
 }
 
@@ -84,6 +90,59 @@ pub fn broadcast_observables<'a>(
         .map_err(PredictFailure::from)
     });
     encode_result(env, result)
+}
+
+/// Predict observables for many `{satellite, epoch, receiver}` requests against
+/// one loaded SP3 product in a single boundary crossing. Element `i` of the
+/// returned list is the per-request `{:ok, _}` / `{:error, _}` for `requests[i]`.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn sp3_predict_batch<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    requests: Vec<BatchRequestTerm>,
+    carrier_hz: f64,
+    light_time: bool,
+    sagnac: bool,
+) -> Term<'a> {
+    let options = PredictOptions {
+        carrier_hz,
+        light_time,
+        sagnac,
+    };
+    // Resolve every request's satellite/epoch up front so a malformed request is
+    // reported in place (preserving index alignment) without entering the core.
+    let mut prepared: Vec<Result<PredictRequest, PredictFailure>> =
+        Vec::with_capacity(requests.len());
+    for (system_letter, prn, jd_whole, jd_fraction, receiver_ecef_m) in requests {
+        let resolved = sat_from_parts(&system_letter, prn).and_then(|sat| {
+            let t_rx_j2000_s =
+                j2000_seconds_from_split(jd_whole, jd_fraction).map_err(PredictFailure::from)?;
+            Ok((sat, vec3_to_array(receiver_ecef_m), t_rx_j2000_s))
+        });
+        prepared.push(resolved);
+    }
+
+    // The valid requests are predicted as a batch in the core; the invalid ones
+    // are stitched back into their original slots.
+    let valid: Vec<PredictRequest> = prepared.iter().filter_map(|r| r.clone().ok()).collect();
+    let mut predicted = predict_batch(&handle.sp3, &valid, options).into_iter();
+
+    let rows: Vec<Term> = prepared
+        .into_iter()
+        .map(|prep| match prep {
+            // A valid request consumes the next core prediction. A short result
+            // stream (fewer predictions than valid requests) is a core-contract
+            // breach, not a request fault; report this slot as a typed error
+            // rather than panic across the NIF boundary.
+            Ok(_) => match predicted.next() {
+                Some(result) => encode_result(env, result.map_err(PredictFailure::from)),
+                None => (atoms::error(), atoms::prediction_missing()).encode(env),
+            },
+            Err(failure) => encode_result(env, Err(failure)),
+        })
+        .collect();
+
+    rows.encode(env)
 }
 
 #[derive(Debug, Clone)]

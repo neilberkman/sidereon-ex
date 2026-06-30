@@ -404,6 +404,53 @@ defmodule Sidereon.GNSS.Geometry do
     e in ErlangError -> {:error, e.original}
   end
 
+  # --- direct line-of-sight DOP --------------------------------------------
+
+  @doc """
+  Dilution of precision from explicit line-of-sight rows, with an explicit
+  east-north-up convention for the horizontal/vertical split.
+
+  `rows` is a list of `{{e_x, e_y, e_z}, weight}` entries: `e` is the ECEF
+  receiver-to-satellite unit line of sight (at least four, unit length) and
+  `weight` the non-negative diagonal of `W`. `receiver_lat_rad`/
+  `receiver_lon_rad` are the receiver geodetic latitude/longitude in radians.
+
+  `convention` is `:geodetic_normal` (the default DOP path) or
+  `:geocentric_radial`, which rotates the position block into the
+  geocentric-radial ENU instead, changing only HDOP/VDOP (GDOP/PDOP/TDOP are
+  identical between conventions).
+
+  Returns `{:ok, %{gdop:, pdop:, hdop:, vdop:, tdop:}}` or `{:error, reason}`.
+  """
+  @spec dop_with_convention(
+          [{{number(), number(), number()}, number()}],
+          number(),
+          number(),
+          :geodetic_normal | :geocentric_radial
+        ) ::
+          {:ok, %{gdop: float(), pdop: float(), hdop: float(), vdop: float(), tdop: float()}}
+          | {:error, atom()}
+  def dop_with_convention(rows, receiver_lat_rad, receiver_lon_rad, convention \\ :geodetic_normal)
+      when is_list(rows) and convention in [:geodetic_normal, :geocentric_radial] do
+    normalized =
+      Enum.map(rows, fn {{ex, ey, ez}, weight} ->
+        {{ex / 1.0, ey / 1.0, ez / 1.0}, weight / 1.0}
+      end)
+
+    case NIF.geometry_dop_with_convention(
+           normalized,
+           receiver_lat_rad / 1.0,
+           receiver_lon_rad / 1.0,
+           Atom.to_string(convention)
+         ) do
+      {:ok, {gdop, pdop, hdop, vdop, tdop}} ->
+        {:ok, %{gdop: gdop, pdop: pdop, hdop: hdop, vdop: vdop, tdop: tdop}}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
   # --- linear algebra (4x4 cofactor inverse) --------------------------------
 
   @doc """

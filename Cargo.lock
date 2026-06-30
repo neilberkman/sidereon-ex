@@ -198,6 +198,16 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
+name = "libloading"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
@@ -393,7 +403,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875c8fe88089b9bbc0977385e107d35bfae740c6b0734e60a1e9cc82d0017f49"
 dependencies = [
  "inventory",
- "libloading",
+ "libloading 0.9.0",
  "regex-lite",
  "rustler_codegen",
 ]
@@ -477,9 +487,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon-core"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "876821c8c169a7715e963fc8493a242bed41585906ac6722893d5c353425953b"
+checksum = "cc463aa3033f296483367fbc4fe63557546effcb78a00e22d141e39f35826ef9"
 dependencies = [
  "cc",
  "libm",
@@ -496,8 +506,10 @@ name = "sidereon_nif"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "nalgebra",
  "rustler",
  "sidereon-core",
+ "trust-region-least-squares",
 ]
 
 [[package]]
@@ -548,6 +560,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "trust-region-least-squares"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f27e8bc54a4c2fab2d007c2bf0287217718ba05b410517c5dd120e93a281fe55"
+dependencies = [
+ "libloading 0.8.9",
+ "nalgebra",
+ "rayon",
 ]
 
 [[package]]

@@ -9,7 +9,8 @@ use rustler::{Encoder, Env, Term};
 use sidereon_core::astro::time::civil;
 use sidereon_core::astro::time::model::{Instant, TimeScale};
 use sidereon_core::astro::time::scales::{
-    find_leap_seconds, julian_day_number, leap_second_table, ut1_coverage,
+    find_leap_seconds, gps_utc_offset_s as core_gps_utc_offset_s, julian_day_number,
+    leap_second_table, tai_utc_offset_s as core_tai_utc_offset_s, ut1_coverage,
 };
 use sidereon_core::astro::time::{timescale_offset_at_s, timescale_offset_s, TimeOffsetError};
 
@@ -92,6 +93,24 @@ fn leap_seconds(year: i32, month: i32, day: i32) -> f64 {
 fn leap_seconds_for_date(year: i32, month: i32, day: i32) -> f64 {
     let jd_utc_midnight = julian_day_number(year, month, day) as f64 - 0.5;
     find_leap_seconds(jd_utc_midnight)
+}
+
+/// GPS - UTC (the GNSS leap-second offset broadcast in the nav message, 18 s
+/// from 2017) at UTC midnight on the given date.
+#[rustler::nif]
+fn gps_utc_offset_s(year: i32, month: i32, day: i32) -> f64 {
+    core_gps_utc_offset_s(jd_utc_midnight(year, month, day))
+}
+
+/// TAI - UTC (the IERS Bulletin C quantity, 37 s from 2017) at UTC midnight on
+/// the given date.
+#[rustler::nif]
+fn tai_utc_offset_s(year: i32, month: i32, day: i32) -> f64 {
+    core_tai_utc_offset_s(jd_utc_midnight(year, month, day))
+}
+
+fn jd_utc_midnight(year: i32, month: i32, day: i32) -> f64 {
+    julian_day_number(year, month, day) as f64 - 0.5
 }
 
 #[rustler::nif]

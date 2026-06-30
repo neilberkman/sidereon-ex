@@ -26,7 +26,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
 
-  @version "0.9.0"
+  @version "0.9.1"
   @source_url "https://github.com/neilberkman/sidereon-ex"
 
   def project do

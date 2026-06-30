@@ -1,6 +1,7 @@
 mod angles;
 mod antex;
 mod atmosphere;
+mod bodies;
 mod broadcast;
 mod broadcast_comparison;
 mod carrier_phase;
@@ -27,6 +28,7 @@ mod iono;
 mod lambert;
 mod lnav;
 mod look_angle;
+mod normality;
 mod observables;
 mod observation;
 mod oem;
@@ -52,6 +54,7 @@ mod staleness;
 mod tides;
 mod time;
 mod tle;
+mod trls;
 mod tropo;
 mod velocity;
 
@@ -385,6 +388,38 @@ fn covariance_positive_semidefinite(m: Vec<Vec<f64>>) -> NifResult<bool> {
 #[rustler::nif]
 fn covariance_symmetric(m: Vec<Vec<f64>>) -> NifResult<bool> {
     covariance::symmetric_impl(m)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn covariance_normal_covariance<'a>(
+    env: Env<'a>,
+    jacobian: Vec<Vec<f64>>,
+    variance_scale: f64,
+) -> NifResult<Term<'a>> {
+    covariance::normal_covariance_impl(env, jacobian, variance_scale)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn covariance_hessian_trace(jacobian: Vec<Vec<f64>>) -> NifResult<f64> {
+    covariance::hessian_trace_impl(jacobian)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn covariance_from_jacobian<'a>(
+    env: Env<'a>,
+    jacobian: Vec<Vec<f64>>,
+    cost: f64,
+) -> NifResult<Term<'a>> {
+    covariance::covariance_from_jacobian_impl(env, jacobian, cost)
+}
+
+#[rustler::nif]
+fn covariance_error_ellipse_2x2<'a>(
+    env: Env<'a>,
+    covariance_2x2: Vec<Vec<f64>>,
+    confidence: f64,
+) -> NifResult<Term<'a>> {
+    covariance::error_ellipse_2x2_impl(env, covariance_2x2, confidence)
 }
 
 #[rustler::nif]

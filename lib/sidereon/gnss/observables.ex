@@ -158,6 +158,66 @@ defmodule Sidereon.GNSS.Observables do
     |> Map.new(fn sat_id -> {sat_id, predict(sp3, sat_id, receiver_ecef, epoch, opts)} end)
   end
 
+  @doc """
+  Predict observables for many `{satellite_id, receiver_ecef, epoch}` requests
+  against one loaded SP3 product in a single NIF call.
+
+  Each request is fully independent (its own satellite, receiver, and epoch), so
+  one batch can mix many satellites, receivers, and epochs. The result list is
+  index-aligned with `requests`: element `i` is `{:ok, observables}` or
+  `{:error, reason}` for `requests[i]`, so one bad request does not sink the
+  batch. The valid requests are predicted as a batch inside the core (one
+  boundary crossing); options are the same as `predict/5`.
+  """
+  @spec predict_batch(SP3.t(), [{String.t(), vec3() | map(), NaiveDateTime.t()}], keyword()) ::
+          [{:ok, observables()} | {:error, term()}]
+  def predict_batch(%SP3{handle: handle}, requests, opts \\ []) when is_list(requests) do
+    carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz())
+    light_time? = Keyword.get(opts, :light_time, true)
+    sagnac? = Keyword.get(opts, :sagnac, true)
+
+    prepared = Enum.map(requests, &prepare_batch_request/1)
+    nif_requests = for {:ok, {tuple, _epoch}} <- prepared, do: tuple
+
+    nif_results =
+      case nif_requests do
+        [] -> []
+        _ -> NIF.sp3_predict_batch(handle, nif_requests, carrier_hz, light_time?, sagnac?)
+      end
+
+    stitch_batch(prepared, nif_results)
+  rescue
+    e in ErlangError -> Enum.map(requests, fn _ -> {:error, e.original} end)
+  end
+
+  # Normalize one batch request into the NIF tuple plus the epoch (kept for the
+  # transmit-time reconstruction), or surface the per-request error.
+  defp prepare_batch_request({satellite_id, receiver_ecef, %NaiveDateTime{} = epoch}) when is_binary(satellite_id) do
+    with {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
+         {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id) do
+      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
+      {:ok, {{system_letter, prn, jd_whole, jd_fraction, receiver}, epoch}}
+    end
+  end
+
+  defp prepare_batch_request(_request), do: {:error, :invalid_request}
+
+  # Walk the prepared requests, consuming one core result per valid request so
+  # the returned list stays index-aligned with the input.
+  defp stitch_batch([], _results), do: []
+
+  defp stitch_batch([{:error, _reason} = err | rest], results), do: [err | stitch_batch(rest, results)]
+
+  defp stitch_batch([{:ok, {_tuple, epoch}} | rest], [result | results]) do
+    decoded =
+      case result do
+        {:ok, raw} -> {:ok, to_observables_map(raw, epoch)}
+        {:error, _reason} = err -> err
+      end
+
+    [decoded | stitch_batch(rest, results)]
+  end
+
   defp core_predict(%SP3{handle: handle}, system_letter, prn, receiver, epoch, carrier_hz, light_time?, sagnac?) do
     {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
 

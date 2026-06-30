@@ -77,4 +77,86 @@ defmodule Sidereon.Covariance do
   def symmetric?(m) do
     valid_matrix?(m) and NIF.covariance_symmetric(m)
   end
+
+  @doc """
+  Parameter covariance `variance_scale * (J^T J)^-1` from a design (Jacobian)
+  matrix.
+
+  `jacobian` is an `m`-by-`n` matrix (a list of `m` rows of `n` numbers) with
+  `m >= n`. The covariance is formed from the thin SVD of `J` directly, the same
+  quantity (and construction) `scipy.optimize.curve_fit` reports as `pcov`: pass
+  the post-fit reduced chi-square as `variance_scale` for the fitted covariance,
+  or `1.0` for the bare `(J^T J)^-1` cofactor.
+
+  Returns `{:ok, covariance_rows}` or `{:error, :singular_jacobian | :invalid_input}`.
+  """
+  @spec normal_covariance([[number()]], number()) :: {:ok, [[float()]]} | {:error, atom()}
+  def normal_covariance(jacobian, variance_scale) when is_list(jacobian) do
+    NIF.covariance_normal_covariance(to_rows(jacobian), variance_scale / 1.0)
+  end
+
+  @doc """
+  Trace of the Gauss-Newton Hessian approximation `J^T J`, i.e. the sum of the
+  squared column norms of `jacobian`. No inverse is formed.
+  """
+  @spec hessian_trace([[number()]]) :: float()
+  def hessian_trace(jacobian) when is_list(jacobian) do
+    NIF.covariance_hessian_trace(to_rows(jacobian))
+  end
+
+  @doc """
+  Fitted parameter covariance directly from a converged solve's design matrix
+  and cost.
+
+  Scales `(J^T J)^-1` by the post-fit reduced chi-square `2 * cost / (m - n)`,
+  the same scale `scipy.optimize.curve_fit` applies to its `pcov`. `jacobian` is
+  the `m`-by-`n` design matrix and `cost` the optimum `0.5 * dot(r, r)`. The
+  redundancy comes from the Jacobian's own shape, so no residual or parameter
+  vectors are needed. Requires positive redundancy `m > n`.
+
+  Returns `{:ok, covariance_rows}` or `{:error, :singular_jacobian | :invalid_input}`.
+  """
+  @spec covariance_from_jacobian([[number()]], number()) ::
+          {:ok, [[float()]]} | {:error, atom()}
+  def covariance_from_jacobian(jacobian, cost) when is_list(jacobian) do
+    NIF.covariance_from_jacobian(to_rows(jacobian), cost / 1.0)
+  end
+
+  @doc """
+  Confidence ellipse from an arbitrary 2x2 covariance block.
+
+  The semi-axes are scaled by the two-degree-of-freedom chi-square quantile
+  `-2 ln(1 - confidence)` applied to the eigenvalues of the symmetrized block.
+  Returns `{:ok, %{confidence:, chi_square_scale:, semi_major:, semi_minor:,
+  orientation_rad:}}` or `{:error, reason}`.
+  """
+  @spec error_ellipse_2x2([[number()]], number()) ::
+          {:ok,
+           %{
+             confidence: float(),
+             chi_square_scale: float(),
+             semi_major: float(),
+             semi_minor: float(),
+             orientation_rad: float()
+           }}
+          | {:error, atom()}
+  def error_ellipse_2x2(covariance_2x2, confidence) when is_list(covariance_2x2) do
+    case NIF.covariance_error_ellipse_2x2(to_rows(covariance_2x2), confidence / 1.0) do
+      {:ok, {conf, chi_square_scale, semi_major, semi_minor, orientation_rad}} ->
+        {:ok,
+         %{
+           confidence: conf,
+           chi_square_scale: chi_square_scale,
+           semi_major: semi_major,
+           semi_minor: semi_minor,
+           orientation_rad: orientation_rad
+         }}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  defp to_rows(rows), do: Enum.map(rows, &to_floats/1)
+  defp to_floats(values), do: Enum.map(values, &(&1 / 1.0))
 end
