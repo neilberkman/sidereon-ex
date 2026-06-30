@@ -1,0 +1,128 @@
+name: Precompiled NIFs
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  precompile:
+    name: ${{ matrix.nif }} / ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        nif: ["2.15"]
+        job:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract project version
+        shell: bash
+        run: |
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          test -n "$version"
+          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: ${{ matrix.job.target }}
+
+      - name: Install cross
+        if: ${{ matrix.job.use-cross }}
+        shell: bash
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build NIF
+        shell: bash
+        env:
+          RUSTLER_NIF_VERSION: ${{ matrix.nif }}
+        run: |
+          tool=cargo
+          if [[ "${{ matrix.job.use-cross || false }}" == "true" ]]; then
+            tool=cross
+          fi
+
+          "$tool" build \
+            --manifest-path native/sidereon_nif/Cargo.toml \
+            --target "${{ matrix.job.target }}" \
+            --release
+
+      - name: Package NIF archive
+        id: package-nif
+        shell: bash
+        run: |
+          target="${{ matrix.job.target }}"
+          nif="${{ matrix.nif }}"
+          lib_prefix="lib"
+          source_ext="so"
+          final_ext="so"
+
+          case "$target" in
+            *-pc-windows-*)
+              lib_prefix=""
+              source_ext="dll"
+              final_ext="dll"
+              ;;
+            *-apple-darwin)
+              source_ext="dylib"
+              final_ext="so"
+              ;;
+          esac
+
+          source_lib="target/${target}/release/${lib_prefix}sidereon_nif.${source_ext}"
+          final_lib="${lib_prefix}sidereon_nif-v${PROJECT_VERSION}-nif-${nif}-${target}.${final_ext}"
+          archive="${final_lib}.tar.gz"
+
+          test -f "$source_lib"
+          rm -f "$final_lib" "$archive"
+          cp "$source_lib" "$final_lib"
+          tar -czf "$archive" "$final_lib"
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          else
+            sha="$(shasum -a 256 "$archive" | cut -d ' ' -f 1)"
+          fi
+
+          echo "file-name=$archive" >> "$GITHUB_OUTPUT"
+          echo "file-path=$archive" >> "$GITHUB_OUTPUT"
+          echo "file-sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Built $archive"
+          echo "SHA256 $sha"
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package-nif.outputs.file-name }}
+          path: ${{ steps.package-nif.outputs.file-path }}
+
+  publish-release-assets:
+    name: Publish release assets
+    needs: precompile
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Attach archives to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.tar.gz
