@@ -29,6 +29,7 @@ defmodule Sidereon.GNSS.SP3 do
   """
 
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
 
@@ -275,6 +276,35 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   def states_at(%__MODULE__{}, epoch_index), do: {:error, {:bad_epoch_index, epoch_index}}
+
+  @doc """
+  Extract the product as the canonical precise-ephemeris samples, in SI units,
+  one per real position record in ascending epoch order.
+
+  Each element is a `Sidereon.GNSS.PreciseEphemerisSample` carrying the satellite
+  token, the epoch (split Julian date tagged with the product's time scale), the
+  ECEF position in meters, the optional clock in seconds, and the SP3 `E`
+  clock-event flag. Round-tripping these back through
+  `Sidereon.GNSS.PreciseEphemeris.from_samples/1` rebuilds the same interpolatable
+  source.
+
+  ## Examples
+
+      {:ok, sp3} = Sidereon.GNSS.SP3.load("igs.sp3")
+      samples = Sidereon.GNSS.SP3.precise_ephemeris_samples(sp3)
+      {:ok, source} = Sidereon.GNSS.PreciseEphemeris.from_samples(samples)
+  """
+  @spec precise_ephemeris_samples(t()) :: [PreciseEphemerisSample.t()]
+  def precise_ephemeris_samples(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.sp3_precise_ephemeris_samples()
+    |> Enum.map(&PreciseEphemerisSample.from_nif_tuple/1)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not extract precise-ephemeris samples: #{inspect(e.original)}"],
+              __STACKTRACE__
+  end
 
   @doc """
   Serialize the product to standard SP3-c / SP3-d text as iodata. Pure, no I/O.

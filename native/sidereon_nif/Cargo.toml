@@ -10,7 +10,9 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-sidereon-core = "0.9.1"
+# Published core with the sample-backed precise-ephemeris source and
+# predict_ranges feature.
+sidereon-core = "0.9.2"
 trust-region-least-squares = "0.9.1"
 # Same major.minor as sidereon-core so the shared `DMatrix`/`DVector` types
 # unify across crates for the covariance/least-squares marshalling.

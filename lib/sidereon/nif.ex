@@ -391,6 +391,10 @@ defmodule Sidereon.NIF do
 
   def sp3_to_iodata(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_precise_ephemeris_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_samples_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
+
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_record_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
@@ -1226,6 +1230,8 @@ defmodule Sidereon.NIF do
   # --- batch observable prediction -----------------------------------
 
   def sp3_predict_batch(_handle, _requests, _carrier_hz, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
+
+  def predict_ranges_batch(_source, _requests, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
 
   # --- leap-second accessors -----------------------------------------
 

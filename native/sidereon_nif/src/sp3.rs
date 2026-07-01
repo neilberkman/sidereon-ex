@@ -3,7 +3,7 @@
 //! This module is **pure glue**: it decodes Erlang terms, calls
 //! the `sidereon_core::ephemeris` public APIs, manages the parsed product as a
 //! Rustler resource handle, and encodes results back. No SP3 grammar, no unit
-//! conversion, and no interpolation numerics live here — those are the crate's
+//! conversion, and no interpolation numerics live here: those are the crate's
 //! responsibility. In particular:
 //!
 //! - `sp3_parse/1` decodes a byte buffer, calls [`Sp3::parse`], and returns a
@@ -59,7 +59,7 @@ impl rustler::Resource for Sp3Resource {}
 
 /// Map a GNSS single-letter system identifier (as the Elixir side passes it,
 /// e.g. `"G"`) onto the crate's [`GnssSystem`]. Pure identifier translation.
-fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
+pub(crate) fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
     let c = letter
         .chars()
         .next()
@@ -79,7 +79,7 @@ fn systems_from_letters(letters: Vec<String>) -> NifResult<BTreeSet<GnssSystem>>
 /// Map a time-scale abbreviation onto the core [`TimeScale`]. Pure translation;
 /// used so an Elixir caller can name the epoch's scale explicitly when it is not
 /// the file's own header scale.
-fn time_scale_from_abbrev(abbrev: &str) -> NifResult<TimeScale> {
+pub(crate) fn time_scale_from_abbrev(abbrev: &str) -> NifResult<TimeScale> {
     Ok(match abbrev {
         "UTC" => TimeScale::Utc,
         "TAI" => TimeScale::Tai,
@@ -221,7 +221,7 @@ fn sp3_states_at<'a>(
 /// term rather than a float so a missing clock is not forced through `NaN`,
 /// which the BEAM cannot represent.
 ///
-/// Operates only on the resource handle — no file I/O.
+/// Operates only on the resource handle, no file I/O.
 #[rustler::nif]
 fn sp3_position<'a>(
     env: Env<'a>,

@@ -37,6 +37,7 @@ mod opm;
 mod passes;
 mod ppp_corrections;
 mod precise_positioning;
+mod precise_samples;
 mod propagation;
 mod qc;
 mod reduced_orbit;

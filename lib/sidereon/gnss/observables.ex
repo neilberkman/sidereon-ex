@@ -64,7 +64,7 @@ defmodule Sidereon.GNSS.Observables do
       }
   """
 
-  alias Sidereon.GNSS.{Broadcast, SP3, Time}
+  alias Sidereon.GNSS.{Broadcast, PreciseEphemeris, SP3, Time}
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.NIF
@@ -216,6 +216,102 @@ defmodule Sidereon.GNSS.Observables do
       end
 
     [decoded | stitch_batch(rest, results)]
+  end
+
+  @type range_request :: {String.t(), vec3() | map(), number()}
+
+  @type range_result :: %{
+          geometric_range_m: float(),
+          sat_clock_s: float() | nil,
+          transmit_time_j2000_s: float(),
+          sat_pos_ecef_m: vec3()
+        }
+
+  @doc """
+  Predict geometry-only ranges for many `{satellite_id, receiver_ecef, t_rx_j2000_s}`
+  requests against one precise-ephemeris source in a single NIF call.
+
+  `source` is either a loaded `Sidereon.GNSS.SP3` product or a
+  `Sidereon.GNSS.PreciseEphemeris` sample-built source; both interpolate through
+  the same core substrate, so the ranges are identical for a source and its
+  round-tripped samples. Each request carries its own satellite token, static
+  receiver ECEF position (`{x_m, y_m, z_m}` or `%{x_m: _, y_m: _, z_m: _}`), and
+  receive epoch as **seconds since J2000 in the source's own time scale**.
+
+  This is the transmit-time geometry a range-only consumer needs, without the
+  Doppler / topocentric fields of `predict/5`. On success returns
+  `{:ok, results}` where each result is a map:
+
+      %{
+        geometric_range_m:      float(),         # metres, after light-time + Sagnac
+        sat_clock_s:            float() | nil,   # satellite clock at transmit time
+        transmit_time_j2000_s:  float(),         # transmit epoch, seconds since J2000
+        sat_pos_ecef_m:         {float(), float(), float()}  # Sagnac-transported sat position
+      }
+
+  The core range batch aborts on the first failing request, so a malformed
+  request or an ephemeris error (unknown satellite, epoch out of coverage)
+  returns `{:error, reason}` for the whole call. Never raises.
+
+  ## Options
+
+    * `:light_time` - apply the light-time / transmit-time correction, default
+      `true`. When `false`, the satellite is evaluated at the receive epoch.
+    * `:sagnac` - apply the Sagnac / Earth-rotation correction, default `true`.
+  """
+  @spec predict_ranges(SP3.t() | PreciseEphemeris.t(), [range_request()], keyword()) ::
+          {:ok, [range_result()]} | {:error, term()}
+  def predict_ranges(source, requests, opts \\ []) when is_list(requests) do
+    light_time? = Keyword.get(opts, :light_time, true)
+    sagnac? = Keyword.get(opts, :sagnac, true)
+
+    with {:ok, handle} <- source_handle(source),
+         {:ok, nif_requests} <- prepare_range_requests(requests) do
+      case NIF.predict_ranges_batch(handle, nif_requests, light_time?, sagnac?) do
+        {:ok, rows} -> {:ok, Enum.map(rows, &to_range_map/1)}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
+  defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
+  defp source_handle(_source), do: {:error, :invalid_source}
+
+  defp prepare_range_requests(requests) do
+    requests
+    |> Enum.reduce_while({:ok, []}, fn request, {:ok, acc} ->
+      case prepare_range_request(request) do
+        {:ok, tuple} -> {:cont, {:ok, [tuple | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, tuples} -> {:ok, Enum.reverse(tuples)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp prepare_range_request({satellite_id, receiver_ecef, t_rx_j2000_s})
+       when is_binary(satellite_id) and is_number(t_rx_j2000_s) do
+    with {:ok, {x, y, z}} <- Types.normalize_ecef(receiver_ecef),
+         {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id) do
+      {:ok, {system_letter, prn, {x, y, z}, t_rx_j2000_s * 1.0}}
+    end
+  end
+
+  defp prepare_range_request(_request), do: {:error, :invalid_request}
+
+  defp to_range_map({geometric_range_m, sat_clock_s, transmit_time_j2000_s, sat_pos_ecef_m}) do
+    %{
+      geometric_range_m: geometric_range_m,
+      sat_clock_s: sat_clock_s,
+      transmit_time_j2000_s: transmit_time_j2000_s,
+      sat_pos_ecef_m: sat_pos_ecef_m
+    }
   end
 
   defp core_predict(%SP3{handle: handle}, system_letter, prn, receiver, epoch, carrier_hz, light_time?, sagnac?) do

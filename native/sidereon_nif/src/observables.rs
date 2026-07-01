@@ -5,11 +5,13 @@
 //! receiver ECEF; call the crate's predictor; encode the result for Elixir.
 
 use crate::broadcast::BroadcastResource;
+use crate::precise_samples::SampleSourceResource;
 use crate::sp3::Sp3Resource;
-use rustler::{Encoder, Env, ResourceArc, Term};
+use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::observables::{
-    j2000_seconds_from_split, predict, predict_batch, ObservablesError, PredictOptions,
-    PredictedObservables, PredictRequest,
+    j2000_seconds_from_split, predict, predict_batch, predict_ranges as core_predict_ranges,
+    ObservablesError, PredictOptions, PredictedObservables, PredictRequest, RangePrediction,
+    RangePredictionRequest,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 
@@ -211,8 +213,102 @@ fn encode_result<'a>(
             ];
             (atoms::ok(), (scalars, vectors)).encode(env)
         }
-        Err(PredictFailure::NoEphemeris) => (atoms::error(), atoms::no_ephemeris()).encode(env),
-        Err(PredictFailure::InvalidInput) => (atoms::error(), atoms::invalid_input()).encode(env),
-        Err(PredictFailure::Reason(reason)) => (atoms::error(), reason).encode(env),
+        Err(failure) => (atoms::error(), failure_reason(env, failure)).encode(env),
     }
+}
+
+/// The error reason term for a prediction failure (without the `:error` tag):
+/// a typed atom for the recognized failure classes, or the crate's message for
+/// an ephemeris error passed through verbatim.
+fn failure_reason(env: Env<'_>, failure: PredictFailure) -> Term<'_> {
+    match failure {
+        PredictFailure::NoEphemeris => atoms::no_ephemeris().encode(env),
+        PredictFailure::InvalidInput => atoms::invalid_input().encode(env),
+        PredictFailure::Reason(reason) => reason.encode(env),
+    }
+}
+
+/// One batch range request from Elixir: `{system_letter, prn, receiver_ecef_m,
+/// t_rx_j2000_s}`. The receive epoch is seconds since J2000 in the source's own
+/// time scale, matching the core [`RangePredictionRequest`].
+type RangeRequestTerm = (String, u8, Vec3, f64);
+/// One batch range result: `{geometric_range_m, sat_clock_s, transmit_time_j2000_s,
+/// sat_pos_ecef_m}`. The clock is `nil` when the source carries no clock estimate.
+type RangeResultTerm = (f64, Option<f64>, f64, Vec3);
+
+fn range_to_tuple(prediction: &RangePrediction) -> RangeResultTerm {
+    (
+        prediction.geometric_range_m,
+        prediction.sat_clock_s,
+        prediction.transmit_time_j2000_s,
+        array_to_vec3(prediction.sat_pos_ecef_m),
+    )
+}
+
+/// Predict geometric ranges for many `{satellite, receiver, epoch}` requests
+/// against one loaded precise-ephemeris source in a single boundary crossing.
+///
+/// `source` accepts either an SP3 handle or a sample-built source handle; both
+/// implement the core `ObservableEphemerisSource` trait, so the batch drives the
+/// identical transmit-time geometry regardless of how the source was built.
+/// Returns `{:ok, [result]}` on success, or the first request's `{:error, _}`
+/// (the core range batch aborts on the first failing request). Dirty-CPU: the
+/// request list is unbounded relative to the 1 ms NIF budget.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn predict_ranges_batch<'a>(
+    env: Env<'a>,
+    source: Term<'a>,
+    requests: Vec<RangeRequestTerm>,
+    light_time: bool,
+    sagnac: bool,
+) -> NifResult<Term<'a>> {
+    // Resolve every request's satellite up front so a malformed token is
+    // reported without entering the core.
+    let mut resolved = Vec::with_capacity(requests.len());
+    for (system_letter, prn, receiver_ecef_m, t_rx_j2000_s) in requests {
+        let sat = match sat_from_parts(&system_letter, prn) {
+            Ok(sat) => sat,
+            Err(failure) => return Ok((atoms::error(), failure_reason(env, failure)).encode(env)),
+        };
+        resolved.push(RangePredictionRequest {
+            sat,
+            receiver_ecef_m: vec3_to_array(receiver_ecef_m),
+            t_rx_j2000_s,
+        });
+    }
+
+    let options = PredictOptions {
+        carrier_hz: 0.0,
+        light_time,
+        sagnac,
+    };
+    let mut out = vec![
+        RangePrediction {
+            geometric_range_m: 0.0,
+            sat_clock_s: None,
+            transmit_time_j2000_s: 0.0,
+            sat_pos_ecef_m: [0.0; 3],
+        };
+        resolved.len()
+    ];
+
+    // The source is one of the two precise-ephemeris resource handles; dispatch
+    // on whichever the term decodes as.
+    let result = if let Ok(handle) = source.decode::<ResourceArc<Sp3Resource>>() {
+        core_predict_ranges(&handle.sp3, &resolved, options, &mut out)
+    } else if let Ok(handle) = source.decode::<ResourceArc<SampleSourceResource>>() {
+        core_predict_ranges(&handle.source, &resolved, options, &mut out)
+    } else {
+        return Err(Error::Term(Box::new(
+            "expected an SP3 or precise-sample source handle",
+        )));
+    };
+
+    Ok(match result {
+        Ok(()) => {
+            let rows: Vec<RangeResultTerm> = out.iter().map(range_to_tuple).collect();
+            (atoms::ok(), rows).encode(env)
+        }
+        Err(err) => (atoms::error(), failure_reason(env, PredictFailure::from(err))).encode(env),
+    })
 }
