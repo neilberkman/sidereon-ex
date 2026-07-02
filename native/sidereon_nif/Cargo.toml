@@ -1,6 +1,6 @@
 [package]
 name = "sidereon_nif"
-version = "0.10.0"
+version = "0.10.1"
 authors = []
 edition = "2021"
 
@@ -10,8 +10,8 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-sidereon-core = "0.10.0"
-sidereon = "0.10.0"
+sidereon-core = "0.10.1"
+sidereon = "0.10.1"
 trust-region-least-squares = "0.9.1"
 # Same major.minor as sidereon-core so the shared `DMatrix`/`DVector` types
 # unify across crates for the covariance/least-squares marshalling.

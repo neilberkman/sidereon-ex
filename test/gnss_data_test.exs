@@ -28,7 +28,7 @@ defmodule Sidereon.GNSS.DataTest do
     assert {:ok, "https://s3.amazonaws.com/elevation-tiles-prod/skadi/N36/N36W107.hgt.gz"} =
              Data.skadi_archive_url(36, -107)
 
-    assert {:ok, "n30_w110/n36_w107_1arc_v3.dt2"} = Data.dted_cache_relpath(36, -107)
+    assert {:ok, "n30_w100/n36_w107_1arc_v3.dt2"} = Data.dted_cache_relpath(36, -107)
   end
 
   test "verified cache hit and offline hit return with no network", %{root: root} do

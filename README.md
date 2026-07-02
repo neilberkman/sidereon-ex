@@ -97,19 +97,25 @@ positioning, and conjunction screening; more notebooks live under
 ## What's in the box
 
 - **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical force-model
-  propagation, ground track, sub-satellite point, eclipse, Sun and Moon angles,
-  and Doppler. See `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`.
+  propagation with an optional atmospheric drag model, orbital decay estimation,
+  two-body Kepler propagation, ground track, sub-satellite point, eclipse, Sun
+  and Moon angles, and Doppler. See `Sidereon`, `Sidereon.Propagator`,
+  `Sidereon.SGP4`, `Sidereon.Drag`.
 - **GNSS positioning** single-point positioning (SPP), RTK (float,
-  integer-fixed, fix-and-hold), PPP, DGNSS, RAIM with fault detection and
-  exclusion, dilution of precision, and receiver velocity from Doppler. See
+  integer-fixed, fix-and-hold), PPP, DGNSS, robust Huber-reweighted solves,
+  RAIM with fault detection and exclusion, SBAS and RTCM SSR / Galileo HAS
+  corrections, dilution of precision, and receiver velocity from Doppler. See
   `Sidereon.GNSS.Positioning`, `Sidereon.GNSS.RTK`, `Sidereon.GNSS.PrecisePositioning`,
-  `Sidereon.GNSS.DGNSS`, `Sidereon.GNSS.QC`.
+  `Sidereon.GNSS.DGNSS`, `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`, `Sidereon.GNSS.SSR`.
 - **GNSS data and observations** SP3 (read, multi-center merge, write), broadcast
-  navigation (RINEX 3.x / 4.x), IONEX, ANTEX, CLK, RINEX 3 observations with
-  Hatanaka / CRINEX decoding, carrier-phase combinations, cycle-slip detection,
-  Hatch smoothing, ionosphere-free combination, and GPS L1 C/A signal
-  generation, acquisition, and LNAV decode. See `Sidereon.GNSS.SP3`,
-  `Sidereon.GNSS.Broadcast`, `Sidereon.GNSS.CarrierPhase`, `Sidereon.GNSS.RTCM`.
+  navigation (RINEX 3.x / 4.x), IONEX, ANTEX, CLK, satellite code biases
+  (Bias-SINEX and CODE DCB with OSB / DSB lookup), uniform satellite-state
+  sampling that treats precise and broadcast sources interchangeably, RINEX 3
+  observations with Hatanaka / CRINEX decoding, carrier-phase combinations,
+  cycle-slip detection, Hatch smoothing, ionosphere-free combination, and GPS
+  L1 C/A signal generation, acquisition, and LNAV decode. See `Sidereon.GNSS.SP3`,
+  `Sidereon.GNSS.Broadcast`, `Sidereon.GNSS.Ephemeris`, `Sidereon.GNSS.Bias`,
+  `Sidereon.GNSS.CarrierPhase`, `Sidereon.GNSS.RTCM`.
 - **Ephemeris and time** JPL SPK / `.bsp` kernels for Sun, Moon, and planets;
   TEME, GCRS, ITRS, geodetic, ECEF, and topocentric frames with IAU2000A
   nutation and IAU2006 precession; UTC / TAI / TT / TDB / UT1 scales. See
@@ -117,14 +123,30 @@ positioning, and conjunction screening; more notebooks live under
 - **Geometry and events** pass prediction, look angles, conjunction and TCA
   screening, collision probability (Foster equal-area and numerical), CCSDS CDM
   parsing, covariance propagation, initial orbit determination (Gibbs,
-  Herrick-Gibbs, Gauss angles-only), Lambert and Battin transfers, and orbital
-  element conversions. See `Sidereon.Passes`, `Sidereon.Conjunction`,
-  `Sidereon.Collision`, `Sidereon.IOD`, `Sidereon.Lambert`, `Sidereon.OrbitalElements`.
+  Herrick-Gibbs, Gauss angles-only), Lambert and Battin transfers, relative
+  motion in RIC / RTN / LVLH frames with Clohessy-Wiltshire propagation,
+  anomaly conversions, orbital element conversions including equinoctial and
+  modified equinoctial forms, and angular geometry (angular separation,
+  position angle, phase angle, beta angle). See `Sidereon.Passes`,
+  `Sidereon.Conjunction`, `Sidereon.Collision`, `Sidereon.IOD`, `Sidereon.Lambert`,
+  `Sidereon.OrbitalElements`, `Sidereon.Astro.Relative`, `Sidereon.Astro.Anomaly`,
+  `Sidereon.Astro.Equinoctial`, `Sidereon.Angles`.
+- **Observation and almanac** apparent topocentric places (right ascension,
+  declination, azimuth, elevation) for the Sun, Moon, and any SPK body;
+  sub-solar and sub-observer points, terminator latitude, parallactic angle,
+  and satellite visual magnitude; Moon rise / set, illumination, and meridian
+  transits; seasons, moon phases, planetary events, and lunar / solar eclipses
+  over a window. See `Sidereon.Astro.Observe`, `Sidereon.Astro.Almanac`,
+  `Sidereon.Bodies`, `Sidereon.Observation`.
 - **Atmosphere** Klobuchar and Galileo NeQuick-G ionospheric delay, IONEX grids,
   tropospheric zenith delay and mapping, and NRLMSISE-00 neutral density. See
   `Sidereon.GNSS.Ionosphere`, `Sidereon.GNSS.Troposphere`, `Sidereon.Atmosphere`.
 - **RF link budget** free-space path loss, EIRP, C/N0, dish gain, and link
   margin. See `Sidereon.RF`.
+- **Terrain and data acquisition** DTED terrain elevation lookup, and
+  cache-first download of GNSS products (SP3, CLK, NAV, IONEX) and DTED tiles
+  from public archives, with canonical filenames and archive URLs for callers
+  who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
   CCSDS OPM / OEM / CDM, and the GNSS products above. See `Sidereon.Format.TLE`,
   `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`.

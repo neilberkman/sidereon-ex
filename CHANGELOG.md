@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1]
+
+### Fixed
+
+- DTED block-directory naming now matches production store layouts.
+- Sample-ephemeris construction rejects non-finite derived epochs and clock
+  values.
+
 ## [0.10.0]
 
 ### Added
