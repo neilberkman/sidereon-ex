@@ -97,7 +97,7 @@ defmodule Sidereon.GNSS.ConstellationTest do
     }
   end
 
-  describe "from_celestrak_omm/2 — GPS" do
+  describe "from_celestrak_omm/2: GPS" do
     test "accepts the canonical raw JSON feed input" do
       assert {:ok, records} = Constellation.from_celestrak_json(full_celestrak_json(), :gps)
       assert Enum.map(records, & &1.sp3_id) == ["G03", "G05", "G13", "G19"]
@@ -146,7 +146,7 @@ defmodule Sidereon.GNSS.ConstellationTest do
     end
   end
 
-  describe "from_celestrak_omm/2 — multi-system (the 4-constellation gain)" do
+  describe "from_celestrak_omm/2: multi-system (the 4-constellation gain)" do
     test "resolves a Galileo GSAT build id to its SVID/PRN" do
       assert {:ok, [rec]} = Constellation.from_celestrak_omm(:galileo, [galileo_omm()])
       assert rec.system == :galileo

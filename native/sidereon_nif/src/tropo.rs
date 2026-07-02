@@ -2,7 +2,7 @@
 //!
 //! This module is **pure glue**: it decodes Erlang terms, calls the
 //! `sidereon_core::atmosphere::troposphere` public APIs, and encodes the results back. No
-//! Saastamoinen zenith formula and no Niell mapping numerics live here — those
+//! Saastamoinen zenith formula and no Niell mapping numerics live here; those
 //! are the crate's responsibility. This is the neutral-atmosphere signal delay
 //! and is distinct from `Sidereon.Atmosphere` (NRLMSISE-00 mass density).
 //!

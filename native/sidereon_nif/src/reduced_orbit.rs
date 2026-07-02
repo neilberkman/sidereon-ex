@@ -2,7 +2,7 @@
 //!
 //! Pure glue: it decodes Erlang terms, calls the `sidereon_core::orbit`
 //! public APIs, and encodes the results back. No fitting, element, or frame math
-//! lives here — those belong to the crate. The fitted elements are a small flat
+//! lives here; those belong to the crate. The fitted elements are a small flat
 //! value (not a resource handle), so they travel back and forth as plain tuples;
 //! the Elixir layer owns persistence (`to_map`/`from_map`).
 

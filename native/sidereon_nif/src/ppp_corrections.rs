@@ -57,6 +57,7 @@ pub fn ppp_corrections_build<'a>(
         ocean_loading: decode_ocean_loading(ocean_loading)?,
         phase_windup,
         satellite_antenna: decode_satellite_antenna_options(satellite_antenna)?,
+        code_bias: None,
     };
     let corrections = core::build(
         &handle.sp3,
@@ -73,7 +74,6 @@ pub fn ppp_corrections_build<'a>(
             encode_sat_scalars(&corrections.windup_m),
             encode_sat_vectors(&corrections.sat_pco_ecef),
             encode_sat_scalars(&corrections.sat_pcv_m),
-            // B1: the new per-epoch displacement tables, encoded like `tide`.
             encode_tide(&corrections.pole_tide),
             encode_tide(&corrections.ocean_loading),
         ),
@@ -92,6 +92,7 @@ fn decode_epochs(epochs: Vec<EpochTerm>) -> NifResult<Vec<core::PppCorrectionEpo
                         sat: sat_from_token(&sat)?,
                         freq1_hz,
                         freq2_hz,
+                        glonass_channel: None,
                     })
                 })
                 .collect::<NifResult<Vec<_>>>()?;

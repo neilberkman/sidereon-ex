@@ -12,7 +12,7 @@ reduced-orbit tests.
 Derived from the GFZ rapid MGEX product
 `GBM0MGXRAP_20201770000_01D_05M_ORB.SP3` (2020 day-of-year 177, 5-minute grid,
 GPS time) by keeping the verbatim header and only the position records for two
-BeiDou satellites — **C21** (MEO, e ≈ 9e-4) and **C08** (IGSO, e ≈ 5e-3) — across
+BeiDou satellites: **C21** (MEO, e ≈ 9e-4) and **C08** (IGSO, e ≈ 5e-3), across
 all 288 epochs. Other satellites' records were dropped (the header still lists
 the full constellation, which the SP3 reader tolerates); no values were altered.
 
@@ -21,7 +21,7 @@ the full constellation, which the SP3 reader tolerates); no values were altered.
 - Source product: GFZ Potsdam MGEX products for GPS week 2111.
 - Purpose: the real BeiDou drift gate for `Orbis.GNSS.ReducedOrbit`'s
   `:eccentric_secular` model (the GRG product carries no BeiDou). GEO satellites
-  (C01–C05) are excluded — near-equatorial and not orbital-element-friendly. An
+  (C01–C05) are excluded; they are near-equatorial and not orbital-element-friendly. An
   identical copy lives in the `astrodynamics-gnss` crate fixtures for the same
   gate at the Rust layer.
 
@@ -56,7 +56,7 @@ the graceful-degeneracy path; not a redistributed product.
 - **Upstream source:** `COD0MGXFIN_20201770000_01D_05M_ORB.SP3.gz`, the CODE MGEX
   final precise orbit/clock product for 2020 day-of-year 177 (GPS week 2111),
   fetched from the source archive before committing this fixture.
-- **Trim:** none — the verbatim full-day product (289 epochs, 00:00 through the
+- **Trim:** none: the verbatim full-day product (289 epochs, 00:00 through the
   following day 00:00 GPST at 5-minute cadence), GPS+GLONASS+Galileo+BeiDou.
 - **Use:** the precise reference for the full-day broadcast-vs-precise accuracy
   check in `gnss_ephemeris_test.exs`.

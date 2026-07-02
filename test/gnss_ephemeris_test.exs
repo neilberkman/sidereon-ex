@@ -71,7 +71,7 @@ defmodule Sidereon.GNSS.EphemerisTest do
     test "reports an explicit gap instead of extrapolating", %{sp3: sp3} do
       # A satellite id that is not in the product, and an epoch outside coverage.
       window = %{from: ~N[2020-06-25 00:30:00], to: ~N[2020-06-25 00:30:00], step_s: 900}
-      [missing_sat] = Ephemeris.sample(sp3, ["G99"], window)
+      [missing_sat] = Ephemeris.sample(sp3, ["S20"], window)
 
       assert missing_sat.status == :no_ephemeris
       assert missing_sat.x_m == nil and missing_sat.y_m == nil
@@ -102,7 +102,7 @@ defmodule Sidereon.GNSS.EphemerisTest do
     end
   end
 
-  describe "BroadcastComparison.compare/4 — broadcast vs precise over a full day" do
+  describe "BroadcastComparison.compare/4: broadcast vs precise over a full day" do
     setup do
       nav = Broadcast.load!(@full_nav_path)
       sp3 = SP3.load!(@full_sp3_path)

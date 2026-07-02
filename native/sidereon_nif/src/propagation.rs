@@ -3,6 +3,7 @@
 
 use crate::errors;
 use rustler::{Encoder, Env, NifResult, Term};
+use sidereon_core::astro::forces::DragParameters;
 use sidereon_core::astro::propagator::{
     propagate_states, IntegratorOptions, PropagationConfig, PropagationForceModel,
 };
@@ -145,6 +146,29 @@ pub(crate) fn propagate_dp54_impl(
     abs_tol: f64,
     rel_tol: f64,
 ) -> NifResult<Term<'_>> {
+    propagate_dp54_impl_with_drag(
+        env,
+        position_km,
+        velocity_km_s,
+        dt_seconds,
+        forces,
+        abs_tol,
+        rel_tol,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn propagate_dp54_impl_with_drag(
+    env: Env<'_>,
+    position_km: (f64, f64, f64),
+    velocity_km_s: (f64, f64, f64),
+    dt_seconds: f64,
+    forces: Vec<String>,
+    abs_tol: f64,
+    rel_tol: f64,
+    drag: Option<DragParameters>,
+) -> NifResult<Term<'_>> {
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
@@ -163,6 +187,7 @@ pub(crate) fn propagate_dp54_impl(
         rel_tol,
         ..config.options
     };
+    config.drag = drag;
 
     match propagate_states(&config, &[dt_seconds]) {
         Ok(states) => {

@@ -8,13 +8,13 @@
 use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::observables::j2000_seconds_from_split;
+use sidereon_core::positioning::SurfaceMet;
 use sidereon_core::ppp_corrections as ppp;
 use sidereon_core::precise_positioning as core;
 use sidereon_core::precise_positioning::auto_init::{
     solve_ppp_auto_init_fixed, solve_ppp_auto_init_float, PppAutoInitError, PppAutoInitOptions,
     PppInitialGuess,
 };
-use sidereon_core::positioning::SurfaceMet;
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 use std::collections::BTreeMap;
 
@@ -101,7 +101,12 @@ mod atoms {
 
 // (initial_guess {position, clock_m} | nil, spp_initial_guess [x, y, z, b],
 //  spp_troposphere, spp_met {pressure_hpa, temperature_k, relative_humidity}).
-type PppAutoInitTerm = (Option<(Vec3, f64)>, (f64, f64, f64, f64), bool, (f64, f64, f64));
+type PppAutoInitTerm = (
+    Option<(Vec3, f64)>,
+    (f64, f64, f64, f64),
+    bool,
+    (f64, f64, f64),
+);
 
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
@@ -277,7 +282,8 @@ pub fn precise_positioning_solve_ppp_auto_init_fixed<'a>(
         opts: decode_solve_options(solve_options),
         ambiguity: decode_fixed_ambiguity(ambiguity),
     };
-    let result = solve_ppp_auto_init_fixed(&handle.sp3, &epochs, options, float_config, fixed_config);
+    let result =
+        solve_ppp_auto_init_fixed(&handle.sp3, &epochs, options, float_config, fixed_config);
     Ok(match result {
         Ok(solution) => encode_fixed_result(env, Ok(solution)),
         Err(PppAutoInitError::Float(error)) => {
@@ -422,6 +428,7 @@ fn decode_epoch(epoch: EpochTerm) -> NifResult<core::FloatEpoch> {
                     phase_m,
                     freq1_hz,
                     freq2_hz,
+                    glonass_channel: None,
                 })
             },
         )
@@ -490,7 +497,9 @@ fn decode_float_status(status: Term<'_>) -> NifResult<core::FloatStatus> {
     match status.atom_to_string()?.as_str() {
         "state_tolerance" => Ok(core::FloatStatus::StateTolerance),
         "max_iterations" => Ok(core::FloatStatus::MaxIterations),
-        other => Err(Error::Term(Box::new(format!("unknown PPP float status {other}")))),
+        other => Err(Error::Term(Box::new(format!(
+            "unknown PPP float status {other}"
+        )))),
     }
 }
 
@@ -572,6 +581,7 @@ fn decode_corrections(term: CorrectionsTerm) -> NifResult<DecodedCorrections> {
             ocean_loading: crate::ppp_corrections::decode_ocean_loading(ocean_loading)?,
             phase_windup,
             satellite_antenna: decode_satellite_antenna_options(satellite_antenna)?,
+            code_bias: None,
         },
     })
 }

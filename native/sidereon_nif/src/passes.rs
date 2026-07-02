@@ -51,7 +51,7 @@ pub(crate) fn predict_passes_impl<'a>(
     // `elevation_mask_deg` instead moves AOS/LOS to the threshold crossing, so
     // we must NOT route `min_elevation` there. Validate it separately (matching
     // the range the finder's mask validation used to enforce when this value was
-    // — incorrectly — passed as the mask) before falling back to the peak filter.
+    // incorrectly passed as the mask) before falling back to the peak filter.
     if !(min_elevation_deg.is_finite() && (-90.0..=90.0).contains(&min_elevation_deg)) {
         return Err(crate::errors::invalid_input(()));
     }

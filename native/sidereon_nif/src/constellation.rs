@@ -4,7 +4,7 @@
 //! Pure glue over the core crate: decode Erlang terms, call the core
 //! constellation surface, and encode the results back. No PRN/slot/SVID parsing,
 //! NAVCEN HTML scanning, FDMA channel table, block-type detection, validation,
-//! or diff logic lives here — all of that is `sidereon_core::constellation`,
+//! or diff logic lives here; all of that is `sidereon_core::constellation`,
 //! which covers GPS, Galileo, GLONASS, BeiDou, and QZSS.
 
 use crate::errors;

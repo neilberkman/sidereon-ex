@@ -342,9 +342,26 @@ defmodule Sidereon.GNSS.QCTest do
       assert is_float(scale) and scale > 0.0
     end
 
-    test "robust FDE reports the missing core driver without composing in Elixir", ctx do
+    test "robust FDE requires an explicit noise model", ctx do
       assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [robust: true]) ==
-               {:error, {:core_gap, :spp_robust_fde_driver}}
+               {:error, {:robust_requires_noise_model, :no_weights}}
+    end
+
+    test "robust FDE succeeds with explicit weights and surfaces FDE metadata", ctx do
+      weights = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+
+      assert {:ok, sol} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [robust: true, weights: weights]
+               )
+
+      assert position_error(sol) < 1.0e-2
+      assert %{excluded: excluded, iterations: iterations} = sol.metadata.fde
+      assert excluded == []
+      assert iterations == 0
     end
 
     test "malformed :huber options return tagged errors, never raise", ctx do

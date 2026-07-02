@@ -16,6 +16,8 @@ use sidereon_core::rtcm::{
 };
 use sidereon_core::GnssSystem;
 
+use crate::spp::atom_from;
+
 mod atoms {
     rustler::atoms! {
         ok,
@@ -608,15 +610,18 @@ fn encode_message<'a>(env: Env<'a>, message: Message) -> Term<'a> {
             StationCoordinatesFields::from(s),
         )
             .encode(env),
-        Message::AntennaDescriptor(a) => {
-            (atoms::antenna_descriptor(), AntennaDescriptorFields::from(a)).encode(env)
-        }
+        Message::AntennaDescriptor(a) => (
+            atoms::antenna_descriptor(),
+            AntennaDescriptorFields::from(a),
+        )
+            .encode(env),
         Message::GpsEphemeris(e) => {
             (atoms::gps_ephemeris(), GpsEphemerisFields::from(e)).encode(env)
         }
         Message::GlonassEphemeris(e) => {
             (atoms::glonass_ephemeris(), GlonassEphemerisFields::from(e)).encode(env)
         }
+        Message::Ssr(s) => (atom_from(env, "ssr"), format!("{s:?}")).encode(env),
         Message::Unsupported(u) => (
             atoms::unsupported(),
             UnsupportedFields {

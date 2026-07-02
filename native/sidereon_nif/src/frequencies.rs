@@ -96,7 +96,10 @@ fn frequencies_default_pair<'a>(env: Env<'a>, system: String) -> Term<'a> {
     match frequencies::default_iono_free_pair(system_id) {
         Some(pair) => (
             atoms::ok(),
-            (pair.band1.name().to_string(), pair.band2.name().to_string()),
+            (
+                pair.band1.as_str().to_string(),
+                pair.band2.as_str().to_string(),
+            ),
         )
             .encode(env),
         None => error(env, atoms::no_default_pair()),

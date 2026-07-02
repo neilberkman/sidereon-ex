@@ -4,7 +4,7 @@
 //! Pure glue: it decodes Erlang terms, calls the crate's `rinex` public APIs,
 //! holds the parsed product as a resource handle, and
 //! encodes results back. No CRINEX grammar, RINEX parsing, or pseudorange
-//! selection numerics live here — those are the crate's responsibility.
+//! selection numerics live here; those are the crate's responsibility.
 //!
 //! - `crinex_decode/1` expands CRINEX text to plain RINEX text.
 //! - `rinex_obs_parse/1` parses plain RINEX observation text into a handle.
@@ -266,7 +266,7 @@ fn rinex_obs_pseudoranges(
 /// trailing blank observations a satellite did not report are simply absent.
 /// `overrides` is an optional per-system code filter `[{"G", ["L1C", "L2W"]}, ...]`:
 /// an empty list crosses every code for every satellite, while a non-empty list
-/// restricts the result to the listed systems only — and, within a listed system,
+/// restricts the result to the listed systems only, and, within a listed system,
 /// to the listed codes (an empty code list keeps all of that system's codes). This
 /// keeps a daily product from marshalling every observable when the caller only
 /// wants a few.

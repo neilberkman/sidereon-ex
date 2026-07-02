@@ -115,7 +115,7 @@ defmodule Sidereon.PassesTest do
       assert Enum.any?(all_passes, &(&1.max_elevation >= min_el))
 
       # The kept set is exactly the horizon passes whose PEAK clears the
-      # threshold — low-peak passes are dropped, nothing else.
+      # threshold: low-peak passes are dropped, nothing else.
       expected_kept = Enum.filter(all_passes, &(&1.max_elevation >= min_el))
       assert length(kept_passes) == length(expected_kept)
 
@@ -124,7 +124,7 @@ defmodule Sidereon.PassesTest do
 
       # Critical: a nonzero :min_elevation must NOT move AOS/LOS to the threshold
       # crossing. Each kept pass keeps the SAME rise/set (and thus duration) it
-      # had under min_elevation: 0.0 — bit-for-bit — and its rise sits on the
+      # had under min_elevation: 0.0, bit-for-bit, and its rise sits on the
       # 0-degree horizon, not on the 30-degree mask.
       by_key = Map.new(all_passes, &{key.(&1), &1})
 
@@ -231,7 +231,7 @@ defmodule Sidereon.PassesTest do
   describe "opsmode is honored (regression)" do
     # ISS TLE specified by the task (epoch 2018-07-03). The ISS is a near-Earth
     # satellite, so the deep-space periodics never run and AFSPC vs Improved are
-    # bit-identical in correct SGP4 — opsmode only changes results through the
+    # bit-identical in correct SGP4: opsmode only changes results through the
     # deep-space `dpper` negative-node branch. We therefore prove the
     # passes<->look_angle *consistency* with the ISS, and prove the AFSPC-vs-
     # Improved *difference* with a deep-space object (below), where opsmode
@@ -241,7 +241,7 @@ defmodule Sidereon.PassesTest do
 
     # Deep-space object 23599 (period > 225 min). Its node goes negative within a
     # day of epoch, so the AFSPC-only branch in the core periodics fires and the
-    # propagation — and thus look angle and passes — differs by opsmode.
+    # propagation, and thus look angle and passes, differs by opsmode.
     @ds_l1 "1 23599U 95029B   06171.76535463  .00085586  12891-6  12956-2 0  2905"
     @ds_l2 "2 23599   6.9327   0.2849 5782022 274.4436  25.2425  4.47796565123555"
 

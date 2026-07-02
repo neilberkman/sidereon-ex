@@ -217,7 +217,7 @@ defmodule Sidereon.CCSDS.CDMTest do
       # KVN with leading whitespace routes to KVN parser (will fail on
       # missing required fields, not on format detection)
       assert {:error, _} = CDM.parse(kvn)
-      # XML with leading whitespace routes to XML parser (same — will
+      # XML with leading whitespace routes to XML parser (same path will
       # fail on missing required fields, not on format detection)
       assert {:error, _} = CDM.parse(xml)
     end

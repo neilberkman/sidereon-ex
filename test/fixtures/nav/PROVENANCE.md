@@ -35,7 +35,7 @@ product family is the BKG / IGS MGEX archive.
 The committed file is the original decompressed product filtered to the GPS,
 Galileo, and BeiDou ephemeris records (the Keplerian constellations the broadcast
 evaluator supports), with the full original header preserved verbatim. The filter
-is a deterministic, reproducible pass — keep the header through `END OF HEADER`,
+is a deterministic, reproducible pass; keep the header through `END OF HEADER`,
 then keep only records whose first line begins with `G`, `E`, or `C` (continuation
 lines are space-indented and follow their record):
 
@@ -78,8 +78,8 @@ parser test and the `Orbis.GNSS.Broadcast` wrapper test.
 - **Source:** nav-solutions/data, `https://raw.githubusercontent.com/nav-solutions/data/main/NAV/V3/BRDC00GOP_R_20210010000_01D_MN.rnx.gz`.
 - **sha256** (`.gz`, as fetched): `1bb7bb0ca70fb1e11e366abd9126881d62b238b687ace7fba360002b61a12f09`.
 - **Content:** a merged BRDC header (GOP/Pecny) carrying `IONOSPHERIC CORR`
-  coefficients for GPS (`GPSA`/`GPSB`), Galileo (`GAL`), QZSS, NavIC, and — the
-  reason it is committed — **BeiDou** (`BDSA`/`BDSB`), which the other fixtures
+  coefficients for GPS (`GPSA`/`GPSB`), Galileo (`GAL`), QZSS, NavIC, and
+  especially **BeiDou** (`BDSA`/`BDSB`), which the other fixtures
   lack. Used to test `parse_iono_corrections` extracting the BeiDou Klobuchar-8
   coefficients. Vendored to the gnss crate only (header parse test). It has no
   orbit records, so it is not a solve fixture.

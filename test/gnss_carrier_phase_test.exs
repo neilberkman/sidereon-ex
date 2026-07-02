@@ -604,7 +604,7 @@ defmodule Sidereon.GNSS.CarrierPhaseTest do
       ]
 
       slips = CarrierPhase.detect_cycle_slips(arc)
-      # A non-numeric frequency is skipped, with nil combinations and no slip —
+      # A non-numeric frequency is skipped, with nil combinations and no slip,
       # never raised.
       assert Enum.all?(
                slips,

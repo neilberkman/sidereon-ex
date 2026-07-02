@@ -4,7 +4,7 @@
 //! `sidereon_core::atmosphere::ionosphere` public APIs, manages the parsed IONEX product as
 //! a Rustler resource handle, and encodes the results back. No Klobuchar
 //! polynomial, no single-layer-model geometry, and no grid interpolation lives
-//! here — those are the crate's responsibility.
+//! here; those are the crate's responsibility.
 //!
 //! - `klobuchar_delay/7` evaluates the GPS broadcast Klobuchar L1 model scaled
 //!   to the requested carrier, taking radians at the boundary (the public Elixir

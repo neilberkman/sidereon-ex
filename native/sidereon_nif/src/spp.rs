@@ -6,7 +6,7 @@
 //! strategy, and encodes the
 //! [`ReceiverSolution`] back. No transmit-time iteration, no least-squares
 //! numerics, no atmospheric
-//! model, and no frame conversion lives here — those are the crate's
+//! model, and no frame conversion lives here; those are the crate's
 //! responsibility. The SP3 product is reused from the [`Sp3Resource`] handle the
 //! `sp3_parse/1` NIF already returns; this call never touches the filesystem.
 //!
@@ -90,8 +90,8 @@ impl SppErrorReason {
 }
 
 /// Map an [`SppError`] onto its pure [`SppErrorReason`]. Total over the enum, so
-/// every variant — including the defensive `Singular` / `EphemerisLost` paths
-/// that real SP3 inputs do not naturally reach — has a tested mapping.
+/// every variant, including the defensive `Singular` / `EphemerisLost` paths
+/// that real SP3 inputs do not naturally reach, has a tested mapping.
 fn spp_error_reason(e: &SppError) -> SppErrorReason {
     match e {
         SppError::InvalidInput { .. } => SppErrorReason::InvalidInput,
@@ -276,6 +276,8 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             let reason = match r.reason {
                 RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris"),
                 RejectionReason::LowElevation => atom_from(env, "low_elevation"),
+                RejectionReason::SbasWithdrawn => atom_from(env, "sbas_withdrawn"),
+                RejectionReason::SbasIonoUncovered => atom_from(env, "sbas_iono_uncovered"),
             };
             (r.satellite_id.to_string(), reason)
         })
@@ -355,7 +357,7 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
 /// the outer-loop position step tolerance is left at the crate default. This is
 /// the only place the boundary touches the robust path, so the off path is a
 /// straight `None`.
-fn is_nil(term: Term<'_>) -> bool {
+pub(crate) fn is_nil(term: Term<'_>) -> bool {
     term.is_atom()
         && term
             .atom_to_string()
@@ -392,7 +394,7 @@ fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
 /// crate's concern: an out-of-range channel for an observed GLONASS satellite
 /// with the ionosphere requested surfaces as
 /// [`SppError::IonosphereUnsupported`], not a boundary rejection.
-fn decode_glonass_channels(term: Term<'_>) -> NifResult<BTreeMap<u8, i8>> {
+pub(crate) fn decode_glonass_channels(term: Term<'_>) -> NifResult<BTreeMap<u8, i8>> {
     let pairs: Vec<(u8, i8)> = term.decode().map_err(|_| {
         Error::Term(Box::new(
             "glonass_channels must be a list of {slot, channel} integer pairs",
@@ -495,6 +497,7 @@ pub(crate) fn build_solve_inputs(
         // Galileo NeQuick-G coefficients come from a broadcast NAV header; the
         // None fallback preserves the historical Klobuchar path bit-identically.
         galileo_nequick: None,
+        sbas_iono: None,
         // GLONASS FDMA channel map; empty by default (no GLONASS observation, or
         // ionosphere off). The SPP entry points set it from the caller-supplied
         // %{slot => channel} map via `decode_glonass_channels`; every non-GLONASS
@@ -510,7 +513,7 @@ pub(crate) fn build_solve_inputs(
 }
 
 /// Run the solve against any ephemeris source and encode the result term.
-fn solve_to_term<'a>(
+pub(crate) fn solve_to_term<'a>(
     env: Env<'a>,
     eph: &dyn EphemerisSource,
     inputs: &SolveInputs,

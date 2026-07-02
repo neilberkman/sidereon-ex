@@ -6,6 +6,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.CarrierPhase
   alias Sidereon.GNSS.Constellation
+  alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.DGNSS
   alias Sidereon.GNSS.Frequencies
   alias Sidereon.GNSS.Geometry
@@ -26,7 +27,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
 
-  @version "0.9.2"
+  @version "0.10.0"
   @source_url "https://github.com/neilberkman/sidereon-ex"
 
   def project do
@@ -49,7 +50,7 @@ defmodule Sidereon.MixProject do
   def application do
     [
       mod: {Sidereon.Application, []},
-      extra_applications: [:logger]
+      extra_applications: [:logger, :ssl]
     ]
   end
 
@@ -61,6 +62,7 @@ defmodule Sidereon.MixProject do
       {:rustler, "~> 0.37", optional: true},
       {:rustler_precompiled, "~> 0.9"},
       {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:quokka, "~> 2.13", only: [:dev, :test], runtime: false}
@@ -104,6 +106,7 @@ defmodule Sidereon.MixProject do
         "CHANGELOG.md",
         "guides/pass_prediction.md",
         "guides/accuracy.md",
+        "guides/data_acquisition.md",
         "guides/gnss_constellation_catalog.md",
         "examples/gnss_positioning.livemd"
       ],
@@ -141,13 +144,14 @@ defmodule Sidereon.MixProject do
           IonosphereFree,
           Ionosphere,
           Troposphere,
+          Data,
           Sidereon.GNSS.Time,
           CA,
           Correlator,
           LNAV,
           Ephemeris
         ],
-        "Data Sources": [Sidereon.Constellation],
+        "Data Sources": [Data, Sidereon.Constellation],
         "Batch Analysis": [Sidereon.Coverage, Sidereon.RF],
         Format: [TLE, OMM]
       ]

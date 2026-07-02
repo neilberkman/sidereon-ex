@@ -146,6 +146,40 @@ defmodule Sidereon.Angles do
     Sidereon.NIF.angles_earth_angular_radius(floats(satellite_gcrs_position))
   end
 
+  @doc "Angular separation between two non-zero vectors, in degrees."
+  @spec angular_separation({number(), number(), number()}, {number(), number(), number()}) :: float()
+  def angular_separation(a, b) do
+    Sidereon.NIF.angles_angular_separation(floats(a), floats(b))
+  end
+
+  @doc "Angular separation between two `{longitude_deg, latitude_deg}` pairs."
+  @spec angular_separation_coords({number(), number()}, {number(), number()}) :: float()
+  def angular_separation_coords({lon_a, lat_a}, {lon_b, lat_b}) do
+    Sidereon.NIF.angles_angular_separation_coords({lon_a / 1.0, lat_a / 1.0}, {lon_b / 1.0, lat_b / 1.0})
+  end
+
+  @doc "Position angle from the first `{longitude_deg, latitude_deg}` coordinate to the second, in degrees."
+  @spec position_angle({number(), number()}, {number(), number()}) :: float()
+  def position_angle({lon_a, lat_a}, {lon_b, lat_b}) do
+    Sidereon.NIF.angles_position_angle({lon_a / 1.0, lat_a / 1.0}, {lon_b / 1.0, lat_b / 1.0})
+  end
+
+  @doc "Solar beta angle for an orbit normal and Sun vector, in degrees."
+  @spec beta_angle({number(), number(), number()}, {number(), number(), number()}) :: float()
+  def beta_angle(orbit_normal, sun_position) do
+    Sidereon.NIF.angles_beta_angle(floats(orbit_normal), floats(sun_position))
+  end
+
+  @doc "Solar beta angle computed from position, velocity, and Sun vector, in degrees."
+  @spec beta_angle_from_state(
+          {number(), number(), number()},
+          {number(), number(), number()},
+          {number(), number(), number()}
+        ) :: float()
+  def beta_angle_from_state(r, v, sun_position) do
+    Sidereon.NIF.angles_beta_angle_from_state(floats(r), floats(v), floats(sun_position))
+  end
+
   @doc """
   Compute all standard angles for a satellite at a given time.
 

@@ -1,6 +1,9 @@
 mod angles;
 mod antex;
+mod astro_observe_almanac;
+mod astro_phase_b;
 mod atmosphere;
+mod bias;
 mod bodies;
 mod broadcast;
 mod broadcast_comparison;
@@ -12,7 +15,9 @@ mod constellation;
 mod consts;
 mod covariance;
 mod coverage;
+mod data;
 mod dgnss;
+mod drag;
 mod eclipse;
 mod elements;
 mod ephemeris;
@@ -47,10 +52,12 @@ mod rinex_obs;
 mod rtcm;
 mod rtk;
 mod rtk_filter;
+mod sbas;
 mod sgp4_batch;
 mod signal;
 mod sp3;
 mod spp;
+mod ssr;
 mod staleness;
 mod tides;
 mod time;
@@ -123,6 +130,31 @@ fn propagate_dp54<'a>(
         forces,
         abs_tol,
         rel_tol,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn propagate_dp54_with_drag<'a>(
+    env: Env<'a>,
+    position_km: Vec3,
+    velocity_km_s: Vec3,
+    dt_seconds: f64,
+    forces: Vec<String>,
+    abs_tol: f64,
+    rel_tol: f64,
+    drag: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let drag = Some(drag::decode_drag_parameters(drag)?);
+    propagation::propagate_dp54_impl_with_drag(
+        env,
+        position_km,
+        velocity_km_s,
+        dt_seconds,
+        forces,
+        abs_tol,
+        rel_tol,
+        drag,
     )
 }
 

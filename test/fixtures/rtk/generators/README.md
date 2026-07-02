@@ -19,7 +19,7 @@ shared per-epoch JSON shape by `pos_to_oracle.py`.
 - **Base reference position** (ARP): `49.144200524 12.878913935 666.0917`, the
   same fixed base used by the canonical `wtzr_wtzz_rtklib_oracle.json`.
 - **Truth:** the static antenna baseline of the co-located WTZR/WTZZ pair
-  (receivers do not move) — copied verbatim into every oracle's `truth` block.
+  (receivers do not move), copied verbatim into every oracle's `truth` block.
 
 The first two configs below each change exactly **one** variable from the
 canonical `l1_brdc_fix_and_hold` reference, so a parity failure isolates to that

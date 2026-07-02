@@ -6,7 +6,7 @@ defmodule Sidereon.CollisionTest do
   """
   use ExUnit.Case
 
-  # NASA CARA Omitron test case — states in ECI km/km/s, covariances in km²
+  # NASA CARA Omitron test case: states in ECI km/km/s, covariances in km²
   @omitron_params %{
     r1: {378.39559, 4305.721887, 5752.767554},
     v1: {2.360800244, 5.580331936, -4.322349039},
@@ -48,7 +48,7 @@ defmodule Sidereon.CollisionTest do
       {:ok, res_num} = Sidereon.Collision.probability(@omitron_params, method: :numerical)
       {:ok, res_alf} = Sidereon.Collision.probability(@omitron_params, method: :alfano_2005)
 
-      # Alfano is an independent derivation — it should match the Foster
+      # Alfano is an independent derivation; it should match the Foster
       # methods within ~1% for this well-conditioned geometry.
       assert_in_delta res_alf.pc, res_ea.pc, res_ea.pc * 0.01
       assert_in_delta res_alf.pc, res_num.pc, res_num.pc * 0.01

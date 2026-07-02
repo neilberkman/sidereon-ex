@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 
 use rustler::types::atom;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
-use sidereon_core::positioning::{EphemerisSource, KlobucharCoeffs, SppError};
+use sidereon_core::positioning::{EphemerisSource, KlobucharCoeffs, RobustConfig, SppError};
 use sidereon_core::quality::{
     self, FdeError, FdeOptions, FdeSppError, FdeSppOptions, PseudorangeVarianceModel,
     PseudorangeVarianceOptions, QualityError, RaimInput, RaimOptions, RaimWeights,
-    RangeChiSquareTest, RangeFdeOptions, RangeFdeResult, RangeFdeRow,
-    RangeMeasurementDiagnostic, SolutionValidationError, SolutionValidationOptions, WeightEntry,
+    RangeChiSquareTest, RangeFdeOptions, RangeFdeResult, RangeFdeRow, RangeMeasurementDiagnostic,
+    SolutionValidationError, SolutionValidationOptions, WeightEntry,
 };
 
 use crate::broadcast::BroadcastResource;
@@ -354,6 +354,123 @@ fn qc_fde_broadcast<'a>(
     )
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn qc_robust_fde_sp3<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    observations: Vec<(String, f64)>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: Tuple4,
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: Tuple4,
+    beta: Tuple4,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    p_fa: f64,
+    unit_weights: bool,
+    weights: Vec<(String, f64)>,
+    n_systems: Term<'a>,
+    max_iterations: u64,
+    max_pdop: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let inputs = crate::spp::build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        None,
+    )?;
+
+    encode_robust_fde_result(
+        env,
+        &handle.sp3,
+        inputs,
+        with_geodetic,
+        p_fa,
+        unit_weights,
+        weights,
+        n_systems,
+        max_iterations,
+        max_pdop,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn qc_robust_fde_broadcast<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<BroadcastResource>,
+    observations: Vec<(String, f64)>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: Tuple4,
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: Tuple4,
+    beta: Tuple4,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    p_fa: f64,
+    unit_weights: bool,
+    weights: Vec<(String, f64)>,
+    n_systems: Term<'a>,
+    max_iterations: u64,
+    max_pdop: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let mut inputs = crate::spp::build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        None,
+    )?;
+
+    if let Some(bds) = handle.store.iono_corrections().beidou {
+        inputs.beidou_klobuchar = Some(KlobucharCoeffs {
+            alpha: bds.alpha,
+            beta: bds.beta,
+        });
+    }
+
+    encode_robust_fde_result(
+        env,
+        &handle.store,
+        inputs,
+        with_geodetic,
+        p_fa,
+        unit_weights,
+        weights,
+        n_systems,
+        max_iterations,
+        max_pdop,
+    )
+}
+
 /// Standalone range RAIM/FDE over a caller-supplied linearized measurement set.
 ///
 /// Pure glue over `sidereon_core::quality::raim_fde_design`: decode the rows and
@@ -419,6 +536,56 @@ fn encode_fde_result<'a>(
 
     let result = quality::fde_spp(eph, &inputs, with_geodetic, &options);
 
+    encode_fde_result_term(env, result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_robust_fde_result<'a>(
+    env: Env<'a>,
+    eph: &dyn EphemerisSource,
+    inputs: sidereon_core::positioning::SolveInputs,
+    with_geodetic: bool,
+    p_fa: f64,
+    unit_weights: bool,
+    weights: Vec<(String, f64)>,
+    n_systems: Term<'a>,
+    max_iterations: u64,
+    max_pdop: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let validation = SolutionValidationOptions {
+        max_pdop: decode_optional_f64(max_pdop)?,
+        ..Default::default()
+    };
+    let options = FdeSppOptions {
+        fde: FdeOptions {
+            raim: RaimOptions {
+                p_fa,
+                weights: raim_weights(unit_weights, weights),
+                n_systems: decode_optional_isize(n_systems)?,
+            },
+            max_iterations: max_iterations as usize,
+        },
+        validation,
+    };
+
+    let result = quality::spp_robust_fde_driver(
+        eph,
+        &inputs,
+        with_geodetic,
+        RobustConfig::default(),
+        &options,
+    );
+
+    encode_fde_result_term(env, result)
+}
+
+fn encode_fde_result_term<'a>(
+    env: Env<'a>,
+    result: Result<
+        sidereon_core::quality::FdeResult<sidereon_core::positioning::ReceiverSolution>,
+        FdeError<FdeSppError>,
+    >,
+) -> NifResult<Term<'a>> {
     Ok(match result {
         Ok(result) => {
             let solution = crate::spp::encode_solution(env, &result.solution);

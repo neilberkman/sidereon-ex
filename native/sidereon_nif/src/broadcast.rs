@@ -197,9 +197,9 @@ fn broadcast_leap_seconds(handle: ResourceArc<BroadcastResource>) -> Option<f64>
 ///
 /// `t_j2000_s` is the query instant as a continuous second-of-J2000 in the
 /// GPST-aligned scale the crate's [`EphemerisSource`] contract expects (it maps
-/// that onto each system's own time — BDT for BeiDou, UTC-referenced for GLONASS
-/// — internally). Returns `{x_m, y_m, z_m, clock_s}` — ECEF meters and the
-/// satellite clock offset in seconds — or the atom `nil` when the product has no
+/// that onto each system's own time: BDT for BeiDou, UTC-referenced for GLONASS
+/// internally). Returns `{x_m, y_m, z_m, clock_s}`: ECEF meters and the
+/// satellite clock offset in seconds, or the atom `nil` when the product has no
 /// usable ephemeris for that satellite at that instant (the crate returns
 /// `None`). The miss is encoded as an atom rather than a tuple of NaNs, which the
 /// BEAM cannot represent. Pure glue over

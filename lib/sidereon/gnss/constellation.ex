@@ -8,8 +8,8 @@ defmodule Sidereon.GNSS.Constellation do
 
   The identity, parsing, validation, and diff logic lives in the `sidereon_core`
   `constellation` module (the shared Rust core), reached through the NIF. The
-  core covers all five GNSS constellations — **GPS, Galileo, GLONASS, BeiDou, and
-  QZSS** — so this module is multi-system: `from_celestrak_omm/2` dispatches on
+  core covers all five GNSS constellations: **GPS, Galileo, GLONASS, BeiDou, and
+  QZSS**, so this module is multi-system: `from_celestrak_omm/2` dispatches on
   the constellation atom (`:gps`, `:galileo`, `:glonass`, `:beidou`, `:qzss`) to
   the per-system identity adapter in the core.
 

@@ -51,6 +51,7 @@ defmodule Sidereon.GNSS.Positioning do
   alias Sidereon.Constants
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Positioning.Decode
+  alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Staleness
   alias Sidereon.GNSS.Staleness.StalenessMetadata
@@ -290,9 +291,8 @@ defmodule Sidereon.GNSS.Positioning do
       geometry is rank-deficient or whose PDOP exceeds the ceiling is refused
       with `{:error, {:degenerate_geometry, pdop}}` (a non-positive value is
       `{:error, {:invalid_option, :max_pdop}}`); default unset.
-    * `:robust` - reserved for a single core-backed SPP FDE driver. When `true`,
-      the binding returns `{:error, {:core_gap, :spp_robust_fde_driver}}`
-      rather than composing an FDE loop in Elixir.
+    * `:robust` - run the core robust SPP FDE driver. Requires an explicit
+      `:weights` map unless `:unsafe_unit_weights` is set.
 
   ### Optional convergence aids
 
@@ -344,7 +344,7 @@ defmodule Sidereon.GNSS.Positioning do
   the plausible geocentric-radius band), `{:no_convergence, rms_m}` (a
   converged-flagged fix with physically implausible post-fit residual RMS),
   `{:invalid_option, :max_pdop}`, `{:invalid_option, :coarse_search}`,
-  `{:core_gap, :spp_robust_fde_driver}`, or `{:invalid_option, key}` for a
+  `{:robust_requires_noise_model, :no_weights}`, or `{:invalid_option, key}` for a
   malformed `:huber`, `:huber_k`, `:huber_sigma`, or `:huber_max_iter`.
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
@@ -494,7 +494,8 @@ defmodule Sidereon.GNSS.Positioning do
           {:ok, [{:ok, Solution.t()} | {:error, term()}]} | {:error, term()}
   def solve_batch(source, requests, opts \\ [])
 
-  def solve_batch(%SP3{handle: handle}, requests, opts) when is_list(requests) do
+  def solve_batch(%SP3{} = source, requests, opts) when is_list(requests) do
+    handle = source.handle
     robust? = Keyword.get(opts, :robust, false)
     huber? = Keyword.get(opts, :huber, false)
     parallel? = Keyword.get(opts, :parallel, true)
@@ -524,11 +525,24 @@ defmodule Sidereon.GNSS.Positioning do
         {:error, {:incompatible_options, [:coarse_search, :robust]}}
 
       robust? ->
-        {:error, {:core_gap, :spp_robust_fde_driver}}
+        run_robust_batch(source, requests, opts)
 
       true ->
         run_batch(handle, requests, opts, coarse, parallel?)
     end
+  end
+
+  defp run_robust_batch(source, requests, opts) do
+    results =
+      Enum.map(requests, fn
+        {observations, epoch} ->
+          solve(source, observations, epoch, opts)
+
+        {observations, epoch, epoch_opts} when is_list(epoch_opts) ->
+          solve(source, observations, epoch, Keyword.merge(opts, epoch_opts))
+      end)
+
+    {:ok, results}
   end
 
   defp run_batch(handle, requests, opts, coarse, parallel?) do
@@ -629,7 +643,7 @@ defmodule Sidereon.GNSS.Positioning do
   defp decode_source({:broadcast, {:precise_degraded_unusable, metadata, spp_reason}}),
     do: {:broadcast, {:precise_degraded_unusable, Staleness.decode_metadata(metadata), spp_reason}}
 
-  defp dispatch(_source, source_tag, handle, observations, epoch, opts) do
+  defp dispatch(source, source_tag, handle, observations, epoch, opts) do
     robust? = Keyword.get(opts, :robust, false)
     huber? = Keyword.get(opts, :huber, false)
     coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
@@ -655,10 +669,39 @@ defmodule Sidereon.GNSS.Positioning do
         {:error, {:incompatible_options, [:coarse_search, :robust]}}
 
       robust? ->
-        {:error, {:core_gap, :spp_robust_fde_driver}}
+        run_robust_solve(source, observations, epoch, opts)
 
       true ->
         run_solve(source_tag, handle, observations, epoch, opts, coarse)
+    end
+  end
+
+  defp run_robust_solve(source, observations, epoch, opts) do
+    cond do
+      Keyword.has_key?(opts, :weights) ->
+        run_core_robust_solve(source, observations, epoch, opts)
+
+      Keyword.get(opts, :unsafe_unit_weights, false) == true ->
+        run_core_robust_solve(source, observations, epoch, Keyword.put(opts, :weights, :unit))
+
+      true ->
+        {:error, {:robust_requires_noise_model, :no_weights}}
+    end
+  end
+
+  defp run_core_robust_solve(source, observations, epoch, opts) do
+    case QC.robust_fde(source, observations, epoch, opts) do
+      {:ok, %{solution: solution, excluded: excluded, iterations: iterations}} ->
+        metadata =
+          Map.put(solution.metadata, :fde, %{
+            excluded: excluded,
+            iterations: iterations
+          })
+
+        {:ok, %{solution | metadata: metadata}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -796,7 +839,7 @@ defmodule Sidereon.GNSS.Positioning do
   # The GLONASS FDMA channel map, `%{slot => channel}`. Slots are GLONASS PRNs
   # (`u8`) and channels are the FDMA `k` index decoded as `i8` at the NIF; only
   # the type/range that the NIF boundary can carry is enforced here. Whether a
-  # channel is a *valid* GLONASS index ([-7, +6]) is the crate's concern — an
+  # channel is a *valid* GLONASS index ([-7, +6]) is the crate's concern; an
   # out-of-range channel for an observed GLONASS satellite with the ionosphere
   # requested surfaces as `{:ionosphere_unsupported, sat}`, not an option error.
   # Returned as a `[{slot, channel}]` list (the codebase idiom for map NIF args).

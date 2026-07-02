@@ -4,7 +4,7 @@
 # developing the next release before that version exists on crates.io, copy this
 # file to `config.toml` in this directory and set the path to your checkout.
 #
-# `config.toml` is gitignored — never commit a path override, or CI/external
+# `config.toml` is gitignored; never commit a path override, or CI/external
 # builds break again.
 #
 #   cp config.toml.example config.toml

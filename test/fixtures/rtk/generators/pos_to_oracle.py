@@ -7,7 +7,7 @@ Usage:
 
 Truth is the WTZR/WTZZ static antenna baseline (receivers do not move), copied
 verbatim from the existing Wettzell oracle, so kinematic-mode and multi-GNSS
-oracles share the same physical truth — only the RTKLIB processing changes.
+oracles share the same physical truth; only the RTKLIB processing changes.
 """
 import argparse
 import csv

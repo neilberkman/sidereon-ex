@@ -8,7 +8,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquares do
 
   The production ambiguity-resolution solver: LtDL factorization + integer-Gauss
   /permutation decorrelation reduction + modified-LAMBDA search. Correct for any
-  positive-definite covariance — it finds the true ILS optimum even on
+  positive-definite covariance; it finds the true ILS optimum even on
   strongly-correlated geometry, with no search box and no combinatorial blow-up.
   Gated against RTKLIB's own reference vectors in the Rust crate.
 
@@ -36,7 +36,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquares do
   Enumerates the lattice within `:radius_cycles` of each rounded float ambiguity,
   scoring `Δᵀ Q⁻¹ Δ`. Correct ONLY when the ILS optimum lies within that box
   (weakly-correlated geometry); on strongly-correlated covariance it returns a
-  suboptimal fix — use `search/3` (LAMBDA) for the general case. Kept as a fast
+  suboptimal fix. Use `search/3` (LAMBDA) for the general case. Kept as a fast
   in-regime alternative and as the documented box reference. Honors
   `:radius_cycles`, `:candidate_limit`, and `:ratio_threshold`.
   """

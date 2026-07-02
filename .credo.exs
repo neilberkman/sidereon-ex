@@ -181,7 +181,7 @@
         ],
         disabled: [
           # OperationOnSameValues: false-positive for IEEE 754 NaN/Inf detection
-          # in finite_number?/1 (rtk.ex) — the Rust NIF can return non-finite floats
+          # in finite_number?/1 (rtk.ex), because the Rust NIF can return non-finite floats
           # and `value - value == 0.0` is the standard BEAM idiom to detect them.
           {Credo.Check.Warning.OperationOnSameValues, []},
 

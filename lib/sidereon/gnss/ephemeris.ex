@@ -9,10 +9,9 @@ defmodule Sidereon.GNSS.Ephemeris do
   precise product or an `Sidereon.GNSS.Broadcast` navigation product, so a caller can
   swap precise for broadcast transparently; the dispatch is on the handle's type.
 
-  This is Elixir orchestration over the existing per-satellite evaluators
-  (`Sidereon.GNSS.SP3.position/3` and `Sidereon.GNSS.Broadcast.position/3`); no orbit
-  math lives here. The underlying products are parsed once into resource handles
-  and reused across every cell; no file is re-read per epoch.
+  The grid sampler delegates to the core `ephemeris::sample` API. The underlying
+  products are parsed once into resource handles and reused across every cell; no
+  file is re-read per epoch.
 
   The broadcast models follow IS-GPS-200 (GPS LNAV), the Galileo OS-SIS-ICD, and
   the BeiDou BDS-SIS-ICD; precise products are SP3-c / SP3-d (IGS).
@@ -59,6 +58,8 @@ defmodule Sidereon.GNSS.Ephemeris do
 
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.Time
+  alias Sidereon.NIF
 
   defmodule Row do
     @moduledoc """
@@ -122,10 +123,11 @@ defmodule Sidereon.GNSS.Ephemeris do
       raise ArgumentError, "window `to` (#{to}) precedes `from` (#{from})"
     end
 
-    epochs = epochs(from, to, step_s)
-
-    for sat_id <- sat_ids, epoch <- epochs do
-      eval_cell(source, sat_id, epoch)
+    with {:ok, start_s} <- Time.epoch_to_j2000_seconds_fractional(from),
+         {:ok, stop_s} <- Time.epoch_to_j2000_seconds_fractional(to) do
+      source
+      |> core_sample(sat_ids, start_s, stop_s, step_s / 1.0)
+      |> Enum.map(&decode_row(&1, from, start_s))
     end
   end
 
@@ -133,35 +135,30 @@ defmodule Sidereon.GNSS.Ephemeris do
     raise ArgumentError, "step_s must be a positive integer, got: #{inspect(step_s)}"
   end
 
-  # --- evaluation ----------------------------------------------------------
-
-  defp eval_cell(%SP3{} = sp3, sat_id, epoch) do
-    sp3
-    |> SP3.position(sat_id, epoch)
-    |> to_row(sat_id, epoch)
+  defp core_sample(%SP3{handle: handle}, sat_ids, start_s, stop_s, step_s) do
+    NIF.ephemeris_sample_sp3(handle, sat_ids, start_s, stop_s, step_s)
   end
 
-  defp eval_cell(%Broadcast{} = broadcast, sat_id, epoch) do
-    broadcast
-    |> Broadcast.position(sat_id, epoch)
-    |> to_row(sat_id, epoch)
+  defp core_sample(%Broadcast{handle: handle}, sat_ids, start_s, stop_s, step_s) do
+    NIF.ephemeris_sample_broadcast(handle, sat_ids, start_s, stop_s, step_s)
   end
 
-  # An SP3 state may carry a nil clock (no clock estimate for that satellite or
-  # epoch) even when the position is valid; the row keeps the position and reports
-  # the clock as nil, distinct from a whole-cell `:no_ephemeris` gap.
-  defp to_row({:ok, %SP3.State{x_m: x, y_m: y, z_m: z, clock_s: clk}}, sat_id, epoch) do
-    %Row{satellite_id: sat_id, epoch: epoch, status: :ok, x_m: x, y_m: y, z_m: z, clock_s: clk}
-  end
-
-  defp to_row({:ok, %Broadcast.State{x_m: x, y_m: y, z_m: z, clock_s: clk}}, sat_id, epoch) do
-    %Row{satellite_id: sat_id, epoch: epoch, status: :ok, x_m: x, y_m: y, z_m: z, clock_s: clk}
-  end
-
-  defp to_row({:error, _reason}, sat_id, epoch) do
+  defp decode_row(%{status: "valid", position_ecef_m: {x, y, z}} = row, from, start_s) do
     %Row{
-      satellite_id: sat_id,
-      epoch: epoch,
+      satellite_id: row.satellite_id,
+      epoch: row_epoch(row.epoch_j2000_s, from, start_s),
+      status: :ok,
+      x_m: x,
+      y_m: y,
+      z_m: z,
+      clock_s: row.clock_s
+    }
+  end
+
+  defp decode_row(row, from, start_s) do
+    %Row{
+      satellite_id: row.satellite_id,
+      epoch: row_epoch(row.epoch_j2000_s, from, start_s),
       status: :no_ephemeris,
       x_m: nil,
       y_m: nil,
@@ -170,12 +167,14 @@ defmodule Sidereon.GNSS.Ephemeris do
     }
   end
 
-  # --- helpers -------------------------------------------------------------
+  defp row_epoch(epoch_j2000_s, from, start_s) do
+    offset_us = round((epoch_j2000_s - start_s) * 1_000_000)
+    epoch = NaiveDateTime.add(from, offset_us, :microsecond)
 
-  defp epochs(from, to, step_s) do
-    total_s = NaiveDateTime.diff(to, from, :second)
-    n = div(total_s, step_s)
-
-    for i <- 0..n//1, do: NaiveDateTime.add(from, i * step_s, :second)
+    if rem(offset_us, 1_000_000) == 0 and elem(from.microsecond, 0) == 0 do
+      NaiveDateTime.truncate(epoch, :second)
+    else
+      epoch
+    end
   end
 end

@@ -38,7 +38,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquaresTest do
     @opts %{radius_cycles: 1, ratio_threshold: 3.0, candidate_limit: 100}
 
     test "undersized covariance" do
-      # 2 ambiguities, 1x1 covariance — must not panic / return :nif_panicked.
+      # 2 ambiguities, 1x1 covariance: must not panic / return :nif_panicked.
       f = %{"A" => 0.1, "B" => 0.2}
       assert {:error, {:invalid_dimensions, 2, 1}} = IntegerLeastSquares.search(f, [[1.0]], @opts)
 
@@ -47,7 +47,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquaresTest do
     end
 
     test "oversized covariance" do
-      # 1 ambiguity, 2x2 covariance — must not silently use a submatrix.
+      # 1 ambiguity, 2x2 covariance: must not silently use a submatrix.
       f = %{"A" => 0.1}
       cov = [[1.0, 0.0], [0.0, 1.0]]
       assert {:error, {:invalid_dimensions, 1, 2}} = IntegerLeastSquares.search(f, cov, @opts)

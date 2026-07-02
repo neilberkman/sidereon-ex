@@ -194,11 +194,32 @@ defmodule Sidereon.GNSS.QC do
   def fde(source, observations, epoch, opts \\ [])
 
   def fde(%SP3{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    fde_impl(:sp3, handle, observations, epoch, opts)
+    fde_impl(:sp3, handle, observations, epoch, opts, false)
   end
 
   def fde(%Broadcast{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    fde_impl(:broadcast, handle, observations, epoch, opts)
+    fde_impl(:broadcast, handle, observations, epoch, opts, false)
+  end
+
+  @doc """
+  Core robust-reweighted SPP under the RAIM/FDE exclusion loop.
+  """
+  @spec robust_fde(term(), [Positioning.observation()], Positioning.epoch(), keyword()) ::
+          {:ok,
+           %{
+             solution: Solution.t(),
+             excluded: [{String.t(), :raim_excluded}],
+             iterations: non_neg_integer()
+           }}
+          | {:error, term()}
+  def robust_fde(source, observations, epoch, opts \\ [])
+
+  def robust_fde(%SP3{handle: handle}, observations, epoch, opts) when is_list(observations) do
+    fde_impl(:sp3, handle, observations, epoch, opts, true)
+  end
+
+  def robust_fde(%Broadcast{handle: handle}, observations, epoch, opts) when is_list(observations) do
+    fde_impl(:broadcast, handle, observations, epoch, opts, true)
   end
 
   @doc """
@@ -322,7 +343,7 @@ defmodule Sidereon.GNSS.QC do
     }
   end
 
-  defp fde_impl(source, handle, observations, epoch, opts) do
+  defp fde_impl(source, handle, observations, epoch, opts, robust?) do
     huber? = Keyword.get(opts, :huber, false)
 
     cond do
@@ -333,11 +354,11 @@ defmodule Sidereon.GNSS.QC do
         {:error, {:invalid_option, :huber}}
 
       true ->
-        run_core_fde(source, handle, observations, epoch, opts)
+        run_core_fde(source, handle, observations, epoch, opts, robust?)
     end
   end
 
-  defp run_core_fde(source, handle, observations, epoch, opts) do
+  defp run_core_fde(source, handle, observations, epoch, opts, robust?) do
     p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
     weights_opt = Keyword.get(opts, :weights, :unit)
 
@@ -352,9 +373,11 @@ defmodule Sidereon.GNSS.QC do
       max_pdop = Keyword.get(opts, :max_pdop)
 
       nif_fun =
-        case source do
-          :sp3 -> :qc_fde_sp3
-          :broadcast -> :qc_fde_broadcast
+        case {source, robust?} do
+          {:sp3, false} -> :qc_fde_sp3
+          {:broadcast, false} -> :qc_fde_broadcast
+          {:sp3, true} -> :qc_robust_fde_sp3
+          {:broadcast, true} -> :qc_robust_fde_broadcast
         end
 
       result =

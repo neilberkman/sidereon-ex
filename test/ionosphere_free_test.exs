@@ -324,7 +324,7 @@ defmodule Sidereon.GNSS.IonosphereFreeTest do
       # the forward model. The first-order delay is dispersive (K_slant / f^2); the
       # slant constant is a vertical TEC scaled by a standard obliquity (mapping)
       # factor that grows toward the horizon, so the delay is NOT common-mode
-      # across satellites — it varies with geometry and so genuinely biases the
+      # across satellites; it varies with geometry and so genuinely biases the
       # single-frequency position, while still obeying the 1/f^2 law per band so
       # the combination cancels it exactly.
       preds =

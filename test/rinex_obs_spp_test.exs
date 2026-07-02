@@ -4,8 +4,8 @@ defmodule Sidereon.GNSS.RINEX.ObservationsSppTest do
   the CRINEX, extract single-frequency pseudoranges, solve against the matching
   broadcast navigation product, and recover the receiver's surveyed position.
 
-  This proves the whole last mile — CRINEX decode, RINEX 3 observation parse,
-  pseudorange extraction, and the solve — on real data for the ESBC00DNK station
+  This proves the whole last mile: CRINEX decode, RINEX 3 observation parse,
+  pseudorange extraction, and the solve on real data for the ESBC00DNK station
   (Esbjerg, Denmark) at 2020-06-25 00:00 GPST.
   """
   use ExUnit.Case, async: true

@@ -1,21 +1,21 @@
 # Sidereon Architecture
 
-Satellite toolkit for Elixir — orbit propagation, coordinate transformations, orbit determination, conjunction assessment, and ground station operations. Rust NIF backend with bit-exact Skyfield parity on coordinate transforms.
+Satellite toolkit for Elixir: orbit propagation, coordinate transformations, orbit determination, conjunction assessment, and ground station operations. Rust NIF backend with bit-exact Skyfield parity on coordinate transforms.
 
 ## Module Structure
 
 ```
-Sidereon                         — public API entry point
-Sidereon.TLE                     — TLE struct and parser
-Sidereon.SGP4                    — orbit propagation (TLE → TEME state vectors)
-Sidereon.Coordinates             — frame transformations (TEME → GCRS → ITRS → geodetic → topocentric)
-Sidereon.Passes                  — ground station visibility / access windows
-Sidereon.Doppler                 — range rate and Doppler shift
-Sidereon.Eclipse                 — sunlit/penumbra/umbra status
-Sidereon.Atmosphere              — NRLMSISE-00 atmospheric density model
-Sidereon.Ephemeris               — JPL SPK/BSP reader (Sun, Moon, planets)
-Sidereon.Angles                  — Sun/Moon angles, phase angle, Earth angular radius
-Sidereon.NIF                     — private Rust NIF bindings (not part of public API)
+Sidereon                         : public API entry point
+Sidereon.TLE                     : TLE struct and parser
+Sidereon.SGP4                    : orbit propagation (TLE → TEME state vectors)
+Sidereon.Coordinates             : frame transformations (TEME → GCRS → ITRS → geodetic → topocentric)
+Sidereon.Passes                  : ground station visibility / access windows
+Sidereon.Doppler                 : range rate and Doppler shift
+Sidereon.Eclipse                 : sunlit/penumbra/umbra status
+Sidereon.Atmosphere              : NRLMSISE-00 atmospheric density model
+Sidereon.Ephemeris               : JPL SPK/BSP reader (Sun, Moon, planets)
+Sidereon.Angles                  : Sun/Moon angles, phase angle, Earth angular radius
+Sidereon.NIF                     : private Rust NIF bindings (not part of public API)
 ```
 
 ## Rust NIF Architecture
@@ -24,22 +24,22 @@ The NIF is implemented in Rust via Rustler (`native/sidereon_nif/`):
 
 ```
 src/
-  lib.rs                      — NIF entry points
-  propagation.rs              — SGP4 propagation (wraps sgp4 crate)
-  coordinates.rs              — TEME→GCRS→ITRS pipeline
-  nutation.rs                 — IAU2000A nutation (678 lunisolar + 687 planetary terms)
-  precession.rs               — IAU2006 precession + frame bias
-  matrix.rs                   — matrix operations (Kahan-compensated triple product)
-  time_scales.rs              — UTC→TAI→TT→TDB→UT1 conversions
-  iod.rs                      — Gibbs and Herrick-Gibbs orbit determination
-  gauss.rs                    — Gauss angles-only IOD
-  lambert.rs                  — Lambert solver (Battin method)
-  conjunction.rs              — Closest approach finder
-  atmosphere.rs               — NRLMSISE-00 atmospheric density
-  doppler.rs                  — Doppler shift computation
-  ephemeris.rs                — JPL SPK/BSP ephemeris reader
-  iau2000a_data.rs            — nutation coefficient tables (IERS/ERFA source)
-  iers_data.rs                — embedded IERS delta-T / UT1-UTC table
+  lib.rs                      : NIF entry points
+  propagation.rs              : SGP4 propagation (wraps sgp4 crate)
+  coordinates.rs              : TEME→GCRS→ITRS pipeline
+  nutation.rs                 : IAU2000A nutation (678 lunisolar + 687 planetary terms)
+  precession.rs               : IAU2006 precession + frame bias
+  matrix.rs                   : matrix operations (Kahan-compensated triple product)
+  time_scales.rs              : UTC→TAI→TT→TDB→UT1 conversions
+  iod.rs                      : Gibbs and Herrick-Gibbs orbit determination
+  gauss.rs                    : Gauss angles-only IOD
+  lambert.rs                  : Lambert solver (Battin method)
+  conjunction.rs              : Closest approach finder
+  atmosphere.rs               : NRLMSISE-00 atmospheric density
+  doppler.rs                  : Doppler shift computation
+  ephemeris.rs                : JPL SPK/BSP ephemeris reader
+  iau2000a_data.rs            : nutation coefficient tables (IERS/ERFA source)
+  iers_data.rs                : embedded IERS delta-T / UT1-UTC table
 ```
 
 ### FMA Discipline
@@ -69,5 +69,5 @@ mix test --include skyfield_parity --exclude spk_file       # parity tests
 
 ## Test Tags
 
-- `:skyfield_parity` — bit-exact 0 ULP coordinate transform verification
-- `:spk_file` — requires JPL DE421 BSP file at `/tmp/de421.bsp`
+- `:skyfield_parity`: bit-exact 0 ULP coordinate transform verification
+- `:spk_file`: requires JPL DE421 BSP file at `/tmp/de421.bsp`
