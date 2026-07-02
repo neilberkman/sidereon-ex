@@ -17,7 +17,7 @@ defmodule Sidereon.PhaseBApiTest do
   alias Sidereon.OrbitalElements
   alias Sidereon.Terrain
 
-  @core_fixtures "/tmp/sid-integration/crates/sidereon-core/tests/fixtures"
+  @core_fixtures Path.join(__DIR__, "fixtures")
 
   test "anomaly conversions and Kepler solver delegate to core" do
     assert {:ok, solution} = Anomaly.solve_kepler(1.0, 0.1)
