@@ -5,13 +5,50 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      rebuild_existing_assets:
+        description: "Rebuild and replace assets even if this tag already has release archives"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
+  asset-check:
+    name: Check release assets
+    runs-on: ubuntu-22.04
+    outputs:
+      should-build: ${{ steps.check.outputs.should-build }}
+    steps:
+      - name: Check whether this tag already has release archives
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          REBUILD_EXISTING_ASSETS: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_existing_assets || false }}
+        run: |
+          if [[ "$REBUILD_EXISTING_ASSETS" == "true" ]]; then
+            echo "should-build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          asset_count="$(gh release view "$REF_NAME" --repo "$REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+          if [[ "$asset_count" -gt 0 ]]; then
+            echo "Release $REF_NAME already has $asset_count assets; skipping rebuild."
+            echo "should-build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No existing assets found for $REF_NAME; building precompiled NIFs."
+            echo "should-build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   precompile:
     name: ${{ matrix.nif }} / ${{ matrix.job.target }}
+    needs: asset-check
+    if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -112,9 +149,9 @@ jobs:
 
   publish-release-assets:
     name: Publish release assets
-    needs: precompile
+    needs: [asset-check, precompile]
     runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && needs.asset-check.outputs.should-build == 'true'
 
     steps:
       - name: Download all artifacts

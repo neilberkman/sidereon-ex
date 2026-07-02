@@ -14,12 +14,19 @@ SIDEREON_BUILD=1 mix compile
 
 The precompiled archive workflow is `.github/workflows/precompiled-nifs.yml`.
 After tagging a release and waiting for the archives to attach to the GitHub
-Release, generate the checksum file before publishing Hex:
+Release, generate the checksum file, commit it, and move the tag to the final
+publish commit before publishing or replacing Hex:
 
 ```bash
 mix rustler_precompiled.download Sidereon.NIF --all --print
 mix hex.build --unpack
+git tag -f vX.Y.Z
+git push --force origin vX.Y.Z
 ```
 
 The unpack check should include `checksum-Elixir.Sidereon.NIF.exs` and should not
 include `native/sidereon_nif/target`.
+
+Pushing a tag that already has release archives only runs the asset check and
+skips the rebuild. To intentionally rebuild and replace archives, run the
+workflow manually with `rebuild_existing_assets` enabled.
