@@ -29,12 +29,29 @@ defmodule Sidereon.GNSS.SBAS do
     @moduledoc "Decoded SBAS message metadata."
     @enforce_keys [:kind, :message_type, :preamble, :details]
     defstruct [:kind, :message_type, :preamble, :details]
+
+    @type t :: %__MODULE__{
+            kind: atom() | String.t(),
+            message_type: integer(),
+            preamble: integer(),
+            details: String.t()
+          }
   end
 
   defmodule LogBlock do
     @moduledoc "One SBAS log block with decoded message metadata."
     @enforce_keys [:satellite_id, :epoch_scale, :week, :tow_s, :form, :bytes, :message]
     defstruct [:satellite_id, :epoch_scale, :week, :tow_s, :form, :bytes, :message]
+
+    @type t :: %__MODULE__{
+            satellite_id: String.t(),
+            epoch_scale: String.t(),
+            week: integer(),
+            tow_s: float(),
+            form: String.t(),
+            bytes: [byte()],
+            message: Message.t()
+          }
   end
 
   @doc "Decode one 250-bit framed or 226-bit body SBAS message."

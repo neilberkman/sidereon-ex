@@ -21,6 +21,12 @@ defmodule Sidereon.GNSS.SSR do
     @moduledoc "SSR solution identity."
     @enforce_keys [:source, :provider_id, :solution_id]
     defstruct [:source, :provider_id, :solution_id]
+
+    @type t :: %__MODULE__{
+            source: atom() | String.t(),
+            provider_id: integer(),
+            solution_id: integer()
+          }
   end
 
   defmodule OrbitCorrection do
@@ -55,6 +61,22 @@ defmodule Sidereon.GNSS.SSR do
       :crs_regional,
       :reference_point
     ]
+
+    @type t :: %__MODULE__{
+            solution: Solution.t(),
+            iode: integer(),
+            iod_ssr: integer(),
+            radial_m: float(),
+            along_m: float(),
+            cross_m: float(),
+            radial_rate_m_s: float(),
+            along_rate_m_s: float(),
+            cross_rate_m_s: float(),
+            ref_epoch_j2000_s: float(),
+            update_interval_s: float(),
+            crs_regional: boolean(),
+            reference_point: String.t()
+          }
   end
 
   defmodule ClockCorrection do
@@ -79,6 +101,17 @@ defmodule Sidereon.GNSS.SSR do
       :update_interval_s,
       :high_rate_c0_m
     ]
+
+    @type t :: %__MODULE__{
+            solution: Solution.t(),
+            iod_ssr: integer(),
+            c0_m: float(),
+            c1_m_s: float(),
+            c2_m_s2: float(),
+            ref_epoch_j2000_s: float(),
+            update_interval_s: float(),
+            high_rate_c0_m: float() | nil
+          }
   end
 
   @doc "Create an empty correction store."

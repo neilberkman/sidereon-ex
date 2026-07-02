@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 0.9"}]
+  [{:sidereon, "~> 0.10"}]
 end
 ```
 
@@ -92,7 +92,7 @@ observations and a product in, a typed solution out.
 
 A runnable [`sidereon.livemd`](sidereon.livemd) walks through propagation,
 positioning, and conjunction screening; more notebooks live under
-[`examples/`](examples).
+[the examples directory](https://github.com/neilberkman/sidereon-ex/tree/main/examples).
 
 ## What's in the box
 

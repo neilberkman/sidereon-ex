@@ -92,6 +92,8 @@ defmodule Sidereon.MixProject do
       "native/sidereon_nif/Cargo*",
       "mix.exs",
       "README.md",
+      "sidereon.livemd",
+      "examples",
       "CHANGELOG.md",
       "LICENSE"
     ] ++ Path.wildcard("checksum-*.exs")
@@ -99,10 +101,11 @@ defmodule Sidereon.MixProject do
 
   defp docs do
     [
-      main: "Sidereon",
+      main: "sidereon",
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       extras: [
         "README.md",
+        "sidereon.livemd",
         "CHANGELOG.md",
         "guides/pass_prediction.md",
         "guides/accuracy.md",
