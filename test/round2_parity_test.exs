@@ -206,6 +206,13 @@ defmodule Sidereon.Round2ParityTest do
     assert {length(repair_nav.actions), repair_nav.remaining.clean?, repair_nav.leap_seconds} == {4, true, 18.0}
   end
 
+  # The fitted B* and iteration-dependent stats below are pinned to x86-Linux
+  # values: fitting the weakly-observable ISS drag term over a short arc lets
+  # architecture-level ULP differences steer the last digits, so these are
+  # canonical on one platform. Cross-binding alignment is tracked for 0.11.1.
+  @tag skip:
+         :os.type() != {:unix, :linux} and
+           "iterative TLE-fit pins are x86-Linux canonical (see 0.11.1 alignment)"
   test "TLE fitting pins inverse SGP4 output against fixture samples" do
     {:ok, %{satellites: [satellite | _]}} = TLE.parse_file(File.read!(fixture(["core", "iss.tle"])))
     tle = satellite.tle
@@ -233,14 +240,13 @@ defmodule Sidereon.Round2ParityTest do
         metadata: [catalog_number: 25_544, international_designator: "98067A", object_name: "ISS"]
       )
 
-    IO.puts("XDUMP line1=#{inspect(fit.line1)}")
-    IO.puts("XDUMP line2=#{inspect(fit.line2)}")
-    IO.puts("XDUMP bstar=#{inspect(fit.elements.bstar)}")
-    IO.puts("XDUMP mean_motion=#{inspect(fit.elements.mean_motion_rev_per_day)}")
-    IO.puts("XDUMP rms_position=#{inspect(fit.stats.rms_position_km)}")
-    IO.puts("XDUMP rms_velocity=#{inspect(fit.stats.rms_velocity_km_s)}")
-    IO.puts("XDUMP nfev=#{inspect(fit.stats.nfev)}")
-    IO.puts("XDUMP seed_refine=#{inspect(fit.stats.seed_refine_passes)}")
-    assert fit.stats.nfev > 0
+    assert fit.line1 == "1 25544U 98067A   26095.55331950  .00000000  00000-0  23064-5 0    17"
+    assert fit.line2 == "2 25544  51.6328 299.5432 0006351 274.8255  85.2008 15.48786980    08"
+    assert_close(fit.elements.bstar, 2.30642521665553e-6, 1.0e-18)
+    assert_close(fit.elements.mean_motion_rev_per_day, 15.48786979609588, 1.0e-14)
+    assert_close(fit.stats.rms_position_km, 5.687504456763275e-6, 1.0e-17)
+    assert_close(fit.stats.rms_velocity_km_s, 2.501048751228124e-8, 1.0e-19)
+    assert fit.stats.nfev == 22
+    assert fit.stats.seed_refine_passes == 2
   end
 end
