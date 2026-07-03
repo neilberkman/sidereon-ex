@@ -33,6 +33,323 @@ defmodule Sidereon.GNSS.QC do
   @default_temperature_k Constants.surface_met_temperature_k()
   @default_relative_humidity Constants.surface_met_relative_humidity()
 
+  defmodule ObservationReport do
+    @moduledoc "RINEX observation QC report."
+    alias Sidereon.GNSS.QC.ClockJump
+    alias Sidereon.GNSS.QC.CycleSlipQc
+    alias Sidereon.GNSS.QC.DataGap
+    alias Sidereon.GNSS.QC.MultipathReport
+    alias Sidereon.GNSS.QC.ObservationFinding
+    alias Sidereon.GNSS.QC.ObservationHeader
+    alias Sidereon.GNSS.QC.ObservationNote
+    alias Sidereon.GNSS.QC.SatelliteObservation
+    alias Sidereon.GNSS.QC.SatelliteSignal
+    alias Sidereon.GNSS.QC.SystemObservation
+    alias Sidereon.GNSS.QC.SystemSignal
+
+    @derive {Inspect, except: [:handle]}
+    defstruct [
+      :handle,
+      :header,
+      :total_epoch_records,
+      :observation_epochs,
+      :event_records,
+      :power_failure_epochs,
+      :skipped_records,
+      :interval_s,
+      :interval_source,
+      :missing_epochs,
+      data_gaps: [],
+      clock_jumps: [],
+      cycle_slips: nil,
+      multipath: nil,
+      systems: [],
+      satellites: [],
+      satellite_signals: [],
+      system_signals: [],
+      lint_findings: [],
+      notes: []
+    ]
+
+    @type t :: %__MODULE__{
+            handle: reference(),
+            header: ObservationHeader.t(),
+            total_epoch_records: non_neg_integer(),
+            observation_epochs: non_neg_integer(),
+            event_records: non_neg_integer(),
+            power_failure_epochs: non_neg_integer(),
+            skipped_records: non_neg_integer(),
+            interval_s: float() | nil,
+            interval_source: String.t(),
+            missing_epochs: non_neg_integer(),
+            data_gaps: [DataGap.t()],
+            clock_jumps: [ClockJump.t()],
+            cycle_slips: CycleSlipQc.t(),
+            multipath: MultipathReport.t(),
+            systems: [SystemObservation.t()],
+            satellites: [SatelliteObservation.t()],
+            satellite_signals: [SatelliteSignal.t()],
+            system_signals: [SystemSignal.t()],
+            lint_findings: [ObservationFinding.t()],
+            notes: [ObservationNote.t()]
+          }
+  end
+
+  defmodule ObservationHeader do
+    @moduledoc "Header metadata copied into a QC report."
+    alias Sidereon.GNSS.QC.ObservationAntenna
+    alias Sidereon.GNSS.QC.ObservationReceiver
+    alias Sidereon.GNSS.QC.ObservationTime
+
+    defstruct [
+      :marker_name,
+      :marker_number,
+      :marker_type,
+      :receiver,
+      :antenna,
+      :approx_position_m,
+      :antenna_delta_hen_m,
+      :time_of_first_obs,
+      :time_of_last_obs,
+      :duration_s
+    ]
+
+    @type t :: %__MODULE__{
+            marker_name: String.t() | nil,
+            marker_number: String.t() | nil,
+            marker_type: String.t() | nil,
+            receiver: ObservationReceiver.t() | nil,
+            antenna: ObservationAntenna.t() | nil,
+            approx_position_m: {float(), float(), float()} | nil,
+            antenna_delta_hen_m: {float(), float(), float()} | nil,
+            time_of_first_obs: ObservationTime.t() | nil,
+            time_of_last_obs: ObservationTime.t() | nil,
+            duration_s: float() | nil
+          }
+  end
+
+  defmodule ObservationReceiver do
+    @moduledoc "Receiver identity from `REC # / TYPE / VERS`."
+    defstruct [:number, :receiver_type, :version]
+
+    @type t :: %__MODULE__{
+            number: String.t(),
+            receiver_type: String.t(),
+            version: String.t()
+          }
+  end
+
+  defmodule ObservationAntenna do
+    @moduledoc "Antenna identity from `ANT # / TYPE`."
+    defstruct [:number, :antenna_type]
+
+    @type t :: %__MODULE__{number: String.t(), antenna_type: String.t()}
+  end
+
+  defmodule ObservationTime do
+    @moduledoc "Observation epoch with an optional RINEX time-scale label."
+    defstruct [:epoch, :time_scale]
+
+    @type t :: %__MODULE__{
+            epoch: {{integer(), integer(), integer()}, {integer(), integer(), float()}},
+            time_scale: String.t() | nil
+          }
+  end
+
+  defmodule DataGap do
+    @moduledoc "Detected gap between adjacent observation epochs."
+    defstruct [:start_epoch, :end_epoch, :nominal_interval_s, :observed_delta_s, :missing_epochs]
+
+    @type t :: %__MODULE__{
+            start_epoch: term(),
+            end_epoch: term(),
+            nominal_interval_s: float(),
+            observed_delta_s: float(),
+            missing_epochs: non_neg_integer()
+          }
+  end
+
+  defmodule SystemObservation do
+    @moduledoc "Per-constellation observation completeness row."
+    defstruct [
+      :system,
+      :satellites_seen,
+      :epochs_with_observations,
+      :value_observations,
+      :expected_observations,
+      :completeness_ratio,
+      :gap_count,
+      :total_gap_s
+    ]
+
+    @type t :: %__MODULE__{
+            system: String.t(),
+            satellites_seen: non_neg_integer(),
+            epochs_with_observations: non_neg_integer(),
+            value_observations: non_neg_integer(),
+            expected_observations: non_neg_integer(),
+            completeness_ratio: float() | nil,
+            gap_count: non_neg_integer(),
+            total_gap_s: float()
+          }
+  end
+
+  defmodule SatelliteObservation do
+    @moduledoc "Per-satellite observation completeness row."
+    defstruct [:satellite, :epochs_with_observations, :value_observations]
+
+    @type t :: %__MODULE__{
+            satellite: String.t(),
+            epochs_with_observations: non_neg_integer(),
+            value_observations: non_neg_integer()
+          }
+  end
+
+  defmodule SsiHistogram do
+    @moduledoc "Histogram over RINEX SSI digits."
+    defstruct counts: []
+
+    @type t :: %__MODULE__{counts: [non_neg_integer()]}
+  end
+
+  defmodule SnrStats do
+    @moduledoc "Summary statistics over raw numeric S-code observations."
+    defstruct [:n, :mean, :min, :max, :std]
+
+    @type t :: %__MODULE__{
+            n: non_neg_integer(),
+            mean: float(),
+            min: float(),
+            max: float(),
+            std: float() | nil
+          }
+  end
+
+  defmodule SatelliteSignal do
+    @moduledoc "Per-satellite, per-code observation completeness row."
+    alias Sidereon.GNSS.QC.SnrStats
+    alias Sidereon.GNSS.QC.SsiHistogram
+
+    defstruct [:satellite, :code, :value_observations, :ssi, :snr]
+
+    @type t :: %__MODULE__{
+            satellite: String.t(),
+            code: String.t(),
+            value_observations: non_neg_integer(),
+            ssi: SsiHistogram.t() | nil,
+            snr: SnrStats.t() | nil
+          }
+  end
+
+  defmodule SystemSignal do
+    @moduledoc "Per-constellation, per-code observation completeness row."
+    alias Sidereon.GNSS.QC.SnrStats
+    alias Sidereon.GNSS.QC.SsiHistogram
+
+    defstruct [:system, :code, :value_observations, :ssi, :snr]
+
+    @type t :: %__MODULE__{
+            system: String.t(),
+            code: String.t(),
+            value_observations: non_neg_integer(),
+            ssi: SsiHistogram.t() | nil,
+            snr: SnrStats.t() | nil
+          }
+  end
+
+  defmodule ObservationFinding do
+    @moduledoc "Compact lint finding retained by a QC report."
+    defstruct [:code, :severity, :spec_ref]
+
+    @type t :: %__MODULE__{code: String.t(), severity: String.t(), spec_ref: String.t()}
+  end
+
+  defmodule ClockJump do
+    @moduledoc "Detected receiver-clock jump."
+    defstruct [:epoch_index, :epoch, :delta_s]
+
+    @type t :: %__MODULE__{epoch_index: non_neg_integer(), epoch: term(), delta_s: float()}
+  end
+
+  defmodule CycleSlipQc do
+    @moduledoc "Aggregate dual-frequency cycle-slip counts."
+    alias Sidereon.GNSS.QC.SystemCycleSlipQc
+
+    defstruct [:observations, :total_slips, :observations_per_slip, by_system: []]
+
+    @type t :: %__MODULE__{
+            observations: non_neg_integer(),
+            total_slips: non_neg_integer(),
+            observations_per_slip: float() | nil,
+            by_system: [SystemCycleSlipQc.t()]
+          }
+  end
+
+  defmodule SystemCycleSlipQc do
+    @moduledoc "Per-constellation cycle-slip counts."
+    defstruct [:system, :observations, :slips, :observations_per_slip]
+
+    @type t :: %__MODULE__{
+            system: String.t(),
+            observations: non_neg_integer(),
+            slips: non_neg_integer(),
+            observations_per_slip: float() | nil
+          }
+  end
+
+  defmodule MultipathReport do
+    @moduledoc "MP1/MP2 multipath RMS report."
+    alias Sidereon.GNSS.QC.SatelliteMultipath
+    alias Sidereon.GNSS.QC.SystemMultipath
+
+    defstruct satellites: [], systems: []
+
+    @type t :: %__MODULE__{
+            satellites: [SatelliteMultipath.t()],
+            systems: [SystemMultipath.t()]
+          }
+  end
+
+  defmodule SatelliteMultipath do
+    @moduledoc "Per-satellite MP1/MP2 RMS row."
+    alias Sidereon.GNSS.QC.MultipathStats
+
+    defstruct [:satellite, :mp1, :mp2]
+
+    @type t :: %__MODULE__{
+            satellite: String.t(),
+            mp1: MultipathStats.t() | nil,
+            mp2: MultipathStats.t() | nil
+          }
+  end
+
+  defmodule SystemMultipath do
+    @moduledoc "Per-constellation MP1/MP2 RMS row."
+    alias Sidereon.GNSS.QC.MultipathStats
+
+    defstruct [:system, :mp1, :mp2]
+
+    @type t :: %__MODULE__{
+            system: String.t(),
+            mp1: MultipathStats.t() | nil,
+            mp2: MultipathStats.t() | nil
+          }
+  end
+
+  defmodule MultipathStats do
+    @moduledoc "RMS statistics for one multipath series."
+    defstruct [:n, :rms_m]
+
+    @type t :: %__MODULE__{n: non_neg_integer(), rms_m: float()}
+  end
+
+  defmodule ObservationNote do
+    @moduledoc "Non-fatal QC note."
+    defstruct [:kind, :epoch_index]
+
+    @type t :: %__MODULE__{kind: String.t(), epoch_index: non_neg_integer() | nil}
+  end
+
   @typedoc "A `{satellite_id, elevation_deg}` or `{satellite_id, elevation_deg, cn0_dbhz}` entry."
   @type weight_entry ::
           {String.t(), number()} | {String.t(), number(), number()}
@@ -226,18 +543,63 @@ defmodule Sidereon.GNSS.QC do
   @doc """
   Observation completeness and signal-quality rollup for a parsed RINEX OBS file.
   """
-  @spec observation_report(Observations.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec observation_report(Observations.t(), keyword()) :: {:ok, ObservationReport.t()} | {:error, term()}
   def observation_report(%Observations{handle: handle}, opts \\ []) do
     interval = Keyword.get(opts, :interval_s)
     gap_factor = Keyword.get(opts, :gap_factor, 1.5)
 
-    case NIF.rinex_obs_observation_qc(handle, interval, gap_factor / 1.0) do
-      {:ok, report} -> {:ok, report}
+    clock_jump_threshold_s =
+      case Keyword.get(opts, :clock_jump_threshold_s) do
+        nil -> nil
+        value -> value / 1.0
+      end
+
+    case NIF.rinex_obs_observation_qc(handle, interval, gap_factor / 1.0, clock_jump_threshold_s) do
+      {:ok, report} -> {:ok, normalize_observation_report(report)}
       {:error, _reason} = err -> err
     end
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Render an observation QC report as fixed-width text.
+  """
+  @spec render_text(ObservationReport.t()) :: {:ok, String.t()} | {:error, term()}
+  def render_text(%ObservationReport{handle: handle}) when is_reference(handle) do
+    {:ok, NIF.rinex_qc_report_render_text(handle)}
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def render_text(%ObservationReport{}), do: {:error, :missing_report_handle}
+
+  @doc """
+  Render an observation QC report as HTML.
+  """
+  @spec render_html(ObservationReport.t()) :: {:ok, String.t()} | {:error, term()}
+  def render_html(%ObservationReport{handle: handle}) when is_reference(handle) do
+    {:ok, NIF.rinex_qc_report_render_html(handle)}
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def render_html(%ObservationReport{}), do: {:error, :missing_report_handle}
+
+  @doc """
+  Serialize an observation QC report as JSON.
+  """
+  @spec to_json(ObservationReport.t()) :: {:ok, String.t()} | {:error, term()}
+  def to_json(%ObservationReport{handle: handle}) when is_reference(handle) do
+    case NIF.rinex_qc_report_to_json(handle) do
+      {:ok, json} -> {:ok, json}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def to_json(%ObservationReport{}), do: {:error, :missing_report_handle}
 
   @doc """
   Lint a parsed RINEX OBS file.
@@ -554,6 +916,103 @@ defmodule Sidereon.GNSS.QC do
       date: Map.fetch!(stamp, :date)
     }
   end
+
+  defp normalize_observation_report(report) when is_map(report) do
+    %ObservationReport{
+      handle: Map.fetch!(report, :handle),
+      header: normalize_observation_header(report.header),
+      total_epoch_records: report.total_epoch_records,
+      observation_epochs: report.observation_epochs,
+      event_records: report.event_records,
+      power_failure_epochs: report.power_failure_epochs,
+      skipped_records: report.skipped_records,
+      interval_s: report.interval_s,
+      interval_source: report.interval_source,
+      missing_epochs: report.missing_epochs,
+      data_gaps: structs(report.data_gaps, DataGap),
+      clock_jumps: structs(report.clock_jumps, ClockJump),
+      cycle_slips: normalize_cycle_slips(report.cycle_slips),
+      multipath: normalize_multipath(report.multipath),
+      systems: structs(report.systems, SystemObservation),
+      satellites: structs(report.satellites, SatelliteObservation),
+      satellite_signals: Enum.map(report.satellite_signals, &normalize_satellite_signal/1),
+      system_signals: Enum.map(report.system_signals, &normalize_system_signal/1),
+      lint_findings: structs(report.lint_findings, ObservationFinding),
+      notes: structs(report.notes, ObservationNote)
+    }
+  end
+
+  defp normalize_observation_header(header) when is_map(header) do
+    %ObservationHeader{
+      marker_name: header.marker_name,
+      marker_number: header.marker_number,
+      marker_type: header.marker_type,
+      receiver: optional_struct(header.receiver, ObservationReceiver),
+      antenna: optional_struct(header.antenna, ObservationAntenna),
+      approx_position_m: header.approx_position_m,
+      antenna_delta_hen_m: header.antenna_delta_hen_m,
+      time_of_first_obs: optional_struct(header.time_of_first_obs, ObservationTime),
+      time_of_last_obs: optional_struct(header.time_of_last_obs, ObservationTime),
+      duration_s: header.duration_s
+    }
+  end
+
+  defp normalize_cycle_slips(row) when is_map(row) do
+    %CycleSlipQc{
+      observations: row.observations,
+      total_slips: row.total_slips,
+      observations_per_slip: row.observations_per_slip,
+      by_system: structs(row.by_system, SystemCycleSlipQc)
+    }
+  end
+
+  defp normalize_multipath(report) when is_map(report) do
+    %MultipathReport{
+      satellites: Enum.map(report.satellites, &normalize_satellite_multipath/1),
+      systems: Enum.map(report.systems, &normalize_system_multipath/1)
+    }
+  end
+
+  defp normalize_satellite_multipath(row) when is_map(row) do
+    %SatelliteMultipath{
+      satellite: row.satellite,
+      mp1: optional_struct(row.mp1, MultipathStats),
+      mp2: optional_struct(row.mp2, MultipathStats)
+    }
+  end
+
+  defp normalize_system_multipath(row) when is_map(row) do
+    %SystemMultipath{
+      system: row.system,
+      mp1: optional_struct(row.mp1, MultipathStats),
+      mp2: optional_struct(row.mp2, MultipathStats)
+    }
+  end
+
+  defp normalize_satellite_signal(row) when is_map(row) do
+    %SatelliteSignal{
+      satellite: row.satellite,
+      code: row.code,
+      value_observations: row.value_observations,
+      ssi: optional_struct(row.ssi, SsiHistogram),
+      snr: optional_struct(row.snr, SnrStats)
+    }
+  end
+
+  defp normalize_system_signal(row) when is_map(row) do
+    %SystemSignal{
+      system: row.system,
+      code: row.code,
+      value_observations: row.value_observations,
+      ssi: optional_struct(row.ssi, SsiHistogram),
+      snr: optional_struct(row.snr, SnrStats)
+    }
+  end
+
+  defp optional_struct(nil, _module), do: nil
+  defp optional_struct(value, module) when is_map(value), do: struct(module, value)
+
+  defp structs(rows, module), do: Enum.map(rows, &struct(module, &1))
 
   defp normalize_repair(repair) when is_map(repair) do
     repair

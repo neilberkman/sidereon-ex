@@ -192,7 +192,46 @@ defmodule Sidereon.Round2ParityTest do
              }
 
     [first_sat | _] = report.satellites
-    assert first_sat == %{satellite: "G02", epochs_with_observations: 2, value_observations: 6}
+
+    assert first_sat == %QC.SatelliteObservation{
+             satellite: "G02",
+             epochs_with_observations: 2,
+             value_observations: 6
+           }
+
+    assert report.clock_jumps == []
+
+    assert report.cycle_slips.observations == 68
+    assert report.cycle_slips.total_slips == 0
+    assert report.cycle_slips.observations_per_slip == nil
+
+    assert Enum.map(report.cycle_slips.by_system, &{&1.system, &1.observations, &1.slips, &1.observations_per_slip}) ==
+             [{"G", 22, 0, nil}, {"R", 14, 0, nil}, {"E", 16, 0, nil}, {"C", 16, 0, nil}]
+
+    gps_mp = Enum.find(report.multipath.systems, &(&1.system == "G"))
+    assert gps_mp.mp1.n == 22
+    assert_close(gps_mp.mp1.rms_m, 0.1069865674510667)
+    assert gps_mp.mp2.n == 22
+    assert_close(gps_mp.mp2.rms_m, 0.059282645631154554)
+
+    g08_mp = Enum.find(report.multipath.satellites, &(&1.satellite == "G08"))
+    assert g08_mp.mp1.n == 2
+    assert_close(g08_mp.mp1.rms_m, 0.29432116710497774)
+    assert g08_mp.mp2.n == 2
+    assert_close(g08_mp.mp2.rms_m, 0.0019879508256253303)
+
+    {:ok, rendered} = QC.render_text(report)
+    assert rendered =~ "G   GPS"
+    assert rendered =~ "R   GLONASS"
+    assert rendered =~ "E   Galileo"
+    assert rendered =~ "C   BeiDou"
+
+    {:ok, html} = QC.render_html(report)
+    assert html =~ "<title>RINEX Observation QC</title>"
+
+    {:ok, json} = QC.to_json(report)
+    assert json =~ "\"cycle_slips\""
+    assert json =~ "\"multipath\""
 
     {:ok, lint_obs} = QC.lint_obs(obs)
     assert lint_obs.clean? == false

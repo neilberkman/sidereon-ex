@@ -817,7 +817,14 @@ defmodule Sidereon.NIF do
 
   def rinex_obs_band_frequency_hz(_system, _band, _channel), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rinex_obs_observation_qc(_handle, _interval_override_s, _gap_factor), do: :erlang.nif_error(:nif_not_loaded)
+  def rinex_obs_observation_qc(_handle, _interval_override_s, _gap_factor, _clock_jump_threshold_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_report_render_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_report_render_html(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_report_to_json(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_qc_lint_obs(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
