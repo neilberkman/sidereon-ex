@@ -38,6 +38,11 @@ defmodule Sidereon.GNSS.Ntrip do
     """
     @enforce_keys [:handle, :records]
     defstruct [:handle, :records]
+
+    @type t :: %__MODULE__{
+            handle: term(),
+            records: [term()]
+          }
   end
 
   defmodule StrRecord do

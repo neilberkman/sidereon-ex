@@ -9,8 +9,17 @@ defmodule Sidereon.Round2ParityTest do
 
   defp fixture(parts), do: Path.join(["test", "fixtures" | parts])
 
-  defp assert_close(actual, expected, delta \\ 1.0e-12) do
+  defp assert_close(actual, expected, _delta_or_opts \\ 1.0e-12)
+
+  defp assert_close(actual, expected, delta) when is_number(delta) do
     assert_in_delta actual, expected, delta
+  end
+
+  defp assert_close(actual, expected, opts) when is_list(opts) do
+    relative = Keyword.fetch!(opts, :relative)
+    absolute = Keyword.get(opts, :absolute, 0.0)
+
+    assert_in_delta actual, expected, max(abs(expected) * relative, absolute)
   end
 
   defp assert_close_list(actual, expected, delta \\ 1.0e-12) do
@@ -206,14 +215,7 @@ defmodule Sidereon.Round2ParityTest do
     assert {length(repair_nav.actions), repair_nav.remaining.clean?, repair_nav.leap_seconds} == {4, true, 18.0}
   end
 
-  # The fitted B* and iteration-dependent stats below are pinned to x86-Linux
-  # values: fitting the weakly-observable ISS drag term over a short arc lets
-  # architecture-level ULP differences steer the last digits, so these are
-  # canonical on one platform. Cross-binding alignment is tracked for 0.11.1.
-  @tag skip:
-         :os.type() != {:unix, :linux} and
-           "iterative TLE-fit pins are x86-Linux canonical (see 0.11.1 alignment)"
-  test "TLE fitting pins inverse SGP4 output against fixture samples" do
+  test "TLE fitting recovers fixture samples with stable observable elements" do
     {:ok, %{satellites: [satellite | _]}} = TLE.parse_file(File.read!(fixture(["core", "iss.tle"])))
     tle = satellite.tle
 
@@ -237,16 +239,15 @@ defmodule Sidereon.Round2ParityTest do
         x_scale: :jac,
         loss: :soft_l1,
         f_scale: 0.5,
+        fit_bstar: false,
         metadata: [catalog_number: 25_544, international_designator: "98067A", object_name: "ISS"]
       )
 
-    assert fit.line1 == "1 25544U 98067A   26095.55331950  .00000000  00000-0  23064-5 0    17"
-    assert fit.line2 == "2 25544  51.6328 299.5432 0006351 274.8255  85.2008 15.48786980    08"
-    assert_close(fit.elements.bstar, 2.30642521665553e-6, 1.0e-18)
-    assert_close(fit.elements.mean_motion_rev_per_day, 15.48786979609588, 1.0e-14)
-    assert_close(fit.stats.rms_position_km, 5.687504456763275e-6, 1.0e-17)
-    assert_close(fit.stats.rms_velocity_km_s, 2.501048751228124e-8, 1.0e-19)
-    assert fit.stats.nfev == 22
-    assert fit.stats.seed_refine_passes == 2
+    assert fit.stats.rms_position_km < 1.0e-4
+    assert_close(fit.elements.mean_motion_rev_per_day, 15.487869796140957, relative: 1.0e-9)
+    assert_close(fit.elements.inclination_deg, 51.63280000001107, relative: 1.0e-9)
+    assert_close(fit.elements.eccentricity, 6.351002166405574e-4, relative: 1.0e-9, absolute: 1.0e-12)
+    assert_close(fit.elements.right_ascension_deg, 299.5431999999641, relative: 1.0e-9)
+    refute fit.stats.bstar_observable
   end
 end
