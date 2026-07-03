@@ -523,6 +523,7 @@ fn sbas_corrected_position<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn sbas_sample_broadcast(
     broadcast: ResourceArc<BroadcastResource>,
     store: ResourceArc<SbasStoreResource>,

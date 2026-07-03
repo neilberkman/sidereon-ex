@@ -11,12 +11,12 @@
 
 use rustler::{Encoder, Env, Error, NifResult, OwnedBinary, Term};
 use sidereon_core::rtcm::{
-    self, AntennaDescriptor, GlonassEphemeris, GpsEphemeris, Message, MsmHeader, MsmKind,
-    MsmMessage, MsmSatellite, MsmSignal, StationCoordinates, UnsupportedMessage,
+    self, derive_lli, minimum_lock_time_ms, msm_epoch_dt_ms, msm_signal_rinex_code,
+    AntennaDescriptor, CellLli, FrameSkip, FrameSkipReason, GlonassEphemeris, GpsEphemeris,
+    LockTimeTracker, Message, MsmHeader, MsmKind, MsmMessage, MsmSatellite, MsmSignal,
+    PreviousLock, StationCoordinates, UnsupportedMessage, LLI_HALF_CYCLE, LLI_LOSS_OF_LOCK,
 };
 use sidereon_core::GnssSystem;
-
-use crate::spp::atom_from;
 
 mod atoms {
     rustler::atoms! {
@@ -27,7 +27,10 @@ mod atoms {
         gps_ephemeris,
         glonass_ephemeris,
         msm,
-        unsupported
+        ssr,
+        unsupported,
+        truncated,
+        malformed
     }
 }
 
@@ -369,6 +372,79 @@ struct UnsupportedFields {
     body: Vec<u8>,
 }
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SsrFields {
+    message_number: i64,
+    body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct CellLliFields {
+    satellite_id: i64,
+    signal_id: i64,
+    lli: i64,
+    min_lock_time_ms: Option<i64>,
+}
+
+impl From<CellLli> for CellLliFields {
+    fn from(cell: CellLli) -> Self {
+        Self {
+            satellite_id: cell.satellite_id as i64,
+            signal_id: cell.signal_id as i64,
+            lli: cell.lli as i64,
+            min_lock_time_ms: cell.min_lock_time_ms.map(|v| v as i64),
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct FrameSkipFields {
+    offset: i64,
+    message_number: Option<i64>,
+    reason: String,
+    detail: Option<String>,
+}
+
+impl From<FrameSkip> for FrameSkipFields {
+    fn from(skip: FrameSkip) -> Self {
+        let (reason, detail) = match skip.reason {
+            FrameSkipReason::Truncated => ("truncated".to_string(), None),
+            FrameSkipReason::Malformed(detail) => ("malformed".to_string(), Some(detail)),
+        };
+        Self {
+            offset: skip.offset as i64,
+            message_number: skip.message_number.map(|n| n as i64),
+            reason,
+            detail,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct StreamDiagnosticsFields {
+    resync_bytes: i64,
+    skipped_frames: Vec<FrameSkipFields>,
+}
+
+fn parse_system(system: &str) -> NifResult<GnssSystem> {
+    let mut chars = system.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) => GnssSystem::from_letter(letter)
+            .ok_or_else(|| Error::Term(Box::new("unknown RTCM MSM constellation letter"))),
+        _ => Err(Error::Term(Box::new(
+            "invalid RTCM MSM constellation letter",
+        ))),
+    }
+}
+
+fn parse_msm_kind(kind: &str) -> NifResult<MsmKind> {
+    match kind {
+        "msm4" => Ok(MsmKind::Msm4),
+        "msm7" => Ok(MsmKind::Msm7),
+        _ => Err(Error::Term(Box::new("unknown RTCM MSM kind"))),
+    }
+}
+
 /// Construction input for a 1005 / 1006 station antenna reference point.
 ///
 /// Carries only the raw transmitted fields, so a caller builds a message from
@@ -555,17 +631,8 @@ impl From<MsmSignalFields> for MsmSignal {
 /// Build an [`MsmMessage`] from its decoded field map. The constellation letter
 /// and MSM kind are validated here (the only fallible parts of construction).
 fn build_msm(fields: MsmMessageFields) -> NifResult<MsmMessage> {
-    let system = fields
-        .system
-        .chars()
-        .next()
-        .and_then(GnssSystem::from_letter)
-        .ok_or_else(|| Error::Term(Box::new("unknown RTCM MSM constellation letter")))?;
-    let kind = match fields.kind.as_str() {
-        "msm4" => MsmKind::Msm4,
-        "msm7" => MsmKind::Msm7,
-        _ => return Err(Error::Term(Box::new("unknown RTCM MSM kind"))),
-    };
+    let system = parse_system(&fields.system)?;
+    let kind = parse_msm_kind(&fields.kind)?;
     Ok(MsmMessage {
         message_number: fields.message_number as u16,
         system,
@@ -576,8 +643,20 @@ fn build_msm(fields: MsmMessageFields) -> NifResult<MsmMessage> {
     })
 }
 
+fn build_ssr(fields: SsrFields) -> NifResult<Message> {
+    let message =
+        Message::decode(&fields.body).map_err(|error| Error::Term(Box::new(error.to_string())))?;
+    match message {
+        Message::Ssr(ssr) if i64::from(ssr.message_number) == fields.message_number => {
+            Ok(Message::Ssr(ssr))
+        }
+        Message::Ssr(_) => Err(Error::Term(Box::new("RTCM SSR message number mismatch"))),
+        _ => Err(Error::Term(Box::new("RTCM body is not an SSR message"))),
+    }
+}
+
 /// Build the canonical [`Message`] IR for a `{type, fields}` construction pair.
-fn build_message(kind: &str, fields: Term<'_>) -> NifResult<Message> {
+pub(crate) fn build_message(kind: &str, fields: Term<'_>) -> NifResult<Message> {
     let message = match kind {
         "station_coordinates" => {
             Message::StationCoordinates(fields.decode::<StationCoordinatesInput>()?.into())
@@ -590,6 +669,7 @@ fn build_message(kind: &str, fields: Term<'_>) -> NifResult<Message> {
             Message::GlonassEphemeris(fields.decode::<GlonassEphemerisFields>()?.into())
         }
         "msm" => Message::Msm(build_msm(fields.decode::<MsmMessageFields>()?)?),
+        "ssr" => build_ssr(fields.decode::<SsrFields>()?)?,
         "unsupported" => {
             let unsupported = fields.decode::<UnsupportedFields>()?;
             Message::Unsupported(UnsupportedMessage {
@@ -602,7 +682,7 @@ fn build_message(kind: &str, fields: Term<'_>) -> NifResult<Message> {
     Ok(message)
 }
 
-fn encode_message<'a>(env: Env<'a>, message: Message) -> Term<'a> {
+pub(crate) fn encode_message<'a>(env: Env<'a>, message: Message) -> Term<'a> {
     match message {
         Message::Msm(m) => (atoms::msm(), MsmMessageFields::from(m)).encode(env),
         Message::StationCoordinates(s) => (
@@ -621,7 +701,14 @@ fn encode_message<'a>(env: Env<'a>, message: Message) -> Term<'a> {
         Message::GlonassEphemeris(e) => {
             (atoms::glonass_ephemeris(), GlonassEphemerisFields::from(e)).encode(env)
         }
-        Message::Ssr(s) => (atom_from(env, "ssr"), format!("{s:?}")).encode(env),
+        Message::Ssr(s) => (
+            atoms::ssr(),
+            SsrFields {
+                message_number: i64::from(s.message_number),
+                body: s.encode(),
+            },
+        )
+            .encode(env),
         Message::Unsupported(u) => (
             atoms::unsupported(),
             UnsupportedFields {
@@ -646,6 +733,27 @@ fn rtcm_decode_messages<'a>(env: Env<'a>, bytes: rustler::Binary) -> Vec<Term<'a
         .collect()
 }
 
+/// Decode every RTCM frame and return messages plus forgiving stream diagnostics.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rtcm_decode_stream<'a>(env: Env<'a>, bytes: rustler::Binary) -> NifResult<Term<'a>> {
+    let stream = rtcm::decode_stream(bytes.as_slice());
+    let messages: Vec<Term<'a>> = stream
+        .messages
+        .into_iter()
+        .map(|message| encode_message(env, message))
+        .collect();
+    let diagnostics = StreamDiagnosticsFields {
+        resync_bytes: stream.diagnostics.resync_bytes as i64,
+        skipped_frames: stream
+            .diagnostics
+            .skipped_frames
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    };
+    Ok((atoms::ok(), (messages, diagnostics)).encode(env))
+}
+
 /// Decode a single RTCM message body into the message IR.
 #[rustler::nif]
 fn rtcm_decode_message<'a>(env: Env<'a>, body: rustler::Binary) -> NifResult<Term<'a>> {
@@ -662,6 +770,86 @@ fn rtcm_message_number<'a>(env: Env<'a>, body: rustler::Binary) -> NifResult<Ter
         Ok(number) => Ok((atoms::ok(), number as i64).encode(env)),
         Err(error) => Ok((atoms::error(), error.to_string()).encode(env)),
     }
+}
+
+/// Core RINEX LLI bit constants used by the RTCM derivation helpers.
+#[rustler::nif]
+fn rtcm_lli_bits<'a>(env: Env<'a>) -> Term<'a> {
+    ((LLI_LOSS_OF_LOCK as i64), (LLI_HALF_CYCLE as i64)).encode(env)
+}
+
+/// Minimum continuous-lock time for an MSM lock indicator.
+#[rustler::nif]
+fn rtcm_minimum_lock_time_ms<'a>(
+    env: Env<'a>,
+    kind: String,
+    indicator: i64,
+) -> NifResult<Term<'a>> {
+    let kind = parse_msm_kind(&kind)?;
+    let value = minimum_lock_time_ms(kind, indicator as u16).map(|v| v as i64);
+    Ok((atoms::ok(), value).encode(env))
+}
+
+/// Derive the RINEX LLI digit for one signal cell.
+#[rustler::nif]
+fn rtcm_derive_lli(
+    previous_min_lock_time_ms: Option<i64>,
+    elapsed_ms: Option<i64>,
+    current_min_lock_time_ms: Option<i64>,
+    half_cycle_ambiguity: bool,
+) -> i64 {
+    let previous = elapsed_ms.map(|elapsed_ms| PreviousLock {
+        min_lock_time_ms: previous_min_lock_time_ms.map(|v| v as u32),
+        elapsed_ms: elapsed_ms as u64,
+    });
+    derive_lli(
+        previous,
+        current_min_lock_time_ms.map(|v| v as u32),
+        half_cycle_ambiguity,
+    ) as i64
+}
+
+/// Elapsed milliseconds between two raw MSM epoch fields for one system.
+#[rustler::nif]
+fn rtcm_msm_epoch_dt_ms<'a>(
+    env: Env<'a>,
+    system: String,
+    previous: i64,
+    current: i64,
+) -> NifResult<Term<'a>> {
+    let system = parse_system(&system)?;
+    let dt = msm_epoch_dt_ms(system, previous as u32, current as u32) as i64;
+    Ok((atoms::ok(), dt).encode(env))
+}
+
+/// RINEX observation-code suffix for an MSM signal id.
+#[rustler::nif]
+fn rtcm_msm_signal_rinex_code<'a>(
+    env: Env<'a>,
+    system: String,
+    signal_id: i64,
+) -> NifResult<Term<'a>> {
+    let system = parse_system(&system)?;
+    let code = msm_signal_rinex_code(system, signal_id as u8);
+    Ok((atoms::ok(), code).encode(env))
+}
+
+/// Derive LLI rows by running one tracker over a sequence of MSM field maps.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rtcm_msm_lli(messages: Vec<MsmMessageFields>) -> NifResult<Vec<Vec<CellLliFields>>> {
+    let mut tracker = LockTimeTracker::new();
+    let mut output = Vec::with_capacity(messages.len());
+    for fields in messages {
+        let message = build_msm(fields)?;
+        output.push(
+            tracker
+                .observe(&message)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
+    }
+    Ok(output)
 }
 
 /// Decode the single RTCM 3 frame that begins at the start of `bytes`.

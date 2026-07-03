@@ -193,11 +193,26 @@ defmodule Sidereon do
               to: Sidereon.ILS
 
   defdelegate decode_rtcm(data), to: RTCM, as: :decode
+  defdelegate decode_rtcm_stream(data), to: RTCM, as: :decode_stream
   defdelegate decode_rtcm_message(body), to: RTCM, as: :decode_message
   defdelegate decode_rtcm_frame(frame), to: RTCM, as: :decode_frame
   defdelegate encode_rtcm(message), to: RTCM, as: :encode
   defdelegate encode_rtcm_frame(message_or_body), to: RTCM, as: :encode_frame
   defdelegate rtcm_message_number(body), to: RTCM, as: :message_number
+  defdelegate rtcm_lli_bits, to: RTCM, as: :lli_bits
+  defdelegate rtcm_minimum_lock_time_ms(kind, indicator), to: RTCM, as: :minimum_lock_time_ms
+
+  defdelegate rtcm_derive_lli(previous_min, elapsed_ms, current_min, half_cycle?),
+    to: RTCM,
+    as: :derive_lli
+
+  defdelegate rtcm_msm_epoch_dt_ms(system, previous, current), to: RTCM, as: :msm_epoch_dt_ms
+
+  defdelegate rtcm_msm_signal_rinex_code(system, signal_id),
+    to: RTCM,
+    as: :msm_signal_rinex_code
+
+  defdelegate rtcm_msm_lli(messages), to: RTCM, as: :msm_lli
 
   defdelegate parse_rinex_clock(text), to: Clock, as: :parse
   defdelegate load_rinex_clock(path), to: Clock, as: :load

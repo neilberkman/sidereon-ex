@@ -10,10 +10,10 @@ defmodule Sidereon.GNSS.Broadcast do
   parsed product is held as a reference, not re-parsed per call.
 
   Parsing covers RINEX 3.x and 4.xx files: GPS, Galileo, and BeiDou records
-  (including BeiDou geostationary satellites), and GLONASS (a PZ-90.11
-  state-vector model propagated by Runge-Kutta integration rather than Keplerian
-  elements). Other constellations in a mixed file are skipped, as are version-4
-  CNAV-family messages.
+  (including BeiDou geostationary satellites), GPS/QZSS CNAV-family records, and
+  GLONASS (a PZ-90.11 state-vector model propagated by Runge-Kutta integration
+  rather than Keplerian elements). Other constellations in a mixed file are
+  skipped.
 
   The orbit and clock models follow IS-GPS-200 (GPS LNAV), the Galileo OS-SIS-ICD
   (I/NAV + F/NAV), and the BeiDou BDS-SIS-ICD (D1/D2), parsed from RINEX 3.x/4.xx
@@ -37,7 +37,17 @@ defmodule Sidereon.GNSS.Broadcast do
   defstruct [:handle]
 
   @type t :: %__MODULE__{handle: reference()}
-  @type nav_message :: :gps_lnav | :galileo_inav | :galileo_fnav | :beidou_d1 | :beidou_d2
+  @type nav_message ::
+          :gps_lnav
+          | :gps_cnav
+          | :gps_cnav2
+          | :qzss_cnav
+          | :qzss_cnav2
+          | :galileo_inav
+          | :galileo_fnav
+          | :beidou_d1
+          | :beidou_d2
+  @type message_preference :: :legacy | :modern
 
   defmodule State do
     @moduledoc """
@@ -192,6 +202,127 @@ defmodule Sidereon.GNSS.Broadcast do
           }
   end
 
+  defmodule WeekTow do
+    @moduledoc """
+    GNSS week and time-of-week tagged with its native time scale.
+    """
+    @enforce_keys [:system, :week, :tow_s]
+    defstruct [:system, :week, :tow_s]
+
+    @type t :: %__MODULE__{system: String.t(), week: non_neg_integer(), tow_s: float()}
+  end
+
+  defmodule Issue do
+    @moduledoc """
+    Broadcast issue value plus the navigation-message family that carried it.
+    """
+    @enforce_keys [:issue, :message]
+    defstruct [:issue, :message]
+
+    @type t :: %__MODULE__{issue: non_neg_integer(), message: Broadcast.nav_message()}
+  end
+
+  defmodule GroupDelays do
+    @moduledoc """
+    Broadcast group-delay fields preserved from a NAV record.
+    """
+    defstruct [
+      :gps_tgd_s,
+      :galileo_bgd_e5a_e1_s,
+      :galileo_bgd_e5b_e1_s,
+      :beidou_tgd1_s,
+      :beidou_tgd2_s,
+      :cnav_isc_l1ca_s,
+      :cnav_isc_l2c_s,
+      :cnav_isc_l5i5_s,
+      :cnav_isc_l5q5_s,
+      :cnav_isc_l1cd_s,
+      :cnav_isc_l1cp_s
+    ]
+
+    @type t :: %__MODULE__{}
+  end
+
+  defmodule CnavParameters do
+    @moduledoc """
+    CNAV/CNAV-2 fields that have no LNAV counterpart.
+    """
+    @enforce_keys [
+      :adot_m_s,
+      :delta_n0_dot_rad_s2,
+      :top,
+      :ura_ed_index,
+      :ura_ned0_index,
+      :ura_ned1_index,
+      :ura_ned2_index,
+      :transmission_time_sow
+    ]
+    defstruct [
+      :adot_m_s,
+      :delta_n0_dot_rad_s2,
+      :top,
+      :ura_ed_index,
+      :ura_ed_nominal_m,
+      :ura_ned0_index,
+      :ura_ned0_nominal_m,
+      :ura_ned1_index,
+      :ura_ned2_index,
+      :transmission_time_sow,
+      :flags
+    ]
+
+    @type t :: %__MODULE__{top: WeekTow.t()}
+  end
+
+  defmodule CnavCorrections do
+    @moduledoc """
+    Core-evaluated CNAV single-frequency clock corrections in seconds.
+    """
+    defstruct [:l1ca_s, :l2c_s, :l5i5_s, :l5q5_s, :l1cp_s, :l1cd_s]
+
+    @type t :: %__MODULE__{}
+  end
+
+  defmodule DetailedRecord do
+    @moduledoc """
+    One broadcast record with issue, time tags, group delays, and CNAV fields.
+    """
+    @enforce_keys [
+      :satellite_id,
+      :message,
+      :issue_of_data,
+      :week,
+      :toe,
+      :toc,
+      :elements,
+      :clock,
+      :group_delays,
+      :cnav_corrections,
+      :group_delay_s,
+      :sv_health,
+      :sv_accuracy_m
+    ]
+    defstruct [
+      :satellite_id,
+      :message,
+      :issue_of_data,
+      :week,
+      :toe,
+      :toc,
+      :elements,
+      :clock,
+      :group_delays,
+      :cnav,
+      :cnav_corrections,
+      :group_delay_s,
+      :sv_health,
+      :sv_accuracy_m,
+      :fit_interval_s
+    ]
+
+    @type t :: %__MODULE__{}
+  end
+
   defmodule GlonassRecord do
     @moduledoc """
     One GLONASS broadcast state-vector record.
@@ -302,9 +433,17 @@ defmodule Sidereon.GNSS.Broadcast do
   @doc """
   Parse an in-memory RINEX 3.x or 4.xx navigation text buffer into a handle.
   """
-  @spec parse(String.t()) :: {:ok, t()} | {:error, term()}
-  def parse(text) when is_binary(text) do
-    case NIF.broadcast_parse(text) do
+  @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def parse(text, opts \\ []) when is_binary(text) do
+    preference = Keyword.get(opts, :message_preference, :legacy)
+
+    result =
+      case preference do
+        :legacy -> NIF.broadcast_parse(text)
+        :modern -> NIF.broadcast_parse_with_preference(text, "modern")
+      end
+
+    case result do
       handle when is_reference(handle) -> {:ok, %__MODULE__{handle: handle}}
       {:error, _} = err -> err
     end
@@ -338,6 +477,32 @@ defmodule Sidereon.GNSS.Broadcast do
   rescue
     e in ErlangError ->
       reraise ArgumentError, [message: "could not read broadcast records: #{inspect(e.original)}"], __STACKTRACE__
+  end
+
+  @doc """
+  Detailed GPS, Galileo, BeiDou, and CNAV-family records in file order.
+  """
+  @spec records_detailed(t()) :: [DetailedRecord.t()]
+  def records_detailed(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.broadcast_records_detailed()
+    |> Enum.map(&decode_detailed_record/1)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not read detailed broadcast records: #{inspect(e.original)}"],
+              __STACKTRACE__
+  end
+
+  @doc """
+  GPS/QZSS record-family preference used by mixed LNAV/CNAV selection.
+  """
+  @spec message_preference(t()) :: message_preference()
+  def message_preference(%__MODULE__{handle: handle}) do
+    case NIF.broadcast_message_preference(handle) do
+      "legacy" -> :legacy
+      "modern" -> :modern
+    end
   end
 
   @doc """
@@ -414,6 +579,20 @@ defmodule Sidereon.GNSS.Broadcast do
   end
 
   @doc """
+  Nominal CNAV URA in metres for a URA ED/NED0 index.
+  """
+  @spec cnav_ura_nominal(integer()) :: float() | nil
+  def cnav_ura_nominal(index) when is_integer(index), do: NIF.broadcast_cnav_ura_nominal(index)
+
+  @doc """
+  Time-dependent CNAV URA_NED bound in metres.
+  """
+  @spec cnav_ura_ned(CnavParameters.t(), WeekTow.t()) :: float() | nil
+  def cnav_ura_ned(%CnavParameters{} = cnav, %WeekTow{} = time) do
+    NIF.broadcast_cnav_ura_ned(encode_cnav(cnav), time.system, time.week, time.tow_s)
+  end
+
+  @doc """
   Evaluate the broadcast state of satellite `sat_id` at `epoch`.
 
   `sat_id` is the canonical RINEX token, e.g. `"G01"` (GPS PRN 1), `"E12"`,
@@ -467,6 +646,48 @@ defmodule Sidereon.GNSS.Broadcast do
       sv_health: sv_health,
       sv_accuracy_m: sv_accuracy_m,
       fit_interval_s: fit_interval_s
+    }
+  end
+
+  defp decode_detailed_record(raw) do
+    %DetailedRecord{
+      satellite_id: raw.satellite_id,
+      message: decode_message(raw.message),
+      issue_of_data: decode_issue(raw.issue_of_data),
+      week: raw.week,
+      toe: decode_week_tow(raw.toe),
+      toc: decode_week_tow(raw.toc),
+      elements: decode_elements(raw.elements),
+      clock: decode_clock(raw.clock),
+      group_delays: struct(GroupDelays, raw.group_delays),
+      cnav: decode_cnav(raw.cnav),
+      cnav_corrections: struct(CnavCorrections, raw.cnav_corrections),
+      group_delay_s: raw.group_delay_s,
+      sv_health: raw.sv_health,
+      sv_accuracy_m: raw.sv_accuracy_m,
+      fit_interval_s: raw.fit_interval_s
+    }
+  end
+
+  defp decode_week_tow(raw), do: %WeekTow{system: raw.system, week: raw.week, tow_s: raw.tow_s}
+
+  defp decode_issue(raw), do: %Issue{issue: raw.issue, message: decode_message(raw.message)}
+
+  defp decode_cnav(nil), do: nil
+
+  defp decode_cnav(raw) do
+    %CnavParameters{
+      adot_m_s: raw.adot_m_s,
+      delta_n0_dot_rad_s2: raw.delta_n0_dot_rad_s2,
+      top: decode_week_tow(raw.top),
+      ura_ed_index: raw.ura_ed_index,
+      ura_ed_nominal_m: raw.ura_ed_nominal_m,
+      ura_ned0_index: raw.ura_ned0_index,
+      ura_ned0_nominal_m: raw.ura_ned0_nominal_m,
+      ura_ned1_index: raw.ura_ned1_index,
+      ura_ned2_index: raw.ura_ned2_index,
+      transmission_time_sow: raw.transmission_time_sow,
+      flags: raw.flags
     }
   end
 
@@ -535,8 +756,28 @@ defmodule Sidereon.GNSS.Broadcast do
   end
 
   defp decode_message("gps_lnav"), do: :gps_lnav
+  defp decode_message("gps_cnav"), do: :gps_cnav
+  defp decode_message("gps_cnav2"), do: :gps_cnav2
+  defp decode_message("qzss_cnav"), do: :qzss_cnav
+  defp decode_message("qzss_cnav2"), do: :qzss_cnav2
   defp decode_message("galileo_inav"), do: :galileo_inav
   defp decode_message("galileo_fnav"), do: :galileo_fnav
   defp decode_message("beidou_d1"), do: :beidou_d1
   defp decode_message("beidou_d2"), do: :beidou_d2
+
+  defp encode_cnav(%CnavParameters{} = cnav) do
+    %{
+      adot_m_s: cnav.adot_m_s,
+      delta_n0_dot_rad_s2: cnav.delta_n0_dot_rad_s2,
+      top: %{system: cnav.top.system, week: cnav.top.week, tow_s: cnav.top.tow_s},
+      ura_ed_index: cnav.ura_ed_index,
+      ura_ed_nominal_m: cnav.ura_ed_nominal_m,
+      ura_ned0_index: cnav.ura_ned0_index,
+      ura_ned0_nominal_m: cnav.ura_ned0_nominal_m,
+      ura_ned1_index: cnav.ura_ned1_index,
+      ura_ned2_index: cnav.ura_ned2_index,
+      transmission_time_sow: cnav.transmission_time_sow,
+      flags: cnav.flags
+    }
+  end
 end

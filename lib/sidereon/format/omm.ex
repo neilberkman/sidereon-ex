@@ -31,10 +31,11 @@ defmodule Sidereon.Format.OMM do
             hour: integer(),
             minute: integer(),
             second: integer(),
-            microsecond: integer()
+            microsecond: integer(),
+            femtosecond: integer()
           }
 
-    defstruct [:year, :month, :day, :hour, :minute, :second, :microsecond]
+    defstruct [:year, :month, :day, :hour, :minute, :second, :microsecond, femtosecond: 0]
   end
 
   @type t :: %__MODULE__{
@@ -374,7 +375,8 @@ defmodule Sidereon.Format.OMM do
       hour: fields.hour,
       minute: fields.minute,
       second: fields.second,
-      microsecond: fields.microsecond
+      microsecond: fields.microsecond,
+      femtosecond: Map.get(fields, :femtosecond, 0)
     }
   end
 
@@ -442,7 +444,7 @@ defmodule Sidereon.Format.OMM do
   end
 
   defp epoch_fields(%Epoch{} = epoch) do
-    fields = [:year, :month, :day, :hour, :minute, :second, :microsecond]
+    fields = [:year, :month, :day, :hour, :minute, :second, :microsecond, :femtosecond]
 
     Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, acc} ->
       case Map.fetch!(epoch, field) do

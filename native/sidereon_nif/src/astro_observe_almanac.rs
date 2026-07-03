@@ -532,6 +532,7 @@ fn almanac_moon_phases_impl<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn almanac_planetary_events_spk<'a>(
     env: Env<'a>,
     handle: ResourceArc<SpkResource>,

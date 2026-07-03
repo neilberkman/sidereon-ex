@@ -16,20 +16,18 @@ use sidereon_core::rtk::{
     DoubleDifferenceError, ElevationMaskEpoch,
 };
 use sidereon_core::rtk_filter::{
-    fix_wide_lane_rtk_arc, prepare_ionosphere_free_rtk_arc, solve_moving_baseline,
-    solve_float_baseline, solve_fixed_baseline_validated, solve_rtk_arc, solve_static_rtk_arc,
-    update_epoch,
-    AmbiguityScale, AmbiguitySet, CycleSlipOptions, CycleSlipPolicy,
-    CycleSlipSplitArc, DynamicsModel, Epoch, IonosphereFreeBaselineError, MovingBaselineEpoch,
-    MovingBaselineEpochSolution, MovingBaselineError,
-    MovingBaselineOpts, MovingBaselineStatus, FilterState, FixedBaselineSolution, FixedSolveError,
-    FixedSolveOpts, FloatBaselineSolution, FloatResidual, FloatSolveError,
-    FloatSolveOpts, FloatSolveStatus, FullSetIntegerSummary, InnovationScreen, InnovationScreenOpts,
-    IntegerSearchMeta, IntegerStatus, MeasModel, ReceiverAntennaCalibration,
-    ReceiverAntennaCorrections, ResidualComponentKind, ResidualValidationMeta,
-    ResidualValidationOpts, ResidualValidationOutlier, RtkArcConfig, RtkArcEpoch,
-    RtkArcEpochSolution, RtkArcError, RtkArcObservation, RtkArcPreprocessing, RtkArcSolution,
-    RtkDualCycleSlipConfig, RtkDualFrequencyArcEpoch, RtkDualFrequencyObservation,
+    fix_wide_lane_rtk_arc, prepare_ionosphere_free_rtk_arc, solve_fixed_baseline_validated,
+    solve_float_baseline, solve_moving_baseline, solve_rtk_arc, solve_static_rtk_arc, update_epoch,
+    AmbiguityScale, AmbiguitySet, CycleSlipOptions, CycleSlipPolicy, CycleSlipSplitArc,
+    DynamicsModel, Epoch, FilterState, FixedBaselineSolution, FixedSolveError, FixedSolveOpts,
+    FloatBaselineSolution, FloatResidual, FloatSolveError, FloatSolveOpts, FloatSolveStatus,
+    FullSetIntegerSummary, InnovationScreen, InnovationScreenOpts, IntegerSearchMeta,
+    IntegerStatus, IonosphereFreeBaselineError, MeasModel, MovingBaselineEpoch,
+    MovingBaselineEpochSolution, MovingBaselineError, MovingBaselineOpts, MovingBaselineStatus,
+    ReceiverAntennaCalibration, ReceiverAntennaCorrections, ResidualComponentKind,
+    ResidualValidationMeta, ResidualValidationOpts, ResidualValidationOutlier, RtkArcConfig,
+    RtkArcEpoch, RtkArcEpochSolution, RtkArcError, RtkArcObservation, RtkArcPreprocessing,
+    RtkArcSolution, RtkDualCycleSlipConfig, RtkDualFrequencyArcEpoch, RtkDualFrequencyObservation,
     RtkDualFrequencySatelliteObservation, RtkIonosphereFreeArcConfig, RtkIonosphereFreeArcError,
     RtkIonosphereFreeArcSolution, RtkStaticArcConfig, RtkStaticArcError, RtkStaticArcSolution,
     RtkWideLaneArcConfig, RtkWideLaneArcError, RtkWideLaneArcSolution, SatMeas, SearchOpts,
@@ -178,6 +176,7 @@ mod atoms {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 pub fn rtk_solve_float<'a>(
     env: Env<'a>,
     epoch_terms: Vec<EpochTerm>,
@@ -195,18 +194,20 @@ pub fn rtk_solve_float<'a>(
     let receiver_antenna_corrections =
         receiver_antenna_corrections_term.map(decode_receiver_antenna_corrections);
 
-    Ok(match solve_float_baseline(
-        &epochs,
-        vec3(base),
-        &ambiguity_ids,
-        vec3(initial_baseline_m),
-        &model,
-        decode_float_solve_opts(float_opts_term),
-        receiver_antenna_corrections.as_ref(),
-    ) {
-        Ok(solution) => (atoms::ok(), encode_float_solution(env, solution)).encode(env),
-        Err(error) => (atoms::error(), encode_float_error(env, error)).encode(env),
-    })
+    Ok(
+        match solve_float_baseline(
+            &epochs,
+            vec3(base),
+            &ambiguity_ids,
+            vec3(initial_baseline_m),
+            &model,
+            decode_float_solve_opts(float_opts_term),
+            receiver_antenna_corrections.as_ref(),
+        ) {
+            Ok(solution) => (atoms::ok(), encode_float_solution(env, solution)).encode(env),
+            Err(error) => (atoms::error(), encode_float_error(env, error)).encode(env),
+        },
+    )
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -252,18 +253,22 @@ pub fn rtk_solve_fixed<'a>(
         residual: decode_residual_validation_opts(residual_opts_term),
     };
 
-    Ok(match solve_fixed_baseline_validated(
-        &epochs,
-        vec3(base),
-        ambiguities,
-        vec3(initial_baseline_m),
-        &model,
-        opts,
-        receiver_antenna_corrections.as_ref(),
-    ) {
-        Ok(solution) => (atoms::ok(), encode_validated_fixed_solution(env, solution)).encode(env),
-        Err(error) => (atoms::error(), encode_validated_fixed_error(env, error)).encode(env),
-    })
+    Ok(
+        match solve_fixed_baseline_validated(
+            &epochs,
+            vec3(base),
+            ambiguities,
+            vec3(initial_baseline_m),
+            &model,
+            opts,
+            receiver_antenna_corrections.as_ref(),
+        ) {
+            Ok(solution) => {
+                (atoms::ok(), encode_validated_fixed_solution(env, solution)).encode(env)
+            }
+            Err(error) => (atoms::error(), encode_validated_fixed_error(env, error)).encode(env),
+        },
+    )
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -1212,7 +1217,9 @@ pub fn rtk_solve_static_arc<'a>(
     let epochs: Vec<RtkArcEpoch> = epochs.into_iter().map(decode_arc_epoch).collect();
     let config = match decode_static_arc_config(&epochs, config) {
         Ok(config) => config,
-        Err(error) => return Ok((atoms::error(), encode_static_config_error(env, error)).encode(env)),
+        Err(error) => {
+            return Ok((atoms::error(), encode_static_config_error(env, error)).encode(env))
+        }
     };
 
     Ok(match solve_static_rtk_arc(&epochs, &config) {
@@ -1227,8 +1234,10 @@ pub fn rtk_fix_wide_lane_arc<'a>(
     epochs: Vec<RtkDualFrequencyArcEpochTerm>,
     config: RtkWideLaneArcConfigTerm,
 ) -> NifResult<Term<'a>> {
-    let epochs: Vec<RtkDualFrequencyArcEpoch> =
-        epochs.into_iter().map(decode_dual_frequency_arc_epoch).collect();
+    let epochs: Vec<RtkDualFrequencyArcEpoch> = epochs
+        .into_iter()
+        .map(decode_dual_frequency_arc_epoch)
+        .collect();
     let config = match decode_wide_lane_arc_config(config) {
         Some(config) => config,
         None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
@@ -1236,7 +1245,11 @@ pub fn rtk_fix_wide_lane_arc<'a>(
 
     Ok(match fix_wide_lane_rtk_arc(&epochs, &config) {
         Ok(solution) => (atoms::ok(), encode_wide_lane_arc_solution(env, solution)).encode(env),
-        Err(error) => (atoms::error(), encode_wide_lane_arc_error(env, error, &epochs)).encode(env),
+        Err(error) => (
+            atoms::error(),
+            encode_wide_lane_arc_error(env, error, &epochs),
+        )
+            .encode(env),
     })
 }
 
@@ -1247,8 +1260,10 @@ pub fn rtk_prepare_ionosphere_free_arc<'a>(
     wide_lane_cycles: Vec<(String, i64)>,
     config: RtkIonosphereFreeArcConfigTerm,
 ) -> NifResult<Term<'a>> {
-    let epochs: Vec<RtkDualFrequencyArcEpoch> =
-        epochs.into_iter().map(decode_dual_frequency_arc_epoch).collect();
+    let epochs: Vec<RtkDualFrequencyArcEpoch> = epochs
+        .into_iter()
+        .map(decode_dual_frequency_arc_epoch)
+        .collect();
     let config = match decode_ionosphere_free_arc_config(config) {
         Some(config) => config,
         None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
@@ -1257,8 +1272,12 @@ pub fn rtk_prepare_ionosphere_free_arc<'a>(
 
     Ok(
         match prepare_ionosphere_free_rtk_arc(&epochs, &wide_lane_cycles, &config) {
-            Ok(solution) => (atoms::ok(), encode_ionosphere_free_arc_solution(solution)).encode(env),
-            Err(error) => (atoms::error(), encode_ionosphere_free_arc_error(env, error)).encode(env),
+            Ok(solution) => {
+                (atoms::ok(), encode_ionosphere_free_arc_solution(solution)).encode(env)
+            }
+            Err(error) => {
+                (atoms::error(), encode_ionosphere_free_arc_error(env, error)).encode(env)
+            }
         },
     )
 }
@@ -1319,9 +1338,10 @@ fn decode_static_arc_config(
     term: RtkStaticArcConfigTerm,
 ) -> Result<RtkStaticArcConfig, StaticConfigError> {
     let model = decode_model(term.model).ok_or(StaticConfigError::InvalidStochasticModel)?;
-    let reference = decode_arc_reference(term.reference).ok_or(StaticConfigError::InvalidReference)?;
-    let preprocessing =
-        decode_arc_preprocessing(term.preprocessing).ok_or(StaticConfigError::InvalidPreprocessing)?;
+    let reference =
+        decode_arc_reference(term.reference).ok_or(StaticConfigError::InvalidReference)?;
+    let preprocessing = decode_arc_preprocessing(term.preprocessing)
+        .ok_or(StaticConfigError::InvalidPreprocessing)?;
     let float = decode_float_solve_opts(term.float_opts);
     let (fixed, float_only_systems) = decode_static_fixed_solve_opts(term.fixed_opts);
     let residual = decode_residual_validation_opts(term.residual_opts);
@@ -1432,7 +1452,9 @@ fn expand_static_scale(
     match mode.as_str() {
         "scalar" => {
             if matches!(kind, StaticScaleKind::Wavelength) && scalar <= 0.0 {
-                return Err(StaticConfigError::InvalidScaleOption("ambiguity_wavelength_m"));
+                return Err(StaticConfigError::InvalidScaleOption(
+                    "ambiguity_wavelength_m",
+                ));
             }
             Ok(ambiguity_satellites
                 .iter()
@@ -1508,12 +1530,9 @@ fn static_ambiguity_satellites(
             satellite_positions_m: epoch.shared_positions.clone(),
         })
         .collect::<Vec<_>>();
-    let refs = baseline_reference_satellites(
-        config.base_m,
-        &reference_epochs,
-        config.reference.clone(),
-    )
-    .map_err(RtkArcError::Reference)?;
+    let refs =
+        baseline_reference_satellites(config.base_m, &reference_epochs, config.reference.clone())
+            .map_err(RtkArcError::Reference)?;
     let reference_sats = refs.values().map(String::as_str).collect::<BTreeSet<_>>();
     let mut ambiguity_satellites = BTreeMap::<(String, String), ()>::new();
 
@@ -1682,7 +1701,11 @@ fn encode_static_arc_solution<'a>(env: Env<'a>, solution: RtkStaticArcSolution) 
     make_tuple(
         env,
         &[
-            solution.references.into_iter().collect::<Vec<_>>().encode(env),
+            solution
+                .references
+                .into_iter()
+                .collect::<Vec<_>>()
+                .encode(env),
             solution.ambiguity_ids.encode(env),
             solution
                 .ambiguity_satellites
@@ -1706,9 +1729,7 @@ fn encode_static_arc_error<'a>(env: Env<'a>, error: RtkStaticArcError) -> Term<'
     }
 }
 
-fn decode_dual_frequency_arc_epoch(
-    term: RtkDualFrequencyArcEpochTerm,
-) -> RtkDualFrequencyArcEpoch {
+fn decode_dual_frequency_arc_epoch(term: RtkDualFrequencyArcEpochTerm) -> RtkDualFrequencyArcEpoch {
     RtkDualFrequencyArcEpoch {
         jd_whole: term.jd_whole,
         jd_fraction: term.jd_fraction,
@@ -1794,14 +1815,15 @@ fn decode_ionosphere_free_arc_config(
     })
 }
 
-fn encode_wide_lane_arc_solution<'a>(
-    env: Env<'a>,
-    solution: RtkWideLaneArcSolution,
-) -> Term<'a> {
+fn encode_wide_lane_arc_solution<'a>(env: Env<'a>, solution: RtkWideLaneArcSolution) -> Term<'a> {
     make_tuple(
         env,
         &[
-            solution.references.into_iter().collect::<Vec<_>>().encode(env),
+            solution
+                .references
+                .into_iter()
+                .collect::<Vec<_>>()
+                .encode(env),
             solution
                 .wide_lane_cycles
                 .into_iter()
@@ -1824,10 +1846,7 @@ fn encode_dual_frequency_arc_epochs<'a>(
         .collect()
 }
 
-fn encode_dual_frequency_arc_epoch<'a>(
-    env: Env<'a>,
-    epoch: RtkDualFrequencyArcEpoch,
-) -> Term<'a> {
+fn encode_dual_frequency_arc_epoch<'a>(env: Env<'a>, epoch: RtkDualFrequencyArcEpoch) -> Term<'a> {
     let observations: Vec<Term<'a>> = epoch
         .observations
         .into_iter()
@@ -1884,7 +1903,10 @@ fn encode_dual_frequency_observation<'a>(
     )
 }
 
-fn encode_ionosphere_free_arc_solution(solution: RtkIonosphereFreeArcSolution) -> (
+#[allow(clippy::type_complexity)]
+fn encode_ionosphere_free_arc_solution(
+    solution: RtkIonosphereFreeArcSolution,
+) -> (
     Vec<(String, String)>,
     Vec<PreprocessedArcEpochTerm>,
     Vec<(String, f64)>,
@@ -2077,8 +2099,8 @@ fn preprocess_arc_epochs_for_binding(
                 satellite_positions_m: epoch.satellite_positions_m.clone(),
             })
             .collect();
-        let result =
-            apply_elevation_mask(base_m, &mask_epochs, mask_deg).map_err(RtkArcError::ElevationMask)?;
+        let result = apply_elevation_mask(base_m, &mask_epochs, mask_deg)
+            .map_err(RtkArcError::ElevationMask)?;
         work = work
             .iter()
             .zip(result.epochs.iter())
@@ -2405,12 +2427,7 @@ fn encode_arc_error<'a>(env: Env<'a>, error: RtkArcError) -> Term<'a> {
         RtkArcError::MissingPosition {
             epoch_index,
             satellite_id,
-        } => (
-            atoms::missing_position(),
-            epoch_index as i64,
-            satellite_id,
-        )
-            .encode(env),
+        } => (atoms::missing_position(), epoch_index as i64, satellite_id).encode(env),
         RtkArcError::CycleSlipPrep(error) => encode_arc_cycle_slip_error(env, error),
         RtkArcError::CodeSmoothing(error) => {
             (atoms::code_smoothing_failed(), format!("{error:?}")).encode(env)

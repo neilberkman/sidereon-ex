@@ -5,6 +5,7 @@ defmodule Sidereon.Drag do
 
   alias Sidereon.Astro.Relative.State
   alias Sidereon.NIF
+  alias Sidereon.SpaceWeather, as: SpaceWeatherTable
 
   defmodule SpaceWeather do
     @moduledoc """
@@ -89,18 +90,18 @@ defmodule Sidereon.Drag do
 
   @spec estimate_decay(State.t(), Parameters.t(), keyword()) :: {:ok, DecayEstimate.t()} | {:error, term()}
   def estimate_decay(%State{} = state, %Parameters{} = params, opts \\ []) do
-    case NIF.drag_estimate_decay(
-           Map.from_struct(state),
-           params_map(params),
-           Keyword.get(opts, :force_model, :twobody) |> Atom.to_string(),
-           Keyword.get(opts, :abs_tol, 1.0e-9) / 1.0,
-           Keyword.get(opts, :rel_tol, 1.0e-12) / 1.0,
-           Keyword.get(opts, :reentry_altitude_km, @default_cutoff_altitude_km) / 1.0,
-           Keyword.get(opts, :scan_step_s, 60.0) / 1.0,
-           Keyword.get(opts, :crossing_tolerance_s, 1.0) / 1.0,
-           Keyword.get(opts, :max_duration_s, 12_000_000.0) / 1.0,
-           Keyword.get(opts, :max_scan_samples, 200_000)
-         ) do
+    args = decay_args(state, params, opts)
+
+    result =
+      case Keyword.get(opts, :space_weather_table) do
+        %SpaceWeatherTable{handle: handle} ->
+          apply(NIF, :drag_estimate_decay_with_space_weather_table, args ++ [handle])
+
+        nil ->
+          apply(NIF, :drag_estimate_decay, args)
+      end
+
+    case result do
       {:ok, fields} -> {:ok, to_decay(fields)}
       {:error, reason} -> {:error, reason}
     end
@@ -121,6 +122,21 @@ defmodule Sidereon.Drag do
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  defp decay_args(%State{} = state, %Parameters{} = params, opts) do
+    [
+      Map.from_struct(state),
+      params_map(params),
+      Keyword.get(opts, :force_model, :twobody) |> Atom.to_string(),
+      Keyword.get(opts, :abs_tol, 1.0e-9) / 1.0,
+      Keyword.get(opts, :rel_tol, 1.0e-12) / 1.0,
+      Keyword.get(opts, :reentry_altitude_km, @default_cutoff_altitude_km) / 1.0,
+      Keyword.get(opts, :scan_step_s, 60.0) / 1.0,
+      Keyword.get(opts, :crossing_tolerance_s, 1.0) / 1.0,
+      Keyword.get(opts, :max_duration_s, 12_000_000.0) / 1.0,
+      Keyword.get(opts, :max_scan_samples, 200_000)
+    ]
   end
 
   defp to_params(fields) do

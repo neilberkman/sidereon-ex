@@ -112,6 +112,8 @@ fn omm_from_term<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Omm> {
         bstar: 0.0,
         mean_motion_dot: 0.0,
         mean_motion_ddot: 0.0,
+        exact_sgp4_epoch: None,
+        quantize_tle_derived_fields: true,
     })
 }
 
@@ -129,6 +131,7 @@ fn parse_epoch(s: Option<&str>) -> OmmEpoch {
         minute: 0,
         second: 0,
         microsecond: 0,
+        femtosecond: 0,
     };
     s.and_then(|text| sidereon_core::astro::omm::parse_epoch(text).ok())
         .unwrap_or(zero)

@@ -522,9 +522,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon"
-version = "0.10.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb1b04b3d01de6ef836f46a3784a50436f4e14bf99601b212c078a3e39888e8"
+checksum = "149530024e57e795e061055c0a2af9bc1168127915c5858d179e78ff6d3e612b"
 dependencies = [
  "flate2",
  "sidereon-core",
@@ -532,9 +532,9 @@ dependencies = [
 
 [[package]]
 name = "sidereon-core"
-version = "0.10.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0de0bcc2e9682f3faab6cad03fbe31df28f518487fdb560a1e4ce9c868a8d744"
+checksum = "9ad99df31c1a3fd5ed37c76cb90336e1d9584581fe961d3fcf119091ab65181e"
 dependencies = [
  "cc",
  "libm",
@@ -544,11 +544,12 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "trust-region-least-squares",
 ]
 
 [[package]]
 name = "sidereon_nif"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "nalgebra",

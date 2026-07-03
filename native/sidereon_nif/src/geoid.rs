@@ -7,10 +7,13 @@
 //! cross the boundary in radians, the crate's native query unit; undulation and
 //! heights are in metres.
 
-use rustler::{Encoder, Env, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, ResourceArc, Term};
 use sidereon_core::geoid::{
-    egm96_ellipsoidal_height_m, egm96_orthometric_height_m, egm96_undulation, ellipsoidal_height_m,
-    geoid_undulation, orthometric_height_m, GeoidGrid,
+    egm96_ellipsoidal_height_m, egm96_orthometric_height_m, egm96_undulation,
+    egm96_undulations_deg as core_egm96_undulations_deg,
+    egm96_undulations_rad as core_egm96_undulations_rad, ellipsoidal_height_m, geoid_undulation,
+    geoid_undulations_deg as core_geoid_undulations_deg,
+    geoid_undulations_rad as core_geoid_undulations_rad, orthometric_height_m, GeoidGrid,
 };
 
 mod atoms {
@@ -53,11 +56,35 @@ fn geoid_ellipsoidal_height_m(orthometric_height: f64, lat_rad: f64, lon_rad: f6
     ellipsoidal_height_m(orthometric_height, lat_rad, lon_rad)
 }
 
+/// Batch built-in coarse-grid geoid undulation lookup, with positions in radians.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_undulations_rad(points_rad: Vec<(f64, f64)>) -> Vec<f64> {
+    core_geoid_undulations_rad(&points_rad)
+}
+
+/// Batch built-in coarse-grid geoid undulation lookup, with positions in degrees.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_undulations_deg(points_deg: Vec<(f64, f64)>) -> Vec<f64> {
+    core_geoid_undulations_deg(&points_deg)
+}
+
 /// Geoid undulation `N` (metres) at a geodetic position in radians, from the
 /// embedded genuine EGM96 1-degree global grid (metre-class, ~0.4 m RMS).
 #[rustler::nif]
 fn egm96_undulation_rad(lat_rad: f64, lon_rad: f64) -> f64 {
     egm96_undulation(lat_rad, lon_rad)
+}
+
+/// Batch EGM96 1-degree undulation lookup, with positions in radians.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn egm96_undulations_rad(points_rad: Vec<(f64, f64)>) -> Vec<f64> {
+    core_egm96_undulations_rad(&points_rad)
+}
+
+/// Batch EGM96 1-degree undulation lookup, with positions in degrees.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn egm96_undulations_deg(points_deg: Vec<(f64, f64)>) -> Vec<f64> {
+    core_egm96_undulations_deg(&points_deg)
 }
 
 /// Orthometric height `H = h - N` (metres) from an ellipsoidal height, using the
@@ -80,6 +107,15 @@ fn egm96_ellipsoidal_height(orthometric_height: f64, lat_rad: f64, lon_rad: f64)
 #[rustler::nif(schedule = "DirtyCpu")]
 fn geoid_grid_from_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
     match GeoidGrid::from_text(&text) {
+        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+        Err(error) => (atoms::error(), error.to_string()).encode(env),
+    }
+}
+
+/// Parse a full EGM96 WW15MGH.DAC byte buffer into a loaded-grid handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_grid_from_egm96_dac<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
+    match GeoidGrid::from_egm96_dac(bytes.as_slice()) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
         Err(error) => (atoms::error(), error.to_string()).encode(env),
     }
@@ -133,4 +169,74 @@ fn geoid_grid_undulation_rad(
     lon_rad: f64,
 ) -> f64 {
     handle.grid.undulation_rad(lat_rad, lon_rad)
+}
+
+/// Batch undulation lookup from a loaded grid, with positions in degrees.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_grid_undulations_deg(
+    handle: ResourceArc<GeoidGridResource>,
+    points_deg: Vec<(f64, f64)>,
+) -> Vec<f64> {
+    handle.grid.undulations_deg(&points_deg)
+}
+
+/// Batch undulation lookup from a loaded grid, with positions in radians.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_grid_undulations_rad(
+    handle: ResourceArc<GeoidGridResource>,
+    points_rad: Vec<(f64, f64)>,
+) -> Vec<f64> {
+    handle.grid.undulations_rad(&points_rad)
+}
+
+/// Loaded-grid orthometric height conversion, with position in degrees.
+#[rustler::nif]
+fn geoid_grid_orthometric_height_deg(
+    handle: ResourceArc<GeoidGridResource>,
+    ellipsoidal_height_m: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> f64 {
+    handle
+        .grid
+        .orthometric_height_deg(ellipsoidal_height_m, lat_deg, lon_deg)
+}
+
+/// Loaded-grid ellipsoidal height conversion, with position in degrees.
+#[rustler::nif]
+fn geoid_grid_ellipsoidal_height_deg(
+    handle: ResourceArc<GeoidGridResource>,
+    orthometric_height_m: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> f64 {
+    handle
+        .grid
+        .ellipsoidal_height_deg(orthometric_height_m, lat_deg, lon_deg)
+}
+
+/// Loaded-grid orthometric height conversion, with position in radians.
+#[rustler::nif]
+fn geoid_grid_orthometric_height_rad(
+    handle: ResourceArc<GeoidGridResource>,
+    ellipsoidal_height_m: f64,
+    lat_rad: f64,
+    lon_rad: f64,
+) -> f64 {
+    handle
+        .grid
+        .orthometric_height_rad(ellipsoidal_height_m, lat_rad, lon_rad)
+}
+
+/// Loaded-grid ellipsoidal height conversion, with position in radians.
+#[rustler::nif]
+fn geoid_grid_ellipsoidal_height_rad(
+    handle: ResourceArc<GeoidGridResource>,
+    orthometric_height_m: f64,
+    lat_rad: f64,
+    lon_rad: f64,
+) -> f64 {
+    handle
+        .grid
+        .ellipsoidal_height_rad(orthometric_height_m, lat_rad, lon_rad)
 }

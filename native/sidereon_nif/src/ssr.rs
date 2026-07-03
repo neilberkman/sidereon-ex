@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{GnssWeekTow, TimeScale};
@@ -13,7 +14,7 @@ use crate::broadcast::BroadcastResource;
 use crate::errors;
 
 pub struct SsrStoreResource {
-    pub store: SsrCorrectionStore,
+    pub store: Mutex<SsrCorrectionStore>,
 }
 
 #[rustler::resource_impl]
@@ -178,7 +179,7 @@ fn sample_row(row: ephemeris::EphemerisSampleRow) -> EphemerisSampleRowTerm {
 #[rustler::nif]
 fn ssr_store_new() -> ResourceArc<SsrStoreResource> {
     ResourceArc::new(SsrStoreResource {
-        store: SsrCorrectionStore::new(),
+        store: Mutex::new(SsrCorrectionStore::new()),
     })
 }
 
@@ -191,7 +192,18 @@ fn ssr_store_from_rtcm(
 ) -> NifResult<ResourceArc<SsrStoreResource>> {
     let store = sidereon::ssr_store_from_rtcm(bytes.as_slice(), week_tow(scale, week, tow_s)?)
         .map_err(|e| Error::Term(Box::new(e.to_string())))?;
-    Ok(ResourceArc::new(SsrStoreResource { store }))
+    Ok(ResourceArc::new(SsrStoreResource {
+        store: Mutex::new(store),
+    }))
+}
+
+fn lock_store(
+    handle: &ResourceArc<SsrStoreResource>,
+) -> NifResult<std::sync::MutexGuard<'_, SsrCorrectionStore>> {
+    handle
+        .store
+        .lock()
+        .map_err(|_| Error::Term(Box::new("ssr store lock poisoned")))
 }
 
 #[rustler::nif]
@@ -201,7 +213,8 @@ fn ssr_orbit<'a>(
     satellite_id: String,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
-    Ok(match handle.store.orbit(sat) {
+    let store = lock_store(&handle)?;
+    Ok(match store.orbit(sat) {
         Some(orbit) => (atoms::ok(), orbit_term(orbit)).encode(env),
         None => (atoms::error(), atoms::not_found()).encode(env),
     })
@@ -214,7 +227,8 @@ fn ssr_clock<'a>(
     satellite_id: String,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
-    Ok(match handle.store.clock(sat) {
+    let store = lock_store(&handle)?;
+    Ok(match store.clock(sat) {
         Some(clock) => (atoms::ok(), clock_term(clock)).encode(env),
         None => (atoms::error(), atoms::not_found()).encode(env),
     })
@@ -227,10 +241,31 @@ fn ssr_ura_index<'a>(
     satellite_id: String,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
-    Ok(match handle.store.ura_index(sat) {
+    let store = lock_store(&handle)?;
+    Ok(match store.ura_index(sat) {
         Some(ura) => (atoms::ok(), ura as i64).encode(env),
         None => (atoms::error(), atoms::not_found()).encode(env),
     })
+}
+
+#[rustler::nif]
+fn ssr_store_ingest<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<SsrStoreResource>,
+    message: Term<'a>,
+    week: u32,
+    tow_s: f64,
+) -> NifResult<Term<'a>> {
+    let (kind_term, fields): (Term<'a>, Term<'a>) = message.decode()?;
+    let kind = kind_term.atom_to_string()?;
+    let message = crate::rtcm::build_message(&kind, fields)?;
+    let mut store = lock_store(&handle)?;
+    Ok(
+        match store.ingest(&message, week_tow("GPST".to_string(), week, tow_s)?) {
+            Ok(()) => atoms::ok().encode(env),
+            Err(error) => (atoms::error(), error.to_string()).encode(env),
+        },
+    )
 }
 
 #[rustler::nif]
@@ -244,7 +279,8 @@ fn ssr_corrected_position<'a>(
     regional_providers: Vec<u16>,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store.store)
+    let store = lock_store(&store)?;
+    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
         .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers));
     Ok(match source.corrected_state(sat, t_j2000_s) {
         Some((position, clock_s)) => (
@@ -257,6 +293,7 @@ fn ssr_corrected_position<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn ssr_sample_broadcast(
     broadcast: ResourceArc<BroadcastResource>,
     store: ResourceArc<SsrStoreResource>,
@@ -271,7 +308,8 @@ fn ssr_sample_broadcast(
         .iter()
         .map(|sat| sat_id(sat))
         .collect::<NifResult<_>>()?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store.store)
+    let store = lock_store(&store)?;
+    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
         .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers));
     let rows = ephemeris::sample(&source, &sats, start_j2000_s, stop_j2000_s, step_s)
         .map_err(errors::invalid_input)?;

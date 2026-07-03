@@ -7,7 +7,7 @@
 use rustler::{Binary, Encoder, Env, OwnedBinary, Term};
 use sidereon_core::data::{
     self, AnalysisCenter, DataCatalogError, HgtConversionError, ProductDate, ProductDateTime,
-    ProductType,
+    ProductType, SpaceWeatherProduct,
 };
 
 mod atoms {
@@ -37,6 +37,10 @@ fn center(code: &str) -> Result<AnalysisCenter, DataCatalogError> {
 }
 
 fn product_type(code: &str) -> Result<ProductType, DataCatalogError> {
+    code.parse()
+}
+
+fn space_weather_product(code: &str) -> Result<SpaceWeatherProduct, DataCatalogError> {
     code.parse()
 }
 
@@ -253,6 +257,7 @@ fn data_predicted_day_offset<'a>(env: Env<'a>, center_code: String) -> Term<'a> 
 }
 
 #[rustler::nif]
+#[allow(clippy::too_many_arguments)]
 fn data_canonical_filename<'a>(
     env: Env<'a>,
     center_code: String,
@@ -274,6 +279,7 @@ fn data_canonical_filename<'a>(
 }
 
 #[rustler::nif]
+#[allow(clippy::too_many_arguments)]
 fn data_archive_url<'a>(
     env: Env<'a>,
     center_code: String,
@@ -317,6 +323,7 @@ fn data_gim_date_candidates<'a>(
 }
 
 #[rustler::nif]
+#[allow(clippy::too_many_arguments)]
 fn data_ultra_issue_candidates<'a>(
     env: Env<'a>,
     center_code: String,
@@ -357,6 +364,39 @@ fn data_skadi_source_entry<'a>(env: Env<'a>) -> Term<'a> {
         entry.root_url,
     )
         .encode(env)
+}
+
+#[rustler::nif]
+fn data_space_weather_source_entry<'a>(env: Env<'a>) -> Term<'a> {
+    let entry = data::space_weather_source_entry();
+    (
+        entry.protocol.as_str(),
+        entry.host,
+        entry.compression.as_str(),
+        entry.root_url,
+    )
+        .encode(env)
+}
+
+#[rustler::nif]
+fn data_space_weather_filename<'a>(env: Env<'a>, product_code: String) -> Term<'a> {
+    encode_result(env, space_weather_product(&product_code), |env, product| {
+        data::space_weather_filename(product).encode(env)
+    })
+}
+
+#[rustler::nif]
+fn data_space_weather_archive_url<'a>(env: Env<'a>, product_code: String) -> Term<'a> {
+    encode_result(env, space_weather_product(&product_code), |env, product| {
+        data::space_weather_archive_url(product).encode(env)
+    })
+}
+
+#[rustler::nif]
+fn data_space_weather_cache_relpath<'a>(env: Env<'a>, product_code: String) -> Term<'a> {
+    encode_result(env, space_weather_product(&product_code), |env, product| {
+        data::space_weather_cache_relpath(product).encode(env)
+    })
 }
 
 #[rustler::nif]

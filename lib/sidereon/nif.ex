@@ -38,6 +38,18 @@ defmodule Sidereon.NIF do
   def propagate_dp54_with_drag(_position_km, _velocity_km_s, _dt_seconds, _forces, _abs_tol, _rel_tol, _drag),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def propagate_dp54_with_drag_and_space_weather(
+        _position_km,
+        _velocity_km_s,
+        _epoch_tdb_seconds,
+        _dt_seconds,
+        _forces,
+        _abs_tol,
+        _rel_tol,
+        _drag,
+        _table
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def predict_passes(
         _tle_map,
         _station_latitude_deg,
@@ -187,6 +199,24 @@ defmodule Sidereon.NIF do
 
   def covariance_symmetric(_m), do: :erlang.nif_error(:nif_not_loaded)
 
+  def covariance6_from_diagonal(_diagonal), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_validate(_matrix), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_rtn_to_eci(_matrix, _state), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_eci_to_rtn(_matrix, _state), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_km_to_m(_matrix), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_m_to_km(_matrix), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_interpolate_psd(_a, _b, _u), do: :erlang.nif_error(:nif_not_loaded)
+
+  def covariance6_transport_segments(_matrix, _segments, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_covariance(_initial_state, _covariance, _epochs, _options), do: :erlang.nif_error(:nif_not_loaded)
+
   def encounter_frame(_r1, _v1, _r2, _v2), do: :erlang.nif_error(:nif_not_loaded)
 
   def encounter_plane_covariance(_x_hat, _z_hat, _cov), do: :erlang.nif_error(:nif_not_loaded)
@@ -235,6 +265,20 @@ defmodule Sidereon.NIF do
         _crossing_tolerance_s,
         _max_duration_s,
         _max_scan_samples
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def drag_estimate_decay_with_space_weather_table(
+        _state,
+        _params,
+        _force_model,
+        _abs_tol,
+        _rel_tol,
+        _reentry_altitude_km,
+        _scan_step_s,
+        _crossing_tolerance_s,
+        _max_duration_s,
+        _max_scan_samples,
+        _table
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spk_load(_bytes), do: :erlang.nif_error(:nif_not_loaded)
@@ -436,9 +480,15 @@ defmodule Sidereon.NIF do
 
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
+  def broadcast_parse_with_preference(_text, _message_preference), do: :erlang.nif_error(:nif_not_loaded)
+
   def broadcast_record_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_records_detailed(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_message_preference(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_glonass_record_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -451,6 +501,10 @@ defmodule Sidereon.NIF do
   def broadcast_position(_handle, _system_letter, _prn, _t_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_encode_nav(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_cnav_ura_nominal(_index), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_cnav_ura_ned(_cnav, _system, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def bias_parse_sinex(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -533,6 +587,8 @@ defmodule Sidereon.NIF do
   def ssr_store_new, do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_store_from_rtcm(_bytes, _scale, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ssr_store_ingest(_handle, _message, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_orbit(_handle, _satellite_id), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -760,6 +816,18 @@ defmodule Sidereon.NIF do
   def rinex_obs_phases(_handle, _epoch_index, _overrides), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_band_frequency_hz(_system, _band, _channel), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_observation_qc(_handle, _interval_override_s, _gap_factor), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_lint_obs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_lint_obs_text(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_lint_nav_text(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_repair_obs_text(_text, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_qc_repair_nav_text(_text, _options), do: :erlang.nif_error(:nif_not_loaded)
 
   def frequencies_carrier_frequency_hz(_system, _band), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1460,6 +1528,10 @@ defmodule Sidereon.NIF do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def data_skadi_source_entry, do: :erlang.nif_error(:nif_not_loaded)
+  def data_space_weather_source_entry, do: :erlang.nif_error(:nif_not_loaded)
+  def data_space_weather_filename(_product), do: :erlang.nif_error(:nif_not_loaded)
+  def data_space_weather_archive_url(_product), do: :erlang.nif_error(:nif_not_loaded)
+  def data_space_weather_cache_relpath(_product), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_tile_id(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_band(_lat_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_archive_url(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
@@ -1472,11 +1544,17 @@ defmodule Sidereon.NIF do
 
   def geoid_undulation_rad(_lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
 
+  def geoid_undulations_rad(_points_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_undulations_deg(_points_deg), do: :erlang.nif_error(:nif_not_loaded)
+
   def geoid_orthometric_height_m(_ellipsoidal_height, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_ellipsoidal_height_m(_orthometric_height, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_grid_from_text(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_from_egm96_dac(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_grid_new(_lat_min_deg, _lon_min_deg, _dlat_deg, _dlon_deg, _n_lat, _n_lon, _values_m),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -1485,17 +1563,91 @@ defmodule Sidereon.NIF do
 
   def geoid_grid_undulation_rad(_handle, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
 
+  def geoid_grid_undulations_deg(_handle, _points_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_undulations_rad(_handle, _points_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_orthometric_height_deg(_handle, _ellipsoidal_height_m, _lat_deg, _lon_deg),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_ellipsoidal_height_deg(_handle, _orthometric_height_m, _lat_deg, _lon_deg),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_orthometric_height_rad(_handle, _ellipsoidal_height_m, _lat_rad, _lon_rad),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_ellipsoidal_height_rad(_handle, _orthometric_height_m, _lat_rad, _lon_rad),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def sgp4_propagate_batch(_tle_maps, _times_minutes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
 
   def sgp4_propagate_batch_parallel(_tle_maps, _times_minutes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sgp4_fit_tle(_samples, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_parse_sentence(_line), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_group_epochs(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_accumulator_new(_date, _max_sentences_per_epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_accumulator_push(_handle, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_accumulator_finish(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_accumulator_retained_len(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def nmea_write_gga(_gga), do: :erlang.nif_error(:nif_not_loaded)
+
   def civil_utc_instant_split(_year, _month, _day, _hour, _minute, _second), do: :erlang.nif_error(:nif_not_loaded)
 
+  def space_weather_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_space_weather_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_sample_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_sample_at_with_policy(_handle, _epoch_j2000_s, _policy), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_ap_array_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_coverage(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_to_csv_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def space_weather_to_txt_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ntrip_config_new(_config), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_request_bytes(_config), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_request_headers(_config), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_new(_config), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_push(_machine, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_finish(_machine), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_gga(_machine, _now_s, _position, _utc_seconds_of_day), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_reset(_machine), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_machine_state(_machine), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_classify_http_response(_status, _reason, _headers), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_parse_sourcetable(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_sourcetable_to_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def ntrip_format_gga(_position, _utc_seconds_of_day), do: :erlang.nif_error(:nif_not_loaded)
+  def rtcm_assembler_new, do: :erlang.nif_error(:nif_not_loaded)
+  def rtcm_assembler_push(_assembler, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+
   def rtcm_decode_messages(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_decode_stream(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_decode_message(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_message_number(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_lli_bits, do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_minimum_lock_time_ms(_kind, _indicator), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_derive_lli(_previous_min_lock_time_ms, _elapsed_ms, _current_min_lock_time_ms, _half_cycle_ambiguity),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_msm_epoch_dt_ms(_system, _previous, _current), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_msm_signal_rinex_code(_system, _signal_id), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtcm_msm_lli(_messages), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_decode_frame(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1596,6 +1748,10 @@ defmodule Sidereon.NIF do
   # --- EGM96 geoid ---------------------------------------------------
 
   def egm96_undulation_rad(_lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def egm96_undulations_rad(_points_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def egm96_undulations_deg(_points_deg), do: :erlang.nif_error(:nif_not_loaded)
 
   def egm96_orthometric_height(_ellipsoidal_height, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
 

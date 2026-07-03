@@ -48,6 +48,34 @@ defmodule Sidereon.GNSS.RTCM do
   end
 
   @doc """
+  Decode every CRC-valid RTCM 3 frame and return messages plus stream diagnostics.
+
+  The message list matches `decode_messages/1`. Diagnostics include skipped
+  resynchronization bytes and CRC-valid frames whose typed body decode failed.
+  """
+  @spec decode_stream(binary()) ::
+          {:ok,
+           %{
+             messages: [message()],
+             diagnostics: %{
+               resync_bytes: non_neg_integer(),
+               skipped_frames: [map()]
+             }
+           }}
+          | {:error, term()}
+  def decode_stream(bytes) when is_binary(bytes) do
+    case NIF.rtcm_decode_stream(bytes) do
+      {:ok, {messages, diagnostics}} ->
+        {:ok, %{messages: messages, diagnostics: diagnostics}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Decode every CRC-valid RTCM 3 frame in a byte buffer.
   """
   @spec decode(binary()) :: {:ok, [message()]} | {:error, term()}
@@ -75,6 +103,94 @@ defmodule Sidereon.GNSS.RTCM do
       {:ok, number} -> {:ok, number}
       {:error, reason} -> {:error, reason}
     end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Return the RINEX LLI bit constants used by the RTCM MSM derivation helpers.
+  """
+  @spec lli_bits() :: %{loss_of_lock: 1, half_cycle: 2}
+  def lli_bits do
+    {loss_of_lock, half_cycle} = NIF.rtcm_lli_bits()
+    %{loss_of_lock: loss_of_lock, half_cycle: half_cycle}
+  end
+
+  @doc """
+  Minimum continuous-lock time in milliseconds for an MSM lock indicator.
+
+  `kind` is `"msm4"` or `"msm7"`.
+  """
+  @spec minimum_lock_time_ms(String.t(), integer()) ::
+          {:ok, non_neg_integer() | nil} | {:error, term()}
+  def minimum_lock_time_ms(kind, indicator) when is_binary(kind) and is_integer(indicator) do
+    case NIF.rtcm_minimum_lock_time_ms(kind, indicator) do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Derive the RINEX LLI digit for one signal cell.
+
+  Pass `elapsed_ms` as `nil` for the first observation. When `elapsed_ms` is an
+  integer, `previous_min_lock_time_ms` may be `nil` to represent a previous
+  reserved indicator.
+  """
+  @spec derive_lli(integer() | nil, integer() | nil, integer() | nil, boolean()) ::
+          non_neg_integer()
+  def derive_lli(previous_min_lock_time_ms, elapsed_ms, current_min_lock_time_ms, half_cycle?)
+      when (is_integer(previous_min_lock_time_ms) or is_nil(previous_min_lock_time_ms)) and
+             (is_integer(elapsed_ms) or is_nil(elapsed_ms)) and
+             (is_integer(current_min_lock_time_ms) or is_nil(current_min_lock_time_ms)) and is_boolean(half_cycle?) do
+    NIF.rtcm_derive_lli(
+      previous_min_lock_time_ms,
+      elapsed_ms,
+      current_min_lock_time_ms,
+      half_cycle?
+    )
+  end
+
+  @doc """
+  Elapsed milliseconds between two raw MSM epoch-time fields for one system.
+  """
+  @spec msm_epoch_dt_ms(String.t(), integer(), integer()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def msm_epoch_dt_ms(system, previous, current)
+      when is_binary(system) and is_integer(previous) and is_integer(current) do
+    case NIF.rtcm_msm_epoch_dt_ms(system, previous, current) do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  RINEX observation-code suffix for an MSM signal id, or `nil` if reserved.
+  """
+  @spec msm_signal_rinex_code(String.t(), integer()) :: {:ok, String.t() | nil} | {:error, term()}
+  def msm_signal_rinex_code(system, signal_id) when is_binary(system) and is_integer(signal_id) do
+    case NIF.rtcm_msm_signal_rinex_code(system, signal_id) do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Derive per-cell LLI rows by running a core lock-time tracker over MSM maps.
+
+  The input is a list of decoded MSM field maps, in stream order. The result is
+  one list of `%{satellite_id, signal_id, lli, min_lock_time_ms}` maps per input
+  message.
+  """
+  @spec msm_lli([map()]) :: {:ok, [[map()]]} | {:error, term()}
+  def msm_lli(messages) when is_list(messages) do
+    {:ok, NIF.rtcm_msm_lli(messages)}
   rescue
     e in ErlangError -> {:error, e.original}
   end

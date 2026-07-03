@@ -3,7 +3,7 @@ defmodule Sidereon.GNSS.QC do
   Measurement-quality control for single-point positioning.
 
   The numerical modeling and FDE orchestration live in the
-  `sidereon-core` Rust core. This module keeps the Elixir API shape,
+  `sidereon-core` Rust core. This module keeps the Elixir API,
   normalizes options and epochs for the NIF, maps errors, and decodes the
   unchanged public result maps.
   """
@@ -13,6 +13,7 @@ defmodule Sidereon.GNSS.QC do
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.Positioning.Solution
+  alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
@@ -220,6 +221,87 @@ defmodule Sidereon.GNSS.QC do
 
   def robust_fde(%Broadcast{handle: handle}, observations, epoch, opts) when is_list(observations) do
     fde_impl(:broadcast, handle, observations, epoch, opts, true)
+  end
+
+  @doc """
+  Observation completeness and signal-quality rollup for a parsed RINEX OBS file.
+  """
+  @spec observation_report(Observations.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def observation_report(%Observations{handle: handle}, opts \\ []) do
+    interval = Keyword.get(opts, :interval_s)
+    gap_factor = Keyword.get(opts, :gap_factor, 1.5)
+
+    case NIF.rinex_obs_observation_qc(handle, interval, gap_factor / 1.0) do
+      {:ok, report} -> {:ok, report}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Lint a parsed RINEX OBS file.
+  """
+  @spec lint_obs(Observations.t()) :: {:ok, map()} | {:error, term()}
+  def lint_obs(%Observations{handle: handle}) do
+    case NIF.rinex_qc_lint_obs(handle) do
+      {:ok, report} -> {:ok, normalize_lint_report(report)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Lint RINEX OBS or CRINEX text.
+  """
+  @spec lint_obs_text(String.t()) :: {:ok, map()} | {:error, term()}
+  def lint_obs_text(text) when is_binary(text) do
+    case NIF.rinex_qc_lint_obs_text(text) do
+      {:ok, report} -> {:ok, normalize_lint_report(report)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Lint RINEX NAV text.
+  """
+  @spec lint_nav_text(String.t()) :: {:ok, map()} | {:error, term()}
+  def lint_nav_text(text) when is_binary(text) do
+    case NIF.rinex_qc_lint_nav_text(text) do
+      {:ok, report} -> {:ok, normalize_lint_report(report)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Mechanically repair RINEX OBS or CRINEX text.
+  """
+  @spec repair_obs_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def repair_obs_text(text, opts \\ []) when is_binary(text) do
+    case NIF.rinex_qc_repair_obs_text(text, repair_options(opts)) do
+      {:ok, repair} -> {:ok, normalize_repair(repair)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Mechanically repair RINEX NAV text.
+  """
+  @spec repair_nav_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def repair_nav_text(text, opts \\ []) when is_binary(text) do
+    case NIF.rinex_qc_repair_nav_text(text, repair_options(opts)) do
+      {:ok, repair} -> {:ok, normalize_repair(repair)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
   end
 
   @doc """
@@ -446,4 +528,40 @@ defmodule Sidereon.GNSS.QC do
   defp to_tuple4({_a, _b, _c, _d} = t), do: t
 
   defp to_tuple4([a, b, c, d]), do: {a / 1.0, b / 1.0, c / 1.0, d / 1.0}
+
+  defp repair_options(opts) do
+    %{
+      file_stamp: file_stamp(Keyword.get(opts, :file_stamp)),
+      set_interval: Keyword.get(opts, :set_interval, true),
+      set_time_of_last_obs: Keyword.get(opts, :set_time_of_last_obs, true),
+      set_obs_counts: Keyword.get(opts, :set_obs_counts, true),
+      drop_empty_records: Keyword.get(opts, :drop_empty_records, true),
+      sort_records: Keyword.get(opts, :sort_records, true),
+      drop_unsupported: Keyword.get(opts, :drop_unsupported, true)
+    }
+  end
+
+  defp file_stamp(nil), do: nil
+
+  defp file_stamp({program, run_by, date}) do
+    %{program: to_string(program), run_by: to_string(run_by), date: to_string(date)}
+  end
+
+  defp file_stamp(%{} = stamp) do
+    %{
+      program: Map.fetch!(stamp, :program),
+      run_by: Map.fetch!(stamp, :run_by),
+      date: Map.fetch!(stamp, :date)
+    }
+  end
+
+  defp normalize_repair(repair) when is_map(repair) do
+    repair
+    |> Map.update(:remaining, nil, &normalize_lint_report/1)
+  end
+
+  defp normalize_lint_report(report) when is_map(report) do
+    report
+    |> Map.put(:clean?, Map.get(report, :clean))
+  end
 end

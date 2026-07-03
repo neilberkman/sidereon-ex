@@ -34,6 +34,7 @@ defmodule Sidereon.GNSS.Data do
 
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
+  alias Sidereon.SpaceWeather
 
   @default_max_compressed_bytes 64 * 1024 * 1024
   @default_max_decompressed_bytes 500 * 1024 * 1024
@@ -59,6 +60,7 @@ defmodule Sidereon.GNSS.Data do
           | {:incompatible_sources, [String.t()], term()}
           | {:no_products, [term()]}
           | {:no_coverage, String.t()}
+          | {:unknown_product, term()}
 
   defmodule Product do
     @moduledoc """
@@ -338,6 +340,27 @@ defmodule Sidereon.GNSS.Data do
   end
 
   @doc """
+  Derive a space-weather filename.
+  """
+  def space_weather_filename(product \\ :sw_all) do
+    core(NIF.data_space_weather_filename(normalize_space_weather_product(product)))
+  end
+
+  @doc """
+  Derive the space-weather archive URL.
+  """
+  def space_weather_archive_url(product \\ :sw_all) do
+    core(NIF.data_space_weather_archive_url(normalize_space_weather_product(product)))
+  end
+
+  @doc """
+  Derive the space-weather cache relative path.
+  """
+  def space_weather_cache_relpath(product \\ :sw_all) do
+    core(NIF.data_space_weather_cache_relpath(normalize_space_weather_product(product)))
+  end
+
+  @doc """
   Parse a Skadi tile id.
   """
   def parse_skadi_tile_id(tile_id) when is_binary(tile_id), do: core(NIF.data_parse_skadi_tile_id(tile_id))
@@ -366,6 +389,40 @@ defmodule Sidereon.GNSS.Data do
           if truthy?(Keyword.get(opts, :offline)),
             do: {:error, reason},
             else: download_and_cache_gnss(product, path, url, protocol, compression, opts)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Fetch, verify, cache, and parse a space-weather product.
+  """
+  @spec fetch_space_weather(keyword()) :: {:ok, SpaceWeather.t()} | {:error, error_reason()}
+  def fetch_space_weather(opts \\ []) do
+    product = Keyword.get(opts, :product, :sw_all) |> normalize_space_weather_product()
+
+    with {:ok, relpath} <- space_weather_cache_relpath(product),
+         {:ok, path} <- safe_terrain_path(resolve_cache_dir(opts, :gnss), relpath),
+         {:ok, url} <- space_weather_archive_url(product),
+         {protocol, _host, compression, _root_url} <- NIF.data_space_weather_source_entry() do
+      case classify_space_weather(path, Keyword.get(opts, :sha256), Keyword.get(opts, :max_age_s, 86_400.0), opts) do
+        {:hit, _path} ->
+          SpaceWeather.load(path)
+
+        {:absent, _} ->
+          fetch_space_weather_on_miss(product, path, url, protocol, compression, opts)
+
+        {:unverified, _} ->
+          fetch_space_weather_on_miss(product, path, url, protocol, compression, opts)
+
+        {:stale, _reason} ->
+          if truthy?(Keyword.get(opts, :offline)) do
+            SpaceWeather.load(path)
+          else
+            download_and_cache_space_weather(product, path, url, protocol, compression, opts)
+          end
 
         {:error, reason} ->
           {:error, reason}
@@ -536,6 +593,14 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
+  defp fetch_space_weather_on_miss(product, path, url, protocol, compression, opts) do
+    if truthy?(Keyword.get(opts, :offline)) do
+      {:error, :offline_cache_miss}
+    else
+      download_and_cache_space_weather(product, path, url, protocol, compression, opts)
+    end
+  end
+
   defp download_and_cache_gnss(product, path, url, protocol, compression, opts) do
     with {:ok, downloaded} <- download(url, protocol, opts),
          {:ok, data} <- decompress_if_needed(downloaded, compression, max_decompressed_bytes(opts)),
@@ -543,6 +608,16 @@ defmodule Sidereon.GNSS.Data do
          provenance = gnss_provenance(product, url, protocol, compression, downloaded, data),
          :ok <- commit_file(path, data, provenance) do
       {:ok, path}
+    end
+  end
+
+  defp download_and_cache_space_weather(product, path, url, protocol, compression, opts) do
+    with {:ok, downloaded} <- download(url, protocol, opts),
+         {:ok, data} <- decompress_if_needed(downloaded, compression, max_decompressed_bytes(opts)),
+         :ok <- verify_sha256(data, Keyword.get(opts, :sha256)),
+         provenance = space_weather_provenance(product, url, protocol, compression, downloaded, data),
+         :ok <- commit_file(path, data, provenance) do
+      SpaceWeather.load(path)
     end
   end
 
@@ -860,6 +935,63 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
+  defp classify_space_weather(path, expected_sha256, max_age_s, opts) do
+    case File.read(path) do
+      {:ok, data} ->
+        got = sha256(data)
+
+        cond do
+          is_binary(expected_sha256) and got == String.downcase(expected_sha256) ->
+            {:hit, path}
+
+          is_binary(expected_sha256) ->
+            {:error, {:checksum_mismatch, String.downcase(expected_sha256), got}}
+
+          true ->
+            classify_space_weather_with_provenance(path, got, max_age_s, truthy?(Keyword.get(opts, :offline)))
+        end
+
+      {:error, :enoent} ->
+        {:absent, nil}
+
+      {:error, reason} ->
+        {:error, {:cache_not_writable, {:read, path, reason}}}
+    end
+  end
+
+  defp classify_space_weather_with_provenance(path, got, max_age_s, offline?) do
+    case read_json(provenance_path(path)) do
+      {:ok, provenance} ->
+        expected = provenance["sha256_data"] || provenance["sha256_decompressed"]
+
+        cond do
+          is_binary(expected) and got != String.downcase(expected) ->
+            {:error, {:checksum_mismatch, String.downcase(expected), got}}
+
+          is_binary(expected) and (offline? or fresh_provenance?(provenance, max_age_s)) ->
+            {:hit, path}
+
+          is_binary(expected) ->
+            {:stale, :expired}
+
+          true ->
+            {:unverified, path}
+        end
+
+      _ ->
+        {:unverified, path}
+    end
+  end
+
+  defp fresh_provenance?(%{"fetched_at" => fetched_at}, max_age_s) when is_number(max_age_s) do
+    case DateTime.from_iso8601(fetched_at) do
+      {:ok, dt, _offset} -> DateTime.diff(DateTime.utc_now(), dt, :second) <= max_age_s
+      _ -> false
+    end
+  end
+
+  defp fresh_provenance?(_provenance, _max_age_s), do: false
+
   defp classify_with_provenance(path, got) do
     case read_json(provenance_path(path)) do
       {:ok, provenance} ->
@@ -1141,6 +1273,23 @@ defmodule Sidereon.GNSS.Data do
     }
   end
 
+  defp space_weather_provenance(product, url, protocol, compression, downloaded, data) do
+    digest = sha256(data)
+
+    %{
+      source_url: url,
+      protocol: protocol,
+      compression: compression,
+      sha256_data: digest,
+      size_data: byte_size(data),
+      sha256_downloaded: sha256(downloaded),
+      size_downloaded: byte_size(downloaded),
+      product: product,
+      fetched_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      fetcher: "Sidereon.GNSS.Data"
+    }
+  end
+
   defp provenance_path(path), do: path <> ".provenance.json"
   defp sha256(data), do: :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
 
@@ -1203,6 +1352,11 @@ defmodule Sidereon.GNSS.Data do
   defp normalize_code(value) when is_atom(value), do: value |> Atom.to_string() |> String.replace("-", "_")
   defp normalize_code(value) when is_binary(value), do: value
   defp normalize_code(value), do: to_string(value)
+
+  defp normalize_space_weather_product(:all), do: "sw_all"
+  defp normalize_space_weather_product(:last5), do: "sw_last5"
+  defp normalize_space_weather_product(:last_5_years), do: "sw_last5"
+  defp normalize_space_weather_product(value), do: normalize_code(value)
 
   defp core({:ok, value}), do: {:ok, value}
   defp core({:error, reason}), do: {:error, reason}

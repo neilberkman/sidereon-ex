@@ -43,8 +43,44 @@ defmodule Sidereon.GNSS.RTCMTest do
     assert {:ok, []} = RTCM.decode_messages(<<0, 1, 2, 3, 4, 5>>)
   end
 
+  test "decode_stream returns messages and diagnostics" do
+    assert {:ok, stream} = RTCM.decode_stream(<<"junk", @frame_1006::binary>>)
+
+    assert [{:station_coordinates, fields}] = stream.messages
+    assert fields.message_number == 1006
+    assert stream.diagnostics.resync_bytes >= 4
+    assert stream.diagnostics.skipped_frames == []
+  end
+
   test "decode_frame errors on a truncated buffer" do
     assert {:error, _reason} = RTCM.decode_frame(<<211, 0>>)
+  end
+
+  test "LLI helper functions delegate to core tables and rules" do
+    assert RTCM.lli_bits() == %{loss_of_lock: 1, half_cycle: 2}
+    assert {:ok, 0} = RTCM.minimum_lock_time_ms("msm4", 0)
+    assert {:ok, 512} = RTCM.minimum_lock_time_ms("msm4", 5)
+    assert {:ok, nil} = RTCM.minimum_lock_time_ms("msm4", 16)
+    assert {:ok, 67_108_864} = RTCM.minimum_lock_time_ms("msm7", 704)
+    assert {:ok, nil} = RTCM.minimum_lock_time_ms("msm7", 705)
+
+    assert RTCM.derive_lli(nil, nil, 0, true) == 2
+    assert RTCM.derive_lli(1024, 500, 512, false) == 1
+    assert RTCM.derive_lli(512, 600, 512, false) == 1
+    assert RTCM.derive_lli(512, 512, 512, false) == 0
+
+    assert {:ok, 2_000} = RTCM.msm_epoch_dt_ms("G", 604_799_000, 1_000)
+    assert {:ok, "1C"} = RTCM.msm_signal_rinex_code("G", 2)
+    assert {:ok, nil} = RTCM.msm_signal_rinex_code("G", 1)
+  end
+
+  test "msm_lli runs one lock-time tracker over MSM field maps" do
+    first = msm_fields("msm4", 1074)
+    second = put_in(first.header.epoch_time, 700)
+
+    assert {:ok, [[first_cell], [second_cell]]} = RTCM.msm_lli([first, second])
+    assert first_cell == %{satellite_id: 5, signal_id: 2, lli: 0, min_lock_time_ms: 512}
+    assert second_cell == %{satellite_id: 5, signal_id: 2, lli: 1, min_lock_time_ms: 512}
   end
 
   describe "encode_message/1 (from-scratch construction + encode)" do

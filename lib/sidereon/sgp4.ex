@@ -6,6 +6,22 @@ defmodule Sidereon.SGP4 do
   alias Sidereon.Elements
   alias Sidereon.TemeState
 
+  defmodule Fit do
+    @moduledoc """
+    Result of inverse SGP4 TLE fitting.
+    """
+    @enforce_keys [:elements, :line1, :line2, :omm_kvn, :stats]
+    defstruct [:elements, :line1, :line2, :omm_kvn, :stats]
+
+    @type t :: %__MODULE__{
+            elements: map(),
+            line1: String.t(),
+            line2: String.t(),
+            omm_kvn: String.t(),
+            stats: map()
+          }
+  end
+
   @required_float_fields [
     :bstar,
     :mean_motion_dot,
@@ -96,6 +112,20 @@ defmodule Sidereon.SGP4 do
     e in ErlangError -> {:error, {:nif_error, Exception.message(e)}}
   end
 
+  @doc """
+  Fit a TLE to TEME position samples using the core inverse-SGP4 solver.
+  """
+  @spec fit_tle([map()], keyword()) :: {:ok, Fit.t()} | {:error, term()}
+  def fit_tle(samples, opts \\ []) when is_list(samples) do
+    case Sidereon.NIF.sgp4_fit_tle(Enum.map(samples, &fit_sample/1), fit_config(opts)) do
+      {:ok, fit} -> {:ok, decode_fit(fit)}
+      {:error, {:did_not_converge, fit}} -> {:error, {:did_not_converge, decode_fit(fit)}}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
   defp to_nif_elements_maps(satellites) do
     satellites
     |> Enum.with_index()
@@ -116,6 +146,84 @@ defmodule Sidereon.SGP4 do
   end
 
   defp decode_arc({:error, reason}), do: {:error, reason}
+
+  defp fit_sample(sample) do
+    %{
+      epoch: epoch_jd(Map.fetch!(sample, :epoch)),
+      position_teme_km: vec3(Map.fetch!(sample, :position_teme_km)),
+      velocity_teme_km_s: optional_vec3(Map.get(sample, :velocity_teme_km_s))
+    }
+  end
+
+  defp fit_config(opts) do
+    {epoch_kind, epoch_jd, epoch_sample} = fit_epoch(Keyword.get(opts, :epoch, :midpoint))
+    {x_scale_kind, x_scale_values} = x_scale(Keyword.get(opts, :x_scale, :default))
+
+    %{
+      epoch_kind: epoch_kind,
+      epoch_jd: epoch_jd,
+      epoch_sample: epoch_sample,
+      fit_bstar: Keyword.get(opts, :fit_bstar, true),
+      bstar_seed: Keyword.get(opts, :bstar_seed, 0.0) / 1.0,
+      use_velocity: Keyword.get(opts, :use_velocity, true),
+      velocity_weight_s: optional_float(Keyword.get(opts, :velocity_weight_s)),
+      weights: optional_float_list(Keyword.get(opts, :weights)),
+      opsmode: Keyword.get(opts, :opsmode, :improved) |> to_string(),
+      ftol: optional_float(Keyword.get(opts, :ftol)),
+      xtol: optional_float(Keyword.get(opts, :xtol)),
+      gtol: optional_float(Keyword.get(opts, :gtol)),
+      max_nfev: Keyword.get(opts, :max_nfev),
+      x_scale_kind: x_scale_kind,
+      x_scale_values: x_scale_values,
+      loss: Keyword.get(opts, :loss, :linear) |> to_string(),
+      f_scale: Keyword.get(opts, :f_scale, 1.0) / 1.0,
+      metadata: fit_metadata(Keyword.get(opts, :metadata, []))
+    }
+  end
+
+  defp decode_fit(fit) do
+    %Fit{
+      elements: fit.elements,
+      line1: fit.line1,
+      line2: fit.line2,
+      omm_kvn: fit.omm_kvn,
+      stats: fit.stats
+    }
+  end
+
+  defp fit_epoch(:midpoint), do: {"midpoint", nil, nil}
+  defp fit_epoch(:first), do: {"first", nil, nil}
+  defp fit_epoch(:last), do: {"last", nil, nil}
+  defp fit_epoch({:sample, index}), do: {"sample", nil, index}
+  defp fit_epoch({:jd, jd}), do: {"jd", epoch_jd(jd), nil}
+
+  defp x_scale(:default), do: {"default", nil}
+  defp x_scale(:unit), do: {"unit", nil}
+  defp x_scale(:jac), do: {"jac", nil}
+  defp x_scale({:values, values}), do: {"values", Enum.map(values, &(&1 / 1.0))}
+
+  defp fit_metadata(metadata) do
+    %{
+      catalog_number: get_opt(metadata, :catalog_number, 99_999),
+      classification: get_opt(metadata, :classification, "U"),
+      international_designator: get_opt(metadata, :international_designator, ""),
+      element_set_number: get_opt(metadata, :element_set_number, 1),
+      rev_at_epoch: get_opt(metadata, :rev_at_epoch, 0),
+      object_name: get_opt(metadata, :object_name, "")
+    }
+  end
+
+  defp get_opt(opts, key, default) when is_list(opts), do: Keyword.get(opts, key, default)
+  defp get_opt(opts, key, default) when is_map(opts), do: Map.get(opts, key, default)
+
+  defp epoch_jd({whole, fraction}), do: {whole / 1.0, fraction / 1.0}
+  defp vec3({x, y, z}), do: {x / 1.0, y / 1.0, z / 1.0}
+  defp optional_vec3(nil), do: nil
+  defp optional_vec3(value), do: vec3(value)
+  defp optional_float(nil), do: nil
+  defp optional_float(value), do: value / 1.0
+  defp optional_float_list(nil), do: nil
+  defp optional_float_list(values), do: Enum.map(values, &(&1 / 1.0))
 
   @doc false
   @spec to_nif_elements_map(Elements.t()) :: {:ok, map()} | {:error, element_error()}

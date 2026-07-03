@@ -3,7 +3,7 @@
 
 use crate::errors;
 use rustler::{Encoder, Env, NifResult, Term};
-use sidereon_core::astro::forces::DragParameters;
+use sidereon_core::astro::forces::{DragParameters, SpaceWeatherSource};
 use sidereon_core::astro::propagator::{
     propagate_states, IntegratorOptions, PropagationConfig, PropagationForceModel,
 };
@@ -190,6 +190,59 @@ pub(crate) fn propagate_dp54_impl_with_drag(
     config.drag = drag;
 
     match propagate_states(&config, &[dt_seconds]) {
+        Ok(states) => {
+            let state = states[0];
+            let pos = state.position_array();
+            let vel = state.velocity_array();
+            let r = (pos[0], pos[1], pos[2]);
+            let v = (vel[0], vel[1], vel[2]);
+            Ok((ok, (r, v)).encode(env))
+        }
+        Err(_) => {
+            let reason = rustler::types::atom::Atom::from_str(env, "propagation_failed")?;
+            Ok((error, reason).encode(env))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
+    env: Env<'_>,
+    position_km: (f64, f64, f64),
+    velocity_km_s: (f64, f64, f64),
+    epoch_tdb_seconds: f64,
+    dt_seconds: f64,
+    forces: Vec<String>,
+    abs_tol: f64,
+    rel_tol: f64,
+    drag: DragParameters,
+    table: rustler::ResourceArc<crate::space_weather::SpaceWeatherTableResource>,
+) -> NifResult<Term<'_>> {
+    let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
+    let error = rustler::types::atom::Atom::from_str(env, "error")?;
+
+    let mut config = PropagationConfig::new(
+        epoch_tdb_seconds,
+        [position_km.0, position_km.1, position_km.2],
+        [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
+    );
+    config.force_model = if forces.iter().any(|f| f == "j2") {
+        PropagationForceModel::TwoBodyJ2
+    } else {
+        PropagationForceModel::TwoBody
+    };
+    config.options = IntegratorOptions {
+        abs_tol,
+        rel_tol,
+        ..config.options
+    };
+    config.drag = Some(drag);
+
+    let propagator = config
+        .to_propagator()
+        .with_space_weather(SpaceWeatherSource::Table(table.table.clone()));
+
+    match propagator.ephemeris(&[epoch_tdb_seconds + dt_seconds]) {
         Ok(states) => {
             let state = states[0];
             let pos = state.position_array();

@@ -8,6 +8,7 @@ defmodule Sidereon.GNSS.SSR do
   """
 
   alias Sidereon.GNSS.Broadcast
+  alias Sidereon.GNSS.RTCM
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
 
@@ -139,6 +140,18 @@ defmodule Sidereon.GNSS.SSR do
       {:ok, store} -> store
       {:error, reason} -> raise ArgumentError, "could not decode SSR corrections: #{inspect(reason)}"
     end
+  end
+
+  @doc """
+  Ingest one decoded RTCM message into an existing correction store.
+
+  Non-SSR RTCM messages are ignored by the core store.
+  """
+  @spec ingest(t(), RTCM.message(), non_neg_integer(), number()) :: :ok | {:error, term()}
+  def ingest(%__MODULE__{handle: handle}, message, week, tow_s) when is_integer(week) and is_number(tow_s) do
+    NIF.ssr_store_ingest(handle, message, week, tow_s / 1.0)
+  rescue
+    e in ErlangError -> {:error, e.original}
   end
 
   @doc "Return the latest orbit correction for a satellite."

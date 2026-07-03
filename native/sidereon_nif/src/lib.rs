@@ -14,6 +14,7 @@ mod conjunction;
 mod constellation;
 mod consts;
 mod covariance;
+mod covariance_transport;
 mod coverage;
 mod data;
 mod dgnss;
@@ -33,7 +34,9 @@ mod iono;
 mod lambert;
 mod lnav;
 mod look_angle;
+mod nmea;
 mod normality;
+mod ntrip;
 mod observables;
 mod observation;
 mod oem;
@@ -49,6 +52,7 @@ mod reduced_orbit;
 mod rf;
 mod rinex_clock;
 mod rinex_obs;
+mod rinex_qc;
 mod rtcm;
 mod rtk;
 mod rtk_filter;
@@ -56,12 +60,14 @@ mod sbas;
 mod sgp4_batch;
 mod signal;
 mod sp3;
+mod space_weather;
 mod spp;
 mod ssr;
 mod staleness;
 mod tides;
 mod time;
 mod tle;
+mod tle_fit;
 mod trls;
 mod tropo;
 mod velocity;
@@ -160,6 +166,34 @@ fn propagate_dp54_with_drag<'a>(
 
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
+fn propagate_dp54_with_drag_and_space_weather<'a>(
+    env: Env<'a>,
+    position_km: Vec3,
+    velocity_km_s: Vec3,
+    epoch_tdb_seconds: f64,
+    dt_seconds: f64,
+    forces: Vec<String>,
+    abs_tol: f64,
+    rel_tol: f64,
+    drag: Term<'a>,
+    table: rustler::ResourceArc<space_weather::SpaceWeatherTableResource>,
+) -> NifResult<Term<'a>> {
+    propagation::propagate_dp54_impl_with_drag_and_space_weather(
+        env,
+        position_km,
+        velocity_km_s,
+        epoch_tdb_seconds,
+        dt_seconds,
+        forces,
+        abs_tol,
+        rel_tol,
+        drag::decode_drag_parameters(drag)?,
+        table,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn predict_passes<'a>(
     env: Env<'a>,
     tle_map: Term<'a>,
@@ -253,7 +287,7 @@ fn constellation_ground_tracks<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn constellation_passes<'a>(
     env: Env<'a>,
     tle_maps: Vec<Term<'a>>,

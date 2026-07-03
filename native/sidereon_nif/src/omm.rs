@@ -24,6 +24,7 @@ struct OmmEpochFields {
     minute: i64,
     second: i64,
     microsecond: i64,
+    femtosecond: Option<i64>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -64,6 +65,7 @@ impl From<OmmEpoch> for OmmEpochFields {
             minute: epoch.minute as i64,
             second: epoch.second as i64,
             microsecond: epoch.microsecond as i64,
+            femtosecond: Some(epoch.femtosecond as i64),
         }
     }
 }
@@ -111,6 +113,7 @@ impl TryFrom<OmmEpochFields> for OmmEpoch {
             minute: u32_field(epoch.minute, "epoch.minute")?,
             second: u32_field(epoch.second, "epoch.second")?,
             microsecond: u32_field(epoch.microsecond, "epoch.microsecond")?,
+            femtosecond: u32_field(epoch.femtosecond.unwrap_or(0), "epoch.femtosecond")?,
         })
     }
 }
@@ -144,6 +147,8 @@ impl TryFrom<OmmFields> for Omm {
             bstar: finite(fields.bstar, "bstar")?,
             mean_motion_dot: finite(fields.mean_motion_dot, "mean_motion_dot")?,
             mean_motion_ddot: finite(fields.mean_motion_ddot, "mean_motion_ddot")?,
+            exact_sgp4_epoch: None,
+            quantize_tle_derived_fields: true,
         })
     }
 }

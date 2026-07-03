@@ -39,17 +39,17 @@ struct SpaceWeatherTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct CartesianStateTerm {
+pub(crate) struct CartesianStateTerm {
     epoch_tdb_seconds: f64,
     position_km: Vec3,
     velocity_km_s: Vec3,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct DecayEstimateTerm {
-    time_to_decay_s: f64,
-    reentry_state: CartesianStateTerm,
-    reentry_altitude_km: f64,
+pub(crate) struct DecayEstimateTerm {
+    pub(crate) time_to_decay_s: f64,
+    pub(crate) reentry_state: CartesianStateTerm,
+    pub(crate) reentry_altitude_km: f64,
 }
 
 pub(crate) fn decode_drag_parameters(term: Term<'_>) -> NifResult<DragParameters> {
@@ -85,7 +85,7 @@ fn decode_space_weather(term: SpaceWeatherTerm) -> SpaceWeather {
     }
 }
 
-fn state_from_term(term: CartesianStateTerm) -> CartesianState {
+pub(crate) fn state_from_term(term: CartesianStateTerm) -> CartesianState {
     CartesianState::new(
         term.epoch_tdb_seconds,
         [term.position_km.0, term.position_km.1, term.position_km.2],
@@ -97,7 +97,7 @@ fn state_from_term(term: CartesianStateTerm) -> CartesianState {
     )
 }
 
-fn state_to_term(state: CartesianState) -> CartesianStateTerm {
+pub(crate) fn state_to_term(state: CartesianState) -> CartesianStateTerm {
     let position = state.position_array();
     let velocity = state.velocity_array();
     CartesianStateTerm {
@@ -107,12 +107,82 @@ fn state_to_term(state: CartesianState) -> CartesianStateTerm {
     }
 }
 
-fn force_model(name: &str) -> NifResult<PropagationForceModel> {
+pub(crate) fn force_model(name: &str) -> NifResult<PropagationForceModel> {
     Ok(match name {
         "twobody" => PropagationForceModel::TwoBody,
         "j2" => PropagationForceModel::TwoBodyJ2,
         _ => return Err(Error::Term(Box::new("unknown force model"))),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decay_config_from_terms(
+    params: DragParametersTerm,
+    force_model_name: String,
+    abs_tol: f64,
+    rel_tol: f64,
+    reentry_altitude_km: f64,
+    scan_step_s: f64,
+    crossing_tolerance_s: f64,
+    max_duration_s: f64,
+    max_scan_samples: u32,
+) -> NifResult<DecayConfig> {
+    let mut config = DecayConfig::new(decode_drag_parameters_from_term(params)?)
+        .with_force_model(force_model(&force_model_name)?)
+        .with_options(IntegratorOptions {
+            abs_tol,
+            rel_tol,
+            ..IntegratorOptions::default()
+        })
+        .with_reentry_altitude_km(reentry_altitude_km)
+        .with_scan_step_s(scan_step_s)
+        .with_crossing_tolerance_s(crossing_tolerance_s)
+        .with_max_duration_s(max_duration_s)
+        .with_max_scan_samples(max_scan_samples);
+    config.mu_km3_s2 = None;
+    Ok(config)
+}
+
+fn decode_drag_parameters_from_term(decoded: DragParametersTerm) -> NifResult<DragParameters> {
+    DragParameters::from_bc_factor_m2_kg(
+        decoded.bc_factor_m2_kg,
+        SpaceWeather {
+            f107: decoded.f107,
+            f107a: decoded.f107a,
+            ap: decoded.ap,
+        },
+        decoded.cutoff_altitude_km,
+    )
+    .map_err(errors::invalid_input)
+}
+
+pub(crate) fn decode_decay_error<'a>(
+    env: Env<'a>,
+    error: sidereon_core::astro::propagator::decay::DecayError,
+) -> Term<'a> {
+    match error {
+        sidereon_core::astro::propagator::decay::DecayError::NoDecayWithinHorizon { horizon_s } => {
+            (
+                atoms::error(),
+                (atoms::no_decay_within_horizon(), horizon_s),
+            )
+                .encode(env)
+        }
+        sidereon_core::astro::propagator::decay::DecayError::ScanBudgetExhausted {
+            scanned_s,
+            samples,
+        } => (
+            atoms::error(),
+            (atoms::scan_budget_exhausted(), scanned_s, samples),
+        )
+            .encode(env),
+        sidereon_core::astro::propagator::decay::DecayError::Propagation(_) => {
+            (atoms::error(), atoms::propagation_failed()).encode(env)
+        }
+        sidereon_core::astro::propagator::decay::DecayError::InvalidConfig(_) => {
+            (atoms::error(), atoms::invalid_input()).encode(env)
+        }
+    }
 }
 
 #[rustler::nif]

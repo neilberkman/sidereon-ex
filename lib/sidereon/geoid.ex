@@ -34,6 +34,22 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Built-in coarse-grid geoid undulations `N` (metres) for positions in radians.
+  """
+  @spec undulations([{number(), number()}]) :: [float()]
+  def undulations(points_rad) when is_list(points_rad) do
+    NIF.geoid_undulations_rad(points(points_rad))
+  end
+
+  @doc """
+  Built-in coarse-grid geoid undulations `N` (metres) for positions in degrees.
+  """
+  @spec undulations_deg([{number(), number()}]) :: [float()]
+  def undulations_deg(points_deg) when is_list(points_deg) do
+    NIF.geoid_undulations_deg(points(points_deg))
+  end
+
+  @doc """
   Orthometric height `H = h - N` (metres) from an ellipsoidal height, using the
   built-in grid. Position in radians.
   """
@@ -65,6 +81,22 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Embedded EGM96 1-degree undulations `N` (metres) for positions in radians.
+  """
+  @spec egm96_undulations([{number(), number()}]) :: [float()]
+  def egm96_undulations(points_rad) when is_list(points_rad) do
+    NIF.egm96_undulations_rad(points(points_rad))
+  end
+
+  @doc """
+  Embedded EGM96 1-degree undulations `N` (metres) for positions in degrees.
+  """
+  @spec egm96_undulations_deg([{number(), number()}]) :: [float()]
+  def egm96_undulations_deg(points_deg) when is_list(points_deg) do
+    NIF.egm96_undulations_deg(points(points_deg))
+  end
+
+  @doc """
   Orthometric height `H = h - N` (metres) from an ellipsoidal height, using the
   embedded genuine EGM96 1-degree model. Position in radians.
   """
@@ -93,6 +125,19 @@ defmodule Sidereon.Geoid do
   @spec load_grid(binary()) :: {:ok, grid()} | {:error, term()}
   def load_grid(text) when is_binary(text) do
     case NIF.geoid_grid_from_text(text) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, _} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Parse a full EGM96 WW15MGH.DAC byte buffer into a grid handle.
+  """
+  @spec load_egm96_dac(binary()) :: {:ok, grid()} | {:error, term()}
+  def load_egm96_dac(bytes) when is_binary(bytes) do
+    case NIF.geoid_grid_from_egm96_dac(bytes) do
       {:ok, handle} -> {:ok, handle}
       {:error, _} = err -> err
     end
@@ -143,4 +188,76 @@ defmodule Sidereon.Geoid do
   def grid_undulation_rad(handle, lat_rad, lon_rad) when is_reference(handle) do
     NIF.geoid_grid_undulation_rad(handle, lat_rad / 1.0, lon_rad / 1.0)
   end
+
+  @doc """
+  Bilinearly interpolated undulations `N` (metres) from a loaded grid, with
+  positions in degrees.
+  """
+  @spec grid_undulations_deg(grid(), [{number(), number()}]) :: [float()]
+  def grid_undulations_deg(handle, points_deg) when is_reference(handle) and is_list(points_deg) do
+    NIF.geoid_grid_undulations_deg(handle, points(points_deg))
+  end
+
+  @doc """
+  Bilinearly interpolated undulations `N` (metres) from a loaded grid, with
+  positions in radians.
+  """
+  @spec grid_undulations_rad(grid(), [{number(), number()}]) :: [float()]
+  def grid_undulations_rad(handle, points_rad) when is_reference(handle) and is_list(points_rad) do
+    NIF.geoid_grid_undulations_rad(handle, points(points_rad))
+  end
+
+  @doc """
+  Loaded-grid orthometric height `H = h - N` (metres), position in degrees.
+  """
+  @spec grid_orthometric_height_deg(grid(), number(), number(), number()) :: float()
+  def grid_orthometric_height_deg(handle, ellipsoidal_height_m, lat_deg, lon_deg) when is_reference(handle) do
+    NIF.geoid_grid_orthometric_height_deg(
+      handle,
+      ellipsoidal_height_m / 1.0,
+      lat_deg / 1.0,
+      lon_deg / 1.0
+    )
+  end
+
+  @doc """
+  Loaded-grid ellipsoidal height `h = H + N` (metres), position in degrees.
+  """
+  @spec grid_ellipsoidal_height_deg(grid(), number(), number(), number()) :: float()
+  def grid_ellipsoidal_height_deg(handle, orthometric_height_m, lat_deg, lon_deg) when is_reference(handle) do
+    NIF.geoid_grid_ellipsoidal_height_deg(
+      handle,
+      orthometric_height_m / 1.0,
+      lat_deg / 1.0,
+      lon_deg / 1.0
+    )
+  end
+
+  @doc """
+  Loaded-grid orthometric height `H = h - N` (metres), position in radians.
+  """
+  @spec grid_orthometric_height_rad(grid(), number(), number(), number()) :: float()
+  def grid_orthometric_height_rad(handle, ellipsoidal_height_m, lat_rad, lon_rad) when is_reference(handle) do
+    NIF.geoid_grid_orthometric_height_rad(
+      handle,
+      ellipsoidal_height_m / 1.0,
+      lat_rad / 1.0,
+      lon_rad / 1.0
+    )
+  end
+
+  @doc """
+  Loaded-grid ellipsoidal height `h = H + N` (metres), position in radians.
+  """
+  @spec grid_ellipsoidal_height_rad(grid(), number(), number(), number()) :: float()
+  def grid_ellipsoidal_height_rad(handle, orthometric_height_m, lat_rad, lon_rad) when is_reference(handle) do
+    NIF.geoid_grid_ellipsoidal_height_rad(
+      handle,
+      orthometric_height_m / 1.0,
+      lat_rad / 1.0,
+      lon_rad / 1.0
+    )
+  end
+
+  defp points(points), do: Enum.map(points, fn {lat, lon} -> {lat / 1.0, lon / 1.0} end)
 end
