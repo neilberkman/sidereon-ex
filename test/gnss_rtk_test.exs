@@ -1,12 +1,14 @@
 defmodule Sidereon.GNSS.RTKTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.RTK
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
   @c 299_792_458.0
   @f_l1 1_575_420_000.0
+  @f_l2 1_227_600_000.0
   @l1_wavelength_m @c / @f_l1
   @sat_positions [
     %{
@@ -93,6 +95,23 @@ defmodule Sidereon.GNSS.RTKTest do
       assert solution.used_sats == @ambiguity_ids
       assert solution.metadata.converged
       assert solution.metadata.n_epochs == 3
+
+      assert %GeometryQuality{
+               tier: :nominal,
+               raim_checkable: true,
+               covariance_validated: true
+             } = solution.metadata.geometry_quality
+    end
+
+    test "rank-deficient geometry returns the singular error" do
+      assert RTK.solve_rtk_float(%{
+               epochs: rank_deficient_prepared_epochs(),
+               base: @base,
+               ambiguity_ids: @ambiguity_ids,
+               model: model(),
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               options: %{max_iterations: 20}
+             }) == {:error, :singular_geometry}
     end
   end
 
@@ -150,6 +169,27 @@ defmodule Sidereon.GNSS.RTKTest do
       assert solution.references == %{"G" => "G01"}
       assert solution.ambiguity_ids == @ambiguity_ids
       assert solution.dropped_sats == []
+
+      assert %GeometryQuality{
+               tier: :nominal,
+               raim_checkable: true,
+               covariance_validated: true
+             } = solution.geometry_quality
+    end
+  end
+
+  describe "fix_wide_lane_rtk_arc/2" do
+    test "surfaces geometry quality for a synthetic dual-frequency arc" do
+      assert {:ok, solution} =
+               RTK.fix_wide_lane_rtk_arc(dual_frequency_epochs(), wide_lane_config())
+
+      assert map_size(solution.wide_lane_cycles) == 3
+
+      assert %GeometryQuality{
+               tier: :nominal,
+               raim_checkable: true,
+               covariance_validated: true
+             } = solution.geometry_quality
     end
   end
 
@@ -168,6 +208,19 @@ defmodule Sidereon.GNSS.RTKTest do
         dt_s: idx * 30.0
       }
     end)
+  end
+
+  defp rank_deficient_prepared_epochs do
+    reference = prepared_sat("G01", {15_000_000.0, 7_000_000.0, 21_000_000.0}, 0)
+    repeated = {-12_000_000.0, 18_000_000.0, 19_000_000.0}
+
+    [
+      %{
+        references: [reference],
+        nonref: Enum.map(@ambiguity_ids, &prepared_sat(&1, repeated, 0)),
+        dt_s: 0.0
+      }
+    ]
   end
 
   defp prepared_sat(sat, sat_pos, idx) do
@@ -241,6 +294,63 @@ defmodule Sidereon.GNSS.RTKTest do
         report_residuals?: true
       },
       preprocessing: %{}
+    }
+  end
+
+  defp dual_frequency_epochs do
+    positions =
+      @sat_positions
+      |> hd()
+      |> Map.take(["G01", "G02", "G03", "G04"])
+
+    for idx <- 0..2 do
+      rows = [
+        dual_frequency_pair("G01", 2.0, 5.0),
+        dual_frequency_pair("G02", 1.0, 7.0),
+        dual_frequency_pair("G03", -2.0, 0.0),
+        dual_frequency_pair("G04", 4.0, 8.0)
+      ]
+
+      %{
+        epoch: idx,
+        base_observations: Enum.map(rows, fn {base, _rover} -> base end),
+        rover_observations: Enum.map(rows, fn {_base, rover} -> rover end),
+        satellite_positions_m: positions
+      }
+    end
+  end
+
+  defp dual_frequency_pair(sat, base_wide_lane, rover_wide_lane) do
+    base_code = 20_000_000.0 + base_wide_lane * 10.0
+    rover_code = base_code + 25.0 + rover_wide_lane
+
+    {
+      dual_frequency_observation(sat, base_code, base_code + 2.0, base_wide_lane),
+      dual_frequency_observation(sat, rover_code, rover_code + 2.5, rover_wide_lane)
+    }
+  end
+
+  defp dual_frequency_observation(sat, p1_m, p2_m, wide_lane_phase_cycles) do
+    %{
+      satellite_id: sat,
+      ambiguity_id: sat,
+      p1_m: p1_m,
+      p2_m: p2_m,
+      phi1_cyc: wide_lane_phase_cycles,
+      phi2_cyc: 0.0,
+      f1_hz: @f_l1,
+      f2_hz: @f_l2
+    }
+  end
+
+  defp wide_lane_config do
+    %{
+      base_m: @base,
+      reference: :auto,
+      min_epochs: 2,
+      tolerance_cycles: 0.5,
+      skip_short_fragments: false,
+      cycle_slip: nil
     }
   end
 

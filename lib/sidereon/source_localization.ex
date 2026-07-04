@@ -161,34 +161,20 @@ end
 
 defmodule Sidereon.SourceLocalization.GeometryQuality do
   @moduledoc """
-  Rank and redundancy summary for a source-localization solve.
+  Compatibility namespace for source-localization geometry diagnostics.
 
-  Counts are row and parameter counts from the timing design. `rank_deficient`
-  is true when covariance was not available from the normal matrix.
+  Source-localization solutions now use `Sidereon.GeometryQuality`, the shared
+  geometry observability struct.
   """
 
-  @enforce_keys [
-    :residual_count,
-    :parameter_count,
-    :redundancy,
-    :covariance_available,
-    :rank_deficient
-  ]
-  defstruct [
-    :residual_count,
-    :parameter_count,
-    :redundancy,
-    :covariance_available,
-    :rank_deficient
-  ]
+  @typedoc "Shared geometry observability diagnostics."
+  @type t :: Sidereon.GeometryQuality.t()
 
-  @type t :: %__MODULE__{
-          residual_count: non_neg_integer(),
-          parameter_count: non_neg_integer(),
-          redundancy: non_neg_integer(),
-          covariance_available: boolean(),
-          rank_deficient: boolean()
-        }
+  @doc "Decode the NIF tuple representation into a geometry diagnostics struct."
+  defdelegate from_nif(term), to: Sidereon.GeometryQuality
+
+  @doc "Encode a geometry diagnostics struct into the tuple representation used by the NIF."
+  defdelegate to_nif(geometry_quality), to: Sidereon.GeometryQuality
 end
 
 defmodule Sidereon.SourceLocalization.Solution do
@@ -197,11 +183,12 @@ defmodule Sidereon.SourceLocalization.Solution do
 
   Position is a 2D or 3D Cartesian coordinate in metres. Origin time and
   residuals are seconds. The covariance, when present, is scaled by the timing
-  sigma in the options.
+  sigma in the options. `geometry_quality` reports the shared observability tier
+  and covariance-validation diagnostics for the final timing design.
   """
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.SourceLocalization.Covariance
-  alias Sidereon.SourceLocalization.GeometryQuality
   alias Sidereon.SourceLocalization.InitialGuess
   alias Sidereon.SourceLocalization.Residual
   alias Sidereon.SourceLocalization.SensorInfluence
@@ -277,10 +264,10 @@ defmodule Sidereon.SourceLocalization do
   optional per-sensor override for simple per-path timing differences.
   """
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.NIF
   alias Sidereon.SourceLocalization.Covariance
   alias Sidereon.SourceLocalization.Crlb
-  alias Sidereon.SourceLocalization.GeometryQuality
   alias Sidereon.SourceLocalization.InitialGuess
   alias Sidereon.SourceLocalization.Options
   alias Sidereon.SourceLocalization.Residual
@@ -524,15 +511,7 @@ defmodule Sidereon.SourceLocalization do
     }
   end
 
-  defp geometry_quality_from_tuple({residual_count, parameter_count, redundancy, covariance_available, rank_deficient}) do
-    %GeometryQuality{
-      residual_count: residual_count,
-      parameter_count: parameter_count,
-      redundancy: redundancy,
-      covariance_available: covariance_available,
-      rank_deficient: rank_deficient
-    }
-  end
+  defp geometry_quality_from_tuple(tuple), do: GeometryQuality.from_nif(tuple)
 
   defp initial_guess_from_tuple({position_m, origin_time_s, residual_rms_s}) do
     %InitialGuess{

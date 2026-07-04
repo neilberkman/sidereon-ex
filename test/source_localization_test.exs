@@ -1,6 +1,7 @@
 defmodule Sidereon.SourceLocalizationTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.SourceLocalization
 
   defp arrivals(sensors, source, origin, speed) do
@@ -50,6 +51,43 @@ defmodule Sidereon.SourceLocalizationTest do
     assert_in_delta solution.origin_time_s, origin, 1.0e-10
     assert solution.covariance != nil
     assert Enum.all?(solution.residuals, &(abs(&1.residual_s) < 1.0e-10))
+    assert %GeometryQuality{} = solution.geometry_quality
+  end
+
+  test "source solution surfaces nominal geometry quality for a balanced fixture" do
+    sensors = [
+      SourceLocalization.sensor([0.0, 0.0, 0.0]),
+      SourceLocalization.sensor([2.0, 0.0, 0.0]),
+      SourceLocalization.sensor([0.0, 2.0, 0.0]),
+      SourceLocalization.sensor([0.0, 0.0, 2.0]),
+      SourceLocalization.sensor([2.0, 2.0, 2.0])
+    ]
+
+    source = [0.4, 0.6, 0.5]
+    origin = 1.25
+    speed = 1.0
+    times = arrivals(sensors, source, origin, speed)
+
+    assert {:ok, solution} = SourceLocalization.locate_source(sensors, times, speed)
+
+    assert %GeometryQuality{
+             tier: :nominal,
+             redundancy: 1,
+             rank: 4,
+             raim_checkable: true,
+             covariance_validated: true
+           } = solution.geometry_quality
+  end
+
+  test "rank-deficient source DOP geometry returns a typed singular error" do
+    sensors = [
+      SourceLocalization.sensor([0.0, 0.0]),
+      SourceLocalization.sensor([100.0, 0.0]),
+      SourceLocalization.sensor([200.0, 0.0]),
+      SourceLocalization.sensor([300.0, 0.0])
+    ]
+
+    assert SourceLocalization.source_dop(sensors, [50.0, 0.0], 300.0) == {:error, {:geometry, :singular}}
   end
 
   test "TDOA solve, source DOP, and CRLB match the analytic references" do

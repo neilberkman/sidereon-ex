@@ -1,6 +1,7 @@
 defmodule Sidereon.GNSS.Positioning.Decode do
   @moduledoc false
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Positioning.Solution
 
   def decode(
@@ -49,7 +50,7 @@ defmodule Sidereon.GNSS.Positioning.Decode do
 
   defp metadata_map(
          {iterations, converged, status, iono, tropo, outer_iterations, final_robust_scale_m, used_count, systems,
-          redundancy, raim_checkable?}
+          redundancy, raim_checkable?, geometry_quality}
        ) do
     base = %{
       iterations: iterations,
@@ -60,7 +61,8 @@ defmodule Sidereon.GNSS.Positioning.Decode do
       used_count: used_count,
       systems: systems,
       redundancy: redundancy,
-      raim_checkable?: raim_checkable?
+      raim_checkable?: raim_checkable?,
+      geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
 
     case final_robust_scale_m do
