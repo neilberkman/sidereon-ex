@@ -96,17 +96,35 @@ positioning, and conjunction screening; more notebooks live under
 
 ## What's in the box
 
-- **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical force-model
-  propagation with an optional atmospheric drag model, orbital decay estimation,
-  two-body Kepler propagation, ground track, sub-satellite point, eclipse, Sun
-  and Moon angles, and Doppler. See `Sidereon`, `Sidereon.Propagator`,
-  `Sidereon.SGP4`, `Sidereon.Drag`.
+- **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical propagation
+  with a composable force model (zonal harmonics through J6, Sun/Moon
+  third-body, solar radiation pressure, relativistic correction, atmospheric
+  drag), orbital decay estimation, two-body Kepler propagation, ground track,
+  sub-satellite point, eclipse, Sun and Moon angles, and Doppler. See
+  `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`, `Sidereon.Drag`.
 - **GNSS positioning** single-point positioning (SPP), RTK (float,
   integer-fixed, fix-and-hold), PPP, DGNSS, robust Huber-reweighted solves,
   RAIM with fault detection and exclusion, SBAS and RTCM SSR / Galileo HAS
   corrections, dilution of precision, and receiver velocity from Doppler. See
   `Sidereon.GNSS.Positioning`, `Sidereon.GNSS.RTK`, `Sidereon.GNSS.PrecisePositioning`,
   `Sidereon.GNSS.DGNSS`, `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`, `Sidereon.GNSS.SSR`.
+- **Integrity and error bounds** multi-constellation ARAIM protection levels,
+  SBAS protection levels (DO-229), per-observation reliability (minimal
+  detectable bias, internal and external), observability classification of
+  every solution (rank, redundancy, conditioning), and covariance-derived
+  error metrics (CEP, R95, SEP, error ellipse) that report wide or flagged
+  bounds for weak geometry rather than fabricated confidence. See
+  `Sidereon.ARAIM`, `Sidereon.Reliability`, `Sidereon.ErrorMetrics`,
+  `Sidereon.GNSS.SBAS`.
+- **Timing, estimation, and geodesy** Allan-family clock stability with
+  power-law noise identification (IEEE 1139), scalar Kalman and alpha-beta
+  trackers with innovation gating and CFAR thresholds, source localization
+  (ToA/TDOA), robust station velocity (MIDAS) with trajectory fitting, step
+  detection, and network motion fields, repeating-geometry (sidereal)
+  filtering, and batch least-squares orbit fitting against precise
+  ephemerides with a per-satellite residual ledger. See
+  `Sidereon.ClockStability`, `Sidereon.Estimation`, `Sidereon.SourceLocalization`,
+  `Sidereon.GeodeticTimeSeries`, `Sidereon.Sidereal`, `Sidereon.OrbitDetermination`.
 - **GNSS data and observations** SP3 (read, multi-center merge, write), broadcast
   navigation (RINEX 3.x / 4.x), IONEX, ANTEX, CLK, satellite code biases
   (Bias-SINEX and CODE DCB with OSB / DSB lookup), uniform satellite-state
