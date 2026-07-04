@@ -230,6 +230,15 @@ defmodule Sidereon.NIF do
   def araim_solve(_rows, _receiver, _clock_systems, _constellations, _satellites, _allocation),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def reliability_default_options, do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_wtest_noncentrality(_alpha, _power), do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_design(_rows, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_araim(_rows, _receiver, _clock_systems, _constellations, _satellites, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def rf_fspl(_distance_km, _frequency_mhz), do: :erlang.nif_error(:nif_not_loaded)
 
   def rf_fspl_batch(_distances_km, _frequency_mhz), do: :erlang.nif_error(:nif_not_loaded)
@@ -652,6 +661,28 @@ defmodule Sidereon.NIF do
         _max_pdop,
         _coarse_search_seeds,
         _glonass_channels
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_k_precision_approach, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_k_en_route_npa, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_airborne_aad_a, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_degradation_none, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_protection_levels(_rows, _receiver, _clock_systems, _error_rows, _k),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_error_model_from_store(
+        _store,
+        _geo_id,
+        _rows,
+        _receiver,
+        _clock_systems,
+        _airborne,
+        _epoch_j2000_s,
+        _degradation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_store_new, do: :erlang.nif_error(:nif_not_loaded)

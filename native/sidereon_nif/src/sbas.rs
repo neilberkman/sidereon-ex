@@ -7,6 +7,10 @@ use sidereon_core::sbas::{
     SbasLongTermHalf, SbasMessage, SbasMixedFastCorrections, SbasSolveMode, SbasWireForm,
     SpareBits,
 };
+use sidereon_core::sbas_pl::{
+    sbas_protection_levels, AirborneModel, DegradationParams, ProtectionGeometry, SbasErrorModel,
+    SbasKMultipliers, SbasPlError, SbasProtection, SbasSisError as SbasPlSisError,
+};
 use sidereon_core::staleness::StalenessPolicy;
 use sidereon_core::GnssSatelliteId;
 
@@ -22,13 +26,20 @@ pub struct SbasStoreResource {
 impl rustler::Resource for SbasStoreResource {}
 
 type Vec3 = (f64, f64, f64);
+type SbasPlKTerm = (f64, f64);
+type SbasPlSisTerm = (String, f64, f64, f64, f64);
+type SbasPlAirborneTerm = f64;
+type SbasPlDegradationTerm = (f64, f64, f64, f64, f64, f64, bool);
 
 mod atoms {
     rustler::atoms! {
         ok,
         error,
         invalid_input,
-        not_found
+        not_found,
+        insufficient_geometry,
+        numerical_failure,
+        invalid_error_model
     }
 }
 
@@ -177,6 +188,26 @@ struct EphemerisSampleRowTerm {
     clock_s: Option<f64>,
 }
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasPlProtectionTerm {
+    hpl_m: f64,
+    vpl_m: f64,
+    d_major_m: f64,
+    sigma_u_m: f64,
+    d_east_m: f64,
+    d_north_m: f64,
+    d_en_m2: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasPlSisTermOut {
+    id: String,
+    sigma_flt_m: f64,
+    sigma_uire_m: f64,
+    sigma_air_m: f64,
+    sigma_tropo_m: f64,
+}
+
 fn parse_time_scale(value: &str) -> NifResult<TimeScale> {
     Ok(match value {
         "GPST" => TimeScale::Gpst,
@@ -235,6 +266,120 @@ fn sbas_geo(token: &str) -> NifResult<GnssSatelliteId> {
         sbas_prn_to_sat(prn).ok_or_else(|| Error::Term(Box::new("invalid SBAS GEO prn")))
     } else {
         sat_id(token)
+    }
+}
+
+fn sbas_pl_k((k_h, k_v): SbasPlKTerm) -> SbasKMultipliers {
+    SbasKMultipliers { k_h, k_v }
+}
+
+fn sbas_pl_k_term(k: SbasKMultipliers) -> SbasPlKTerm {
+    (k.k_h, k.k_v)
+}
+
+fn sbas_pl_airborne(sigma_noise_divergence_m: SbasPlAirborneTerm) -> AirborneModel {
+    AirborneModel::new(sigma_noise_divergence_m)
+}
+
+fn sbas_pl_degradation(
+    (
+        delta_udre,
+        eps_fc_m,
+        eps_rrc_m,
+        eps_ltc_m,
+        eps_er_m,
+        eps_iono_m,
+        rss_udre,
+    ): SbasPlDegradationTerm,
+) -> DegradationParams {
+    DegradationParams {
+        delta_udre,
+        eps_fc_m,
+        eps_rrc_m,
+        eps_ltc_m,
+        eps_er_m,
+        eps_iono_m,
+        rss_udre,
+    }
+}
+
+fn sbas_pl_degradation_term(value: DegradationParams) -> SbasPlDegradationTerm {
+    (
+        value.delta_udre,
+        value.eps_fc_m,
+        value.eps_rrc_m,
+        value.eps_ltc_m,
+        value.eps_er_m,
+        value.eps_iono_m,
+        value.rss_udre,
+    )
+}
+
+fn sbas_pl_geometry(
+    rows: Vec<crate::araim::RowTerm>,
+    receiver: crate::araim::ReceiverTerm,
+    clock_systems: Vec<String>,
+) -> NifResult<ProtectionGeometry> {
+    Ok(ProtectionGeometry {
+        rows: rows
+            .into_iter()
+            .map(crate::araim::decode_row)
+            .collect::<NifResult<_>>()?,
+        receiver: crate::araim::decode_receiver(receiver)?,
+        clock_systems: clock_systems
+            .iter()
+            .map(|system| crate::araim::system_from_term(system))
+            .collect::<NifResult<_>>()?,
+    })
+}
+
+fn sbas_pl_sis(
+    (id, sigma_flt_m, sigma_uire_m, sigma_air_m, sigma_tropo_m): SbasPlSisTerm,
+) -> NifResult<SbasPlSisError> {
+    Ok(SbasPlSisError {
+        id: sat_id(&id)?,
+        sigma_flt_m,
+        sigma_uire_m,
+        sigma_air_m,
+        sigma_tropo_m,
+    })
+}
+
+fn sbas_pl_sis_term(value: SbasPlSisError) -> SbasPlSisTermOut {
+    SbasPlSisTermOut {
+        id: value.id.to_string(),
+        sigma_flt_m: value.sigma_flt_m,
+        sigma_uire_m: value.sigma_uire_m,
+        sigma_air_m: value.sigma_air_m,
+        sigma_tropo_m: value.sigma_tropo_m,
+    }
+}
+
+fn sbas_pl_error_model(rows: Vec<SbasPlSisTerm>) -> NifResult<SbasErrorModel> {
+    Ok(SbasErrorModel::new(
+        rows.into_iter()
+            .map(sbas_pl_sis)
+            .collect::<NifResult<_>>()?,
+    ))
+}
+
+fn sbas_pl_protection_term(value: SbasProtection) -> SbasPlProtectionTerm {
+    SbasPlProtectionTerm {
+        hpl_m: value.hpl_m,
+        vpl_m: value.vpl_m,
+        d_major_m: value.d_major_m,
+        sigma_u_m: value.sigma_u_m,
+        d_east_m: value.d_east_m,
+        d_north_m: value.d_north_m,
+        d_en_m2: value.d_en_m2,
+    }
+}
+
+fn sbas_pl_error_atom(error: SbasPlError) -> rustler::Atom {
+    match error {
+        SbasPlError::InsufficientGeometry => atoms::insufficient_geometry(),
+        SbasPlError::NumericalFailure => atoms::numerical_failure(),
+        SbasPlError::InvalidErrorModel => atoms::invalid_error_model(),
     }
 }
 
@@ -540,6 +685,85 @@ fn iono_grid_term(grid: &SbasIonoGrid) -> SbasIonoGridTerm {
             })
             .collect(),
     }
+}
+
+#[rustler::nif]
+fn sbas_pl_k_precision_approach() -> SbasPlKTerm {
+    sbas_pl_k_term(SbasKMultipliers::PRECISION_APPROACH)
+}
+
+#[rustler::nif]
+fn sbas_pl_k_en_route_npa() -> SbasPlKTerm {
+    sbas_pl_k_term(SbasKMultipliers::EN_ROUTE_NPA)
+}
+
+#[rustler::nif]
+fn sbas_pl_airborne_aad_a() -> SbasPlAirborneTerm {
+    AirborneModel::aad_a().sigma_noise_divergence_m
+}
+
+#[rustler::nif]
+fn sbas_pl_degradation_none() -> SbasPlDegradationTerm {
+    sbas_pl_degradation_term(DegradationParams::none())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sbas_pl_protection_levels<'a>(
+    env: Env<'a>,
+    rows: Vec<crate::araim::RowTerm>,
+    receiver: crate::araim::ReceiverTerm,
+    clock_systems: Vec<String>,
+    error_rows: Vec<SbasPlSisTerm>,
+    k: SbasPlKTerm,
+) -> NifResult<Term<'a>> {
+    let geometry = sbas_pl_geometry(rows, receiver, clock_systems)?;
+    let model = sbas_pl_error_model(error_rows)?;
+    Ok(
+        match sbas_protection_levels(&geometry, &model, sbas_pl_k(k)) {
+            Ok(value) => (atoms::ok(), sbas_pl_protection_term(value)).encode(env),
+            Err(error) => (atoms::error(), sbas_pl_error_atom(error)).encode(env),
+        },
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn sbas_pl_error_model_from_store<'a>(
+    env: Env<'a>,
+    store: ResourceArc<SbasStoreResource>,
+    geo_id: String,
+    rows: Vec<crate::araim::RowTerm>,
+    receiver: crate::araim::ReceiverTerm,
+    clock_systems: Vec<String>,
+    airborne: SbasPlAirborneTerm,
+    epoch_j2000_s: f64,
+    degradation: SbasPlDegradationTerm,
+) -> NifResult<Term<'a>> {
+    let geometry = sbas_pl_geometry(rows, receiver, clock_systems)?;
+    let geo = sbas_geo(&geo_id)?;
+    let airborne = sbas_pl_airborne(airborne);
+    let degradation = sbas_pl_degradation(degradation);
+    Ok(
+        match SbasErrorModel::from_store(
+            &store.store,
+            geo,
+            &geometry,
+            &airborne,
+            epoch_j2000_s,
+            &degradation,
+        ) {
+            Ok(model) => (
+                atoms::ok(),
+                model
+                    .rows
+                    .into_iter()
+                    .map(sbas_pl_sis_term)
+                    .collect::<Vec<_>>(),
+            )
+                .encode(env),
+            Err(error) => (atoms::error(), sbas_pl_error_atom(error)).encode(env),
+        },
+    )
 }
 
 #[rustler::nif]

@@ -12,12 +12,12 @@ use sidereon_core::araim::{
 use sidereon_core::positioning::LineOfSight;
 use sidereon_core::{GnssSatelliteId, GnssSystem, Wgs84Geodetic};
 
-type Vec3 = (f64, f64, f64);
-type RowTerm = (String, Vec3, String, f64);
-type ReceiverTerm = (f64, f64, f64);
-type SatModelTerm = (f64, f64, Option<f64>, Option<f64>, f64, f64);
-type ConstellationTerm = (String, f64, SatModelTerm);
-type SatelliteTerm = (String, f64, f64, Option<f64>, Option<f64>, f64, f64);
+pub(crate) type Vec3 = (f64, f64, f64);
+pub(crate) type RowTerm = (String, Vec3, String, f64);
+pub(crate) type ReceiverTerm = (f64, f64, f64);
+pub(crate) type SatModelTerm = (f64, f64, Option<f64>, Option<f64>, f64, f64);
+pub(crate) type ConstellationTerm = (String, f64, SatModelTerm);
+pub(crate) type SatelliteTerm = (String, f64, f64, Option<f64>, Option<f64>, f64, f64);
 type AllocationTerm = (f64, f64, f64, f64, f64, f64, (f64, usize));
 
 mod atoms {
@@ -55,7 +55,7 @@ struct AraimResultTerm {
     availability: bool,
 }
 
-fn sat_id(token: &str) -> NifResult<GnssSatelliteId> {
+pub(crate) fn sat_id(token: &str) -> NifResult<GnssSatelliteId> {
     if token.len() < 2 {
         return Err(Error::Term(Box::new("invalid satellite id")));
     }
@@ -67,7 +67,7 @@ fn sat_id(token: &str) -> NifResult<GnssSatelliteId> {
     GnssSatelliteId::new(system, prn).map_err(crate::errors::invalid_input)
 }
 
-fn system_from_term(system: &str) -> NifResult<GnssSystem> {
+pub(crate) fn system_from_term(system: &str) -> NifResult<GnssSystem> {
     crate::sp3::system_from_letter(system)
 }
 
@@ -75,7 +75,9 @@ fn system_term(system: GnssSystem) -> String {
     system.letter().to_string()
 }
 
-fn decode_row((id, (e_x, e_y, e_z), system, elevation_rad): RowTerm) -> NifResult<AraimRow> {
+pub(crate) fn decode_row(
+    (id, (e_x, e_y, e_z), system, elevation_rad): RowTerm,
+) -> NifResult<AraimRow> {
     Ok(AraimRow {
         id: sat_id(&id)?,
         line_of_sight: LineOfSight::new(e_x, e_y, e_z),
@@ -84,7 +86,9 @@ fn decode_row((id, (e_x, e_y, e_z), system, elevation_rad): RowTerm) -> NifResul
     })
 }
 
-fn decode_receiver((lat_rad, lon_rad, height_m): ReceiverTerm) -> NifResult<Wgs84Geodetic> {
+pub(crate) fn decode_receiver(
+    (lat_rad, lon_rad, height_m): ReceiverTerm,
+) -> NifResult<Wgs84Geodetic> {
     Wgs84Geodetic::new(lat_rad, lon_rad, height_m).map_err(crate::errors::invalid_input)
 }
 
@@ -119,7 +123,7 @@ fn decode_model(
     }
 }
 
-fn decode_constellation(
+pub(crate) fn decode_constellation(
     (system, p_const, default_sat): ConstellationTerm,
 ) -> NifResult<ConstellationIsm> {
     Ok(ConstellationIsm::new(
@@ -129,7 +133,7 @@ fn decode_constellation(
     ))
 }
 
-fn decode_satellite(
+pub(crate) fn decode_satellite(
     (
         id,
         sigma_ura_m,

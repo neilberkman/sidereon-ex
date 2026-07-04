@@ -57,6 +57,7 @@ mod primitive_estimation;
 mod propagation;
 mod qc;
 mod reduced_orbit;
+mod reliability;
 mod rf;
 mod rinex_clock;
 mod rinex_obs;
