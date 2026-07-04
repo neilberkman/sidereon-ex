@@ -3,8 +3,9 @@ use sidereon_core::astro::time::model::{GnssWeekTow, TimeScale};
 use sidereon_core::ephemeris::{self, EphemerisSampleStatus, EphemerisSource};
 use sidereon_core::sbas::{
     parse_ems_lines, parse_rtklib_lines, sat_to_sbas_prn, sbas_prn_to_sat, SbasBlock,
-    SbasCorrectedEphemeris, SbasCorrectionStore, SbasIonoGrid, SbasLogBlock, SbasMessage,
-    SbasSolveMode, SbasWireForm,
+    SbasCorrectedEphemeris, SbasCorrectionStore, SbasIonoDelays, SbasIonoGrid,
+    SbasLogBlock, SbasLongTermHalf, SbasMessage, SbasMixedFastCorrections, SbasSolveMode,
+    SbasWireForm, SpareBits,
 };
 use sidereon_core::staleness::StalenessPolicy;
 use sidereon_core::GnssSatelliteId;
@@ -48,6 +49,80 @@ struct SbasMessageTerm {
     message_type: i64,
     preamble: i64,
     details: String,
+    payload: SbasPayloadTerm,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasPayloadTerm {
+    data: Option<Vec<u8>>,
+    iodp: Option<i64>,
+    iodf: Option<i64>,
+    iodf_by_block: Option<Vec<i64>>,
+    mask: Option<Vec<bool>>,
+    prc: Option<Vec<i64>>,
+    udrei: Option<Vec<i64>>,
+    system_latency_s: Option<i64>,
+    ai: Option<Vec<i64>>,
+    time_of_day_s: Option<i64>,
+    ura: Option<i64>,
+    x_m: Option<i64>,
+    y_m: Option<i64>,
+    z_m: Option<i64>,
+    x_rate_m_s: Option<i64>,
+    y_rate_m_s: Option<i64>,
+    z_rate_m_s: Option<i64>,
+    x_accel_m_s2: Option<i64>,
+    y_accel_m_s2: Option<i64>,
+    z_accel_m_s2: Option<i64>,
+    a_gf0_s: Option<i64>,
+    a_gf1_s_s: Option<i64>,
+    band_number: Option<i64>,
+    block_id: Option<i64>,
+    iodi: Option<i64>,
+    mixed_fast: Option<SbasMixedFastTerm>,
+    long_term: Option<SbasLongHalfTerm>,
+    halves: Option<Vec<SbasLongHalfTerm>>,
+    entries: Option<Vec<SbasIgpDelayTerm>>,
+    reserved: Vec<(i64, i64)>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasMixedFastTerm {
+    iodf: i64,
+    iodp: i64,
+    block_id: i64,
+    prc: Vec<i64>,
+    udrei: Vec<i64>,
+    reserved: Vec<(i64, i64)>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasLongHalfTerm {
+    velocity_code: bool,
+    iodp: i64,
+    records: Vec<SbasLongRecordTerm>,
+    reserved: Vec<(i64, i64)>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasLongRecordTerm {
+    monitored_index: i64,
+    iode: i64,
+    delta_x: i64,
+    delta_y: i64,
+    delta_z: i64,
+    delta_x_rate: i64,
+    delta_y_rate: i64,
+    delta_z_rate: i64,
+    delta_a_f0: i64,
+    delta_a_f1: i64,
+    time_of_day_s: Option<i64>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasIgpDelayTerm {
+    vertical_delay: i64,
+    givei: i64,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -212,12 +287,188 @@ fn message_preamble(message: &SbasMessage) -> u8 {
     }
 }
 
+fn spare_bits(bits: &SpareBits) -> Vec<(i64, i64)> {
+    bits.0
+        .iter()
+        .map(|&(value, width)| (value as i64, i64::from(width)))
+        .collect()
+}
+
+fn i16_vec<const N: usize>(values: &[i16; N]) -> Vec<i64> {
+    values.iter().map(|&value| i64::from(value)).collect()
+}
+
+fn u8_vec<const N: usize>(values: &[u8; N]) -> Vec<i64> {
+    values.iter().map(|&value| i64::from(value)).collect()
+}
+
+fn long_record_term(record: &sidereon_core::sbas::SbasLongTermRecord) -> SbasLongRecordTerm {
+    SbasLongRecordTerm {
+        monitored_index: i64::from(record.monitored_index),
+        iode: i64::from(record.iode),
+        delta_x: i64::from(record.delta_x),
+        delta_y: i64::from(record.delta_y),
+        delta_z: i64::from(record.delta_z),
+        delta_x_rate: i64::from(record.delta_x_rate),
+        delta_y_rate: i64::from(record.delta_y_rate),
+        delta_z_rate: i64::from(record.delta_z_rate),
+        delta_a_f0: i64::from(record.delta_a_f0),
+        delta_a_f1: i64::from(record.delta_a_f1),
+        time_of_day_s: record.time_of_day_s.map(i64::from),
+    }
+}
+
+fn long_half_term(half: &SbasLongTermHalf) -> SbasLongHalfTerm {
+    SbasLongHalfTerm {
+        velocity_code: half.velocity_code,
+        iodp: i64::from(half.iodp),
+        records: half.records.iter().map(long_record_term).collect(),
+        reserved: spare_bits(&half.reserved),
+    }
+}
+
+fn mixed_fast_term(fast: &SbasMixedFastCorrections) -> SbasMixedFastTerm {
+    SbasMixedFastTerm {
+        iodf: i64::from(fast.iodf),
+        iodp: i64::from(fast.iodp),
+        block_id: i64::from(fast.block_id),
+        prc: i16_vec(&fast.prc),
+        udrei: u8_vec(&fast.udrei),
+        reserved: spare_bits(&fast.reserved),
+    }
+}
+
+fn igp_delay_terms(delays: &SbasIonoDelays) -> Vec<SbasIgpDelayTerm> {
+    delays
+        .entries
+        .iter()
+        .map(|entry| SbasIgpDelayTerm {
+            vertical_delay: i64::from(entry.vertical_delay),
+            givei: i64::from(entry.givei),
+        })
+        .collect()
+}
+
+fn empty_payload() -> SbasPayloadTerm {
+    SbasPayloadTerm {
+        data: None,
+        iodp: None,
+        iodf: None,
+        iodf_by_block: None,
+        mask: None,
+        prc: None,
+        udrei: None,
+        system_latency_s: None,
+        ai: None,
+        time_of_day_s: None,
+        ura: None,
+        x_m: None,
+        y_m: None,
+        z_m: None,
+        x_rate_m_s: None,
+        y_rate_m_s: None,
+        z_rate_m_s: None,
+        x_accel_m_s2: None,
+        y_accel_m_s2: None,
+        z_accel_m_s2: None,
+        a_gf0_s: None,
+        a_gf1_s_s: None,
+        band_number: None,
+        block_id: None,
+        iodi: None,
+        mixed_fast: None,
+        long_term: None,
+        halves: None,
+        entries: None,
+        reserved: Vec::new(),
+    }
+}
+
+fn message_payload(message: &SbasMessage) -> SbasPayloadTerm {
+    let mut payload = empty_payload();
+    match message {
+        SbasMessage::DoNotUse(m) => {
+            payload.data = Some(m.data.clone());
+        }
+        SbasMessage::PrnMask(m) => {
+            payload.iodp = Some(i64::from(m.iodp));
+            payload.mask = Some(m.mask.to_vec());
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::FastCorrections(m) => {
+            payload.iodf = Some(i64::from(m.iodf));
+            payload.iodp = Some(i64::from(m.iodp));
+            payload.prc = Some(i16_vec(&m.prc));
+            payload.udrei = Some(u8_vec(&m.udrei));
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::Integrity(m) => {
+            payload.iodf_by_block = Some(u8_vec(&m.iodf));
+            payload.udrei = Some(u8_vec(&m.udrei));
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::FastDegradation(m) => {
+            payload.system_latency_s = Some(i64::from(m.system_latency_s));
+            payload.iodp = Some(i64::from(m.iodp));
+            payload.ai = Some(u8_vec(&m.ai));
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::GeoNav(m) => {
+            payload.time_of_day_s = Some(i64::from(m.time_of_day_s));
+            payload.ura = Some(i64::from(m.ura));
+            payload.x_m = Some(i64::from(m.x_m));
+            payload.y_m = Some(i64::from(m.y_m));
+            payload.z_m = Some(i64::from(m.z_m));
+            payload.x_rate_m_s = Some(i64::from(m.x_rate_m_s));
+            payload.y_rate_m_s = Some(i64::from(m.y_rate_m_s));
+            payload.z_rate_m_s = Some(i64::from(m.z_rate_m_s));
+            payload.x_accel_m_s2 = Some(i64::from(m.x_accel_m_s2));
+            payload.y_accel_m_s2 = Some(i64::from(m.y_accel_m_s2));
+            payload.z_accel_m_s2 = Some(i64::from(m.z_accel_m_s2));
+            payload.a_gf0_s = Some(i64::from(m.a_gf0_s));
+            payload.a_gf1_s_s = Some(i64::from(m.a_gf1_s_s));
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::NetworkTime(m) => {
+            payload.data = Some(m.data.clone());
+        }
+        SbasMessage::GeoAlmanac(m) => {
+            payload.data = Some(m.data.clone());
+        }
+        SbasMessage::IgpMask(m) => {
+            payload.band_number = Some(i64::from(m.band_number));
+            payload.iodi = Some(i64::from(m.iodi));
+            payload.mask = Some(m.mask.to_vec());
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::MixedCorrections(m) => {
+            payload.mixed_fast = Some(mixed_fast_term(&m.fast));
+            payload.long_term = Some(long_half_term(&m.long_term));
+        }
+        SbasMessage::LongTermCorrections(m) => {
+            payload.halves = Some(m.halves.iter().map(long_half_term).collect());
+        }
+        SbasMessage::IonoDelays(m) => {
+            payload.band_number = Some(i64::from(m.band_number));
+            payload.block_id = Some(i64::from(m.block_id));
+            payload.iodi = Some(i64::from(m.iodi));
+            payload.entries = Some(igp_delay_terms(m));
+            payload.reserved = spare_bits(&m.reserved);
+        }
+        SbasMessage::Unsupported(m) => {
+            payload.data = Some(m.data.clone());
+        }
+    }
+    payload
+}
+
 fn message_term(message: &SbasMessage) -> SbasMessageTerm {
     SbasMessageTerm {
         kind: message_kind(message).to_string(),
         message_type: i64::from(message.message_type()),
         preamble: i64::from(message_preamble(message)),
         details: format!("{message:?}"),
+        payload: message_payload(message),
     }
 }
 

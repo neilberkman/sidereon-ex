@@ -661,6 +661,32 @@ fn terrain_dted_height<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+fn terrain_dted_height_batch<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<DtedTerrainResource>,
+    points: Vec<(f64, f64)>,
+    interpolation: String,
+) -> NifResult<Vec<Term<'a>>> {
+    let interpolation = match interpolation.as_str() {
+        "nearest_posting" => DtedInterpolation::NearestPosting,
+        "bilinear" => DtedInterpolation::Bilinear,
+        _ => return Err(Error::Term(Box::new("unknown DTED interpolation"))),
+    };
+    let mut terrain = handle
+        .terrain
+        .lock()
+        .map_err(|_| Error::Term(Box::new("terrain lock poisoned")))?;
+    Ok(terrain
+        .height_batch(&points, DtedLookupOptions { interpolation })
+        .into_iter()
+        .map(|result| match result {
+            Ok(height) => (atoms::ok(), height).encode(env),
+            Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
+        })
+        .collect())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn terrain_dted_tile_load(path: String) -> NifResult<ResourceArc<DtedTileResource>> {
     let tile = DtedTile::from_path(path).map_err(|e| Error::Term(Box::new(e)))?;
     Ok(ResourceArc::new(DtedTileResource { tile }))

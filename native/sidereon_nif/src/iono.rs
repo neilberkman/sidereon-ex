@@ -19,7 +19,8 @@ use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
 use sidereon_core::atmosphere::ionosphere::{
     ionex_slant_delay, ionosphere_delay, klobuchar_native,
     nequick_g_delay_m as core_nequick_g_delay_m, nequick_g_stec_tecu as core_nequick_g_stec_tecu,
-    GalileoNequickCoeffs, Ionex, IonoModel, KlobucharParams, NequickGRayEval,
+    GalileoNequickCoeffs, Ionex, IonoModel, KlobucharParams, NequickGRayEval, TecGridSamples,
+    TecSample, TecSamplesError,
 };
 use sidereon_core::combinations::{self, IonosphereFreeError, PseudorangeDropReason};
 use sidereon_core::frequencies::{self, CarrierBand};
@@ -36,8 +37,36 @@ mod atoms {
         unknown_band,
         missing_band1,
         missing_band2,
-        duplicate_observation
+        duplicate_observation,
+        empty,
+        too_few_nodes,
+        non_monotonic_lat,
+        non_monotonic_lon,
+        non_monotonic_epochs,
+        epoch_not_representable,
+        grid_mismatch,
+        rms_count_mismatch,
+        non_finite_value,
+        non_positive_step,
+        axis_out_of_range
     }
+}
+
+type EpochTerm = (String, f64, f64);
+type TecSampleTerm = (EpochTerm, f64, f64, f64, Option<f64>);
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct TecGridSamplesTerm {
+    map_epochs: Vec<EpochTerm>,
+    lat_nodes_deg: Vec<f64>,
+    lon_nodes_deg: Vec<f64>,
+    dlat_deg: f64,
+    dlon_deg: f64,
+    shell_height_km: f64,
+    base_radius_km: f64,
+    exponent: i64,
+    tec_maps: Vec<Vec<Vec<f64>>>,
+    rms_maps: Vec<Vec<Vec<f64>>>,
 }
 
 /// Resource handle holding a parsed IONEX product across NIF calls.
@@ -51,6 +80,101 @@ pub struct IonexResource {
 
 #[rustler::resource_impl]
 impl rustler::Resource for IonexResource {}
+
+fn tec_samples_error_atom(err: TecSamplesError) -> rustler::Atom {
+    match err {
+        TecSamplesError::Empty => atoms::empty(),
+        TecSamplesError::TooFewNodes(_) => atoms::too_few_nodes(),
+        TecSamplesError::NonMonotonicLat => atoms::non_monotonic_lat(),
+        TecSamplesError::NonMonotonicLon => atoms::non_monotonic_lon(),
+        TecSamplesError::NonMonotonicEpochs => atoms::non_monotonic_epochs(),
+        TecSamplesError::EpochNotRepresentable => atoms::epoch_not_representable(),
+        TecSamplesError::ShapeMismatch => atoms::grid_mismatch(),
+        TecSamplesError::RmsCountMismatch => atoms::rms_count_mismatch(),
+        TecSamplesError::NonFiniteValue => atoms::non_finite_value(),
+        TecSamplesError::NonPositiveStep => atoms::non_positive_step(),
+        TecSamplesError::AxisOutOfRange(_) => atoms::axis_out_of_range(),
+    }
+}
+
+fn checked_i32(value: i64, field: &'static str) -> NifResult<i32> {
+    i32::try_from(value).map_err(|_| Error::Term(Box::new(format!("{field} out of range"))))
+}
+
+fn epoch_from_term((scale, jd_whole, jd_fraction): EpochTerm) -> NifResult<Instant> {
+    let scale = crate::sp3::time_scale_from_abbrev(&scale)?;
+    let split =
+        JulianDateSplit::new(jd_whole, jd_fraction).map_err(crate::errors::invalid_input)?;
+    Ok(Instant::from_julian_date(scale, split))
+}
+
+fn epoch_to_term(epoch: Instant) -> EpochTerm {
+    let (jd_whole, jd_fraction) = epoch
+        .julian_date()
+        .map(|jd| (jd.jd_whole, jd.fraction))
+        .unwrap_or((0.0, 0.0));
+    (
+        epoch.scale.abbrev().to_string(),
+        jd_whole,
+        jd_fraction,
+    )
+}
+
+fn grid_samples_from_term(term: TecGridSamplesTerm) -> NifResult<TecGridSamples> {
+    Ok(TecGridSamples {
+        map_epochs: term
+            .map_epochs
+            .into_iter()
+            .map(epoch_from_term)
+            .collect::<NifResult<_>>()?,
+        lat_nodes_deg: term.lat_nodes_deg,
+        lon_nodes_deg: term.lon_nodes_deg,
+        dlat_deg: term.dlat_deg,
+        dlon_deg: term.dlon_deg,
+        shell_height_km: term.shell_height_km,
+        base_radius_km: term.base_radius_km,
+        exponent: checked_i32(term.exponent, "exponent")?,
+        tec_maps: term.tec_maps,
+        rms_maps: term.rms_maps,
+    })
+}
+
+fn grid_samples_to_term(samples: TecGridSamples) -> TecGridSamplesTerm {
+    TecGridSamplesTerm {
+        map_epochs: samples.map_epochs.into_iter().map(epoch_to_term).collect(),
+        lat_nodes_deg: samples.lat_nodes_deg,
+        lon_nodes_deg: samples.lon_nodes_deg,
+        dlat_deg: samples.dlat_deg,
+        dlon_deg: samples.dlon_deg,
+        shell_height_km: samples.shell_height_km,
+        base_radius_km: samples.base_radius_km,
+        exponent: i64::from(samples.exponent),
+        tec_maps: samples.tec_maps,
+        rms_maps: samples.rms_maps,
+    }
+}
+
+fn tec_sample_from_term(
+    (epoch, lat_deg, lon_deg, vtec_tecu, rms_tecu): TecSampleTerm,
+) -> NifResult<TecSample> {
+    Ok(TecSample {
+        epoch: epoch_from_term(epoch)?,
+        lat_deg,
+        lon_deg,
+        vtec_tecu,
+        rms_tecu,
+    })
+}
+
+fn tec_sample_to_term(sample: TecSample) -> TecSampleTerm {
+    (
+        epoch_to_term(sample.epoch),
+        sample.lat_deg,
+        sample.lon_deg,
+        sample.vtec_tecu,
+        sample.rms_tecu,
+    )
+}
 
 /// The standard ionosphere-free carrier-frequency table.
 ///
@@ -301,6 +425,57 @@ fn ionex_parse(bytes: rustler::Binary) -> NifResult<ResourceArc<IonexResource>> 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn ionex_to_string(handle: ResourceArc<IonexResource>) -> String {
     handle.ionex.to_ionex_string()
+}
+
+/// Build an IONEX product directly from whole-grid TEC samples.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ionex_from_samples<'a>(env: Env<'a>, samples: TecGridSamplesTerm) -> NifResult<Term<'a>> {
+    let samples = grid_samples_from_term(samples)?;
+    Ok(match Ionex::from_samples(samples) {
+        Ok(ionex) => (atoms::ok(), ResourceArc::new(IonexResource { ionex })).encode(env),
+        Err(err) => (atoms::error(), tec_samples_error_atom(err)).encode(env),
+    })
+}
+
+/// Build an IONEX product from one TEC sample per grid node.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ionex_from_node_samples<'a>(
+    env: Env<'a>,
+    samples: Vec<TecSampleTerm>,
+    shell_height_km: f64,
+    base_radius_km: f64,
+    exponent: i64,
+) -> NifResult<Term<'a>> {
+    let samples = samples
+        .into_iter()
+        .map(tec_sample_from_term)
+        .collect::<NifResult<Vec<_>>>()?;
+    Ok(match Ionex::from_node_samples(
+        samples,
+        shell_height_km,
+        base_radius_km,
+        checked_i32(exponent, "exponent")?,
+    ) {
+        Ok(ionex) => (atoms::ok(), ResourceArc::new(IonexResource { ionex })).encode(env),
+        Err(err) => (atoms::error(), tec_samples_error_atom(err)).encode(env),
+    })
+}
+
+/// Extract a parsed or sample-built IONEX product as whole-grid TEC samples.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ionex_tec_grid_samples(handle: ResourceArc<IonexResource>) -> TecGridSamplesTerm {
+    grid_samples_to_term(handle.ionex.tec_grid_samples())
+}
+
+/// Extract a parsed or sample-built IONEX product as node TEC samples.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ionex_tec_samples(handle: ResourceArc<IonexResource>) -> Vec<TecSampleTerm> {
+    handle
+        .ionex
+        .tec_samples()
+        .into_iter()
+        .map(tec_sample_to_term)
+        .collect()
 }
 
 /// IONEX vertical-TEC-grid slant ionospheric group delay (positive meters).

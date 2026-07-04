@@ -24,17 +24,26 @@ defmodule Sidereon.GNSS.SBAS do
 
   @type t :: %__MODULE__{handle: reference()}
   @type epoch :: NaiveDateTime.t() | tuple() | number()
+  @type error :: :not_found | :invalid_input | String.t()
 
   defmodule Message do
-    @moduledoc "Decoded SBAS message metadata."
-    @enforce_keys [:kind, :message_type, :preamble, :details]
-    defstruct [:kind, :message_type, :preamble, :details]
+    @moduledoc """
+    Decoded SBAS message.
+
+    `:message_type` and `:preamble` are the raw wire values. `:payload` contains
+    decoded fields in SBAS wire units, for example PRC values, UDREI values,
+    masks, long-term records, or IGP delay entries depending on `:kind`.
+    """
+
+    @enforce_keys [:kind, :message_type, :preamble, :details, :payload]
+    defstruct [:kind, :message_type, :preamble, :details, :payload]
 
     @type t :: %__MODULE__{
             kind: atom() | String.t(),
             message_type: integer(),
             preamble: integer(),
-            details: String.t()
+            details: String.t(),
+            payload: map()
           }
   end
 
@@ -55,7 +64,7 @@ defmodule Sidereon.GNSS.SBAS do
   end
 
   @doc "Decode one 250-bit framed or 226-bit body SBAS message."
-  @spec decode(binary(), atom() | String.t()) :: {:ok, Message.t()} | {:error, term()}
+  @spec decode(binary(), atom() | String.t()) :: {:ok, Message.t()} | {:error, error()}
   def decode(bytes, form \\ :body_226) when is_binary(bytes) do
     case NIF.sbas_decode(bytes, form_name(form)) do
       {:ok, fields} -> {:ok, message_struct(fields)}
@@ -65,19 +74,28 @@ defmodule Sidereon.GNSS.SBAS do
     e in ErlangError -> {:error, e.original}
   end
 
+  @doc "Decode one 250-bit framed or 226-bit body SBAS message or raise."
+  @spec decode!(binary(), atom() | String.t()) :: Message.t()
   def decode!(bytes, form \\ :body_226), do: bang(decode(bytes, form))
 
   @doc "Parse ESA EMS-style SBAS log lines."
+  @spec parse_ems(String.t()) :: {:ok, [LogBlock.t()]}
   def parse_ems(text) when is_binary(text), do: {:ok, Enum.map(NIF.sbas_parse_ems(text), &block_struct/1)}
 
+  @doc "Parse ESA EMS-style SBAS log lines or raise."
+  @spec parse_ems!(String.t()) :: [LogBlock.t()]
   def parse_ems!(text), do: bang(parse_ems(text))
 
   @doc "Parse RTKLIB SBAS log lines."
+  @spec parse_rtklib(String.t()) :: {:ok, [LogBlock.t()]}
   def parse_rtklib(text) when is_binary(text), do: {:ok, Enum.map(NIF.sbas_parse_rtklib(text), &block_struct/1)}
 
+  @doc "Parse RTKLIB SBAS log lines or raise."
+  @spec parse_rtklib!(String.t()) :: [LogBlock.t()]
   def parse_rtklib!(text), do: bang(parse_rtklib(text))
 
   @doc "Create an empty correction store."
+  @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
       handle:
@@ -254,8 +272,12 @@ defmodule Sidereon.GNSS.SBAS do
   end
 
   defp block_struct(fields), do: struct!(LogBlock, Map.update!(fields, :message, &message_struct/1))
-  defp message_struct(fields), do: struct!(Message, Map.update!(fields, :kind, &kind_atom/1))
+  defp message_struct(fields), do: struct!(Message, fields |> Map.update!(:kind, &kind_atom/1) |> decode_payload())
   defp sample_row(row), do: %{row | status: kind_atom(row.status)}
+
+  defp decode_payload(%{payload: payload} = fields) when is_map(payload) do
+    %{fields | payload: payload}
+  end
 
   defp form_name(:framed_250), do: "framed_250"
   defp form_name(:body_226), do: "body_226"
