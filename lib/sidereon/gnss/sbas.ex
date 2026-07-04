@@ -402,7 +402,7 @@ defmodule Sidereon.GNSS.SBAS do
             String.t(),
             ProtectionGeometry.t(),
             AirborneModel.t(),
-            epoch(),
+            SBAS.epoch(),
             DegradationParams.t()
           ) :: {:ok, t()} | {:error, term()}
     def from_store(

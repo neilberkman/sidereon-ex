@@ -361,6 +361,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "oxiproj-core"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd55084061e6d473ccff30d3abf4f16cf34692bbf92ba90836cbab0fd0fc8b6"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oxiproj-geodesic"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3812d82cc533a5f60f3ff01dce05dcb2fa885be7f1a2589118fd51b07aae2bb6"
+dependencies = [
+ "oxiproj-core",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,8 +541,6 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sidereon"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e7a8e91591efc6e6314055d679e997fe96d9d8fbd3e2f0e838c70097737e61d"
 dependencies = [
  "flate2",
  "sidereon-core",
@@ -533,18 +549,17 @@ dependencies = [
 [[package]]
 name = "sidereon-core"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "351fa302205e1fe98fa56feca0ca798e5cd7b5b8e14da0553027117f20215582"
 dependencies = [
  "cc",
  "libm",
  "nalgebra",
+ "oxiproj-geodesic",
  "rayon",
  "roxmltree",
  "serde",
  "serde_json",
- "thiserror",
- "trust-region-least-squares",
+ "thiserror 1.0.69",
+ "trust-region-least-squares 0.9.1",
 ]
 
 [[package]]
@@ -557,7 +572,7 @@ dependencies = [
  "serde_json",
  "sidereon",
  "sidereon-core",
- "trust-region-least-squares",
+ "trust-region-least-squares 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -602,7 +617,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+dependencies = [
+ "thiserror-impl 2.0.18",
 ]
 
 [[package]]
@@ -614,6 +638,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "trust-region-least-squares"
+version = "0.9.1"
+dependencies = [
+ "libloading 0.8.9",
+ "nalgebra",
+ "rayon",
 ]
 
 [[package]]

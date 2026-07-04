@@ -31,6 +31,9 @@ defmodule Sidereon.GNSS.Troposphere do
 
   alias Sidereon.NIF
 
+  @typedoc "Failure reason returned by checked troposphere mapping."
+  @type mapping_error :: :below_mapping_elevation | :above_mapping_elevation | :outside_mapping_height | term()
+
   @doc """
   Zenith hydrostatic and wet tropospheric delays from supplied meteorology.
 
@@ -56,22 +59,24 @@ defmodule Sidereon.GNSS.Troposphere do
 
   `epoch` is a `NaiveDateTime` or `{{y, m, d}, {h, min, s}}` tuple (the Niell
   seasonal term needs the day-of-year). Returns
-  `{:ok, %{dry: dry, wet: wet}}` (dimensionless) or `{:error, reason}`.
+  `{:ok, %{dry: dry, wet: wet}}` (dimensionless) or `{:error, reason}`. Niell
+  mapping rejects elevations below its 3 degree validity bound with
+  `{:error, :below_mapping_elevation}`.
   """
   @spec mapping(number(), number(), number(), NaiveDateTime.t() | tuple()) ::
-          {:ok, %{dry: float(), wet: float()}} | {:error, term()}
+          {:ok, %{dry: float(), wet: float()}} | {:error, mapping_error()}
   def mapping(elevation_deg, lat_deg, height_m, epoch) do
     with {jd_whole, jd_fraction} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
-      {dry, wet} =
-        NIF.tropo_mapping_factors(
-          elevation_deg / 1.0,
-          lat_deg / 1.0,
-          height_m / 1.0,
-          jd_whole,
-          jd_fraction
-        )
-
-      {:ok, %{dry: dry, wet: wet}}
+      case NIF.tropo_mapping_factors(
+             elevation_deg / 1.0,
+             lat_deg / 1.0,
+             height_m / 1.0,
+             jd_whole,
+             jd_fraction
+           ) do
+        {dry, wet} when is_number(dry) and is_number(wet) -> {:ok, %{dry: dry, wet: wet}}
+        {:error, reason} -> {:error, reason}
+      end
     end
   rescue
     e in ErlangError -> {:error, e.original}

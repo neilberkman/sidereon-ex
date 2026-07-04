@@ -113,6 +113,29 @@ defmodule Sidereon.SGP4 do
   end
 
   @doc """
+  Propagate one satellite through a stateful decay latch over ordered offsets.
+
+  `times_minutes` are minutes since the TLE epoch. The latch is scoped to this
+  call: after the first decay-like SGP4 failure, later requests at the same or a
+  greater offset return `{:error, {:decayed, first_minutes, requested_minutes}}`
+  instead of a raw post-failure state.
+  """
+  @spec propagate_with_decay_latch(Elements.t(), [number()], keyword()) ::
+          {:ok, [{:ok, TemeState.t()} | {:error, term()}]} | {:error, term()}
+  def propagate_with_decay_latch(%Elements{} = tle, times_minutes, opts \\ []) when is_list(times_minutes) do
+    opsmode = Keyword.get(opts, :opsmode, :afspc)
+
+    with {:ok, elements_map} <- to_nif_elements_map(tle) do
+      case Sidereon.NIF.sgp4_propagate_with_decay_latch(elements_map, Enum.map(times_minutes, &(&1 / 1.0)), opsmode) do
+        {:ok, results} -> {:ok, Enum.map(results, &decode_latched_result/1)}
+        {:error, _} = err -> err
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, {:nif_error, Exception.message(e)}}
+  end
+
+  @doc """
   Fit a TLE to TEME position samples using the core inverse-SGP4 solver.
   """
   @spec fit_tle([map()], keyword()) :: {:ok, Fit.t()} | {:error, term()}
@@ -146,6 +169,16 @@ defmodule Sidereon.SGP4 do
   end
 
   defp decode_arc({:error, reason}), do: {:error, reason}
+
+  defp decode_latched_result({:ok, {position, velocity}}) do
+    {:ok, %TemeState{position: position, velocity: velocity}}
+  end
+
+  defp decode_latched_result({:error, {:decayed, first_failing_minutes, requested_minutes}}) do
+    {:error, {:decayed, first_failing_minutes, requested_minutes}}
+  end
+
+  defp decode_latched_result({:error, reason}), do: {:error, reason}
 
   defp fit_sample(sample) do
     %{

@@ -23,6 +23,7 @@ defmodule Sidereon.Geoid do
   alias Sidereon.NIF
 
   @type grid :: reference()
+  @type egm2008_spacing :: :one_minute | :two_point_five_minute | String.t()
 
   @doc """
   Built-in coarse-grid geoid undulation `N` (metres) at a geodetic position in
@@ -146,6 +147,53 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Parse a full NGA EGM2008 interpolation raster into a grid handle.
+
+  `spacing` is `:one_minute` or `:two_point_five_minute`. The returned handle
+  uses the same `grid_undulation_*` and height-conversion functions as every
+  loaded grid.
+  """
+  @spec load_egm2008_raster(binary(), egm2008_spacing()) :: {:ok, grid()} | {:error, term()}
+  def load_egm2008_raster(bytes, spacing) when is_binary(bytes) do
+    case NIF.geoid_grid_from_egm2008_raster(bytes, egm2008_spacing(spacing)) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, _} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Parse a cropped NGA EGM2008 interpolation-raster window into a grid handle.
+
+  `lat_min_deg` and `lon_min_deg` are the southwest node of the crop in degrees.
+  `n_lat` and `n_lon` are the row and column counts carried by `bytes`.
+  """
+  @spec load_egm2008_raster_window(
+          binary(),
+          egm2008_spacing(),
+          number(),
+          number(),
+          pos_integer(),
+          pos_integer()
+        ) :: {:ok, grid()} | {:error, term()}
+  def load_egm2008_raster_window(bytes, spacing, lat_min_deg, lon_min_deg, n_lat, n_lon) when is_binary(bytes) do
+    case NIF.geoid_grid_from_egm2008_raster_window(
+           bytes,
+           egm2008_spacing(spacing),
+           lat_min_deg / 1.0,
+           lon_min_deg / 1.0,
+           n_lat,
+           n_lon
+         ) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, _} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Build a geoid grid handle from its origin, spacing, dimensions, and row-major
   samples (metres).
 
@@ -260,4 +308,10 @@ defmodule Sidereon.Geoid do
   end
 
   defp points(points), do: Enum.map(points, fn {lat, lon} -> {lat / 1.0, lon / 1.0} end)
+
+  defp egm2008_spacing(:one_minute), do: "one-minute"
+  defp egm2008_spacing(:one_minute_grid), do: "one-minute"
+  defp egm2008_spacing(:two_point_five_minute), do: "two-point-five-minute"
+  defp egm2008_spacing(:two_point_five_minute_grid), do: "two-point-five-minute"
+  defp egm2008_spacing(value) when is_binary(value), do: value
 end

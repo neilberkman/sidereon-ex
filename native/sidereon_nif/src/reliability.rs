@@ -8,8 +8,8 @@ use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::araim::{AraimError, AraimGeometry, Ism};
 use sidereon_core::quality::{
     reliability_araim as core_reliability_araim, reliability_design as core_reliability_design,
-    wtest_noncentrality as core_wtest_noncentrality, ObservationReliability, QualityError,
-    RangeReliabilityRow, ReliabilityOptions, ReliabilityReport, ReliabilitySummary,
+    wtest_noncentrality_components as core_wtest_noncentrality_components, ObservationReliability,
+    QualityError, RangeReliabilityRow, ReliabilityOptions, ReliabilityReport, ReliabilitySummary,
 };
 
 type DesignRowTerm = (String, Vec<f64>, f64);
@@ -210,12 +210,12 @@ fn reliability_default_options() -> OptionsTerm {
 /// Compute Baarda's W-test noncentrality from false-alarm probability and detection power.
 #[rustler::nif]
 fn reliability_wtest_noncentrality<'a>(env: Env<'a>, alpha: f64, power: f64) -> Term<'a> {
-    match core_wtest_noncentrality(alpha, 1.0 - power) {
-        Ok(lambda0) => (
+    match core_wtest_noncentrality_components(alpha, 1.0 - power) {
+        Ok(components) => (
             atoms::ok(),
             WTestTerm {
-                delta0: lambda0.sqrt(),
-                lambda0,
+                delta0: components.delta0,
+                lambda0: components.lambda0,
             },
         )
             .encode(env),

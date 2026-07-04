@@ -24,6 +24,29 @@ use sidereon_core::atmosphere::troposphere::{
 };
 use sidereon_core::Wgs84Geodetic;
 
+mod atoms {
+    rustler::atoms! {
+        invalid_input,
+        below_mapping_elevation,
+        above_mapping_elevation,
+        outside_mapping_height
+    }
+}
+
+fn mapping_error(error: sidereon_core::Error) -> rustler::Error {
+    let message = error.to_string();
+    let atom = if message.contains("elevation_rad below mapping validity") {
+        atoms::below_mapping_elevation()
+    } else if message.contains("elevation_rad above mapping validity") {
+        atoms::above_mapping_elevation()
+    } else if message.contains("receiver.height_m outside mapping validity") {
+        atoms::outside_mapping_height()
+    } else {
+        atoms::invalid_input()
+    };
+    rustler::Error::Term(Box::new(atom))
+}
+
 /// Zenith hydrostatic and wet tropospheric delays (positive meters).
 ///
 /// The receiver geodetic latitude and ellipsoidal height set the zenith
@@ -71,7 +94,7 @@ fn tropo_mapping_factors(
         receiver,
         epoch,
     )
-    .map_err(crate::errors::invalid_input)?;
+    .map_err(mapping_error)?;
     Ok((m.dry, m.wet))
 }
 

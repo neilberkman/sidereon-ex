@@ -140,6 +140,55 @@ defmodule Sidereon.OrbitDetermination do
   end
 
   @doc """
+  Fit one satellite from a parsed ECEF SP3 product.
+
+  The Earth-orientation provider is supplied by the core side of the binding.
+  """
+  @spec fit_sp3_ecef_precise_orbit(SP3.t(), satellite_id(), keyword()) ::
+          {:ok, OrbitFitReport.t()} | {:error, error_reason()}
+  def fit_sp3_ecef_precise_orbit(%SP3{handle: handle}, satellite_id, opts \\ []) do
+    {letter, prn} = satellite(satellite_id)
+
+    case NIF.orbit_fit_sp3_ecef_precise_orbit(handle, letter, prn, options(opts)) do
+      {:ok, report} -> {:ok, report(report)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Fit selected satellites from a parsed ECEF SP3 product.
+  """
+  @spec fit_sp3_ecef_precise_orbits(SP3.t(), [satellite_id()], keyword()) ::
+          {:ok, OrbitFitReport.t()} | {:error, error_reason()}
+  def fit_sp3_ecef_precise_orbits(%SP3{handle: handle}, satellite_ids, opts \\ []) when is_list(satellite_ids) do
+    case NIF.orbit_fit_sp3_ecef_precise_orbits(handle, Enum.map(satellite_ids, &satellite/1), options(opts)) do
+      {:ok, report} -> {:ok, report(report)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Fit every satellite declared in a parsed ECEF SP3 product.
+  """
+  @spec fit_all_sp3_ecef_precise_orbits(SP3.t(), keyword()) ::
+          {:ok, OrbitFitReport.t()} | {:error, error_reason()}
+  def fit_all_sp3_ecef_precise_orbits(%SP3{handle: handle}, opts \\ []) do
+    case NIF.orbit_fit_all_sp3_ecef_precise_orbits(handle, options(opts)) do
+      {:ok, report} -> {:ok, report(report)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Fit one satellite from a precise-ephemeris sample slice.
   """
   @spec fit_precise_ephemeris_sample_orbit([PreciseEphemerisSample.t()], satellite_id(), keyword()) ::
@@ -172,6 +221,22 @@ defmodule Sidereon.OrbitDetermination do
 
   defp force_token({:srp, cr, area_to_mass_m2_kg}) when is_number(cr) and is_number(area_to_mass_m2_kg) do
     "srp:#{cr / 1.0}:#{area_to_mass_m2_kg / 1.0}"
+  end
+
+  defp force_token({:geopotential, degree, order}) when is_integer(degree) and is_integer(order) do
+    "geopotential:#{degree}:#{order}"
+  end
+
+  defp force_token({:spherical_harmonic, degree, order}) when is_integer(degree) and is_integer(order) do
+    "spherical_harmonic:#{degree}:#{order}"
+  end
+
+  defp force_token({:egm96, degree, order}) when is_integer(degree) and is_integer(order) do
+    "egm96:#{degree}:#{order}"
+  end
+
+  defp force_token({:earth_phase_b, degree, order}) when is_integer(degree) and is_integer(order) do
+    "earth_phase_b:#{degree}:#{order}"
   end
 
   defp force_token(value), do: to_string(value)

@@ -5,6 +5,7 @@ defmodule Sidereon do
   """
 
   alias Sidereon.Format.TLE
+  alias Sidereon.Geodesic.GeodesicError
   alias Sidereon.GNSS.Constellation, as: GNSSConstellation
   alias Sidereon.GNSS.PrecisePositioning
   alias Sidereon.GNSS.RINEX.Clock
@@ -124,6 +125,28 @@ defmodule Sidereon do
   @spec moon_angle(vec3(), vec3()) :: float()
   defdelegate moon_angle(satellite_gcrs_position, moon_position_from_earth),
     to: Sidereon.Angles
+
+  @doc """
+  Solve the WGS84 inverse geodesic problem.
+
+  See `Sidereon.Geodesic.inverse/4` for details.
+  """
+  @spec geodesic_inverse(number(), number(), number(), number()) ::
+          {:ok, Sidereon.Geodesic.inverse_result()} | {:error, GeodesicError.t()}
+  defdelegate geodesic_inverse(lat1_deg, lon1_deg, lat2_deg, lon2_deg),
+    to: Sidereon.Geodesic,
+    as: :inverse
+
+  @doc """
+  Solve the WGS84 direct geodesic problem.
+
+  See `Sidereon.Geodesic.direct/4` for details.
+  """
+  @spec geodesic_direct(number(), number(), number(), number()) ::
+          {:ok, Sidereon.Geodesic.direct_result()} | {:error, GeodesicError.t()}
+  defdelegate geodesic_direct(lat1_deg, lon1_deg, azi1_deg, s12_m),
+    to: Sidereon.Geodesic,
+    as: :direct
 
   defdelegate find_tca_candidates(
                 primary_line1,
