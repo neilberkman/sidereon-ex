@@ -10,7 +10,7 @@
 use rustler::{Encoder, Env, Term};
 use sidereon_core::astro::constants::earth::{GM_EARTH_KM3_S2, J2_EARTH};
 use sidereon_core::astro::math::robust::HUBER_K;
-use sidereon_core::constants::{C_M_S, AU_KM, OMEGA_E_DOT_RAD_S, WGS84_A_KM, WGS84_E2, WGS84_F};
+use sidereon_core::constants::{AU_KM, C_M_S, OMEGA_E_DOT_RAD_S, WGS84_A_KM, WGS84_E2, WGS84_F};
 use sidereon_core::positioning::{
     SurfaceMet, DEFAULT_ROBUST_MAX_OUTER, DEFAULT_ROBUST_OUTER_TOL_M, DEFAULT_ROBUST_SCALE_FLOOR_M,
 };
@@ -64,7 +64,12 @@ fn core_defaults(env: Env<'_>) -> Term<'_> {
     );
 
     // Static-PPP convergence / iteration / integer defaults.
-    let m = put(env, m, "ppp_position_tol_m", ppp_defaults::POSITION_TOLERANCE_M);
+    let m = put(
+        env,
+        m,
+        "ppp_position_tol_m",
+        ppp_defaults::POSITION_TOLERANCE_M,
+    );
     let m = put(env, m, "ppp_clock_tol_m", ppp_defaults::CLOCK_TOLERANCE_M);
     let m = put(
         env,
@@ -73,7 +78,12 @@ fn core_defaults(env: Env<'_>) -> Term<'_> {
         ppp_defaults::AMBIGUITY_TOLERANCE_M,
     );
     let m = put(env, m, "ppp_ztd_tol_m", ppp_defaults::ZTD_TOLERANCE_M);
-    let m = put(env, m, "ppp_max_iterations", ppp_defaults::MAX_ITERATIONS as i64);
+    let m = put(
+        env,
+        m,
+        "ppp_max_iterations",
+        ppp_defaults::MAX_ITERATIONS as i64,
+    );
     let m = put(env, m, "ppp_ratio_threshold", ppp_defaults::RATIO_THRESHOLD);
 
     // Robust SPP IRLS defaults.

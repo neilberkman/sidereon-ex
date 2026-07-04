@@ -19,8 +19,8 @@ type Vec3 = (f64, f64, f64);
 /// Sub-solar point `{latitude_deg, longitude_deg}` for an Earth-fixed Sun vector.
 #[rustler::nif]
 fn observation_sub_solar_point(sun_ecef: Vec3) -> NifResult<(f64, f64)> {
-    let point = sub_solar_point([sun_ecef.0, sun_ecef.1, sun_ecef.2])
-        .map_err(errors::invalid_input)?;
+    let point =
+        sub_solar_point([sun_ecef.0, sun_ecef.1, sun_ecef.2]).map_err(errors::invalid_input)?;
     Ok((point.latitude_deg, point.longitude_deg))
 }
 

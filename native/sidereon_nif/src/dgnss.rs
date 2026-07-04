@@ -15,8 +15,8 @@ use sidereon_core::dgnss::{
     PositionSolution,
 };
 
-use crate::spp::{atom_from, build_solve_inputs, encode_solution_body, spp_error_term};
 use crate::sp3::Sp3Resource;
+use crate::spp::{atom_from, build_solve_inputs, encode_solution_body, spp_error_term};
 
 type Vec3 = (f64, f64, f64);
 

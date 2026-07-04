@@ -121,7 +121,10 @@ pub(crate) fn normal_covariance_impl(
     let Some(jac) = to_dmatrix(&jacobian) else {
         return Ok((atoms::error(), atoms::invalid_input()).encode(env));
     };
-    Ok(encode_covariance(env, normal_covariance(&jac, variance_scale)))
+    Ok(encode_covariance(
+        env,
+        normal_covariance(&jac, variance_scale),
+    ))
 }
 
 /// Trace of the Gauss-Newton Hessian approximation `J^T J` (sum of squared

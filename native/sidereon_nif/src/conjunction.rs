@@ -3,9 +3,9 @@ use sidereon_core::astro::conjunction::PcMethod;
 use sidereon_core::astro::sgp4::JulianDate;
 use sidereon_core::astro::tca::{
     find_tca_candidates_between_tles, find_tca_conjunctions_between_tles,
-    screen_tca_candidates_from_tle_catalog_parallel, screen_tca_conjunctions_from_tle_catalog_parallel,
-    TcaCandidate, TcaConjunction, TcaFinderOptions, TcaPcOptions, TcaScreeningConjunctionHit,
-    TcaScreeningHit, TcaTle, TcaWindow,
+    screen_tca_candidates_from_tle_catalog_parallel,
+    screen_tca_conjunctions_from_tle_catalog_parallel, TcaCandidate, TcaConjunction,
+    TcaFinderOptions, TcaPcOptions, TcaScreeningConjunctionHit, TcaScreeningHit, TcaTle, TcaWindow,
 };
 
 type Vec3 = (f64, f64, f64);
@@ -37,7 +37,12 @@ fn finder_options(coarse_step_seconds: f64, time_tolerance_seconds: f64) -> TcaF
     }
 }
 
-fn tca_window(start_whole: f64, start_fraction: f64, end_whole: f64, end_fraction: f64) -> TcaWindow {
+fn tca_window(
+    start_whole: f64,
+    start_fraction: f64,
+    end_whole: f64,
+    end_fraction: f64,
+) -> TcaWindow {
     TcaWindow::new(
         JulianDate(start_whole, start_fraction),
         JulianDate(end_whole, end_fraction),
@@ -77,7 +82,10 @@ fn pc_options(
     secondary_covariance_km2: Option<Vec<Vec<f64>>>,
 ) -> NifResult<TcaPcOptions> {
     let method = method_from_atom(method)?;
-    match (mat3(primary_covariance_km2)?, mat3(secondary_covariance_km2)?) {
+    match (
+        mat3(primary_covariance_km2)?,
+        mat3(secondary_covariance_km2)?,
+    ) {
         (Some(primary), Some(secondary)) => Ok(TcaPcOptions::with_covariances(
             hard_body_radius_km,
             method,
@@ -181,15 +189,14 @@ pub(crate) fn find_tca_conjunctions_impl<'a>(
         primary_covariance_km2,
         secondary_covariance_km2,
     )?;
-    let result =
-        find_tca_conjunctions_between_tles(primary, secondary, window, options, pc).map(
-            |conjunctions| {
-                conjunctions
-                    .into_iter()
-                    .map(conjunction_term)
-                    .collect::<Vec<_>>()
-            },
-        );
+    let result = find_tca_conjunctions_between_tles(primary, secondary, window, options, pc).map(
+        |conjunctions| {
+            conjunctions
+                .into_iter()
+                .map(conjunction_term)
+                .collect::<Vec<_>>()
+        },
+    );
     Ok(encode_result(env, result))
 }
 
@@ -227,9 +234,7 @@ pub(crate) fn screen_tca_candidates_impl<'a>(
                 |TcaScreeningHit {
                      secondary_index,
                      candidate,
-                 }| {
-                    (secondary_index as u64, candidate_term(candidate))
-                },
+                 }| { (secondary_index as u64, candidate_term(candidate)) },
             )
             .collect::<Vec<ScreeningHitTerm>>()
     });
@@ -281,9 +286,7 @@ pub(crate) fn screen_tca_conjunctions_impl<'a>(
                 |TcaScreeningConjunctionHit {
                      secondary_index,
                      conjunction,
-                 }| {
-                    (secondary_index as u64, conjunction_term(conjunction))
-                },
+                 }| { (secondary_index as u64, conjunction_term(conjunction)) },
             )
             .collect::<Vec<ScreeningConjunctionHitTerm>>()
     });

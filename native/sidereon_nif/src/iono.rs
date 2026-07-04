@@ -113,11 +113,7 @@ fn epoch_to_term(epoch: Instant) -> EpochTerm {
         .julian_date()
         .map(|jd| (jd.jd_whole, jd.fraction))
         .unwrap_or((0.0, 0.0));
-    (
-        epoch.scale.abbrev().to_string(),
-        jd_whole,
-        jd_fraction,
-    )
+    (epoch.scale.abbrev().to_string(), jd_whole, jd_fraction)
 }
 
 fn grid_samples_from_term(term: TecGridSamplesTerm) -> NifResult<TecGridSamples> {
@@ -450,15 +446,17 @@ fn ionex_from_node_samples<'a>(
         .into_iter()
         .map(tec_sample_from_term)
         .collect::<NifResult<Vec<_>>>()?;
-    Ok(match Ionex::from_node_samples(
-        samples,
-        shell_height_km,
-        base_radius_km,
-        checked_i32(exponent, "exponent")?,
-    ) {
-        Ok(ionex) => (atoms::ok(), ResourceArc::new(IonexResource { ionex })).encode(env),
-        Err(err) => (atoms::error(), tec_samples_error_atom(err)).encode(env),
-    })
+    Ok(
+        match Ionex::from_node_samples(
+            samples,
+            shell_height_km,
+            base_radius_km,
+            checked_i32(exponent, "exponent")?,
+        ) {
+            Ok(ionex) => (atoms::ok(), ResourceArc::new(IonexResource { ionex })).encode(env),
+            Err(err) => (atoms::error(), tec_samples_error_atom(err)).encode(env),
+        },
+    )
 }
 
 /// Extract a parsed or sample-built IONEX product as whole-grid TEC samples.

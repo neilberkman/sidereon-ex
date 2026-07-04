@@ -144,7 +144,11 @@ fn transit_term<'a>(env: Env<'a>, transit: MoonTransit) -> EventTerm<'a> {
         MoonTransitKind::Upper => atoms::upper().encode(env),
         MoonTransitKind::Lower => atoms::lower().encode(env),
     };
-    (transit.time.unix_microseconds(), kind, transit.elevation_deg)
+    (
+        transit.time.unix_microseconds(),
+        kind,
+        transit.elevation_deg,
+    )
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
