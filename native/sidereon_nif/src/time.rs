@@ -190,14 +190,7 @@ fn civil_second_of_day(hour: i32, minute: i32, second: f64) -> f64 {
 /// Fractional day-of-year for a civil instant. Delegates to
 /// [`civil::day_of_year`].
 #[rustler::nif]
-fn civil_day_of_year(
-    year: i32,
-    month: i32,
-    day: i32,
-    hour: i32,
-    minute: i32,
-    second: f64,
-) -> f64 {
+fn civil_day_of_year(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: f64) -> f64 {
     civil::day_of_year(year, month, day, hour, minute, second)
 }
 

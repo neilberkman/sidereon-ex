@@ -10,6 +10,10 @@ defmodule Sidereon.ClockStability do
 
   alias __MODULE__.Curve
   alias __MODULE__.Curves
+  alias __MODULE__.PowerLawNoiseFit
+  alias __MODULE__.PowerLawNoiseOptions
+  alias __MODULE__.PowerLawNoiseRegion
+  alias __MODULE__.PowerLawOctave
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.NIF
 
@@ -53,6 +57,109 @@ defmodule Sidereon.ClockStability do
           }
   end
 
+  defmodule PowerLawNoiseOptions do
+    @moduledoc """
+    Options for power-law clock-noise identification.
+    """
+
+    defstruct min_points_per_octave: 2,
+              slope_tolerance: 0.125,
+              scatter_tolerance: 0.125,
+              basic_tau_s: 1.0,
+              measurement_bandwidth_hz: 0.5
+
+    @type t :: %__MODULE__{
+            min_points_per_octave: pos_integer(),
+            slope_tolerance: float(),
+            scatter_tolerance: float(),
+            basic_tau_s: float(),
+            measurement_bandwidth_hz: float()
+          }
+  end
+
+  defmodule PowerLawOctave do
+    @moduledoc """
+    Per-octave power-law classification.
+    """
+
+    @enforce_keys [:tau_start_s, :tau_end_s, :point_count, :dominance]
+    defstruct [
+      :tau_start_s,
+      :tau_end_s,
+      :point_count,
+      :adev_slope,
+      :mdev_slope,
+      :slope_scatter,
+      :dominance,
+      :noise_type,
+      :flag
+    ]
+
+    @type dominance :: :dominant | :ambiguous | :flagged
+
+    @type t :: %__MODULE__{
+            tau_start_s: float(),
+            tau_end_s: float(),
+            point_count: non_neg_integer(),
+            adev_slope: float() | nil,
+            mdev_slope: float() | nil,
+            slope_scatter: float() | nil,
+            dominance: dominance(),
+            noise_type: atom() | nil,
+            flag: atom() | nil
+          }
+  end
+
+  defmodule PowerLawNoiseRegion do
+    @moduledoc """
+    Consecutive tau span used for one fitted power-law coefficient.
+    """
+
+    @enforce_keys [
+      :noise_type,
+      :tau_start_s,
+      :tau_end_s,
+      :octave_count,
+      :point_count,
+      :mean_slope,
+      :coefficient
+    ]
+    defstruct [
+      :noise_type,
+      :tau_start_s,
+      :tau_end_s,
+      :octave_count,
+      :point_count,
+      :mean_slope,
+      :coefficient
+    ]
+
+    @type t :: %__MODULE__{
+            noise_type: atom(),
+            tau_start_s: float(),
+            tau_end_s: float(),
+            octave_count: pos_integer(),
+            point_count: pos_integer(),
+            mean_slope: float(),
+            coefficient: float()
+          }
+  end
+
+  defmodule PowerLawNoiseFit do
+    @moduledoc """
+    Power-law clock-noise identification result.
+    """
+
+    @enforce_keys [:dominant_per_octave, :coefficients, :regions]
+    defstruct [:dominant_per_octave, :coefficients, :regions]
+
+    @type t :: %__MODULE__{
+            dominant_per_octave: [PowerLawOctave.t()],
+            coefficients: [float()],
+            regions: [PowerLawNoiseRegion.t()]
+          }
+  end
+
   @type series ::
           [number()]
           | {:phase_seconds, [number()]}
@@ -63,6 +170,8 @@ defmodule Sidereon.ClockStability do
   @type tau_grid :: :octave | :all | {:explicit, [pos_integer()]}
   @type gap_policy :: :reject | :omit_terms
   @type estimator :: :adev | :overlapping_adev | :mdev | :hdev | :tdev
+  @type power_law_noise_type ::
+          :random_walk_fm | :flicker_fm | :white_fm | :flicker_pm | :white_pm
   @type allan_error ::
           :empty_series
           | :invalid_tau0
@@ -74,6 +183,8 @@ defmodule Sidereon.ClockStability do
           | :gap
           | :non_finite_tau
           | :non_finite_deviation
+          | :invalid_options
+          | :invalid_curve
           | term()
 
   @doc """
@@ -171,6 +282,29 @@ defmodule Sidereon.ClockStability do
   @spec receiver_clock_phase_deviations(Observations.t()) :: [float() | nil]
   def receiver_clock_phase_deviations(%Observations{handle: handle}) do
     NIF.clock_receiver_phase_deviations(handle)
+  end
+
+  @doc """
+  Return the exact Allan-family log-log slope for a power-law noise type.
+  """
+  @spec power_law_slope(power_law_noise_type(), :adev | :overlapping_adev | :mdev) :: float()
+  def power_law_slope(noise_type, estimator \\ :adev) do
+    NIF.clock_power_law_slope(to_string(noise_type), to_string(estimator))
+  end
+
+  @doc """
+  Identify power-law clock noise from supplied ADEV and MDEV curves.
+  """
+  @spec fit_power_law_noise(Curve.t(), Curve.t(), keyword() | PowerLawNoiseOptions.t()) ::
+          {:ok, PowerLawNoiseFit.t()} | {:error, allan_error()}
+  def fit_power_law_noise(%Curve{} = adev, %Curve{} = mdev, opts \\ []) do
+    case NIF.clock_fit_power_law_noise(curve_to_nif(adev), curve_to_nif(mdev), power_law_options(opts)) do
+      {:ok, fit} -> {:ok, power_law_fit(fit)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
   end
 
   defp estimator(kind, series, tau0_s, averaging_factors) do
@@ -292,4 +426,65 @@ defmodule Sidereon.ClockStability do
 
   defp maybe_curve(nil), do: nil
   defp maybe_curve(raw), do: curve(raw)
+
+  defp power_law_options(%PowerLawNoiseOptions{} = opts), do: power_law_options(Map.from_struct(opts))
+
+  defp power_law_options(opts) when is_list(opts), do: opts |> Map.new() |> power_law_options()
+
+  defp power_law_options(opts) when is_map(opts) do
+    basic_tau_s = Map.get(opts, :basic_tau_s, 1.0) / 1.0
+
+    {
+      Map.get(opts, :min_points_per_octave, 2),
+      Map.get(opts, :slope_tolerance, 0.125) / 1.0,
+      Map.get(opts, :scatter_tolerance, 0.125) / 1.0,
+      basic_tau_s,
+      Map.get(opts, :measurement_bandwidth_hz, 0.5 / basic_tau_s) / 1.0
+    }
+  end
+
+  defp curve_to_nif(%Curve{} = curve) do
+    %{
+      tau_s: Enum.map(curve.tau_s, &(&1 / 1.0)),
+      deviation: Enum.map(curve.deviation, &(&1 / 1.0)),
+      n: curve.n
+    }
+  end
+
+  defp power_law_fit(value) do
+    %PowerLawNoiseFit{
+      dominant_per_octave: Enum.map(value.dominant_per_octave, &power_law_octave/1),
+      coefficients: value.coefficients,
+      regions: Enum.map(value.regions, &power_law_region/1)
+    }
+  end
+
+  defp power_law_octave(value) do
+    %PowerLawOctave{
+      tau_start_s: value.tau_start_s,
+      tau_end_s: value.tau_end_s,
+      point_count: value.point_count,
+      adev_slope: value.adev_slope,
+      mdev_slope: value.mdev_slope,
+      slope_scatter: value.slope_scatter,
+      dominance: String.to_atom(value.dominance),
+      noise_type: atom_or_nil(value.noise_type),
+      flag: atom_or_nil(value.flag)
+    }
+  end
+
+  defp power_law_region(value) do
+    %PowerLawNoiseRegion{
+      noise_type: String.to_atom(value.noise_type),
+      tau_start_s: value.tau_start_s,
+      tau_end_s: value.tau_end_s,
+      octave_count: value.octave_count,
+      point_count: value.point_count,
+      mean_slope: value.mean_slope,
+      coefficient: value.coefficient
+    }
+  end
+
+  defp atom_or_nil(nil), do: nil
+  defp atom_or_nil(value), do: String.to_atom(value)
 end

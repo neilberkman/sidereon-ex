@@ -7,10 +7,13 @@
 use crate::rinex_obs::RinexObsResource;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::clock_stability::{
-    allan_deviation, compute_allan_deviations, hadamard_deviation, modified_adev,
-    overlapping_adev, receiver_clock_phase_deviations, time_deviation, AllanDeviationCurves,
-    AllanError, AllanEstimator, AllanEstimatorSet, AllanInput, AllanOptions, AllanResult,
-    AllanSeries, GapPolicy, TauGrid,
+    allan_deviation, allan_deviation_power_law_slope, compute_allan_deviations,
+    fit_power_law_noise, hadamard_deviation, modified_adev,
+    modified_allan_deviation_power_law_slope, overlapping_adev, receiver_clock_phase_deviations,
+    time_deviation, AllanDeviationCurves, AllanError, AllanEstimator, AllanEstimatorSet,
+    AllanInput, AllanOptions, AllanResult, AllanSeries, GapPolicy, PowerLawNoiseError,
+    PowerLawNoiseFit, PowerLawNoiseOptions, PowerLawNoiseRegion, PowerLawNoiseType, PowerLawOctave,
+    PowerLawOctaveDominance, PowerLawOctaveFlag, TauGrid,
 };
 
 mod atoms {
@@ -26,7 +29,9 @@ mod atoms {
         non_finite_sample,
         gap,
         non_finite_tau,
-        non_finite_deviation
+        non_finite_deviation,
+        invalid_options,
+        invalid_curve
     }
 }
 
@@ -45,6 +50,39 @@ struct AllanCurvesTerm {
     hdev: Option<AllanResultTerm>,
     tdev: Option<AllanResultTerm>,
 }
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct PowerLawOctaveTerm {
+    tau_start_s: f64,
+    tau_end_s: f64,
+    point_count: i64,
+    adev_slope: Option<f64>,
+    mdev_slope: Option<f64>,
+    slope_scatter: Option<f64>,
+    dominance: String,
+    noise_type: Option<String>,
+    flag: Option<String>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct PowerLawRegionTerm {
+    noise_type: String,
+    tau_start_s: f64,
+    tau_end_s: f64,
+    octave_count: i64,
+    point_count: i64,
+    mean_slope: f64,
+    coefficient: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct PowerLawFitTerm {
+    dominant_per_octave: Vec<PowerLawOctaveTerm>,
+    coefficients: Vec<f64>,
+    regions: Vec<PowerLawRegionTerm>,
+}
+
+type PowerLawOptionsTerm = (usize, f64, f64, f64, f64);
 
 enum SeriesOwned {
     Values(Vec<f64>),
@@ -122,6 +160,17 @@ fn result_term(result: AllanResult) -> AllanResultTerm {
     }
 }
 
+fn result_from_term(term: AllanResultTerm) -> NifResult<AllanResult> {
+    if term.n.iter().any(|value| *value < 0) {
+        return Err(Error::Term(Box::new("negative Allan term count")));
+    }
+    Ok(AllanResult {
+        tau_s: term.tau_s,
+        deviation: term.deviation,
+        n: term.n.into_iter().map(|value| value as usize).collect(),
+    })
+}
+
 fn curves_term(curves: AllanDeviationCurves) -> AllanCurvesTerm {
     AllanCurvesTerm {
         adev: curves.adev.map(result_term),
@@ -155,6 +204,111 @@ fn estimator(kind: &str) -> NifResult<AllanEstimator> {
         "hdev" => Ok(AllanEstimator::Hdev),
         "tdev" => Ok(AllanEstimator::Tdev),
         _ => Err(Error::Term(Box::new("unknown Allan estimator"))),
+    }
+}
+
+fn noise_type(kind: &str) -> NifResult<PowerLawNoiseType> {
+    match kind {
+        "random_walk_fm" => Ok(PowerLawNoiseType::RandomWalkFM),
+        "flicker_fm" => Ok(PowerLawNoiseType::FlickerFM),
+        "white_fm" => Ok(PowerLawNoiseType::WhiteFM),
+        "flicker_pm" => Ok(PowerLawNoiseType::FlickerPM),
+        "white_pm" => Ok(PowerLawNoiseType::WhitePM),
+        _ => Err(Error::Term(Box::new("unknown power-law noise type"))),
+    }
+}
+
+fn noise_type_string(value: PowerLawNoiseType) -> String {
+    match value {
+        PowerLawNoiseType::RandomWalkFM => "random_walk_fm",
+        PowerLawNoiseType::FlickerFM => "flicker_fm",
+        PowerLawNoiseType::WhiteFM => "white_fm",
+        PowerLawNoiseType::FlickerPM => "flicker_pm",
+        PowerLawNoiseType::WhitePM => "white_pm",
+    }
+    .to_string()
+}
+
+fn flag_string(value: PowerLawOctaveFlag) -> String {
+    match value {
+        PowerLawOctaveFlag::UnderSampled => "under_sampled",
+        PowerLawOctaveFlag::DegenerateDeviation => "degenerate_deviation",
+        PowerLawOctaveFlag::MissingModifiedAllan => "missing_modified_allan",
+    }
+    .to_string()
+}
+
+fn power_law_options(
+    (
+        min_points_per_octave,
+        slope_tolerance,
+        scatter_tolerance,
+        basic_tau_s,
+        measurement_bandwidth_hz,
+    ): PowerLawOptionsTerm,
+) -> PowerLawNoiseOptions {
+    PowerLawNoiseOptions {
+        min_points_per_octave,
+        slope_tolerance,
+        scatter_tolerance,
+        basic_tau_s,
+        measurement_bandwidth_hz,
+    }
+}
+
+fn power_law_error_atom(error: PowerLawNoiseError) -> rustler::Atom {
+    match error {
+        PowerLawNoiseError::InvalidOptions { .. } => atoms::invalid_options(),
+        PowerLawNoiseError::InvalidCurve { .. } => atoms::invalid_curve(),
+    }
+}
+
+fn octave_term(value: PowerLawOctave) -> PowerLawOctaveTerm {
+    let (dominance, noise_type, flag) = match value.dominance {
+        PowerLawOctaveDominance::Dominant(noise_type) => (
+            "dominant".to_string(),
+            Some(noise_type_string(noise_type)),
+            None,
+        ),
+        PowerLawOctaveDominance::Ambiguous => ("ambiguous".to_string(), None, None),
+        PowerLawOctaveDominance::Flagged(flag) => {
+            ("flagged".to_string(), None, Some(flag_string(flag)))
+        }
+    };
+    PowerLawOctaveTerm {
+        tau_start_s: value.tau_start_s,
+        tau_end_s: value.tau_end_s,
+        point_count: value.point_count as i64,
+        adev_slope: value.adev_slope,
+        mdev_slope: value.mdev_slope,
+        slope_scatter: value.slope_scatter,
+        dominance,
+        noise_type,
+        flag,
+    }
+}
+
+fn region_term(value: PowerLawNoiseRegion) -> PowerLawRegionTerm {
+    PowerLawRegionTerm {
+        noise_type: noise_type_string(value.noise_type),
+        tau_start_s: value.tau_start_s,
+        tau_end_s: value.tau_end_s,
+        octave_count: value.octave_count as i64,
+        point_count: value.point_count as i64,
+        mean_slope: value.mean_slope,
+        coefficient: value.coefficient,
+    }
+}
+
+fn fit_term(value: PowerLawNoiseFit) -> PowerLawFitTerm {
+    PowerLawFitTerm {
+        dominant_per_octave: value
+            .dominant_per_octave
+            .into_iter()
+            .map(octave_term)
+            .collect(),
+        coefficients: value.coefficients.into_iter().collect(),
+        regions: value.regions.into_iter().map(region_term).collect(),
     }
 }
 
@@ -225,8 +379,35 @@ fn clock_compute_allan_deviations<'a>(
 
 /// Extract RINEX receiver-clock offsets as phase deviations in seconds.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn clock_receiver_phase_deviations(
-    handle: ResourceArc<RinexObsResource>,
-) -> Vec<Option<f64>> {
+fn clock_receiver_phase_deviations(handle: ResourceArc<RinexObsResource>) -> Vec<Option<f64>> {
     receiver_clock_phase_deviations(&handle.obs)
+}
+
+/// Return the exact log-log slope for a power-law noise type.
+#[rustler::nif]
+fn clock_power_law_slope(noise_type_kind: String, estimator_kind: String) -> NifResult<f64> {
+    let noise_type = noise_type(&noise_type_kind)?;
+    match estimator_kind.as_str() {
+        "adev" | "overlapping_adev" => Ok(allan_deviation_power_law_slope(noise_type)),
+        "mdev" => Ok(modified_allan_deviation_power_law_slope(noise_type)),
+        _ => Err(Error::Term(Box::new("unknown power-law slope estimator"))),
+    }
+}
+
+/// Identify power-law clock noise from supplied ADEV and MDEV curves.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn clock_fit_power_law_noise<'a>(
+    env: Env<'a>,
+    adev: AllanResultTerm,
+    mdev: AllanResultTerm,
+    opts: PowerLawOptionsTerm,
+) -> NifResult<Term<'a>> {
+    let adev = result_from_term(adev)?;
+    let mdev = result_from_term(mdev)?;
+    Ok(
+        match fit_power_law_noise(&adev, &mdev, power_law_options(opts)) {
+            Ok(fit) => (atoms::ok(), fit_term(fit)).encode(env),
+            Err(error) => (atoms::error(), power_law_error_atom(error)).encode(env),
+        },
+    )
 }

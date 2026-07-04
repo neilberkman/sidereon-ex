@@ -23,7 +23,9 @@ defmodule Sidereon.Propagator do
 
   ## Options
     * `:tolerance` - Integration tolerance (default: 1.0e-12)
-    * `:forces` - List of active force models: `["twobody", "j2"]` (default: `["twobody"]`)
+    * `:forces` - List of active force models: `[:twobody, :j2]`,
+      `[:composite, :j2_j6, :third_body, {:srp, cr, area_to_mass_m2_kg}, :relativity]`,
+      or `[:earth_phase_a]` (default: `[:twobody]`)
     * `:drag` - optional `%Sidereon.Drag.Parameters{}` drag model
     * `:space_weather_table` - optional `%Sidereon.SpaceWeather{}` used with `:drag`
     * `:epoch_tdb_seconds` - initial epoch for table-backed drag (default: 0.0)
@@ -31,7 +33,7 @@ defmodule Sidereon.Propagator do
   @spec propagate(state(), float(), keyword()) :: {:ok, state()} | {:error, any()}
   def propagate({r, v}, dt, opts \\ []) do
     tol = Keyword.get(opts, :tolerance, 1.0e-12)
-    forces = Keyword.get(opts, :forces, ["twobody"]) |> Enum.map(&to_string/1)
+    forces = Keyword.get(opts, :forces, [:twobody]) |> Enum.map(&force_token/1)
 
     case {Keyword.get(opts, :drag), Keyword.get(opts, :space_weather_table)} do
       {nil, nil} ->
@@ -97,7 +99,7 @@ defmodule Sidereon.Propagator do
       input_frame: frame(Keyword.get(opts, :input_frame, :inertial)),
       output_frame: frame(Keyword.get(opts, :output_frame, :inertial)),
       process_noise: process_noise(Keyword.get(opts, :process_noise, :none)),
-      forces: Keyword.get(opts, :forces, ["twobody"]) |> Enum.map(&to_string/1),
+      forces: Keyword.get(opts, :forces, [:twobody]) |> Enum.map(&force_token/1),
       integrator: Keyword.get(opts, :integrator, :dp54) |> to_string(),
       abs_tol: Keyword.get(opts, :abs_tol, tolerance) / 1.0,
       rel_tol: Keyword.get(opts, :rel_tol, tolerance) / 1.0,
@@ -133,6 +135,12 @@ defmodule Sidereon.Propagator do
   end
 
   defp process_noise(%{kind: _} = noise), do: noise
+
+  defp force_token({:srp, cr, area_to_mass_m2_kg}) when is_number(cr) and is_number(area_to_mass_m2_kg) do
+    "srp:#{cr / 1.0}:#{area_to_mass_m2_kg / 1.0}"
+  end
+
+  defp force_token(value), do: to_string(value)
 
   defp rows(matrix), do: Enum.map(matrix, fn row -> Enum.map(row, &(&1 / 1.0)) end)
   defp vec3({x, y, z}), do: {x / 1.0, y / 1.0, z / 1.0}

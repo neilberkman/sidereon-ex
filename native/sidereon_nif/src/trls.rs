@@ -16,10 +16,12 @@
 //! LAPACK/numpy BLAS and is only exercised by the Linux-x86_64 parity tests.
 
 use rustler::{Encoder, Env, Term};
+use trust_region_least_squares::batch::{
+    solve_data_problem_drop_one, solve_data_problem_drop_one_with,
+};
 use trust_region_least_squares::data::{
     solve_data_problem, solve_data_problem_with, BuiltinResidual, DataProblem,
 };
-use trust_region_least_squares::batch::{solve_data_problem_drop_one, solve_data_problem_drop_one_with};
 use trust_region_least_squares::hostlapack::LapackSvd;
 use trust_region_least_squares::loss::Loss;
 use trust_region_least_squares::trf::{ThinSvd, TrfError, TrfResult, XScale};
@@ -250,8 +252,23 @@ pub fn trls_solve<'a>(
     backend: String,
 ) -> Term<'a> {
     let problem = match build_problem(
-        kind, a, b, m, n, t, y, degree, x0, loss, f_scale, x_scale_kind, x_scale_values, max_nfev,
-        ftol, xtol, gtol,
+        kind,
+        a,
+        b,
+        m,
+        n,
+        t,
+        y,
+        degree,
+        x0,
+        loss,
+        f_scale,
+        x_scale_kind,
+        x_scale_values,
+        max_nfev,
+        ftol,
+        xtol,
+        gtol,
     ) {
         Ok(problem) => problem,
         Err(atom) => return (atoms::error(), atom).encode(env),
@@ -298,8 +315,23 @@ pub fn trls_solve_drop_one<'a>(
     backend: String,
 ) -> Term<'a> {
     let problem = match build_problem(
-        kind, a, b, m, n, t, y, degree, x0, loss, f_scale, x_scale_kind, x_scale_values, max_nfev,
-        ftol, xtol, gtol,
+        kind,
+        a,
+        b,
+        m,
+        n,
+        t,
+        y,
+        degree,
+        x0,
+        loss,
+        f_scale,
+        x_scale_kind,
+        x_scale_values,
+        max_nfev,
+        ftol,
+        xtol,
+        gtol,
     ) {
         Ok(problem) => problem,
         Err(atom) => return (atoms::error(), atom).encode(env),

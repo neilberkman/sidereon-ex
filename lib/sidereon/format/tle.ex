@@ -247,7 +247,10 @@ defmodule Sidereon.Format.TLE do
   end
 
   defp encode_with_nif(fields) do
-    {:ok, NIF.tle_encode(fields)}
+    case NIF.tle_encode(fields) do
+      {:ok, lines} -> {:ok, lines}
+      {:error, message} -> {:error, {:encode_error, message}}
+    end
   rescue
     e in ErlangError -> {:error, {:encode_error, Exception.message(e)}}
   end

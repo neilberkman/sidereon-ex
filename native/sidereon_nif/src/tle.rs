@@ -115,8 +115,11 @@ fn tle_parse<'a>(env: Env<'a>, line1: String, line2: String) -> Term<'a> {
 }
 
 #[rustler::nif]
-fn tle_encode(fields: TleFields) -> (String, String) {
-    tle::encode(&fields.into())
+fn tle_encode(env: Env, fields: TleFields) -> Term {
+    match tle::encode(&fields.into()) {
+        Ok(lines) => (atoms::ok(), lines).encode(env),
+        Err(e) => (atoms::error(), e.to_string()).encode(env),
+    }
 }
 
 /// Parse a CelesTrak/Space-Track multi-record TLE file.

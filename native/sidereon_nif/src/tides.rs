@@ -11,7 +11,9 @@ use rustler::{Error, NifResult, Term};
 
 use sidereon_core::astro::bodies::{sun_moon_ecef, sun_moon_eci_at};
 use sidereon_core::astro::time::scales::TimeScales;
-use sidereon_core::tides::{ocean_tide_loading, solid_earth_pole_tide, solid_earth_tide, OceanLoadingBlq};
+use sidereon_core::tides::{
+    ocean_tide_loading, solid_earth_pole_tide, solid_earth_tide, OceanLoadingBlq,
+};
 
 type DateTuple = (i32, i32, i32);
 type TimeTuple = (i32, i32, i32, i32);
@@ -38,13 +40,21 @@ pub(crate) fn sun_moon_ecef_impl(datetime_tuple: Term) -> NifResult<(Vec3, Vec3)
 }
 
 /// Batch geocentric Sun and Moon positions in ECI (m) for UTC Unix microseconds.
-pub(crate) fn sun_moon_eci_batch_impl(epochs_unix_us: Vec<i64>) -> NifResult<(Vec<Vec3>, Vec<Vec3>)> {
-    sun_moon_batch(epochs_unix_us, |ts| sun_moon_eci_at(ts).map_err(crate::errors::invalid_input))
+pub(crate) fn sun_moon_eci_batch_impl(
+    epochs_unix_us: Vec<i64>,
+) -> NifResult<(Vec<Vec3>, Vec<Vec3>)> {
+    sun_moon_batch(epochs_unix_us, |ts| {
+        sun_moon_eci_at(ts).map_err(crate::errors::invalid_input)
+    })
 }
 
 /// Batch geocentric Sun and Moon positions in ECEF (m) for UTC Unix microseconds.
-pub(crate) fn sun_moon_ecef_batch_impl(epochs_unix_us: Vec<i64>) -> NifResult<(Vec<Vec3>, Vec<Vec3>)> {
-    sun_moon_batch(epochs_unix_us, |ts| sun_moon_ecef(ts).map_err(crate::errors::invalid_input))
+pub(crate) fn sun_moon_ecef_batch_impl(
+    epochs_unix_us: Vec<i64>,
+) -> NifResult<(Vec<Vec3>, Vec<Vec3>)> {
+    sun_moon_batch(epochs_unix_us, |ts| {
+        sun_moon_ecef(ts).map_err(crate::errors::invalid_input)
+    })
 }
 
 fn sun_moon_batch<F>(epochs_unix_us: Vec<i64>, mut f: F) -> NifResult<(Vec<Vec3>, Vec<Vec3>)>

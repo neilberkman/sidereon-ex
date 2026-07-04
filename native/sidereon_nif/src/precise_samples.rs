@@ -41,7 +41,7 @@ type EpochTerm = (String, f64, f64);
 /// One sample as it crosses the boundary in both directions:
 /// `{system_letter, prn, epoch, position_ecef_m, clock_s, clock_event}`. The
 /// clock is `nil` when the sample carries no clock estimate.
-type SampleTerm = (String, u8, EpochTerm, Vec3, Option<f64>, bool);
+pub(crate) type SampleTerm = (String, u8, EpochTerm, Vec3, Option<f64>, bool);
 
 /// Resource handle holding a sample-built precise-ephemeris source across NIF
 /// calls. Read-only after construction, so it is shared (`ResourceArc`).
@@ -68,7 +68,7 @@ fn samples_error_atom(err: PreciseSamplesError) -> rustler::Atom {
 /// satellite token, time scale, or Julian-date split is raised as an
 /// `:invalid_input` term (rescued to `{:error, _}` on the Elixir side); the six
 /// structural validation failures are reported by `from_samples` instead.
-fn decode_sample(
+pub(crate) fn decode_sample(
     (letter, prn, (scale, jd_whole, jd_fraction), (x, y, z), clock_s, clock_event): SampleTerm,
 ) -> NifResult<PreciseEphemerisSample> {
     let system = system_from_letter(&letter)?;
@@ -98,7 +98,11 @@ fn sample_to_tuple(sample: &PreciseEphemerisSample) -> SampleTerm {
     (
         sample.sat.system.letter().to_string(),
         sample.sat.prn,
-        (sample.epoch.scale.abbrev().to_string(), jd_whole, jd_fraction),
+        (
+            sample.epoch.scale.abbrev().to_string(),
+            jd_whole,
+            jd_fraction,
+        ),
         (
             sample.position_ecef_m[0],
             sample.position_ecef_m[1],
@@ -123,9 +127,11 @@ pub fn precise_samples_from_samples(env: Env<'_>, samples: Vec<SampleTerm>) -> N
     }
 
     Ok(match PreciseEphemerisSamples::from_samples(built) {
-        Ok(source) => {
-            (atoms::ok(), ResourceArc::new(SampleSourceResource { source })).encode(env)
-        }
+        Ok(source) => (
+            atoms::ok(),
+            ResourceArc::new(SampleSourceResource { source }),
+        )
+            .encode(env),
         Err(err) => (atoms::error(), samples_error_atom(err)).encode(env),
     })
 }

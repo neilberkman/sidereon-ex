@@ -133,11 +133,9 @@ fn encode_spk_error(env: Env<'_>, error: SpkError) -> Term<'_> {
         SpkError::UnknownBody { body } => {
             (atoms::error(), (atoms::unknown_body(), body)).encode(env)
         }
-        SpkError::NoSegmentPath { target, center } => (
-            atoms::error(),
-            (atoms::no_segment_path(), target, center),
-        )
-            .encode(env),
+        SpkError::NoSegmentPath { target, center } => {
+            (atoms::error(), (atoms::no_segment_path(), target, center)).encode(env)
+        }
         other => (atoms::error(), other.to_string()).encode(env),
     }
 }

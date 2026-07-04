@@ -191,9 +191,52 @@ defmodule Sidereon.NIF do
 
   def clock_receiver_phase_deviations(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def clock_power_law_slope(_noise_type, _estimator), do: :erlang.nif_error(:nif_not_loaded)
+
+  def clock_fit_power_law_noise(_adev, _mdev, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sidereal_repeat_period(_system_letter), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sidereal_orbit_repeat_lag(_handle, _system_letter, _prn, _near_epoch_j2000_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sidereal_filter_series(_series, _period_s, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sidereal_periodicity_strength(_series, _candidate_periods_s, _sample_interval_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodetic_velocity_midas(_frame, _samples, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodetic_fit_trajectory(_frame, _samples, _model, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodetic_detect_steps(_frame, _samples, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodetic_network_field(_stations, _frame), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_from_enu_covariance(_covariance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_from_ecef_covariance(_covariance, _receiver), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_from_kinematic_solution(_position_m, _position_covariance_m2),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_sp3_precise_orbit(_handle, _system_letter, _prn, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_precise_ephemeris_sample_orbit(_samples, _system_letter, _prn, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def araim_lpv_200_allocation, do: :erlang.nif_error(:nif_not_loaded)
 
   def araim_solve(_rows, _receiver, _clock_systems, _constellations, _satellites, _allocation),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_default_options, do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_wtest_noncentrality(_alpha, _power), do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_design(_rows, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def reliability_araim(_rows, _receiver, _clock_systems, _constellations, _satellites, _options),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def rf_fspl(_distance_km, _frequency_mhz), do: :erlang.nif_error(:nif_not_loaded)
@@ -618,6 +661,28 @@ defmodule Sidereon.NIF do
         _max_pdop,
         _coarse_search_seeds,
         _glonass_channels
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_k_precision_approach, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_k_en_route_npa, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_airborne_aad_a, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_degradation_none, do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_protection_levels(_rows, _receiver, _clock_systems, _error_rows, _k),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_pl_error_model_from_store(
+        _store,
+        _geo_id,
+        _rows,
+        _receiver,
+        _clock_systems,
+        _airborne,
+        _epoch_j2000_s,
+        _degradation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_store_new, do: :erlang.nif_error(:nif_not_loaded)

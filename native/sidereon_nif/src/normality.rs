@@ -53,7 +53,12 @@ fn normality_moments(env: Env<'_>, x: Vec<f64>, fisher: bool, bias: bool) -> Ter
     match moments(&x, fisher, bias) {
         Ok(stats) => (
             atoms::ok(),
-            (stats.mean, stats.variance, stats.skewness, stats.kurtosis_excess),
+            (
+                stats.mean,
+                stats.variance,
+                stats.skewness,
+                stats.kurtosis_excess,
+            ),
         )
             .encode(env),
         Err(err) => (atoms::error(), error_atom(err)).encode(env),

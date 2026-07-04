@@ -2,12 +2,17 @@
 //! (pure-Rust port of Vallado SGP4, bit-exact to non-FMA Vallado at 0 ULP).
 
 use crate::errors;
+use rustler::Error;
 use rustler::{Encoder, Env, NifResult, Term};
-use sidereon_core::astro::forces::{DragParameters, SpaceWeatherSource};
+use sidereon_core::astro::forces::{
+    DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SpaceWeatherSource,
+    ThirdBodyGravity, ZonalCoefficients, ZonalDegrees, ZonalGravity,
+};
 use sidereon_core::astro::propagator::{
-    propagate_states, IntegratorOptions, PropagationConfig, PropagationForceModel,
+    ForceModelComponents, ForceModelKind, IntegratorKind, IntegratorOptions, StatePropagator,
 };
 use sidereon_core::astro::sgp4::{ElementSet, JulianDate, OpsMode, Satellite};
+use sidereon_core::astro::state::CartesianState;
 use sidereon_core::astro::time::civil;
 use sidereon_core::astro::tle::TleElements;
 
@@ -63,6 +68,131 @@ pub(crate) fn opsmode_from_term<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<O
     }
 }
 
+fn normalized_force_tokens(forces: &[String]) -> Vec<String> {
+    forces
+        .iter()
+        .map(|force| force.trim().to_ascii_lowercase())
+        .filter(|force| !force.is_empty())
+        .collect()
+}
+
+fn has_force(tokens: &[String], aliases: &[&str]) -> bool {
+    tokens
+        .iter()
+        .any(|force| aliases.iter().any(|alias| force == alias))
+}
+
+fn no_composite_perturbations(tokens: &[String]) -> bool {
+    tokens.iter().all(|force| {
+        matches!(
+            force.as_str(),
+            "twobody" | "two_body" | "two-body" | "j2" | "composite"
+        )
+    })
+}
+
+fn srp_from_tokens(tokens: &[String]) -> NifResult<Option<SolarRadiationPressure>> {
+    for token in tokens {
+        if let Some(rest) = token.strip_prefix("srp:") {
+            let fields: Vec<&str> = rest.split(':').collect();
+            if fields.len() != 2 {
+                return Err(Error::Term(Box::new(
+                    "srp token must be srp:cr:area_to_mass",
+                )));
+            }
+            let cr = fields[0]
+                .parse::<f64>()
+                .map_err(|_| Error::Term(Box::new("invalid srp cr")))?;
+            let area_to_mass = fields[1]
+                .parse::<f64>()
+                .map_err(|_| Error::Term(Box::new("invalid srp area_to_mass")))?;
+            return SolarRadiationPressure::new(cr, area_to_mass)
+                .map(Some)
+                .map_err(crate::errors::invalid_input);
+        }
+    }
+    Ok(None)
+}
+
+fn j2_only_zonal() -> ZonalGravity {
+    ZonalGravity::new(
+        sidereon_core::astro::constants::MU_EARTH,
+        sidereon_core::astro::constants::RE_EARTH,
+        ZonalDegrees::J2_ONLY,
+        ZonalCoefficients::default(),
+    )
+}
+
+/// Decode the binding's force-token list into the 0.15 force model selector.
+///
+/// Existing callers can keep passing `["twobody"]` or `["twobody", "j2"]`.
+/// New composable callers may pass aliases such as `:j2_j6`, `:third_body`,
+/// `:sun`, `:moon`, `{:srp, cr, area_to_mass_m2_kg}`, `:relativity`, and
+/// `:earth_phase_a` through the Elixir wrapper.
+pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
+    let tokens = normalized_force_tokens(forces);
+    let tokens = if tokens.is_empty() {
+        vec!["twobody".to_string()]
+    } else {
+        tokens
+    };
+    let srp = srp_from_tokens(&tokens)?;
+
+    if has_force(&tokens, &["earth_phase_a", "phase_a"]) {
+        return Ok(ForceModelKind::earth_phase_a(srp));
+    }
+
+    let wants_j2 = has_force(&tokens, &["j2"]);
+    let wants_full_zonal = has_force(
+        &tokens,
+        &["j2_j6", "j2-j6", "zonal", "zonal_j2_j6", "zonals"],
+    );
+    let wants_sun = has_force(&tokens, &["sun", "third_body_sun"]);
+    let wants_moon = has_force(&tokens, &["moon", "third_body_moon"]);
+    let wants_third_body = has_force(&tokens, &["third_body", "third-body", "sun_moon"]);
+    let wants_relativity = has_force(&tokens, &["relativity", "schwarzschild"]);
+    let wants_composite = has_force(&tokens, &["composite"])
+        || wants_full_zonal
+        || wants_sun
+        || wants_moon
+        || wants_third_body
+        || wants_relativity
+        || srp.is_some();
+
+    if wants_j2 && !wants_composite && no_composite_perturbations(&tokens) {
+        return Ok(ForceModelKind::two_body_j2());
+    }
+    if !wants_composite && !wants_j2 {
+        return Ok(ForceModelKind::two_body());
+    }
+
+    if wants_composite && wants_j2 && no_composite_perturbations(&tokens) {
+        return Ok(ForceModelKind::two_body_j2());
+    }
+
+    let mut components = ForceModelComponents::earth_two_body();
+    if wants_full_zonal {
+        components = components.with_zonal(ZonalGravity::earth_j2_through_j6());
+    } else if wants_j2 {
+        components = components.with_zonal(j2_only_zonal());
+    }
+    if wants_third_body || (wants_sun && wants_moon) {
+        components = components.with_third_body(ThirdBodyGravity::default());
+    } else if wants_sun {
+        components = components.with_third_body(ThirdBodyGravity::sun());
+    } else if wants_moon {
+        components = components.with_third_body(ThirdBodyGravity::moon());
+    }
+    if let Some(srp) = srp {
+        components = components.with_solar_radiation_pressure(srp);
+    }
+    if wants_relativity {
+        components = components.with_relativity(SchwarzschildRelativity::default());
+    }
+
+    Ok(ForceModelKind::composite(components))
+}
+
 pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResult<ElementSet> {
     // The Elixir side carries the SGP4 mean elements plus the full four-digit
     // epoch year and fractional day (it derives the year from its own datetime,
@@ -71,7 +201,9 @@ pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResul
     // `TleElements::to_element_set`, so build that public IR and convert through
     // the single canonical path.
     let elements = TleElements {
-        catalog_number: String::new(),
+        // The map path carries no catalog identity; "0" decodes to catalog 0,
+        // matching the pre-strict behavior for synthesized element sets.
+        catalog_number: "0".to_string(),
         classification: String::new(),
         international_designator: String::new(),
         epoch_year: get_map_val(env, tle_map, "epoch_year")?,
@@ -172,24 +304,25 @@ pub(crate) fn propagate_dp54_impl_with_drag(
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
-    let mut config = PropagationConfig::new(
-        0.0,
-        [position_km.0, position_km.1, position_km.2],
-        [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
-    );
-    config.force_model = if forces.iter().any(|f| f == "j2") {
-        PropagationForceModel::TwoBodyJ2
-    } else {
-        PropagationForceModel::TwoBody
-    };
-    config.options = IntegratorOptions {
+    let options = IntegratorOptions {
         abs_tol,
         rel_tol,
-        ..config.options
+        ..IntegratorOptions::default()
     };
-    config.drag = drag;
+    let propagator = StatePropagator {
+        initial: CartesianState::new(
+            0.0,
+            [position_km.0, position_km.1, position_km.2],
+            [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
+        ),
+        force_model: force_model_kind(&forces)?,
+        integrator: IntegratorKind::Dp54,
+        options,
+        drag,
+        space_weather: None,
+    };
 
-    match propagate_states(&config, &[dt_seconds]) {
+    match propagator.ephemeris(&[dt_seconds]) {
         Ok(states) => {
             let state = states[0];
             let pos = state.position_array();
@@ -221,26 +354,23 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
-    let mut config = PropagationConfig::new(
-        epoch_tdb_seconds,
-        [position_km.0, position_km.1, position_km.2],
-        [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
-    );
-    config.force_model = if forces.iter().any(|f| f == "j2") {
-        PropagationForceModel::TwoBodyJ2
-    } else {
-        PropagationForceModel::TwoBody
-    };
-    config.options = IntegratorOptions {
+    let options = IntegratorOptions {
         abs_tol,
         rel_tol,
-        ..config.options
+        ..IntegratorOptions::default()
     };
-    config.drag = Some(drag);
-
-    let propagator = config
-        .to_propagator()
-        .with_space_weather(SpaceWeatherSource::Table(table.table.clone()));
+    let propagator = StatePropagator {
+        initial: CartesianState::new(
+            epoch_tdb_seconds,
+            [position_km.0, position_km.1, position_km.2],
+            [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
+        ),
+        force_model: force_model_kind(&forces)?,
+        integrator: IntegratorKind::Dp54,
+        options,
+        drag: Some(drag),
+        space_weather: Some(SpaceWeatherSource::Table(table.table.clone())),
+    };
 
     match propagator.ephemeris(&[epoch_tdb_seconds + dt_seconds]) {
         Ok(states) => {
