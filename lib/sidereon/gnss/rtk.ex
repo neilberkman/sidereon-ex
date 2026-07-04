@@ -32,6 +32,7 @@ defmodule Sidereon.GNSS.RTK do
       iex> result.double_differences
       [%{satellite_id: "G02", reference_satellite_id: "G01", ambiguity_id: "G02", code_m: 15.0, phase_m: 17.0}]
   """
+  alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Antex
   alias Sidereon.GNSS.Core.AntennaTerms
   alias Sidereon.GNSS.Core.Observations
@@ -121,6 +122,7 @@ defmodule Sidereon.GNSS.RTK do
               code_rms_m: float(),
               phase_rms_m: float(),
               weighted_rms_m: float(),
+              geometry_quality: GeometryQuality.t(),
               n_epochs: pos_integer(),
               n_observations: pos_integer(),
               dropped_sats: [String.t()],
@@ -467,7 +469,8 @@ defmodule Sidereon.GNSS.RTK do
     * `:update_opts` - the per-epoch update controls (see `arc_update_opts`)
 
   Returns `{:ok, solution}` with `:references`, per-epoch `:epochs`, and the
-  carried `:final_state`, or `{:error, reason}`.
+  carried `:final_state`, or `{:error, reason}`. Each epoch map includes
+  `:geometry_quality`.
   """
   @spec solve_arc([map()], map()) :: {:ok, map()} | {:error, term()}
   def solve_arc(epochs, config) when is_list(epochs) and is_map(config) do
@@ -481,6 +484,8 @@ defmodule Sidereon.GNSS.RTK do
 
   @doc """
   Solve a static RTK arc with a typed core-style configuration map.
+
+  The returned map includes `:geometry_quality` for the static batch design.
   """
   @spec solve_static_arc([map()], map()) :: {:ok, map()} | {:error, term()}
   def solve_static_arc(epochs, config) when is_list(epochs) and is_map(config) do
@@ -494,6 +499,9 @@ defmodule Sidereon.GNSS.RTK do
 
   @doc """
   Fix wide-lane RTK arc ambiguities by delegating to the core arc helper.
+
+  The returned map includes `:geometry_quality` for the wide-lane ambiguity
+  design.
   """
   @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], map()) :: {:ok, map()} | {:error, term()}
   def fix_wide_lane_rtk_arc(epochs, config) when is_list(epochs) and is_map(config) do
@@ -580,7 +588,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_static_arc_solution(
          {references, ambiguity_ids, ambiguity_satellite_terms, float_term, fixed_term, dropped_sats, split_terms,
-          elevation_masked_sats}
+          elevation_masked_sats, geometry_quality}
        ) do
     %{
       references: Map.new(references),
@@ -590,7 +598,8 @@ defmodule Sidereon.GNSS.RTK do
       fixed_term: fixed_term,
       dropped_sats: dropped_sats,
       split_cycle_slip_arcs: Enum.map(split_terms, &decode_arc_split_cycle_slip_arc/1),
-      elevation_masked_sats: elevation_masked_sats
+      elevation_masked_sats: elevation_masked_sats,
+      geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
 
@@ -929,7 +938,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_arc_epoch_solution(
          {reported_baseline_m, float_baseline_m, integer_fixed, integer_ratio, newly_fixed, fixed_ids, sd_ambiguities_m,
-          fixed_double_difference_ids, used_satellite_ids, search, residuals, innovation_screen}
+          fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality, innovation_screen}
        ) do
     %{
       reported_baseline_m: reported_baseline_m,
@@ -943,6 +952,7 @@ defmodule Sidereon.GNSS.RTK do
       used_satellite_ids: used_satellite_ids,
       search: search,
       residuals: residuals,
+      geometry_quality: GeometryQuality.from_nif(geometry_quality),
       innovation_screen: rust_innovation_screen_meta(innovation_screen)
     }
   end
@@ -1272,7 +1282,7 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp decode_wide_lane_arc_solution(
-         {references, wide_lane_cycles, epoch_terms, dropped_sats, split_arc_terms},
+         {references, wide_lane_cycles, epoch_terms, dropped_sats, split_arc_terms, geometry_quality},
          input_epochs
        ) do
     %{
@@ -1280,7 +1290,8 @@ defmodule Sidereon.GNSS.RTK do
       wide_lane_cycles: Map.new(wide_lane_cycles),
       epochs: decode_dual_frequency_arc_epochs(input_epochs, epoch_terms),
       dropped_sats: dropped_sats,
-      split_arcs: decode_rtk_cycle_slip_split_arcs(input_epochs, split_arc_terms)
+      split_arcs: decode_rtk_cycle_slip_split_arcs(input_epochs, split_arc_terms),
+      geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
 
@@ -1475,7 +1486,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_rtk_float_solution(
          {baseline, ambiguities, covariance_m, covariance_inverse_m, residual_terms,
-          {iterations, converged?, status, code_rms_m, phase_rms_m, weighted_rms_m, n_observations}},
+          {iterations, converged?, status, code_rms_m, phase_rms_m, weighted_rms_m, n_observations, geometry_quality}},
          base,
          epochs,
          refs,
@@ -1524,6 +1535,7 @@ defmodule Sidereon.GNSS.RTK do
          code_rms_m: code_rms_m,
          phase_rms_m: phase_rms_m,
          weighted_rms_m: weighted_rms_m,
+         geometry_quality: GeometryQuality.from_nif(geometry_quality),
          n_epochs: length(epochs),
          n_observations: n_observations,
          dropped_sats:

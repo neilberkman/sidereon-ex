@@ -1,6 +1,7 @@
 defmodule Sidereon.GNSS.PositioningTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Geometry
   alias Sidereon.GNSS.Observables
@@ -89,6 +90,29 @@ defmodule Sidereon.GNSS.PositioningTest do
       # known status.
       assert sol.metadata.status == :step_tolerance
       assert sol.metadata.iterations == 7
+    end
+
+    test "surfaces nominal geometry quality for the trace fixture", ctx do
+      assert {:ok, %Solution{} = sol} =
+               Positioning.solve(ctx.sp3, ctx.observations, @epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: ctx.alpha,
+                 klobuchar_beta: ctx.beta,
+                 pressure_hpa: ctx.pressure_hpa,
+                 temperature_k: ctx.temperature_k,
+                 relative_humidity: ctx.relative_humidity,
+                 initial_guess: ctx.initial_guess
+               )
+
+      assert %GeometryQuality{
+               tier: :nominal,
+               raim_checkable: true,
+               covariance_validated: true
+             } = sol.metadata.geometry_quality
+
+      assert sol.metadata.geometry_quality.redundancy == sol.metadata.redundancy
+      assert sol.metadata.geometry_quality.gdop == sol.dop.gdop
     end
 
     test "matches the crate's independent-solve reference byte-for-byte", ctx do
@@ -229,7 +253,7 @@ defmodule Sidereon.GNSS.PositioningTest do
       epoch = ~N[2020-06-24 00:03:20]
 
       assert Positioning.solve(sp3, observations, epoch, initial_guess: {6_378_137.0, 0.0, 0.0, 0.0}) ==
-               {:error, {:degenerate_geometry, :rank_deficient}}
+               {:error, :singular_geometry}
     end
   end
 

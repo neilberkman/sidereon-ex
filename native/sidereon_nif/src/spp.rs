@@ -33,6 +33,7 @@ use sidereon_core::{
 };
 
 use crate::broadcast::BroadcastResource;
+use crate::geometry_quality::geometry_quality_to_term;
 use crate::staleness::{metadata_term, selection_error_term};
 use rustler::types::atom;
 use rustler::types::tuple::make_tuple;
@@ -232,7 +233,8 @@ pub(crate) fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///   outer_iterations,                    # Huber/IRLS outer reweighting count (0 off)
 ///   final_robust_scale_m | nil,
 ///   used_count, ["G", ...], redundancy,
-///   raim_checkable},                     # core-computed integrity metadata
+///   raim_checkable,
+///   geometry_quality},                   # observability diagnostics
 ///  [{"G", clock_s}, {"E", clock_s}],     # per-system receiver clocks, seconds
 ///  [{"G", tdop}, {"E", tdop}]}           # per-system TDOP, ascending system order
 /// ```
@@ -315,6 +317,7 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             systems.encode(env),
             (sol.metadata.redundancy as i64).encode(env),
             sol.metadata.raim_checkable.encode(env),
+            geometry_quality_to_term(env, sol.geometry_quality),
         ],
     );
 

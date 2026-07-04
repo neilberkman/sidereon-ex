@@ -4,12 +4,13 @@
 //! `sidereon-core::source_localization`. This module only decodes Elixir terms
 //! and encodes core result structs.
 
+use crate::geometry_quality::geometry_quality_to_term;
 use rustler::{Encoder, Env, Term};
 use sidereon_core::dop::{Dop, DopError};
 use sidereon_core::source_localization::{
     chan_ho_initial_guess, locate_source, source_crlb, source_dop, Loss, Sensor, SourceCovariance,
-    SourceCrlb, SourceGeometryQuality, SourceInitialGuess, SourceLocalizationError,
-    SourceLocateOptions, SourceResidual, SourceSensorInfluence, SourceSolution, SourceSolveMode,
+    SourceCrlb, SourceInitialGuess, SourceLocalizationError, SourceLocateOptions, SourceResidual,
+    SourceSensorInfluence, SourceSolution, SourceSolveMode,
 };
 
 type SensorTerm = (Vec<f64>, Option<f64>);
@@ -22,16 +23,15 @@ type DopTerm = (f64, f64, f64, f64, f64);
 type CovarianceTerm = (Vec<Vec<f64>>, Vec<Vec<f64>>, Option<f64>, f64);
 type ResidualTerm = (usize, Option<usize>, f64);
 type InfluenceTerm = (usize, f64, Option<f64>, Option<f64>, Option<f64>, f64, f64);
-type GeometryQualityTerm = (usize, usize, usize, bool, bool);
 type InitialGuessTerm = (Vec<f64>, Option<f64>, f64);
-type SolutionTerm = (
+type SolutionTerm<'a> = (
     (
         Vec<f64>,
         Option<f64>,
         Option<CovarianceTerm>,
         Vec<ResidualTerm>,
         Vec<InfluenceTerm>,
-        GeometryQualityTerm,
+        Term<'a>,
         InitialGuessTerm,
     ),
     (i32, usize, usize, f64, f64),
@@ -69,7 +69,7 @@ pub fn source_localization_locate<'a>(
             propagation_speed_m_s,
             &options,
         )
-        .map(solution_to_term),
+        .map(|solution| solution_to_term(env, solution)),
         Err(error) => Err(error),
     };
     encode_result(env, result)
@@ -187,7 +187,7 @@ fn decode_loss(loss: &str) -> Result<Loss, SourceLocalizationError> {
     }
 }
 
-fn solution_to_term(solution: SourceSolution) -> SolutionTerm {
+fn solution_to_term<'a>(env: Env<'a>, solution: SourceSolution) -> SolutionTerm<'a> {
     (
         (
             solution.position_m,
@@ -203,7 +203,7 @@ fn solution_to_term(solution: SourceSolution) -> SolutionTerm {
                 .into_iter()
                 .map(influence_to_term)
                 .collect(),
-            geometry_quality_to_term(solution.geometry_quality),
+            geometry_quality_to_term(env, solution.geometry_quality),
             initial_guess_to_term(solution.initial_guess),
         ),
         (
@@ -246,16 +246,6 @@ fn influence_to_term(influence: SourceSensorInfluence) -> InfluenceTerm {
         influence.origin_time_delta_s,
         influence.loss_weight,
         influence.score,
-    )
-}
-
-fn geometry_quality_to_term(quality: SourceGeometryQuality) -> GeometryQualityTerm {
-    (
-        quality.residual_count,
-        quality.parameter_count,
-        quality.redundancy,
-        quality.covariance_available,
-        quality.rank_deficient,
     )
 }
 

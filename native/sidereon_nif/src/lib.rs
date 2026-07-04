@@ -30,6 +30,7 @@ mod frequencies;
 mod gauss;
 mod geoid;
 mod geometry;
+mod geometry_quality;
 mod ils;
 mod iod;
 mod iono;

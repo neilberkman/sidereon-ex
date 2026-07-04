@@ -49,6 +49,7 @@ defmodule Sidereon.GNSS.Positioning do
   """
 
   alias Sidereon.Constants
+  alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.QC
@@ -84,7 +85,9 @@ defmodule Sidereon.GNSS.Positioning do
     `:low_elevation`). `metadata` reports solver iterations, convergence, the
     corrections applied, and the geometry redundancy: `used_count`, the distinct
     `systems`, the `redundancy` (degrees of freedom, `used_count - (3 + systems)`),
-    and `raim_checkable?` (`redundancy >= 1`). An exactly determined fix has
+    `raim_checkable?` (`redundancy >= 1`), and `geometry_quality` with the
+    core observability tier, rank, condition number, GDOP, RAIM checkability, and
+    covariance-validation flag. An exactly determined fix has
     `redundancy < 1`, forcing the residuals near zero and leaving the fix
     unverifiable by RAIM. When the opt-in `:huber` reweighting runs, `metadata`
     also carries `:huber` with the `outer_iterations` count and the
@@ -135,6 +138,7 @@ defmodule Sidereon.GNSS.Positioning do
             :systems => [String.t()],
             :redundancy => integer(),
             :raim_checkable? => boolean(),
+            :geometry_quality => GeometryQuality.t(),
             optional(:fde) => %{
               excluded: [{String.t(), :raim_excluded}],
               iterations: non_neg_integer()

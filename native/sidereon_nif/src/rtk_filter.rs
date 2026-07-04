@@ -5,6 +5,7 @@
 //! are plain tuples/lists so parity tests can feed the exact epoch/state stream
 //! into Rust without introducing a second Elixir struct layer.
 
+use crate::geometry_quality::geometry_quality_to_term;
 use rustler::types::tuple::make_tuple;
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::carrier_phase::{SlipReason, FREQ_EPSILON_HZ};
@@ -501,6 +502,7 @@ fn encode_float_solution<'a>(env: Env<'a>, solution: FloatBaselineSolution) -> T
             solution.phase_rms_m.encode(env),
             solution.weighted_rms_m.encode(env),
             (solution.n_observations as u64).encode(env),
+            geometry_quality_to_term(env, solution.geometry_quality),
         ],
     );
 
@@ -1717,6 +1719,7 @@ fn encode_static_arc_solution<'a>(env: Env<'a>, solution: RtkStaticArcSolution) 
             solution.dropped_sats.encode(env),
             encode_arc_split_cycle_slip_arcs(solution.split_cycle_slip_arcs).encode(env),
             solution.elevation_masked_sats.encode(env),
+            geometry_quality_to_term(env, solution.geometry_quality),
         ],
     )
 }
@@ -1832,6 +1835,7 @@ fn encode_wide_lane_arc_solution<'a>(env: Env<'a>, solution: RtkWideLaneArcSolut
             encode_dual_frequency_arc_epochs(env, solution.epochs).encode(env),
             solution.dropped_sats.encode(env),
             encode_arc_split_cycle_slip_arcs(solution.split_cycle_slip_arcs).encode(env),
+            geometry_quality_to_term(env, solution.geometry_quality),
         ],
     )
 }
@@ -2396,6 +2400,7 @@ fn encode_arc_epoch_solution<'a>(env: Env<'a>, epoch: RtkArcEpochSolution) -> Te
                 .map(|meta| encode_integer_search_meta(env, meta))
                 .encode(env),
             encode_residuals(env, epoch.residuals).encode(env),
+            geometry_quality_to_term(env, epoch.geometry_quality),
             epoch
                 .innovation_screen
                 .map(encode_innovation_screen)

@@ -522,9 +522,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "733be1cf0ba3774ecd590b8eb97ef0946393fcf36714b9946693592304a6dcc4"
+checksum = "372b894c8b7522d4fa6c5d67cfc11b290baf7b1e98fd707afb0e183af831f797"
 dependencies = [
  "flate2",
  "sidereon-core",
@@ -532,9 +532,9 @@ dependencies = [
 
 [[package]]
 name = "sidereon-core"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a691fe4f9e1e26fd6f28a22a1070d79933aa16d98ee67d8e3bbd5da7469b0fe6"
+checksum = "a5c9fa4f9a1ea4534bf3a2b8788e07d0f0bf884445dd13a58c3a53f84968a14c"
 dependencies = [
  "cc",
  "libm",

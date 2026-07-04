@@ -10,7 +10,8 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
   fix). This module is a thin primitive over
   `sidereon_core::rtk_filter::moving_baseline`: it marshals already-prepared
   double-difference epochs into the core solvers and decodes the per-epoch
-  baseline, its length, and the integer-fix verdict.
+  baseline, its length, the integer-fix verdict, and float-solve geometry
+  diagnostics.
 
   This is a traceable primitive, not the high-level `Sidereon.GNSS.RTK` API: the
   caller supplies the reference/non-reference satellite measurements and the
@@ -54,6 +55,7 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
       }
   """
 
+  alias Sidereon.GeometryQuality
   alias Sidereon.NIF
 
   @type vec3 :: {number(), number(), number()}
@@ -184,7 +186,7 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
 
   defp decode_float(
          {baseline, ambiguities_m, _cov, _cov_inv, _residuals,
-          {iterations, converged?, status, code_rms_m, phase_rms_m, weighted_rms_m, n_observations}}
+          {iterations, converged?, status, code_rms_m, phase_rms_m, weighted_rms_m, n_observations, geometry_quality}}
        ) do
     %{
       baseline_m: baseline,
@@ -195,7 +197,8 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
       code_rms_m: code_rms_m,
       phase_rms_m: phase_rms_m,
       weighted_rms_m: weighted_rms_m,
-      n_observations: n_observations
+      n_observations: n_observations,
+      geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
 
