@@ -15,7 +15,7 @@ defmodule SidereonBuild012BindingsTest do
   # - Clock-stability constants are the closed-form IEEE-1139 second-difference
   #   values for the quadratic phase series below, using the core formulas.
   @dted_root Path.join(__DIR__, "fixtures/dted/tiles")
-  @core_dted_root "/Users/neil/xuku/sidereon/crates/sidereon-core/tests/fixtures/dted/tiles"
+  @core_dted_root Path.join(__DIR__, "fixtures/dted/tiles")
   @ionex_path Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
   @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.rnx")
   @gps_l1_hz 1_575_420_000.0
