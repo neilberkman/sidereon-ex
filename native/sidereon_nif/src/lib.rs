@@ -1,5 +1,6 @@
 mod angles;
 mod antex;
+mod araim;
 mod astro_observe_almanac;
 mod astro_phase_b;
 mod atmosphere;
@@ -9,6 +10,7 @@ mod broadcast;
 mod broadcast_comparison;
 mod carrier_phase;
 mod cdm;
+mod clock_stability;
 mod collision;
 mod conjunction;
 mod constellation;

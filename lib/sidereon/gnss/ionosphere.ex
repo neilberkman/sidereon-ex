@@ -27,6 +27,7 @@ defmodule Sidereon.GNSS.Ionosphere do
   clockwise from north.
   """
 
+  alias Sidereon.GNSS.Ionosphere.{TecGridSamples, TecSample}
   alias Sidereon.NIF
 
   @doc """
@@ -252,6 +253,76 @@ defmodule Sidereon.GNSS.Ionosphere do
   end
 
   @doc """
+  Build an IONEX product directly from whole-grid TEC samples.
+
+  Axes are degrees, shell and base radii are kilometers, and TEC/RMS grids are
+  TECU. The returned handle is accepted anywhere a parsed IONEX handle is
+  accepted, including `ionex_slant_delay/7`.
+  """
+  @spec from_samples(TecGridSamples.t()) :: {:ok, reference()} | {:error, term()}
+  def from_samples(%TecGridSamples{} = samples) do
+    with {:ok, term} <- TecGridSamples.to_nif_map(samples) do
+      case NIF.ionex_from_samples(term) do
+        {:ok, handle} when is_reference(handle) -> {:ok, handle}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Build an IONEX product from one sample per TEC grid node.
+
+  `shell_height_km` and `base_radius_km` are kilometers. Each
+  `Sidereon.GNSS.Ionosphere.TecSample` carries latitude/longitude in degrees
+  and vertical TEC/RMS in TECU.
+  """
+  @spec from_node_samples([TecSample.t()], number(), number(), integer()) :: {:ok, reference()} | {:error, term()}
+  def from_node_samples(samples, shell_height_km, base_radius_km, exponent) when is_list(samples) do
+    with {:ok, tuples} <- tec_sample_terms(samples) do
+      case NIF.ionex_from_node_samples(tuples, shell_height_km / 1.0, base_radius_km / 1.0, exponent) do
+        {:ok, handle} when is_reference(handle) -> {:ok, handle}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Extract an IONEX handle as whole-grid TEC samples.
+
+  This is the inverse IR for `from_samples/1`. Axes are degrees, shell and base
+  radii are kilometers, and TEC/RMS grids are TECU.
+  """
+  @spec tec_grid_samples(reference()) :: TecGridSamples.t() | {:error, term()}
+  def tec_grid_samples(handle) when is_reference(handle) do
+    handle
+    |> NIF.ionex_tec_grid_samples()
+    |> TecGridSamples.from_nif_map()
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Extract an IONEX handle as one TEC sample per grid node.
+
+  Each returned sample has latitude/longitude in degrees and vertical TEC/RMS in
+  TECU.
+  """
+  @spec tec_samples(reference()) :: [TecSample.t()] | {:error, term()}
+  def tec_samples(handle) when is_reference(handle) do
+    handle
+    |> NIF.ionex_tec_samples()
+    |> Enum.map(&TecSample.from_nif_tuple/1)
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   IONEX vertical-TEC-grid slant ionospheric group delay, scaled to `frequency_hz`.
 
   `handle` is a parsed-IONEX reference from `parse_ionex/1` or `load_ionex/1`.
@@ -332,4 +403,18 @@ defmodule Sidereon.GNSS.Ionosphere do
   defp four_tuple({a, b, c, d}), do: {:ok, {a / 1.0, b / 1.0, c / 1.0, d / 1.0}}
   defp four_tuple([a, b, c, d]), do: {:ok, {a / 1.0, b / 1.0, c / 1.0, d / 1.0}}
   defp four_tuple(_other), do: {:error, :bad_coefficients}
+
+  defp tec_sample_terms(samples) do
+    samples
+    |> Enum.reduce_while({:ok, []}, fn sample, {:ok, acc} ->
+      case TecSample.to_nif_tuple(sample) do
+        {:ok, tuple} -> {:cont, {:ok, [tuple | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, tuples} -> {:ok, Enum.reverse(tuples)}
+      {:error, _} = err -> err
+    end
+  end
 end

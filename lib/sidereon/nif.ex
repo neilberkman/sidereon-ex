@@ -176,6 +176,26 @@ defmodule Sidereon.NIF do
 
   def angles_beta_angle_from_state(_r, _v, _sun), do: :erlang.nif_error(:nif_not_loaded)
 
+  def clock_allan_estimator(_estimator, _series_kind, _samples, _tau0_s, _averaging_factors),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def clock_compute_allan_deviations(
+        _series_kind,
+        _samples,
+        _tau0_s,
+        _estimators,
+        _tau_grid_kind,
+        _tau_grid_factors,
+        _gap_policy_kind
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def clock_receiver_phase_deviations(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def araim_lpv_200_allocation, do: :erlang.nif_error(:nif_not_loaded)
+
+  def araim_solve(_rows, _receiver, _clock_systems, _constellations, _satellites, _allocation),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def rf_fspl(_distance_km, _frequency_mhz), do: :erlang.nif_error(:nif_not_loaded)
 
   def rf_fspl_batch(_distances_km, _frequency_mhz), do: :erlang.nif_error(:nif_not_loaded)
@@ -1230,6 +1250,15 @@ defmodule Sidereon.NIF do
 
   def ionex_to_string(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def ionex_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_from_node_samples(_samples, _shell_height_km, _base_radius_km, _exponent),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_tec_grid_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_tec_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def ionex_slant(_handle, _lat_rad, _lon_rad, _elevation_rad, _azimuth_rad, _epoch_j2000_s, _frequency_hz),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1508,6 +1537,8 @@ defmodule Sidereon.NIF do
 
   def terrain_dted_height(_handle, _longitude_deg, _latitude_deg, _interpolation),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_dted_height_batch(_handle, _points, _interpolation), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_dted_tile_load(_path), do: :erlang.nif_error(:nif_not_loaded)
 
