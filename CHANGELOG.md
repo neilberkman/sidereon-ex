@@ -6,6 +6,68 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0]
+
+### Added
+
+- Position error metrics: CEP, R95/R99, drms/2drms, SEP, VEP, and the 1-sigma
+  error ellipse from any solution covariance, with exact elliptical percentile
+  radii and typed errors for non-positive-semidefinite input
+  (`Sidereon.ErrorMetrics`).
+- Classical reliability: per-observation minimal detectable bias and
+  internal/external reliability over the shared ARAIM gain matrix, with
+  zero-redundancy observations reported uncheckable (`Sidereon.Reliability`).
+- SBAS protection levels per DO-229 with the MOPS tables frozen bit-exact
+  (`Sidereon.GNSS.SBAS`).
+- Composable perturbation forces for numerical propagation: zonal harmonics
+  through J6, Sun/Moon third-body, solar radiation pressure, and the
+  relativistic correction (`Sidereon.Propagator`).
+- Batch least-squares orbit fitting against precise ephemerides with a
+  per-satellite RTN residual ledger (`Sidereon.OrbitDetermination`).
+- Power-law clock-noise identification per IEEE 1139 over the Allan-family
+  deviations (`Sidereon.ClockStability`).
+- Robust geodetic time series: MIDAS velocity, trajectory fitting, step
+  detection, and network motion fields (`Sidereon.GeodeticTimeSeries`).
+- Sidereal filtering with per-satellite orbit repeat lag and coverage-aware
+  templates (`Sidereon.Sidereal`).
+- Alpha-5 TLE catalog numbers and CelesTrak GP ingest in the core TLE/OMM
+  path.
+
+### Changed
+
+- `Sidereon.Format.TLE.encode/1` surfaces catalog numbers beyond the TLE range
+  as a typed error instead of raising.
+
+## [0.14.0]
+
+### Added
+
+- Weak-geometry observability classification (`GeometryQuality`: rank,
+  redundancy, conditioning, covariance-validated flags) on every solution.
+
+## [0.13.0]
+
+### Added
+
+- Batched multi-satellite state interpolation, source localization (ToA/TDOA),
+  and estimation/detection primitives (scalar Kalman, alpha-beta, NIS, MAD,
+  CFAR).
+
+## [0.12.0]
+
+### Added
+
+- Allan-family clock stability, ARAIM protection levels, sample-backed IONEX,
+  batch terrain probes, the memory-mappable terrain store, SBAS decode
+  extensions, and angular-separation utilities.
+
+## [0.11.0] and [0.11.1]
+
+### Added
+
+- RINEX observation quality control, NTRIP client handling, NMEA 0183, and the
+  geoid/vertical-datum surface.
+
 ## [0.10.1]
 
 ### Fixed

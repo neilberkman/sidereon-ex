@@ -201,7 +201,9 @@ pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResul
     // `TleElements::to_element_set`, so build that public IR and convert through
     // the single canonical path.
     let elements = TleElements {
-        catalog_number: String::new(),
+        // The map path carries no catalog identity; "0" decodes to catalog 0,
+        // matching the pre-strict behavior for synthesized element sets.
+        catalog_number: "0".to_string(),
         classification: String::new(),
         international_designator: String::new(),
         epoch_year: get_map_val(env, tle_map, "epoch_year")?,
