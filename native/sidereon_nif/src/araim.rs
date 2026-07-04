@@ -15,10 +15,10 @@ use sidereon_core::{GnssSatelliteId, GnssSystem, Wgs84Geodetic};
 type Vec3 = (f64, f64, f64);
 type RowTerm = (String, Vec3, String, f64);
 type ReceiverTerm = (f64, f64, f64);
-type SatModelTerm = (f64, f64, f64, f64);
+type SatModelTerm = (f64, f64, Option<f64>, Option<f64>, f64, f64);
 type ConstellationTerm = (String, f64, SatModelTerm);
-type SatelliteTerm = (String, f64, f64, f64, f64);
-type AllocationTerm = (f64, f64, f64, f64, f64, f64, usize);
+type SatelliteTerm = (String, f64, f64, Option<f64>, Option<f64>, f64, f64);
+type AllocationTerm = (f64, f64, f64, f64, f64, f64, (f64, usize));
 
 mod atoms {
     rustler::atoms! {
@@ -88,8 +88,35 @@ fn decode_receiver((lat_rad, lon_rad, height_m): ReceiverTerm) -> NifResult<Wgs8
     Wgs84Geodetic::new(lat_rad, lon_rad, height_m).map_err(crate::errors::invalid_input)
 }
 
-fn decode_model((sigma_ura_m, sigma_ure_m, b_nom_m, p_sat): SatModelTerm) -> SatelliteIsmModel {
-    SatelliteIsmModel::new(sigma_ura_m, sigma_ure_m, b_nom_m, p_sat)
+fn decode_model(
+    (
+        sigma_ura_m,
+        sigma_ure_m,
+        effective_sigma_int_m,
+        effective_sigma_acc_m,
+        b_nom_m,
+        p_sat,
+    ): SatModelTerm,
+) -> NifResult<SatelliteIsmModel> {
+    match (effective_sigma_int_m, effective_sigma_acc_m) {
+        (Some(sigma_int), Some(sigma_acc)) => Ok(SatelliteIsmModel::new_with_effective_sigmas(
+            sigma_ura_m,
+            sigma_ure_m,
+            b_nom_m,
+            p_sat,
+            sigma_int,
+            sigma_acc,
+        )),
+        (None, None) => Ok(SatelliteIsmModel::new(
+            sigma_ura_m,
+            sigma_ure_m,
+            b_nom_m,
+            p_sat,
+        )),
+        _ => Err(Error::Term(Box::new(
+            "effective ARAIM sigmas must be supplied as a pair",
+        ))),
+    }
 }
 
 fn decode_constellation(
@@ -98,20 +125,43 @@ fn decode_constellation(
     Ok(ConstellationIsm::new(
         system_from_term(&system)?,
         p_const,
-        decode_model(default_sat),
+        decode_model(default_sat)?,
     ))
 }
 
 fn decode_satellite(
-    (id, sigma_ura_m, sigma_ure_m, b_nom_m, p_sat): SatelliteTerm,
-) -> NifResult<SatelliteIsm> {
-    Ok(SatelliteIsm::new(
-        sat_id(&id)?,
+    (
+        id,
         sigma_ura_m,
         sigma_ure_m,
+        effective_sigma_int_m,
+        effective_sigma_acc_m,
         b_nom_m,
         p_sat,
-    ))
+    ): SatelliteTerm,
+) -> NifResult<SatelliteIsm> {
+    let id = sat_id(&id)?;
+    match (effective_sigma_int_m, effective_sigma_acc_m) {
+        (Some(sigma_int), Some(sigma_acc)) => Ok(SatelliteIsm::new_with_effective_sigmas(
+            id,
+            sigma_ura_m,
+            sigma_ure_m,
+            b_nom_m,
+            p_sat,
+            sigma_int,
+            sigma_acc,
+        )),
+        (None, None) => Ok(SatelliteIsm::new(
+            id,
+            sigma_ura_m,
+            sigma_ure_m,
+            b_nom_m,
+            p_sat,
+        )),
+        _ => Err(Error::Term(Box::new(
+            "effective ARAIM sigmas must be supplied as a pair",
+        ))),
+    }
 }
 
 fn decode_allocation(
@@ -122,7 +172,7 @@ fn decode_allocation(
         pfa_vert,
         pfa_hor,
         p_threshold_unmonitored,
-        max_fault_order,
+        (p_emt, max_fault_order),
     ): AllocationTerm,
 ) -> IntegrityAllocation {
     IntegrityAllocation {
@@ -132,6 +182,7 @@ fn decode_allocation(
         pfa_vert,
         pfa_hor,
         p_threshold_unmonitored,
+        p_emt,
         max_fault_order,
     }
 }
@@ -144,7 +195,7 @@ fn allocation_term(allocation: IntegrityAllocation) -> AllocationTerm {
         allocation.pfa_vert,
         allocation.pfa_hor,
         allocation.p_threshold_unmonitored,
-        allocation.max_fault_order,
+        (allocation.p_emt, allocation.max_fault_order),
     )
 }
 
@@ -205,10 +256,7 @@ fn araim_solve<'a>(
     allocation: AllocationTerm,
 ) -> NifResult<Term<'a>> {
     let geometry = AraimGeometry {
-        rows: rows
-            .into_iter()
-            .map(decode_row)
-            .collect::<NifResult<_>>()?,
+        rows: rows.into_iter().map(decode_row).collect::<NifResult<_>>()?,
         receiver: decode_receiver(receiver)?,
         clock_systems: clock_systems
             .iter()
@@ -225,8 +273,10 @@ fn araim_solve<'a>(
             .map(decode_satellite)
             .collect::<NifResult<_>>()?,
     );
-    Ok(match araim(&geometry, &ism, &decode_allocation(allocation)) {
-        Ok(result) => (atoms::ok(), result_term(result)).encode(env),
-        Err(err) => (atoms::error(), error_atom(err)).encode(env),
-    })
+    Ok(
+        match araim(&geometry, &ism, &decode_allocation(allocation)) {
+            Ok(result) => (atoms::ok(), result_term(result)).encode(env),
+            Err(err) => (atoms::error(), error_atom(err)).encode(env),
+        },
+    )
 }

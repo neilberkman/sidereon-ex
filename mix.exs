@@ -26,6 +26,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
+  alias Sidereon.Terrain.MmapTerrain
 
   @version "0.11.1"
   @source_url "https://github.com/neilberkman/sidereon-ex"
@@ -154,7 +155,7 @@ defmodule Sidereon.MixProject do
           LNAV,
           Ephemeris
         ],
-        "Data Sources": [Data, Sidereon.Constellation],
+        "Data Sources": [Data, Sidereon.Constellation, Sidereon.Terrain, MmapTerrain],
         "Batch Analysis": [Sidereon.Coverage, Sidereon.RF],
         Format: [TLE, OMM]
       ]

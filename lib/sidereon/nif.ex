@@ -1544,6 +1544,74 @@ defmodule Sidereon.NIF do
 
   def terrain_dted_tile_elevation(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
 
+  def terrain_store_dted_tree_to_mmap_store(_root), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_write_dted_tree_to_mmap_store(_root, _out_path), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_checksum64_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_mmap_from_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_mmap_from_vec(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_mmap_from_path(_path), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_height_m(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_height_m_with_options(_handle, _longitude_deg, _latitude_deg, _interpolation),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_orthometric_height_m(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_orthometric_height_m_with_options(_handle, _longitude_deg, _latitude_deg, _interpolation),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_height_batch(_handle, _points, _interpolation), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_orthometric_height_batch(_handle, _points, _interpolation), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_ellipsoidal_height_m(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_ellipsoidal_height_m_with_options(_handle, _longitude_deg, _latitude_deg, _interpolation),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_ellipsoidal_height_m_with_model(
+        _handle,
+        _longitude_deg,
+        _latitude_deg,
+        _interpolation,
+        _model,
+        _geoid
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_tile_index(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_vertical_datum(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_mmap_checksum64(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_to_bytes(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_egm96_fifteen_minute_geoid_from_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_egm96_fifteen_minute_geoid_from_path(_path), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_orthometric_to_ellipsoidal_height_deg(
+        _orthometric_height_m,
+        _latitude_deg,
+        _longitude_deg,
+        _model,
+        _geoid
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_orthometric_to_ellipsoidal_height_rad(
+        _orthometric_height_m,
+        _latitude_rad,
+        _longitude_rad,
+        _model,
+        _geoid
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_centers, do: :erlang.nif_error(:nif_not_loaded)
   def data_content_types, do: :erlang.nif_error(:nif_not_loaded)
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)

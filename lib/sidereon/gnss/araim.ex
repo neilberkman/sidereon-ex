@@ -134,25 +134,37 @@ defmodule Sidereon.GNSS.ARAIM do
     @moduledoc """
     Per-satellite integrity and accuracy model without a satellite identity.
 
-    Sigmas and nominal bias are meters. `:p_sat` is the prior satellite-fault
-    probability.
+    Sigmas and nominal bias are meters. Optional effective sigmas let callers
+    pass already-computed local integrity and accuracy range sigmas. `:p_sat` is
+    the prior satellite-fault probability.
     """
 
     @enforce_keys [:sigma_ura_m, :sigma_ure_m, :b_nom_m, :p_sat]
-    defstruct [:sigma_ura_m, :sigma_ure_m, :b_nom_m, :p_sat]
+    defstruct [:sigma_ura_m, :sigma_ure_m, :effective_sigma_int_m, :effective_sigma_acc_m, :b_nom_m, :p_sat]
 
-    @type t :: %__MODULE__{sigma_ura_m: float(), sigma_ure_m: float(), b_nom_m: float(), p_sat: float()}
+    @type t :: %__MODULE__{
+            sigma_ura_m: float(),
+            sigma_ure_m: float(),
+            effective_sigma_int_m: float() | nil,
+            effective_sigma_acc_m: float() | nil,
+            b_nom_m: float(),
+            p_sat: float()
+          }
 
     @doc """
     Build a per-satellite ISM model.
 
-    Sigma and bias inputs are meters.
+    Sigma and bias inputs are meters. `opts` may include
+    `:effective_sigma_int_m` and `:effective_sigma_acc_m`; supply both or omit
+    both.
     """
-    @spec new(number(), number(), number(), number()) :: t()
-    def new(sigma_ura_m, sigma_ure_m, b_nom_m, p_sat) do
+    @spec new(number(), number(), number(), number(), keyword()) :: t()
+    def new(sigma_ura_m, sigma_ure_m, b_nom_m, p_sat, opts \\ []) do
       %__MODULE__{
         sigma_ura_m: sigma_ura_m / 1.0,
         sigma_ure_m: sigma_ure_m / 1.0,
+        effective_sigma_int_m: optional_float(Keyword.get(opts, :effective_sigma_int_m)),
+        effective_sigma_acc_m: optional_float(Keyword.get(opts, :effective_sigma_acc_m)),
         b_nom_m: b_nom_m / 1.0,
         p_sat: p_sat / 1.0
       }
@@ -161,8 +173,18 @@ defmodule Sidereon.GNSS.ARAIM do
     @doc false
     @spec to_nif_tuple(t()) :: tuple()
     def to_nif_tuple(%__MODULE__{} = model) do
-      {model.sigma_ura_m, model.sigma_ure_m, model.b_nom_m, model.p_sat}
+      {
+        model.sigma_ura_m,
+        model.sigma_ure_m,
+        model.effective_sigma_int_m,
+        model.effective_sigma_acc_m,
+        model.b_nom_m,
+        model.p_sat
+      }
     end
+
+    defp optional_float(nil), do: nil
+    defp optional_float(value), do: value / 1.0
   end
 
   defmodule ConstellationIsm do
@@ -205,17 +227,20 @@ defmodule Sidereon.GNSS.ARAIM do
     @moduledoc """
     Per-satellite ARAIM ISM override.
 
-    Sigma and nominal-bias fields are meters. `:p_sat` is the prior
-    satellite-fault probability.
+    Sigma and nominal-bias fields are meters. Optional effective sigmas let
+    callers pass already-computed local integrity and accuracy range sigmas.
+    `:p_sat` is the prior satellite-fault probability.
     """
 
     @enforce_keys [:id, :sigma_ura_m, :sigma_ure_m, :b_nom_m, :p_sat]
-    defstruct [:id, :sigma_ura_m, :sigma_ure_m, :b_nom_m, :p_sat]
+    defstruct [:id, :sigma_ura_m, :sigma_ure_m, :effective_sigma_int_m, :effective_sigma_acc_m, :b_nom_m, :p_sat]
 
     @type t :: %__MODULE__{
             id: String.t(),
             sigma_ura_m: float(),
             sigma_ure_m: float(),
+            effective_sigma_int_m: float() | nil,
+            effective_sigma_acc_m: float() | nil,
             b_nom_m: float(),
             p_sat: float()
           }
@@ -223,14 +248,18 @@ defmodule Sidereon.GNSS.ARAIM do
     @doc """
     Build a satellite-specific ISM override.
 
-    Sigma and bias inputs are meters.
+    Sigma and bias inputs are meters. `opts` may include
+    `:effective_sigma_int_m` and `:effective_sigma_acc_m`; supply both or omit
+    both.
     """
-    @spec new(String.t(), number(), number(), number(), number()) :: t()
-    def new(id, sigma_ura_m, sigma_ure_m, b_nom_m, p_sat) do
+    @spec new(String.t(), number(), number(), number(), number(), keyword()) :: t()
+    def new(id, sigma_ura_m, sigma_ure_m, b_nom_m, p_sat, opts \\ []) do
       %__MODULE__{
         id: id,
         sigma_ura_m: sigma_ura_m / 1.0,
         sigma_ure_m: sigma_ure_m / 1.0,
+        effective_sigma_int_m: optional_float(Keyword.get(opts, :effective_sigma_int_m)),
+        effective_sigma_acc_m: optional_float(Keyword.get(opts, :effective_sigma_acc_m)),
         b_nom_m: b_nom_m / 1.0,
         p_sat: p_sat / 1.0
       }
@@ -239,8 +268,19 @@ defmodule Sidereon.GNSS.ARAIM do
     @doc false
     @spec to_nif_tuple(t()) :: tuple()
     def to_nif_tuple(%__MODULE__{} = ism) do
-      {ism.id, ism.sigma_ura_m, ism.sigma_ure_m, ism.b_nom_m, ism.p_sat}
+      {
+        ism.id,
+        ism.sigma_ura_m,
+        ism.sigma_ure_m,
+        ism.effective_sigma_int_m,
+        ism.effective_sigma_acc_m,
+        ism.b_nom_m,
+        ism.p_sat
+      }
     end
+
+    defp optional_float(nil), do: nil
+    defp optional_float(value), do: value / 1.0
   end
 
   defmodule Ism do
@@ -317,7 +357,8 @@ defmodule Sidereon.GNSS.ARAIM do
       :pfa_vert,
       :pfa_hor,
       :p_threshold_unmonitored,
-      :max_fault_order
+      :max_fault_order,
+      p_emt: 1.0e-5
     ]
 
     @type t :: %__MODULE__{
@@ -327,6 +368,7 @@ defmodule Sidereon.GNSS.ARAIM do
             pfa_vert: float(),
             pfa_hor: float(),
             p_threshold_unmonitored: float(),
+            p_emt: float(),
             max_fault_order: non_neg_integer()
           }
 
@@ -348,13 +390,15 @@ defmodule Sidereon.GNSS.ARAIM do
         allocation.pfa_vert,
         allocation.pfa_hor,
         allocation.p_threshold_unmonitored,
-        allocation.max_fault_order
+        {allocation.p_emt || 1.0e-5, allocation.max_fault_order}
       }
     end
 
     @doc false
     @spec from_nif_tuple(tuple()) :: t()
-    def from_nif_tuple({phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, max_fault_order}) do
+    def from_nif_tuple(
+          {phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, {p_emt, max_fault_order}}
+        ) do
       %__MODULE__{
         phmi_total: phmi_total,
         phmi_vert: phmi_vert,
@@ -362,8 +406,23 @@ defmodule Sidereon.GNSS.ARAIM do
         pfa_vert: pfa_vert,
         pfa_hor: pfa_hor,
         p_threshold_unmonitored: p_threshold_unmonitored,
+        p_emt: p_emt,
         max_fault_order: max_fault_order
       }
+    end
+
+    def from_nif_tuple(
+          {phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, p_emt, max_fault_order}
+        ) do
+      from_nif_tuple(
+        {phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, {p_emt, max_fault_order}}
+      )
+    end
+
+    def from_nif_tuple({phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, max_fault_order}) do
+      from_nif_tuple(
+        {phmi_total, phmi_vert, phmi_hor, pfa_vert, pfa_hor, p_threshold_unmonitored, {1.0e-5, max_fault_order}}
+      )
     end
   end
 

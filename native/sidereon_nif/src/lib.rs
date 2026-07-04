@@ -66,6 +66,7 @@ mod space_weather;
 mod spp;
 mod ssr;
 mod staleness;
+mod terrain_store;
 mod tides;
 mod time;
 mod tle;
