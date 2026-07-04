@@ -67,6 +67,7 @@ defmodule Sidereon.GNSS.Observables do
   alias Sidereon.GNSS.{Broadcast, PreciseEphemeris, SP3, Time}
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.NIF
 
   @type vec3 :: {float(), float(), float()}
@@ -231,12 +232,12 @@ defmodule Sidereon.GNSS.Observables do
   Predict geometry-only ranges for many `{satellite_id, receiver_ecef, t_rx_j2000_s}`
   requests against one precise-ephemeris source in a single NIF call.
 
-  `source` is either a loaded `Sidereon.GNSS.SP3` product or a
-  `Sidereon.GNSS.PreciseEphemeris` sample-built source; both interpolate through
-  the same core substrate, so the ranges are identical for a source and its
-  round-tripped samples. Each request carries its own satellite token, static
-  receiver ECEF position (`{x_m, y_m, z_m}` or `%{x_m: _, y_m: _, z_m: _}`), and
-  receive epoch as **seconds since J2000 in the source's own time scale**.
+  `source` is a loaded `Sidereon.GNSS.SP3` product, a
+  `Sidereon.GNSS.PreciseEphemeris` sample-built source, or a
+  `Sidereon.GNSS.PreciseEphemeris.Interpolant` cached source. Each request
+  carries its own satellite token, static receiver ECEF position
+  (`{x_m, y_m, z_m}` or `%{x_m: _, y_m: _, z_m: _}`), and receive epoch as
+  **seconds since J2000 in the source's own time scale**.
 
   This is the transmit-time geometry a range-only consumer needs, without the
   Doppler / topocentric fields of `predict/5`. On success returns
@@ -259,7 +260,7 @@ defmodule Sidereon.GNSS.Observables do
       `true`. When `false`, the satellite is evaluated at the receive epoch.
     * `:sagnac` - apply the Sagnac / Earth-rotation correction, default `true`.
   """
-  @spec predict_ranges(SP3.t() | PreciseEphemeris.t(), [range_request()], keyword()) ::
+  @spec predict_ranges(SP3.t() | PreciseEphemeris.t() | Interpolant.t(), [range_request()], keyword()) ::
           {:ok, [range_result()]} | {:error, term()}
   def predict_ranges(source, requests, opts \\ []) when is_list(requests) do
     light_time? = Keyword.get(opts, :light_time, true)
@@ -279,6 +280,7 @@ defmodule Sidereon.GNSS.Observables do
 
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
   defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
+  defp source_handle(%Interpolant{handle: handle}), do: {:ok, handle}
   defp source_handle(_source), do: {:error, :invalid_source}
 
   defp prepare_range_requests(requests) do

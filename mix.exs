@@ -1,6 +1,12 @@
 defmodule Sidereon.MixProject do
   use Mix.Project
 
+  alias Sidereon.Estimation
+  alias Sidereon.Estimation.AlphaBetaGains
+  alias Sidereon.Estimation.AlphaBetaState
+  alias Sidereon.Estimation.AlphaBetaStep
+  alias Sidereon.Estimation.NisGate
+  alias Sidereon.Estimation.ScalarKalmanGains
   alias Sidereon.Format.OMM
   alias Sidereon.Format.TLE
   alias Sidereon.GNSS.Broadcast
@@ -16,6 +22,9 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Navigation.LNAV.Ephemeris
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
+  alias Sidereon.GNSS.PreciseEphemeris
+  alias Sidereon.GNSS.PreciseEphemeris.Interpolant
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PrecisePositioning
   alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.ReducedOrbit
@@ -26,6 +35,16 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
+  alias Sidereon.SourceLocalization
+  alias Sidereon.SourceLocalization.Covariance
+  alias Sidereon.SourceLocalization.Crlb
+  alias Sidereon.SourceLocalization.GeometryQuality
+  alias Sidereon.SourceLocalization.InitialGuess
+  alias Sidereon.SourceLocalization.Options
+  alias Sidereon.SourceLocalization.Residual
+  alias Sidereon.SourceLocalization.Sensor
+  alias Sidereon.SourceLocalization.SensorInfluence
+  alias Sidereon.SourceLocalization.Solution
   alias Sidereon.Terrain.MmapTerrain
 
   @version "0.12.0"
@@ -131,6 +150,9 @@ defmodule Sidereon.MixProject do
         Conjunction: [Sidereon.Conjunction],
         "GNSS Positioning": [
           Positioning,
+          PreciseEphemeris,
+          Interpolant,
+          StateBatch,
           PrecisePositioning,
           SP3,
           Broadcast,
@@ -156,6 +178,24 @@ defmodule Sidereon.MixProject do
           Ephemeris
         ],
         "Data Sources": [Data, Sidereon.Constellation, Sidereon.Terrain, MmapTerrain],
+        Estimation: [
+          Estimation,
+          AlphaBetaGains,
+          AlphaBetaState,
+          AlphaBetaStep,
+          NisGate,
+          ScalarKalmanGains,
+          SourceLocalization,
+          Sensor,
+          Options,
+          Solution,
+          Covariance,
+          Residual,
+          SensorInfluence,
+          GeometryQuality,
+          InitialGuess,
+          Crlb
+        ],
         "Batch Analysis": [Sidereon.Coverage, Sidereon.RF],
         Format: [TLE, OMM]
       ]

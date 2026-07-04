@@ -498,6 +498,22 @@ defmodule Sidereon.NIF do
 
   def precise_samples_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
 
+  def precise_interpolant_from_sp3(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_from_precise_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def observable_state_missing_position_ecef_m, do: :erlang.nif_error(:nif_not_loaded)
+
+  def observable_states_at_j2000_s(_source, _satellites, _epochs_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def observable_states_at_shared_j2000_s(_source, _satellites, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_parse_with_preference(_text, _message_preference), do: :erlang.nif_error(:nif_not_loaded)
@@ -1838,6 +1854,63 @@ defmodule Sidereon.NIF do
   def normality_jarque_bera(_x), do: :erlang.nif_error(:nif_not_loaded)
 
   def normality_shapiro_wilk(_x), do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- scalar estimation and detection primitives --------------------
+
+  def estimation_mad_gaussian_consistency, do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_alpha_beta_steady_state_gains(_tracking_index), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_alpha_beta_predict(_state, _dt), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_alpha_beta_apply_measurement(_predicted, _measurement, _dt, _gains),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_alpha_beta_filter_step(_state, _measurement, _dt, _gains), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_kalman_cv_steady_state_gains(_tracking_index, _dt, _measurement_variance),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_normalized_innovation(_innovation, _innovation_variance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_nis(_innovation, _innovation_variance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_nis_expected_value(_dof), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_nis_gate_threshold(_dof, _confidence), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_nis_gate(_innovation, _innovation_variance, _dof, _confidence), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_mad(_values, _scale_floor), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_ewma(_previous, _sample, _alpha), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_ewma_power_of_two(_previous, _sample, _shift), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_cfar_ca_multiplier_from_pfa(_searched_cells, _false_alarm_probability),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_cfar_ca_pfa_from_multiplier(_searched_cells, _multiplier), do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_cfar_ca_threshold(_searched_cells, _false_alarm_probability, _noise_level),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def estimation_cfar_ca_false_alarm_probability(_searched_cells, _threshold, _noise_level),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  # --- source localization -------------------------------------------
+
+  def source_localization_locate(_sensors, _arrival_times_s, _propagation_speed_m_s, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def source_localization_chan_ho_initial_guess(_sensors, _arrival_times_s, _propagation_speed_m_s, _mode),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def source_localization_dop(_sensors, _source_position_m, _propagation_speed_m_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def source_localization_crlb(_sensors, _source_position_m, _propagation_speed_m_s, _timing_sigma_s),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   # --- batch observable prediction -----------------------------------
 
