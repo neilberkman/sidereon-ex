@@ -5,12 +5,13 @@
 //! receiver ECEF; call the crate's predictor; encode the result for Elixir.
 
 use crate::broadcast::BroadcastResource;
+use crate::observable_states::PreciseInterpolantResource;
 use crate::precise_samples::SampleSourceResource;
 use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::observables::{
     j2000_seconds_from_split, predict, predict_batch, predict_ranges as core_predict_ranges,
-    ObservablesError, PredictOptions, PredictedObservables, PredictRequest, RangePrediction,
+    ObservablesError, PredictOptions, PredictRequest, PredictedObservables, RangePrediction,
     RangePredictionRequest,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
@@ -248,9 +249,10 @@ fn range_to_tuple(prediction: &RangePrediction) -> RangeResultTerm {
 /// Predict geometric ranges for many `{satellite, receiver, epoch}` requests
 /// against one loaded precise-ephemeris source in a single boundary crossing.
 ///
-/// `source` accepts either an SP3 handle or a sample-built source handle; both
-/// implement the core `ObservableEphemerisSource` trait, so the batch drives the
-/// identical transmit-time geometry regardless of how the source was built.
+/// `source` accepts an SP3 handle, a sample-built source handle, or a cached
+/// interpolant handle; all implement the core `ObservableEphemerisSource` trait,
+/// so the batch drives the identical transmit-time geometry regardless of how
+/// the source was built.
 /// Returns `{:ok, [result]}` on success, or the first request's `{:error, _}`
 /// (the core range batch aborts on the first failing request). Dirty-CPU: the
 /// request list is unbounded relative to the 1 ms NIF budget.
@@ -298,9 +300,11 @@ pub fn predict_ranges_batch<'a>(
         core_predict_ranges(&handle.sp3, &resolved, options, &mut out)
     } else if let Ok(handle) = source.decode::<ResourceArc<SampleSourceResource>>() {
         core_predict_ranges(&handle.source, &resolved, options, &mut out)
+    } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        core_predict_ranges(&handle.interpolant, &resolved, options, &mut out)
     } else {
         return Err(Error::Term(Box::new(
-            "expected an SP3 or precise-sample source handle",
+            "expected an SP3, precise-sample, or precise-interpolant source handle",
         )));
     };
 
@@ -309,6 +313,10 @@ pub fn predict_ranges_batch<'a>(
             let rows: Vec<RangeResultTerm> = out.iter().map(range_to_tuple).collect();
             (atoms::ok(), rows).encode(env)
         }
-        Err(err) => (atoms::error(), failure_reason(env, PredictFailure::from(err))).encode(env),
+        Err(err) => (
+            atoms::error(),
+            failure_reason(env, PredictFailure::from(err)),
+        )
+            .encode(env),
     })
 }

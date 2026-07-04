@@ -195,6 +195,7 @@ fn clock_allan_estimator<'a>(
 
 /// Compute a configured set of Allan-family curves.
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn clock_compute_allan_deviations<'a>(
     env: Env<'a>,
     series_kind: String,
