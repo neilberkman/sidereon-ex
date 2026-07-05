@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.1]
+
+### Fixed
+
+- The geodesic module is now a first-party implementation; a transitive
+  dependency of the previous release could not build on Windows.
+
 ## [0.16.0]
 
 ### Added
@@ -507,6 +514,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   crate (was a git-rev pin), which carries the RTK filter kernel. The kernel
   hot path holds a measured baseline of ~210k single-core solves/sec on a
   6-satellite epoch with a CI-gated allocations-per-solve regression bound.
+
+## [0.16.1]
+
+### Fixed
+
+- The geodesic module is now a first-party implementation; a transitive
+  dependency of the previous release could not build on Windows.
 
 ## [0.16.0] - 2026-06-10
 
