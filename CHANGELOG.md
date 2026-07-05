@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Added
+
+- Uncertainty-aware geodesic geofencing (`Sidereon.Geofence`): containment and
+  crossing probabilities from a position covariance, with hysteresis.
+- Multi-epoch static positioning (`Sidereon.StaticPositioning`).
+- Doppler velocity solve with receiver clock drift, and ECEF position
+  covariance on receiver solutions.
+- The one-call emission correction bundle (contiguous per-satellite arrays
+  with typed coverage status).
+- The precise-interpolant artifact: build once, evaluate zero-copy from bytes,
+  checksummed.
+- IONEX coverage policy: typed out-of-coverage results by default, explicit
+  hold opt-in.
+
+### Fixed
+
+- Sample-backed SP3 interpolation reconstructs its node axis before time-scale
+  conversion, closing the remaining boundary-node case on real converted
+  epochs (consumer-verified).
+- Tight-coupling measurement row signs and the transmit-time model; tight
+  numeric behavior changes relative to 0.16.x, see the core changelog.
+
 ## [0.16.1]
 
 ### Fixed
