@@ -20,6 +20,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.DGNSS
   alias Sidereon.GNSS.Frequencies
+  alias Sidereon.GNSS.Fusion
   alias Sidereon.GNSS.Geometry
   alias Sidereon.GNSS.Ionosphere
   alias Sidereon.GNSS.IonosphereFree
@@ -35,6 +36,8 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.ReducedOrbit
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.RTK
+  alias Sidereon.GNSS.Scenario
+  alias Sidereon.GNSS.Signal.Analysis
   alias Sidereon.GNSS.Signal.CA
   alias Sidereon.GNSS.Signal.Correlator
   alias Sidereon.GNSS.SP3
@@ -172,6 +175,8 @@ defmodule Sidereon.MixProject do
           QC,
           DGNSS,
           RTK,
+          Fusion,
+          Scenario,
           Frequencies,
           CarrierPhase,
           IonosphereFree,
@@ -180,6 +185,7 @@ defmodule Sidereon.MixProject do
           Data,
           Sidereon.GNSS.Time,
           CA,
+          Analysis,
           Correlator,
           LNAV,
           Ephemeris
