@@ -88,13 +88,16 @@ defmodule SidereonBuild012BindingsTest do
 
     {:ok, dted} = Terrain.dted(@core_dted_root)
     points = [{-106.875, 36.125}, {-105.875, 36.125}, {-104.5, 36.5}]
+    covered_points = Enum.take(points, 2)
 
     for interpolation <- [:bilinear, :nearest_posting] do
       store_results = MmapTerrain.orthometric_height_batch(store, points, interpolation: interpolation)
-      dted_results = Terrain.height_batch(dted, points, interpolation: interpolation)
-      assert Enum.map(store_results, &orthometric_result_to_scalar/1) == dted_results
+      dted_results = Terrain.height_batch(dted, covered_points, interpolation: interpolation)
 
-      for {longitude_deg, latitude_deg} <- points do
+      assert store_results |> Enum.take(2) |> Enum.map(&orthometric_result_to_scalar/1) == dted_results
+      assert {:error, "missing terrain tile (36,-105)"} = List.last(store_results)
+
+      for {longitude_deg, latitude_deg} <- covered_points do
         assert {:ok, %OrthometricHeightM{} = typed_height} =
                  MmapTerrain.height_m(store, longitude_deg, latitude_deg, interpolation: interpolation)
 

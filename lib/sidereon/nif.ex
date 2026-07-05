@@ -156,6 +156,20 @@ defmodule Sidereon.NIF do
 
   def geodesic_direct(_lat1_deg, _lon1_deg, _azi1_deg, _s12_m), do: :erlang.nif_error(:nif_not_loaded)
 
+  def geofence_new(_vertices), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geofence_contains(_handle, _position), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geofence_distance_to_boundary(_handle, _position), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geofence_containment_probability(_handle, _position, _uncertainty, _method),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def geofence_crossing(_handle, _positions), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geofence_crossing_probability(_handle, _samples, _enter_confidence, _leave_confidence, _method),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def frame_catalog, do: :erlang.nif_error(:nif_not_loaded)
 
   def frame_catalog_entry(_from_frame, _to_frame), do: :erlang.nif_error(:nif_not_loaded)
@@ -587,6 +601,16 @@ defmodule Sidereon.NIF do
   def precise_interpolant_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_bytes_from_sp3(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_bytes_from_interpolant(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_open(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_checksum64_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_checksum64_handle(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def observable_state_missing_position_ecef_m, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1174,6 +1198,46 @@ defmodule Sidereon.NIF do
         _glonass_channels
       ), do: :erlang.nif_error(:nif_not_loaded)
 
+  def spp_solve_with_doppler(
+        _handle,
+        _observations,
+        _doppler_observations,
+        _t_rx_j2000_s,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _robust,
+        _glonass_channels
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def spp_solve_broadcast_with_doppler(
+        _handle,
+        _observations,
+        _doppler_observations,
+        _t_rx_j2000_s,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _robust,
+        _glonass_channels
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def spp_solve_with_fallback(
         _precise_handles,
         _broadcast_handle,
@@ -1198,6 +1262,12 @@ defmodule Sidereon.NIF do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_batch_parallel(_handle, _epochs, _with_geodetic, _robust, _max_pdop, _coarse_search_seeds),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def static_positioning_solve_sp3(_handle, _epochs, _initial_position_m, _with_geodetic, _robust),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def static_positioning_solve_broadcast(_handle, _epochs, _initial_position_m, _with_geodetic, _robust),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_residual_rms_m(_residuals_m), do: :erlang.nif_error(:nif_not_loaded)
@@ -2026,6 +2096,16 @@ defmodule Sidereon.NIF do
   def sp3_predict_batch(_handle, _requests, _carrier_hz, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
 
   def predict_ranges_batch(_source, _requests, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
+
+  def emission_media_batch(
+        _source,
+        _requests,
+        _receiver_ecef_m,
+        _carrier_hz,
+        _troposphere,
+        _ionosphere,
+        _min_elevation_rad
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
   # --- leap-second accessors -----------------------------------------
 

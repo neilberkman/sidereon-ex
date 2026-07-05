@@ -13,14 +13,21 @@ defmodule Sidereon.GNSS.Velocity do
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.NIF
 
+  @typedoc "Three-component ECEF vector."
   @type vec3 :: {float(), float(), float()}
+
+  @typedoc "Receiver ECEF position in metres."
   @type receiver :: vec3() | %{x_m: number(), y_m: number(), z_m: number()}
+
+  @typedoc "One range-rate or Doppler observation."
   @type observation :: {String.t(), number()}
 
+  @typedoc "Receiver velocity solve result with unit-variance state covariance."
   @type result :: %{
           velocity_m_s: vec3(),
           speed_m_s: float(),
           clock_drift_s_s: float(),
+          state_covariance: [[float()]],
           residuals_m_s: %{String.t() => float()},
           used_sats: [String.t()],
           n_satellites: non_neg_integer()
@@ -174,11 +181,12 @@ defmodule Sidereon.GNSS.Velocity do
     e in ErlangError -> {:error, e.original}
   end
 
-  defp to_result_map({velocity, speed, clock_drift, residuals, used_sats}) do
+  defp to_result_map({velocity, speed, clock_drift, state_covariance, residuals, used_sats}) do
     %{
       velocity_m_s: velocity,
       speed_m_s: speed,
       clock_drift_s_s: clock_drift,
+      state_covariance: state_covariance,
       residuals_m_s: Map.new(residuals),
       used_sats: used_sats,
       n_satellites: length(used_sats)

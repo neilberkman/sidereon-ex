@@ -5,14 +5,19 @@
 //! receiver ECEF; call the crate's predictor; encode the result for Elixir.
 
 use crate::broadcast::BroadcastResource;
-use crate::observable_states::PreciseInterpolantResource;
+use crate::iono::IonexResource;
+use crate::observable_states::{MappedPreciseInterpolantResource, PreciseInterpolantResource};
 use crate::precise_samples::SampleSourceResource;
 use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+use sidereon_core::atmosphere::ionosphere::{IonoModel, KlobucharParams};
+use sidereon_core::atmosphere::troposphere::{MappingModel, Met};
 use sidereon_core::observables::{
-    j2000_seconds_from_split, predict, predict_batch, predict_ranges as core_predict_ranges,
-    ObservablesError, PredictOptions, PredictRequest, PredictedObservables, RangePrediction,
-    RangePredictionRequest,
+    emission_media_batch_at_j2000_s, j2000_seconds_from_split, predict, predict_batch,
+    predict_ranges as core_predict_ranges, EmissionMediaBatch, EmissionMediaBatchOptions,
+    EmissionMediaStatus, ObservableEphemerisSource, ObservableIonosphereCorrection,
+    ObservableMediaOptions, ObservableTroposphereCorrection, ObservablesError, PredictOptions,
+    PredictRequest, PredictedObservables, RangePrediction, RangePredictionRequest,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 
@@ -28,7 +33,10 @@ mod atoms {
         error,
         no_ephemeris,
         invalid_input,
-        prediction_missing
+        prediction_missing,
+        valid,
+        gap,
+        below_elevation_cutoff
     }
 }
 
@@ -159,7 +167,9 @@ impl From<ObservablesError> for PredictFailure {
     fn from(value: ObservablesError) -> Self {
         match value {
             ObservablesError::NoEphemeris => Self::NoEphemeris,
-            ObservablesError::InvalidInput { .. } => Self::InvalidInput,
+            ObservablesError::InvalidInput { .. } | ObservablesError::Media(_) => {
+                Self::InvalidInput
+            }
             ObservablesError::Ephemeris(err) => Self::Reason(err.to_string()),
         }
     }
@@ -233,6 +243,8 @@ fn failure_reason(env: Env<'_>, failure: PredictFailure) -> Term<'_> {
 /// t_rx_j2000_s}`. The receive epoch is seconds since J2000 in the source's own
 /// time scale, matching the core [`RangePredictionRequest`].
 type RangeRequestTerm = (String, u8, Vec3, f64);
+type EmissionRequestTerm = (String, u8, f64);
+type Coeff4 = (f64, f64, f64, f64);
 /// One batch range result: `{geometric_range_m, sat_clock_s, transmit_time_j2000_s,
 /// sat_pos_ecef_m}`. The clock is `nil` when the source carries no clock estimate.
 type RangeResultTerm = (f64, Option<f64>, f64, Vec3);
@@ -302,6 +314,8 @@ pub fn predict_ranges_batch<'a>(
         core_predict_ranges(&handle.source, &resolved, options, &mut out)
     } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
         core_predict_ranges(&handle.interpolant, &resolved, options, &mut out)
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
+        core_predict_ranges(&handle.interpolant, &resolved, options, &mut out)
     } else {
         return Err(Error::Term(Box::new(
             "expected an SP3, precise-sample, or precise-interpolant source handle",
@@ -319,4 +333,192 @@ pub fn predict_ranges_batch<'a>(
         )
             .encode(env),
     })
+}
+
+/// Predict emission-epoch state plus media corrections for many satellites.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn emission_media_batch<'a>(
+    env: Env<'a>,
+    source: Term<'a>,
+    requests: Vec<EmissionRequestTerm>,
+    receiver_ecef_m: Vec3,
+    carrier_hz: f64,
+    troposphere: Term<'a>,
+    ionosphere: Term<'a>,
+    min_elevation_rad: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let mut satellites = Vec::with_capacity(requests.len());
+    let mut epochs = Vec::with_capacity(requests.len());
+    for (system_letter, prn, emission_epoch_j2000_s) in requests {
+        match sat_from_parts(&system_letter, prn) {
+            Ok(sat) => {
+                satellites.push(sat);
+                epochs.push(emission_epoch_j2000_s);
+            }
+            Err(failure) => return Ok((atoms::error(), failure_reason(env, failure)).encode(env)),
+        }
+    }
+
+    let troposphere = decode_troposphere(troposphere)?;
+    let min_elevation_rad = decode_optional_f64(min_elevation_rad)?;
+    let receiver = vec3_to_array(receiver_ecef_m);
+
+    if is_nil(ionosphere) {
+        let options = EmissionMediaBatchOptions {
+            carrier_hz,
+            media: ObservableMediaOptions {
+                troposphere,
+                ionosphere: None,
+            },
+            min_elevation_rad,
+        };
+        return call_emission_media(env, source, &satellites, &epochs, receiver, options);
+    }
+
+    if let Ok((tag, alpha, beta)) = ionosphere.decode::<(String, Coeff4, Coeff4)>() {
+        if tag != "klobuchar" {
+            return Err(Error::Term(Box::new("unknown ionosphere media option")));
+        }
+        let model = IonoModel::Klobuchar(KlobucharParams {
+            alpha: [alpha.0, alpha.1, alpha.2, alpha.3],
+            beta: [beta.0, beta.1, beta.2, beta.3],
+        });
+        let options = EmissionMediaBatchOptions {
+            carrier_hz,
+            media: ObservableMediaOptions {
+                troposphere,
+                ionosphere: Some(ObservableIonosphereCorrection::Broadcast(model)),
+            },
+            min_elevation_rad,
+        };
+        return call_emission_media(env, source, &satellites, &epochs, receiver, options);
+    }
+
+    if let Ok((tag, ionex)) = ionosphere.decode::<(String, ResourceArc<IonexResource>)>() {
+        if tag != "ionex" {
+            return Err(Error::Term(Box::new("unknown ionosphere media option")));
+        }
+        let options = EmissionMediaBatchOptions {
+            carrier_hz,
+            media: ObservableMediaOptions {
+                troposphere,
+                ionosphere: Some(ObservableIonosphereCorrection::Ionex(&ionex.ionex)),
+            },
+            min_elevation_rad,
+        };
+        return call_emission_media(env, source, &satellites, &epochs, receiver, options);
+    }
+
+    Err(Error::Term(Box::new("unknown ionosphere media option")))
+}
+
+fn call_emission_media<'a>(
+    env: Env<'a>,
+    source: Term<'a>,
+    satellites: &[GnssSatelliteId],
+    epochs: &[f64],
+    receiver_ecef_m: [f64; 3],
+    options: EmissionMediaBatchOptions<'_>,
+) -> NifResult<Term<'a>> {
+    let result = with_precise_source(source, |source| {
+        emission_media_batch_at_j2000_s(source, satellites, epochs, receiver_ecef_m, options)
+    })?;
+    Ok(match result {
+        Ok(batch) => (atoms::ok(), encode_emission_media_batch(env, &batch)).encode(env),
+        Err(error) => (
+            atoms::error(),
+            failure_reason(env, PredictFailure::from(error)),
+        )
+            .encode(env),
+    })
+}
+
+fn with_precise_source<'a, F, R>(source: Term<'a>, f: F) -> NifResult<R>
+where
+    F: FnOnce(&dyn ObservableEphemerisSource) -> R,
+{
+    if let Ok(handle) = source.decode::<ResourceArc<Sp3Resource>>() {
+        Ok(f(&handle.sp3))
+    } else if let Ok(handle) = source.decode::<ResourceArc<SampleSourceResource>>() {
+        Ok(f(&handle.source))
+    } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        Ok(f(&handle.interpolant))
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
+        Ok(f(&handle.interpolant))
+    } else {
+        Err(Error::Term(Box::new(
+            "expected an SP3, precise-sample, or precise-interpolant source handle",
+        )))
+    }
+}
+
+fn decode_troposphere(term: Term<'_>) -> NifResult<Option<ObservableTroposphereCorrection>> {
+    if is_nil(term) {
+        return Ok(None);
+    }
+    let (pressure_hpa, temperature_k, relative_humidity): (f64, f64, f64) = term.decode()?;
+    Ok(Some(ObservableTroposphereCorrection {
+        met: Met::new(pressure_hpa, temperature_k, relative_humidity)
+            .map_err(crate::errors::invalid_input)?,
+        mapping: MappingModel::Niell,
+    }))
+}
+
+fn decode_optional_f64(term: Term<'_>) -> NifResult<Option<f64>> {
+    if is_nil(term) {
+        Ok(None)
+    } else {
+        Ok(Some(term.decode::<f64>()?))
+    }
+}
+
+fn is_nil(term: Term<'_>) -> bool {
+    term.is_atom()
+        && term
+            .atom_to_string()
+            .map(|name| name == "nil")
+            .unwrap_or(false)
+}
+
+fn encode_emission_media_batch<'a>(env: Env<'a>, batch: &EmissionMediaBatch) -> Term<'a> {
+    let positions: Vec<Term<'a>> = batch
+        .positions_ecef_m
+        .iter()
+        .map(|position| match position {
+            Some(position) => array_to_vec3(*position).encode(env),
+            None => rustler::types::atom::nil().encode(env),
+        })
+        .collect();
+    let statuses: Vec<Term<'a>> = batch
+        .statuses
+        .iter()
+        .map(|status| emission_status_atom(*status).encode(env))
+        .collect();
+    let element_errors: Vec<Term<'a>> = batch
+        .element_errors
+        .iter()
+        .map(|error| match error {
+            Some(error) => failure_reason(env, PredictFailure::from(error.clone())),
+            None => rustler::types::atom::nil().encode(env),
+        })
+        .collect();
+    (
+        positions,
+        batch.clocks_s.clone(),
+        batch.ionosphere_slant_delays_m.clone(),
+        batch.troposphere_delays_m.clone(),
+        statuses,
+        element_errors,
+    )
+        .encode(env)
+}
+
+fn emission_status_atom(status: EmissionMediaStatus) -> rustler::Atom {
+    match status {
+        EmissionMediaStatus::Valid => atoms::valid(),
+        EmissionMediaStatus::Gap => atoms::gap(),
+        EmissionMediaStatus::BelowElevationCutoff => atoms::below_elevation_cutoff(),
+        EmissionMediaStatus::Error => atoms::error(),
+    }
 }

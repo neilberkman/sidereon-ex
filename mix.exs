@@ -13,6 +13,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.Estimation.ScalarKalmanGains
   alias Sidereon.Format.OMM
   alias Sidereon.Format.TLE
+  alias Sidereon.Geofence
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.CarrierPhase
   alias Sidereon.GNSS.Constellation
@@ -37,6 +38,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Signal.CA
   alias Sidereon.GNSS.Signal.Correlator
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.StaticPositioning
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
   alias Sidereon.SourceLocalization
@@ -143,7 +145,7 @@ defmodule Sidereon.MixProject do
       groups_for_modules: [
         Core: [Sidereon, Sidereon.Elements, Sidereon.SGP4, Sidereon.TemeState],
         Coordinates: [Sidereon.Coordinates, Sidereon.FrameCatalog, Sidereon.Geodesic],
-        "Ground Station": [Sidereon.Passes, Sidereon.Doppler, Sidereon.RF],
+        "Ground Station": [Sidereon.Passes, Sidereon.Doppler, Sidereon.RF, Geofence],
         "Orbit Determination": [Sidereon.IOD, Sidereon.Lambert],
         "Space Environment": [
           Sidereon.Eclipse,
@@ -166,6 +168,7 @@ defmodule Sidereon.MixProject do
           Geometry,
           Observables,
           Velocity,
+          StaticPositioning,
           QC,
           DGNSS,
           RTK,

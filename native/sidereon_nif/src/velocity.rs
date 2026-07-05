@@ -168,6 +168,7 @@ fn encode_solution<'a>(env: Env<'a>, solution: &VelocitySolution) -> Term<'a> {
             array_to_vec3(solution.velocity_m_s),
             solution.speed_m_s,
             solution.clock_drift_s_s,
+            solution.state_covariance.map(|row| row.to_vec()).to_vec(),
             residuals,
             used_sats,
         ),

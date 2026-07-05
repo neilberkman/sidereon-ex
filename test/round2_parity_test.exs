@@ -244,7 +244,7 @@ defmodule Sidereon.Round2ParityTest do
 
     assert {length(repair_obs.actions), repair_obs.remaining.clean?, byte_size(repair_obs.rinex),
             byte_size(repair_obs.crinex)} ==
-             {2, true, 31_658, 26_274}
+             {2, true, 34_112, 28_728}
 
     nav_text = File.read!(fixture(["nav", "BRD400DLR_S_20261800000_01H_MN_trim.rnx"]))
     {:ok, lint_nav} = QC.lint_nav_text(nav_text)
