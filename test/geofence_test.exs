@@ -44,8 +44,11 @@ defmodule Sidereon.GeofenceTest do
     assert {:ok, inside_distance_m} = Geofence.distance_to_boundary(fence, @inside)
     assert {:ok, outside_distance_m} = Geofence.distance_to_boundary(fence, @outside)
 
-    assert_in_delta inside_distance_m, 445.0292149661649, 1.0e-12
-    assert_in_delta outside_distance_m, -1109.7675457950174, 1.0e-12
+    # Boundary distance comes from the iterative geodesic inverse, which is not
+    # bit-reproducible across architectures; the bound is the core's documented
+    # geodesic accuracy (1e-8 m), not the authoring machine's bits.
+    assert_in_delta inside_distance_m, 445.0292149661649, 1.0e-8
+    assert_in_delta outside_distance_m, -1109.7675457950174, 1.0e-8
   end
 
   test "pins uncertainty-aware containment probability with selectable methods", %{fence: fence} do
