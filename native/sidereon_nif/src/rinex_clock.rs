@@ -34,8 +34,8 @@ fn rinex_clock_parse_lossy<'a>(env: Env<'a>, text: String) -> Term<'a> {
 /// Serialize RINEX clock rows into RINEX clock text.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_clock_to_string<'a>(env: Env<'a>, series: Vec<(String, Vec<(f64, f64)>)>) -> Term<'a> {
-    match RinexClock::from_series_rows(series) {
-        Ok(clock) => (atoms::ok(), clock.to_rinex_string()).encode(env),
+    match RinexClock::from_series_rows(series).and_then(|clock| clock.to_rinex_string()) {
+        Ok(text) => (atoms::ok(), text).encode(env),
         Err(err) => (atoms::error(), err.to_string()).encode(env),
     }
 }

@@ -24,6 +24,7 @@ mod atoms {
         unsupported_version,
         unsupported_datum,
         duplicate_tile,
+        tile_id_mismatch,
         checksum,
         terrain,
         geoid,
@@ -135,6 +136,16 @@ fn store_error_term<'a>(env: Env<'a>, error: TerrainStoreError) -> Term<'a> {
         TerrainStoreError::UnsupportedDatum { tag } => {
             (atoms::unsupported_datum(), tag).encode(env)
         }
+        TerrainStoreError::TileIdMismatch {
+            ref path,
+            ref expected,
+            ref found,
+        } => (
+            atoms::tile_id_mismatch(),
+            path.display().to_string(),
+            format!("expected tile {expected:?}, parsed {found:?}"),
+        )
+            .encode(env),
         TerrainStoreError::DuplicateTile {
             lat_index,
             lon_index,
