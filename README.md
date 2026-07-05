@@ -97,9 +97,10 @@ positioning, and conjunction screening; more notebooks live under
 ## What's in the box
 
 - **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical propagation
-  with a composable force model (zonal harmonics through J6, Sun/Moon
-  third-body, solar radiation pressure, relativistic correction, atmospheric
-  drag), orbital decay estimation, two-body Kepler propagation, ground track,
+  with a composable force model (spherical-harmonic geopotential to selectable
+  degree and order, Sun/Moon third-body, solar radiation pressure, relativistic
+  correction, atmospheric drag), orbital decay estimation with a post-decay
+  validity latch, two-body Kepler propagation, ground track,
   sub-satellite point, eclipse, Sun and Moon angles, and Doppler. See
   `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`, `Sidereon.Drag`.
 - **GNSS positioning** single-point positioning (SPP), RTK (float,
@@ -121,8 +122,10 @@ positioning, and conjunction screening; more notebooks live under
   trackers with innovation gating and CFAR thresholds, source localization
   (ToA/TDOA), robust station velocity (MIDAS) with trajectory fitting, step
   detection, and network motion fields, repeating-geometry (sidereal)
-  filtering, and batch least-squares orbit fitting against precise
-  ephemerides with a per-satellite residual ledger. See
+  filtering, geodesic direct and inverse problems (Karney), an epoch-aware
+  terrestrial frame catalog (ITRF/ETRF Helmert sets), EGM2008 geoid grids, and
+  batch least-squares orbit fitting against precise ephemerides (including
+  terrestrial-frame SP3) with a per-satellite residual ledger. See
   `Sidereon.ClockStability`, `Sidereon.Estimation`, `Sidereon.SourceLocalization`,
   `Sidereon.GeodeticTimeSeries`, `Sidereon.Sidereal`, `Sidereon.OrbitDetermination`.
 - **GNSS data and observations** SP3 (read, multi-center merge, write), broadcast
@@ -166,8 +169,8 @@ positioning, and conjunction screening; more notebooks live under
   from public archives, with canonical filenames and archive URLs for callers
   who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
-  CCSDS OPM / OEM / CDM, and the GNSS products above. See `Sidereon.Format.TLE`,
-  `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`.
+  CCSDS OPM / OEM / CDM / TDM, and the GNSS products above. See `Sidereon.Format.TLE`,
+  `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`, `Sidereon.CCSDS.TDM`.
 
 Every result is what the engine computes, returned as plain Elixir structs and
 maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
