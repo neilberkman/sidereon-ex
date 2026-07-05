@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0]
+
+### Added
+
+- Geodesic direct and inverse solvers on WGS84 (Karney) (`Sidereon.Geodesic`).
+- Epoch-aware terrestrial reference frame catalog with published ITRF and ETRF
+  Helmert parameter sets (`Sidereon.FrameCatalog`).
+- EGM2008 geoid raster loading alongside EGM96 (`Sidereon.Geoid`).
+- Spherical-harmonic geopotential force selection for numerical propagation
+  (`Sidereon.Propagator`).
+- CCSDS TDM parse and encode (`Sidereon.CCSDS.TDM`).
+- Terrestrial-frame (ECEF) SP3 orbit fitting entries
+  (`Sidereon.OrbitDetermination`).
+- SGP4 post-decay validity latch, oblate-Earth shadow model option, and typed
+  troposphere mapping validity errors.
+
+### Fixed
+
+- The core SP3 evaluation path: epoch bucketing no longer mis-serves the state
+  from one second later at nodes sensitive to the GPS-UTC offset, and clock and
+  position evaluation are now gated by an independent oracle against the parsed
+  file text. Consumers of SP3 clock or state evaluation on 0.15.0 should
+  upgrade.
+- The terrain store surfaces skipped and void input as typed results instead of
+  silent zeros.
+
+### Changed
+
+- Reliability marshaling takes both w-test noncentrality components from the
+  core; `Sidereon.Format.TLE.encode/1` surfaces out-of-range catalog numbers as
+  typed errors.
+
 ## [0.15.0]
 
 ### Added

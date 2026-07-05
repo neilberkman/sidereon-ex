@@ -3,10 +3,12 @@
 use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 use sidereon_core::geometry_quality::{GeometryQuality, ObservabilityTier};
 use sidereon_core::orbit_determination::{
-    fit_precise_ephemeris_sample_orbit, fit_sp3_precise_orbit, OrbitFitCovariance, OrbitFitError,
-    OrbitFitOptions, OrbitFitReport, OrbitFitSolution, OrbitResidualLedger, OrbitResidualStats,
+    fit_all_sp3_ecef_precise_orbits, fit_precise_ephemeris_sample_orbit,
+    fit_sp3_ecef_precise_orbit, fit_sp3_ecef_precise_orbits, fit_sp3_precise_orbit,
+    OrbitFitCovariance, OrbitFitError, OrbitFitOptions, OrbitFitReport, OrbitFitSolution,
+    OrbitResidualLedger, OrbitResidualStats,
 };
-use sidereon_core::GnssSatelliteId;
+use sidereon_core::{GnssSatelliteId, TdbEarthOrientationProvider};
 
 use crate::precise_samples::{decode_sample, SampleTerm};
 use crate::sp3::{system_from_letter, Sp3Resource};
@@ -33,6 +35,7 @@ mod atoms {
 
 type Vec3 = (f64, f64, f64);
 type OptionsTerm = (Vec<String>, f64, f64, usize, usize);
+type SatelliteTerm = (String, u8);
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct GeometryQualityTerm {
@@ -121,6 +124,13 @@ fn options(
 fn satellite(system_letter: String, prn: u8) -> NifResult<GnssSatelliteId> {
     let system = system_from_letter(&system_letter)?;
     GnssSatelliteId::new(system, prn).map_err(crate::errors::invalid_input)
+}
+
+fn satellites(terms: Vec<SatelliteTerm>) -> NifResult<Vec<GnssSatelliteId>> {
+    terms
+        .into_iter()
+        .map(|(system_letter, prn)| satellite(system_letter, prn))
+        .collect()
 }
 
 fn geometry_quality(value: GeometryQuality) -> GeometryQualityTerm {
@@ -248,6 +258,56 @@ fn orbit_fit_sp3_precise_orbit<'a>(
     Ok(encode_report(
         env,
         fit_sp3_precise_orbit(&handle.sp3, sat, &opts),
+    ))
+}
+
+/// Fit one satellite from a parsed ECEF SP3 product.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn orbit_fit_sp3_ecef_precise_orbit<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    system_letter: String,
+    prn: u8,
+    opts: OptionsTerm,
+) -> NifResult<Term<'a>> {
+    let sat = satellite(system_letter, prn)?;
+    let opts = options(opts)?;
+    let provider = TdbEarthOrientationProvider::default();
+    Ok(encode_report(
+        env,
+        fit_sp3_ecef_precise_orbit(&handle.sp3, sat, &provider, &opts),
+    ))
+}
+
+/// Fit selected satellites from a parsed ECEF SP3 product.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn orbit_fit_sp3_ecef_precise_orbits<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    satellite_terms: Vec<SatelliteTerm>,
+    opts: OptionsTerm,
+) -> NifResult<Term<'a>> {
+    let satellites = satellites(satellite_terms)?;
+    let opts = options(opts)?;
+    let provider = TdbEarthOrientationProvider::default();
+    Ok(encode_report(
+        env,
+        fit_sp3_ecef_precise_orbits(&handle.sp3, &satellites, &provider, &opts),
+    ))
+}
+
+/// Fit every satellite in a parsed ECEF SP3 product.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn orbit_fit_all_sp3_ecef_precise_orbits<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    opts: OptionsTerm,
+) -> NifResult<Term<'a>> {
+    let opts = options(opts)?;
+    let provider = TdbEarthOrientationProvider::default();
+    Ok(encode_report(
+        env,
+        fit_all_sp3_ecef_precise_orbits(&handle.sp3, &provider, &opts),
     ))
 }
 

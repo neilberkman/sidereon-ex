@@ -11,14 +11,15 @@
 use crate::propagation::{elements_from_map, opsmode_from_term};
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::astro::sgp4::{
-    propagate_batch, propagate_batch_parallel, Error as Sgp4Error, MinutesSinceEpoch, Prediction,
-    Satellite,
+    propagate_batch, propagate_batch_parallel, DecayLatch, DecayLatchedError, Error as Sgp4Error,
+    MinutesSinceEpoch, Prediction, Satellite,
 };
 
 mod atoms {
     rustler::atoms! {
         ok,
-        error
+        error,
+        decayed
     }
 }
 
@@ -39,6 +40,41 @@ fn encode_arc<'a>(env: Env<'a>, arc: Result<Vec<Prediction>, Sgp4Error>) -> Term
             (atoms::ok(), states).encode(env)
         }
         Err(e) => (atoms::error(), e.to_string()).encode(env),
+    }
+}
+
+fn encode_prediction(prediction: Prediction) -> (Vec3, Vec3) {
+    (
+        (
+            prediction.position[0],
+            prediction.position[1],
+            prediction.position[2],
+        ),
+        (
+            prediction.velocity[0],
+            prediction.velocity[1],
+            prediction.velocity[2],
+        ),
+    )
+}
+
+fn encode_latched_result<'a>(
+    env: Env<'a>,
+    result: Result<Prediction, DecayLatchedError>,
+) -> Term<'a> {
+    match result {
+        Ok(prediction) => (atoms::ok(), encode_prediction(prediction)).encode(env),
+        Err(DecayLatchedError::Decayed {
+            first_failing_epoch,
+            requested_epoch,
+        }) => (
+            atoms::error(),
+            (atoms::decayed(), first_failing_epoch.0, requested_epoch.0),
+        )
+            .encode(env),
+        Err(DecayLatchedError::Propagation(error)) => {
+            (atoms::error(), error.to_string()).encode(env)
+        }
     }
 }
 
@@ -107,4 +143,25 @@ fn sgp4_propagate_batch_parallel<'a>(
     opsmode: Term<'a>,
 ) -> NifResult<Term<'a>> {
     batch_impl(env, tle_maps, times_minutes, opsmode, true)
+}
+
+/// Propagate one satellite through a shared decay latch across a time sequence.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sgp4_propagate_with_decay_latch<'a>(
+    env: Env<'a>,
+    tle_map: Term<'a>,
+    times_minutes: Vec<f64>,
+    opsmode: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let opsmode = opsmode_from_term(env, opsmode)?;
+    let elements = elements_from_map(env, tle_map)?;
+    let satellite = Satellite::from_elements_with_opsmode(&elements, opsmode)
+        .map_err(crate::errors::invalid_input)?;
+    let mut latch = DecayLatch::new();
+    let states: Vec<Term<'a>> = times_minutes
+        .into_iter()
+        .map(|minutes| satellite.propagate_with_decay_latch(MinutesSinceEpoch(minutes), &mut latch))
+        .map(|result| encode_latched_result(env, result))
+        .collect();
+    Ok((atoms::ok(), states).encode(env))
 }

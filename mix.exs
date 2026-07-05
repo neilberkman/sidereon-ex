@@ -1,6 +1,10 @@
 defmodule Sidereon.MixProject do
   use Mix.Project
 
+  alias Sidereon.CCSDS.CDM
+  alias Sidereon.CCSDS.OEM
+  alias Sidereon.CCSDS.OPM
+  alias Sidereon.CCSDS.TDM
   alias Sidereon.Estimation
   alias Sidereon.Estimation.AlphaBetaGains
   alias Sidereon.Estimation.AlphaBetaState
@@ -138,7 +142,7 @@ defmodule Sidereon.MixProject do
       ],
       groups_for_modules: [
         Core: [Sidereon, Sidereon.Elements, Sidereon.SGP4, Sidereon.TemeState],
-        Coordinates: [Sidereon.Coordinates],
+        Coordinates: [Sidereon.Coordinates, Sidereon.FrameCatalog, Sidereon.Geodesic],
         "Ground Station": [Sidereon.Passes, Sidereon.Doppler, Sidereon.RF],
         "Orbit Determination": [Sidereon.IOD, Sidereon.Lambert],
         "Space Environment": [
@@ -197,7 +201,7 @@ defmodule Sidereon.MixProject do
           Crlb
         ],
         "Batch Analysis": [Sidereon.Coverage, Sidereon.RF],
-        Format: [TLE, OMM]
+        Format: [TLE, OMM, CDM, OEM, OPM, TDM]
       ]
     ]
   end

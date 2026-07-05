@@ -13,7 +13,8 @@ use sidereon_core::geoid::{
     egm96_undulations_deg as core_egm96_undulations_deg,
     egm96_undulations_rad as core_egm96_undulations_rad, ellipsoidal_height_m, geoid_undulation,
     geoid_undulations_deg as core_geoid_undulations_deg,
-    geoid_undulations_rad as core_geoid_undulations_rad, orthometric_height_m, GeoidGrid,
+    geoid_undulations_rad as core_geoid_undulations_rad, orthometric_height_m, Egm2008GridSpacing,
+    Egm2008RasterWindow, GeoidGrid,
 };
 
 mod atoms {
@@ -118,6 +119,57 @@ fn geoid_grid_from_egm96_dac<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
     match GeoidGrid::from_egm96_dac(bytes.as_slice()) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
         Err(error) => (atoms::error(), error.to_string()).encode(env),
+    }
+}
+
+fn egm2008_spacing(value: String) -> Result<Egm2008GridSpacing, String> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "1" | "1m" | "1-min" | "1-minute" | "one-minute" => Ok(Egm2008GridSpacing::OneMinute),
+        "2.5" | "2.5m" | "2.5-min" | "2.5-minute" | "two-point-five-minute" => {
+            Ok(Egm2008GridSpacing::TwoPointFiveMinute)
+        }
+        other => Err(format!("unsupported EGM2008 spacing {other}")),
+    }
+}
+
+/// Parse a full NGA EGM2008 raster into a loaded-grid handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_grid_from_egm2008_raster<'a>(
+    env: Env<'a>,
+    bytes: Binary<'a>,
+    spacing: String,
+) -> Term<'a> {
+    match egm2008_spacing(spacing).and_then(|spacing| {
+        GeoidGrid::from_egm2008_raster(bytes.as_slice(), spacing).map_err(|e| e.to_string())
+    }) {
+        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+        Err(error) => (atoms::error(), error).encode(env),
+    }
+}
+
+/// Parse a full or cropped NGA EGM2008 raster window into a loaded-grid handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn geoid_grid_from_egm2008_raster_window<'a>(
+    env: Env<'a>,
+    bytes: Binary<'a>,
+    spacing: String,
+    lat_min_deg: f64,
+    lon_min_deg: f64,
+    n_lat: usize,
+    n_lon: usize,
+) -> Term<'a> {
+    let result = egm2008_spacing(spacing).and_then(|spacing| {
+        Egm2008RasterWindow::new(spacing, lat_min_deg, lon_min_deg, n_lat, n_lon)
+            .map_err(|e| e.to_string())
+            .and_then(|window| {
+                GeoidGrid::from_egm2008_raster_window(bytes.as_slice(), window)
+                    .map_err(|e| e.to_string())
+            })
+    });
+    match result {
+        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+        Err(error) => (atoms::error(), error).encode(env),
     }
 }
 

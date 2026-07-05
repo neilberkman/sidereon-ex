@@ -27,8 +27,10 @@ mod ephemeris;
 mod error_metrics;
 mod errors;
 mod forces;
+mod frame_catalog;
 mod frequencies;
 mod gauss;
+mod geodesic;
 mod geodetic_time_series;
 mod geoid;
 mod geometry;
@@ -75,6 +77,7 @@ mod space_weather;
 mod spp;
 mod ssr;
 mod staleness;
+mod tdm;
 mod terrain_store;
 mod tides;
 mod time;
@@ -365,6 +368,24 @@ fn eclipse_shadow_fraction(sat_pos: Vec3, sun_pos: Vec3) -> NifResult<f64> {
 #[rustler::nif]
 fn eclipse_status(sat_pos: Vec3, sun_pos: Vec3) -> NifResult<rustler::Atom> {
     eclipse::status_impl(sat_pos, sun_pos)
+}
+
+#[rustler::nif]
+fn eclipse_shadow_fraction_with_model(
+    sat_pos: Vec3,
+    sun_pos: Vec3,
+    model: String,
+) -> NifResult<f64> {
+    eclipse::shadow_fraction_with_model_impl(sat_pos, sun_pos, model)
+}
+
+#[rustler::nif]
+fn eclipse_status_with_model(
+    sat_pos: Vec3,
+    sun_pos: Vec3,
+    model: String,
+) -> NifResult<rustler::Atom> {
+    eclipse::status_with_model_impl(sat_pos, sun_pos, model)
 }
 
 #[rustler::nif]

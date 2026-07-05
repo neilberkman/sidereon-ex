@@ -148,6 +148,33 @@ defmodule Sidereon.NIF do
 
   def opm_encode_xml(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
+  def tdm_parse_kvn(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_encode_kvn(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodesic_inverse(_lat1_deg, _lon1_deg, _lat2_deg, _lon2_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geodesic_direct(_lat1_deg, _lon1_deg, _azi1_deg, _s12_m), do: :erlang.nif_error(:nif_not_loaded)
+
+  def frame_catalog, do: :erlang.nif_error(:nif_not_loaded)
+
+  def frame_catalog_entry(_from_frame, _to_frame), do: :erlang.nif_error(:nif_not_loaded)
+
+  def frame_catalog_propagate_position(_position_m, _velocity_m_per_year, _from_epoch_year, _to_epoch_year),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def frame_catalog_transform(_position_m, _velocity_m_per_year, _from_frame, _to_frame, _epoch_year),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def frame_catalog_transform_from_epoch(
+        _position_m,
+        _velocity_m_per_year,
+        _position_epoch_year,
+        _from_frame,
+        _to_frame,
+        _transform_epoch_year
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def force_twobody_acceleration(_position, _velocity), do: :erlang.nif_error(:nif_not_loaded)
 
   def force_j2_acceleration(_position, _velocity), do: :erlang.nif_error(:nif_not_loaded)
@@ -155,6 +182,10 @@ defmodule Sidereon.NIF do
   def eclipse_shadow_fraction(_sat_pos, _sun_pos), do: :erlang.nif_error(:nif_not_loaded)
 
   def eclipse_status(_sat_pos, _sun_pos), do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_shadow_fraction_with_model(_sat_pos, _sun_pos, _model), do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_status_with_model(_sat_pos, _sun_pos, _model), do: :erlang.nif_error(:nif_not_loaded)
 
   def angles_sun_angle(_sat_pos, _sun_pos), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -221,6 +252,12 @@ defmodule Sidereon.NIF do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def orbit_fit_sp3_precise_orbit(_handle, _system_letter, _prn, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_sp3_ecef_precise_orbit(_handle, _system_letter, _prn, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_sp3_ecef_precise_orbits(_handle, _satellites, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_all_sp3_ecef_precise_orbits(_handle, _options), do: :erlang.nif_error(:nif_not_loaded)
 
   def orbit_fit_precise_ephemeris_sample_orbit(_samples, _system_letter, _prn, _options),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -1743,6 +1780,11 @@ defmodule Sidereon.NIF do
 
   def geoid_grid_from_egm96_dac(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
+  def geoid_grid_from_egm2008_raster(_bytes, _spacing), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_from_egm2008_raster_window(_bytes, _spacing, _lat_min_deg, _lon_min_deg, _n_lat, _n_lon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def geoid_grid_new(_lat_min_deg, _lon_min_deg, _dlat_deg, _dlon_deg, _n_lat, _n_lon, _values_m),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1769,6 +1811,8 @@ defmodule Sidereon.NIF do
   def sgp4_propagate_batch(_tle_maps, _times_minutes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
 
   def sgp4_propagate_batch_parallel(_tle_maps, _times_minutes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sgp4_propagate_with_decay_latch(_tle_map, _times_minutes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
 
   def sgp4_fit_tle(_samples, _config), do: :erlang.nif_error(:nif_not_loaded)
 

@@ -6,7 +6,8 @@ use rustler::Error;
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::astro::forces::{
     DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SpaceWeatherSource,
-    ThirdBodyGravity, ZonalCoefficients, ZonalDegrees, ZonalGravity,
+    SphericalHarmonicGravityConfig, ThirdBodyGravity, ZonalCoefficients, ZonalDegrees,
+    ZonalGravity,
 };
 use sidereon_core::astro::propagator::{
     ForceModelComponents, ForceModelKind, IntegratorKind, IntegratorOptions, StatePropagator,
@@ -114,6 +115,49 @@ fn srp_from_tokens(tokens: &[String]) -> NifResult<Option<SolarRadiationPressure
     Ok(None)
 }
 
+fn spherical_harmonic_from_tokens(
+    tokens: &[String],
+) -> NifResult<Option<SphericalHarmonicGravityConfig>> {
+    for token in tokens {
+        let (kind, rest) = if let Some(rest) = token.strip_prefix("geopotential:") {
+            ("earth", rest)
+        } else if let Some(rest) = token.strip_prefix("spherical_harmonic:") {
+            ("earth", rest)
+        } else if let Some(rest) = token.strip_prefix("spherical-harmonic:") {
+            ("earth", rest)
+        } else if let Some(rest) = token.strip_prefix("egm96:") {
+            ("egm96", rest)
+        } else if let Some(rest) = token.strip_prefix("earth_phase_b:") {
+            ("earth", rest)
+        } else if let Some(rest) = token.strip_prefix("phase_b:") {
+            ("earth", rest)
+        } else {
+            continue;
+        };
+
+        let fields: Vec<&str> = rest.split(':').collect();
+        if fields.len() != 2 {
+            return Err(Error::Term(Box::new(
+                "geopotential token must be geopotential:degree:order",
+            )));
+        }
+        let degree = fields[0]
+            .parse::<u16>()
+            .map_err(|_| Error::Term(Box::new("invalid geopotential degree")))?;
+        let order = fields[1]
+            .parse::<u16>()
+            .map_err(|_| Error::Term(Box::new("invalid geopotential order")))?;
+        let config = if kind == "egm96" {
+            SphericalHarmonicGravityConfig::egm96(degree, order)
+        } else {
+            SphericalHarmonicGravityConfig::earth(degree, order)
+        }
+        .map_err(crate::errors::invalid_input)?;
+        return Ok(Some(config));
+    }
+    Ok(None)
+}
+
 fn j2_only_zonal() -> ZonalGravity {
     ZonalGravity::new(
         sidereon_core::astro::constants::MU_EARTH,
@@ -127,8 +171,9 @@ fn j2_only_zonal() -> ZonalGravity {
 ///
 /// Existing callers can keep passing `["twobody"]` or `["twobody", "j2"]`.
 /// New composable callers may pass aliases such as `:j2_j6`, `:third_body`,
-/// `:sun`, `:moon`, `{:srp, cr, area_to_mass_m2_kg}`, `:relativity`, and
-/// `:earth_phase_a` through the Elixir wrapper.
+/// `:sun`, `:moon`, `{:srp, cr, area_to_mass_m2_kg}`, `:relativity`,
+/// `{:geopotential, degree, order}`, and `:earth_phase_a` through the Elixir
+/// wrapper.
 pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
     let tokens = normalized_force_tokens(forces);
     let tokens = if tokens.is_empty() {
@@ -137,9 +182,18 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         tokens
     };
     let srp = srp_from_tokens(&tokens)?;
+    let spherical_harmonic = spherical_harmonic_from_tokens(&tokens)?;
 
     if has_force(&tokens, &["earth_phase_a", "phase_a"]) {
         return Ok(ForceModelKind::earth_phase_a(srp));
+    }
+    if has_force(&tokens, &["earth_phase_b", "phase_b"]) && spherical_harmonic.is_none() {
+        return ForceModelKind::earth_phase_b(
+            sidereon_core::astro::forces::EGM96_EMBEDDED_MAX_DEGREE,
+            sidereon_core::astro::forces::EGM96_EMBEDDED_MAX_ORDER,
+            srp,
+        )
+        .map_err(crate::errors::invalid_input);
     }
 
     let wants_j2 = has_force(&tokens, &["j2"]);
@@ -157,6 +211,7 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         || wants_moon
         || wants_third_body
         || wants_relativity
+        || spherical_harmonic.is_some()
         || srp.is_some();
 
     if wants_j2 && !wants_composite && no_composite_perturbations(&tokens) {
@@ -175,6 +230,9 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         components = components.with_zonal(ZonalGravity::earth_j2_through_j6());
     } else if wants_j2 {
         components = components.with_zonal(j2_only_zonal());
+    }
+    if let Some(spherical_harmonic) = spherical_harmonic {
+        components = components.with_spherical_harmonic(spherical_harmonic);
     }
     if wants_third_body || (wants_sun && wants_moon) {
         components = components.with_third_body(ThirdBodyGravity::default());

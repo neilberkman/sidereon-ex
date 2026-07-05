@@ -24,6 +24,15 @@ defmodule Sidereon.Eclipse do
 
   alias Sidereon.NIF
 
+  defmodule EarthShadowModel do
+    @moduledoc """
+    Earth shape model used by eclipse shadow calculations.
+    """
+
+    @typedoc "Supported Earth shadow geometry models."
+    @type t :: :spherical | :wgs84_oblate | String.t()
+  end
+
   @doc """
   Determine the eclipse status of a satellite.
 
@@ -65,6 +74,30 @@ defmodule Sidereon.Eclipse do
     do: NIF.eclipse_shadow_fraction(sat_pos, sun_pos)
 
   @doc """
+  Compute the shadow fraction with an explicit Earth shadow model.
+  """
+  @spec shadow_fraction_with_model(
+          {float(), float(), float()},
+          {float(), float(), float()},
+          EarthShadowModel.t()
+        ) :: float()
+  def shadow_fraction_with_model({_x, _y, _z} = sat_pos, {_sx, _sy, _sz} = sun_pos, model) do
+    NIF.eclipse_shadow_fraction_with_model(sat_pos, sun_pos, shadow_model(model))
+  end
+
+  @doc """
+  Determine eclipse status with an explicit Earth shadow model.
+  """
+  @spec status_with_model(
+          {float(), float(), float()},
+          {float(), float(), float()},
+          EarthShadowModel.t()
+        ) :: :sunlit | :penumbra | :umbra
+  def status_with_model({_x, _y, _z} = sat_pos, {_sx, _sy, _sz} = sun_pos, model) do
+    NIF.eclipse_status_with_model(sat_pos, sun_pos, shadow_model(model))
+  end
+
+  @doc """
   Convenience function: propagate a TLE, transform to GCRS, fetch the Sun
   position from an ephemeris, and return the eclipse status.
 
@@ -94,4 +127,8 @@ defmodule Sidereon.Eclipse do
       {:ok, status(gcrs.position, sun_pos)}
     end
   end
+
+  defp shadow_model(:spherical), do: "spherical"
+  defp shadow_model(:wgs84_oblate), do: "wgs84_oblate"
+  defp shadow_model(value) when is_binary(value), do: value
 end
