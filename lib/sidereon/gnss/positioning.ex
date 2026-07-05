@@ -51,6 +51,7 @@ defmodule Sidereon.GNSS.Positioning do
   alias Sidereon.Constants
   alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Broadcast
+  alias Sidereon.GNSS.Core.Constants, as: GnssConstants
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.SP3
@@ -78,6 +79,9 @@ defmodule Sidereon.GNSS.Positioning do
     system's time DOP (the square root of its clock cofactor variance), one entry
     per constellation in the solve; the reference system's value equals
     `dop.tdop`, and the map is empty when the geometry is rank-deficient.
+    `rx_clock_drift_s_s` is populated by `solve_with_doppler/5` and is `nil` for
+    pseudorange-only solves. `position_covariance` carries the unit-variance ECEF
+    and local ENU position covariance blocks in square metres.
     `residuals_m` are the post-fit
     pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
@@ -98,8 +102,10 @@ defmodule Sidereon.GNSS.Positioning do
       :position,
       :geodetic,
       :rx_clock_s,
+      :rx_clock_drift_s_s,
       :system_clocks_s,
       :system_tdops,
+      :position_covariance,
       :dop,
       :residuals_m,
       :used_sats,
@@ -110,8 +116,10 @@ defmodule Sidereon.GNSS.Positioning do
       :position,
       :geodetic,
       :rx_clock_s,
+      :rx_clock_drift_s_s,
       :system_clocks_s,
       :system_tdops,
+      :position_covariance,
       :dop,
       :residuals_m,
       :used_sats,
@@ -119,8 +127,13 @@ defmodule Sidereon.GNSS.Positioning do
       :metadata
     ]
 
+    @typedoc "Receiver ECEF position in metres."
     @type position :: %{x_m: float(), y_m: float(), z_m: float()}
+
+    @typedoc "Receiver geodetic position in radians and metres."
     @type geodetic :: %{lat_rad: float(), lon_rad: float(), height_m: float()}
+
+    @typedoc "Dilution-of-precision scalars for the solved geometry."
     @type dop :: %{
             gdop: float(),
             pdop: float(),
@@ -128,6 +141,14 @@ defmodule Sidereon.GNSS.Positioning do
             vdop: float(),
             tdop: float()
           }
+
+    @typedoc "Unit-variance receiver position covariance blocks."
+    @type position_covariance :: %{
+            ecef_m2: [[float()]],
+            enu_m2: [[float()]]
+          }
+
+    @typedoc "Solver metadata and applied correction flags."
     @type metadata :: %{
             :iterations => non_neg_integer(),
             :converged => boolean(),
@@ -149,12 +170,15 @@ defmodule Sidereon.GNSS.Positioning do
             }
           }
 
+    @typedoc "Decoded single-point-positioning receiver solution."
     @type t :: %__MODULE__{
             position: position(),
             geodetic: geodetic() | nil,
             rx_clock_s: float(),
+            rx_clock_drift_s_s: float() | nil,
             system_clocks_s: %{String.t() => float()},
             system_tdops: %{String.t() => float()},
+            position_covariance: position_covariance(),
             dop: dop() | nil,
             residuals_m: [float()],
             used_sats: [String.t()],
@@ -207,8 +231,54 @@ defmodule Sidereon.GNSS.Positioning do
           }
   end
 
+  defmodule DopplerSolution do
+    @moduledoc """
+    A receiver position solution paired with an optional Doppler velocity solve.
+
+    `receiver` is the normal `Sidereon.GNSS.Positioning.Solution`. When Doppler
+    rows are supplied and the velocity geometry is solvable, `velocity` contains
+    the ECEF velocity, speed, receiver clock drift, unit-variance state
+    covariance, residuals, and used satellites. When no Doppler rows are supplied
+    or the velocity geometry is not solvable, `velocity` is `nil` and
+    `velocity_error` carries the typed reason when there was a Doppler attempt.
+    """
+
+    alias Sidereon.GNSS.Positioning.Solution
+
+    @enforce_keys [:receiver, :velocity, :velocity_error]
+    defstruct [:receiver, :velocity, :velocity_error]
+
+    @typedoc "Doppler-derived receiver velocity solve result."
+    @type velocity :: %{
+            velocity_m_s: {float(), float(), float()},
+            speed_m_s: float(),
+            clock_drift_s_s: float(),
+            state_covariance: [[float()]],
+            residuals_m_s: %{String.t() => float()},
+            used_sats: [String.t()],
+            n_satellites: non_neg_integer()
+          }
+
+    @typedoc "Pseudorange receiver solution plus optional Doppler velocity result."
+    @type t :: %__MODULE__{
+            receiver: Solution.t(),
+            velocity: velocity() | nil,
+            velocity_error: term() | nil
+          }
+  end
+
   @typedoc "A `{satellite_id, pseudorange_m}` pseudorange observation."
   @type observation :: {String.t(), number()}
+
+  @typedoc """
+  A Doppler observation as `{satellite_id, doppler_hz}`, or
+  `{satellite_id, doppler_hz, carrier_hz}`, or
+  `{satellite_id, doppler_hz, carrier_hz, sat_clock_drift_s_s}`.
+  """
+  @type doppler_observation ::
+          {String.t(), number()}
+          | {String.t(), number(), number()}
+          | {String.t(), number(), number(), number()}
 
   @typedoc "An epoch as a `NaiveDateTime` or `{{y, m, d}, {h, min, s}}` tuple."
   @type epoch :: NaiveDateTime.t() | tuple()
@@ -382,6 +452,36 @@ defmodule Sidereon.GNSS.Positioning do
           {:ok, Solution.t()} | {:error, term()}
   def solve_broadcast(%Broadcast{} = source, observations, epoch, opts \\ []) when is_list(observations) do
     solve(source, observations, epoch, opts)
+  end
+
+  @doc """
+  Solve receiver position from pseudoranges and attach a Doppler velocity solve.
+
+  `doppler_observations` accepts `{satellite_id, doppler_hz}` rows. A row may
+  also include `carrier_hz` and `sat_clock_drift_s_s`; omitted carrier defaults
+  to GPS L1 and omitted satellite clock drift defaults to zero.
+
+  Options match the atmospheric, initial-guess, geodetic, GLONASS-channel, and
+  Huber options from `solve/4`. This entry calls the core SPP+Doppler primitive
+  directly and does not run the `:max_pdop` or `:coarse_search` policy layer.
+  """
+  @spec solve_with_doppler(
+          SP3.t() | Broadcast.t(),
+          [observation()],
+          [doppler_observation()],
+          epoch(),
+          keyword()
+        ) :: {:ok, DopplerSolution.t()} | {:error, term()}
+  def solve_with_doppler(source, observations, doppler_observations, epoch, opts \\ [])
+
+  def solve_with_doppler(%SP3{handle: handle}, observations, doppler_observations, epoch, opts)
+      when is_list(observations) and is_list(doppler_observations) do
+    run_solve_with_doppler(:sp3, handle, observations, doppler_observations, epoch, opts)
+  end
+
+  def solve_with_doppler(%Broadcast{handle: handle}, observations, doppler_observations, epoch, opts)
+      when is_list(observations) and is_list(doppler_observations) do
+    run_solve_with_doppler(:broadcast, handle, observations, doppler_observations, epoch, opts)
   end
 
   @doc """
@@ -646,6 +746,95 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp decode_source({:broadcast, {:precise_degraded_unusable, metadata, spp_reason}}),
     do: {:broadcast, {:precise_degraded_unusable, Staleness.decode_metadata(metadata), spp_reason}}
+
+  defp run_solve_with_doppler(source, handle, observations, doppler_observations, epoch, opts) do
+    with {:ok, glonass_channels} <-
+           validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
+         {:ok, doppler_rows} <- normalize_doppler_observations(doppler_observations),
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+      args = [
+        handle,
+        Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end),
+        doppler_rows,
+        t_rx_j2000_s,
+        Time.second_of_day(epoch),
+        Time.day_of_year(epoch),
+        to_tuple4(Keyword.get(opts, :initial_guess, @default_initial_guess)),
+        Keyword.get(opts, :ionosphere, false),
+        Keyword.get(opts, :troposphere, false),
+        to_tuple4(Keyword.get(opts, :klobuchar_alpha, @default_alpha)),
+        to_tuple4(Keyword.get(opts, :klobuchar_beta, @default_beta)),
+        Keyword.get(opts, :pressure_hpa, @default_pressure_hpa) / 1.0,
+        Keyword.get(opts, :temperature_k, @default_temperature_k) / 1.0,
+        Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
+        Keyword.get(opts, :with_geodetic, true),
+        huber_arg(opts),
+        glonass_channels
+      ]
+
+      nif = if source == :sp3, do: :spp_solve_with_doppler, else: :spp_solve_broadcast_with_doppler
+
+      NIF
+      |> apply(nif, args)
+      |> decode_doppler_solution()
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  defp normalize_doppler_observations(observations) do
+    observations
+    |> Enum.reduce_while({:ok, []}, fn observation, {:ok, acc} ->
+      case normalize_doppler_observation(observation) do
+        {:ok, row} -> {:cont, {:ok, [row | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_doppler_observation({sat, doppler_hz}) when is_binary(sat) and is_number(doppler_hz),
+    do: {:ok, {sat, doppler_hz / 1.0, GnssConstants.gps_l1_hz(), 0.0}}
+
+  defp normalize_doppler_observation({sat, doppler_hz, carrier_hz})
+       when is_binary(sat) and is_number(doppler_hz) and is_number(carrier_hz),
+       do: {:ok, {sat, doppler_hz / 1.0, carrier_hz / 1.0, 0.0}}
+
+  defp normalize_doppler_observation({sat, doppler_hz, carrier_hz, sat_clock_drift_s_s})
+       when is_binary(sat) and is_number(doppler_hz) and is_number(carrier_hz) and is_number(sat_clock_drift_s_s),
+       do: {:ok, {sat, doppler_hz / 1.0, carrier_hz / 1.0, sat_clock_drift_s_s / 1.0}}
+
+  defp normalize_doppler_observation(other), do: {:error, {:invalid_doppler_observation, other}}
+
+  defp decode_doppler_solution({:ok, {receiver_body, velocity, velocity_error}}) do
+    with {:ok, receiver} <- Decode.decode({:ok, receiver_body}) do
+      {:ok,
+       %DopplerSolution{
+         receiver: receiver,
+         velocity: decode_velocity_payload(velocity),
+         velocity_error: velocity_error
+       }}
+    end
+  end
+
+  defp decode_doppler_solution(other), do: Decode.map_solve_error(other)
+
+  defp decode_velocity_payload(nil), do: nil
+
+  defp decode_velocity_payload({velocity, speed, clock_drift, state_covariance, residuals, used_sats}) do
+    %{
+      velocity_m_s: velocity,
+      speed_m_s: speed,
+      clock_drift_s_s: clock_drift,
+      state_covariance: state_covariance,
+      residuals_m_s: Map.new(residuals),
+      used_sats: used_sats,
+      n_satellites: length(used_sats)
+    }
+  end
 
   defp dispatch(source, source_tag, handle, observations, epoch, opts) do
     robust? = Keyword.get(opts, :robust, false)

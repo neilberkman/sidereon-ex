@@ -20,13 +20,16 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   alias Sidereon.NIF
 
   @enforce_keys [:handle, :time_scale]
-  defstruct [:handle, :time_scale]
+  defstruct [:handle, :time_scale, artifact?: false]
 
+  @typedoc "Precise source accepted by interpolant batch evaluators."
   @type source :: SP3.t() | PreciseEphemeris.t() | t()
 
+  @typedoc "Cached precise-ephemeris interpolant or opened artifact handle."
   @type t :: %__MODULE__{
           handle: reference(),
-          time_scale: String.t()
+          time_scale: String.t(),
+          artifact?: boolean()
         }
 
   @doc """
@@ -98,6 +101,86 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc """
+  Build canonical precise-interpolant artifact bytes from a parsed SP3 product
+  or fitted interpolant.
+
+  The returned binary is deterministic for a deterministic source and can be
+  persisted by the caller. `open/1` reads the same bytes back into an evaluation
+  handle.
+  """
+  @spec artifact_bytes(SP3.t() | t()) :: {:ok, binary()} | {:error, term()}
+  def artifact_bytes(%SP3{handle: handle}) do
+    case NIF.precise_interpolant_store_bytes_from_sp3(handle) do
+      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  def artifact_bytes(%__MODULE__{handle: handle}) do
+    case NIF.precise_interpolant_store_bytes_from_interpolant(handle) do
+      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc """
+  Open precise-interpolant artifact bytes into an evaluation handle.
+
+  The BEAM binary is copied into the native resource so the resource can outlive
+  the caller's binary safely. Inside the resource, the core artifact reader
+  borrows its numeric arrays from the owned byte span for repeated evaluation.
+  Corrupt and truncated artifacts return typed `{:error, reason}` values.
+  """
+  @spec open(binary()) :: {:ok, t()} | {:error, term()}
+  def open(bytes) when is_binary(bytes) do
+    case NIF.precise_interpolant_store_open(bytes) do
+      {:ok, resource} when is_reference(resource) ->
+        {:ok,
+         %__MODULE__{
+           handle: resource,
+           time_scale: NIF.precise_interpolant_time_scale(resource),
+           artifact?: true
+         }}
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, other}
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc """
+  Return the artifact checksum.
+
+  Pass artifact bytes to compute their checksum directly. Passing an opened
+  artifact handle returns the checksum of the resource's backing bytes. Passing
+  a fitted interpolant builds artifact bytes first and then checksums them.
+  """
+  @spec checksum(binary() | t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def checksum(bytes) when is_binary(bytes), do: {:ok, NIF.precise_interpolant_store_checksum64_bytes(bytes)}
+
+  def checksum(%__MODULE__{artifact?: true, handle: handle}) do
+    {:ok, NIF.precise_interpolant_store_checksum64_handle(handle)}
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  def checksum(%__MODULE__{} = interpolant) do
+    with {:ok, bytes} <- artifact_bytes(interpolant) do
+      checksum(bytes)
+    end
   end
 
   @doc """

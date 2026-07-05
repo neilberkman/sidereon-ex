@@ -78,6 +78,9 @@ defmodule Sidereon.GNSS.VelocityTest do
       assert abs(result.clock_drift_s_s - drift_true) < 1.0e-13
       assert result.n_satellites == length(ctx.sats)
       assert result.used_sats == ctx.sats
+      assert length(result.state_covariance) == 4
+      assert Enum.all?(result.state_covariance, &(length(&1) == 4))
+      assert result.state_covariance |> hd() |> hd() > 0.0
     end
 
     test "recovers a static receiver as ~zero speed", ctx do

@@ -64,6 +64,7 @@ defmodule Sidereon.GNSS.Observables do
       }
   """
 
+  alias Sidereon.Constants, as: SidereonConstants
   alias Sidereon.GNSS.{Broadcast, PreciseEphemeris, SP3, Time}
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Types
@@ -228,6 +229,19 @@ defmodule Sidereon.GNSS.Observables do
           sat_pos_ecef_m: vec3()
         }
 
+  @typedoc "One emission-media request, `{satellite_id, emission_epoch_j2000_s}`."
+  @type emission_media_request :: {String.t(), number()}
+
+  @typedoc "Index-aligned emission-state and media-delay arrays."
+  @type emission_media_batch :: %{
+          positions_ecef_m: [vec3() | nil],
+          clocks_s: [float() | nil],
+          ionosphere_slant_delays_m: [float() | nil],
+          troposphere_delays_m: [float() | nil],
+          statuses: [:valid | :gap | :below_elevation_cutoff | :error],
+          element_errors: [term() | nil]
+        }
+
   @doc """
   Predict geometry-only ranges for many `{satellite_id, receiver_ecef, t_rx_j2000_s}`
   requests against one precise-ephemeris source in a single NIF call.
@@ -313,6 +327,156 @@ defmodule Sidereon.GNSS.Observables do
       sat_clock_s: sat_clock_s,
       transmit_time_j2000_s: transmit_time_j2000_s,
       sat_pos_ecef_m: sat_pos_ecef_m
+    }
+  end
+
+  @doc """
+  Predict emission-epoch satellite states and media delays in one batch call.
+
+  Each request is `{satellite_id, emission_epoch_j2000_s}`. The source is a
+  parsed SP3 product, a sample-built precise source, or any
+  `Sidereon.GNSS.PreciseEphemeris.Interpolant`, including one opened from
+  artifact bytes. The output is a map of index-aligned arrays:
+
+      %{
+        positions_ecef_m: [vec3() | nil],
+        clocks_s: [float() | nil],
+        ionosphere_slant_delays_m: [float() | nil],
+        troposphere_delays_m: [float() | nil],
+        statuses: [:valid | :gap | :below_elevation_cutoff | :error],
+        element_errors: [term() | nil]
+      }
+
+  Options:
+
+    * `:carrier_hz` - carrier frequency for ionospheric group delay, default
+      GPS L1.
+    * `:troposphere` - `false`, `true`, or a keyword list with `:pressure_hpa`,
+      `:temperature_k`, and `:relative_humidity`.
+    * `:ionosphere` - `nil`, `{:klobuchar, alpha, beta}`,
+      `{:klobuchar, %{alpha: alpha, beta: beta}}`, or `{:ionex, handle}`.
+    * `:min_elevation_deg` - optional minimum receiver elevation. Rows below
+      the cutoff keep state and clock outputs but have nil media delays.
+  """
+  @spec emission_media_batch(
+          SP3.t() | PreciseEphemeris.t() | Interpolant.t(),
+          [emission_media_request()],
+          vec3() | map(),
+          keyword()
+        ) :: {:ok, emission_media_batch()} | {:error, term()}
+  def emission_media_batch(source, requests, receiver_ecef, opts \\ []) when is_list(requests) do
+    with {:ok, handle} <- source_handle(source),
+         {:ok, nif_requests} <- prepare_emission_requests(requests),
+         {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
+         {:ok, carrier_hz} <- emission_number(Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz()), :carrier_hz),
+         {:ok, troposphere} <- emission_troposphere(Keyword.get(opts, :troposphere, false), opts),
+         {:ok, ionosphere} <- emission_ionosphere(Keyword.get(opts, :ionosphere)),
+         {:ok, min_elevation_rad} <- min_elevation_rad(Keyword.get(opts, :min_elevation_deg)) do
+      case NIF.emission_media_batch(
+             handle,
+             nif_requests,
+             receiver,
+             carrier_hz / 1.0,
+             troposphere,
+             ionosphere,
+             min_elevation_rad
+           ) do
+        {:ok, tuple} -> {:ok, emission_media_map(tuple)}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  defp prepare_emission_requests(requests) do
+    requests
+    |> Enum.reduce_while({:ok, []}, fn request, {:ok, acc} ->
+      case prepare_emission_request(request) do
+        {:ok, tuple} -> {:cont, {:ok, [tuple | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, tuples} -> {:ok, Enum.reverse(tuples)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp prepare_emission_request({satellite_id, emission_epoch_j2000_s})
+       when is_binary(satellite_id) and is_number(emission_epoch_j2000_s) do
+    with {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id) do
+      {:ok, {system_letter, prn, emission_epoch_j2000_s / 1.0}}
+    end
+  end
+
+  defp prepare_emission_request(_request), do: {:error, :invalid_request}
+
+  defp emission_troposphere(false, _opts), do: {:ok, nil}
+  defp emission_troposphere(nil, _opts), do: {:ok, nil}
+
+  defp emission_troposphere(true, opts) do
+    emission_met_tuple(opts)
+  end
+
+  defp emission_troposphere(tropo_opts, _opts) when is_list(tropo_opts) do
+    emission_met_tuple(tropo_opts)
+  end
+
+  defp emission_troposphere(_other, _opts), do: {:error, {:invalid_option, :troposphere}}
+
+  defp emission_met_tuple(opts) do
+    with {:ok, pressure_hpa} <-
+           emission_number(Keyword.get(opts, :pressure_hpa, SidereonConstants.surface_met_pressure_hpa()), :troposphere),
+         {:ok, temperature_k} <-
+           emission_number(
+             Keyword.get(opts, :temperature_k, SidereonConstants.surface_met_temperature_k()),
+             :troposphere
+           ),
+         {:ok, relative_humidity} <-
+           emission_number(
+             Keyword.get(opts, :relative_humidity, SidereonConstants.surface_met_relative_humidity()),
+             :troposphere
+           ) do
+      {:ok, {pressure_hpa, temperature_k, relative_humidity}}
+    end
+  end
+
+  defp emission_ionosphere(nil), do: {:ok, nil}
+  defp emission_ionosphere(false), do: {:ok, nil}
+
+  defp emission_ionosphere({:klobuchar, %{alpha: alpha, beta: beta}}),
+    do: emission_ionosphere({:klobuchar, alpha, beta})
+
+  defp emission_ionosphere({:klobuchar, alpha, beta}) do
+    with {:ok, alpha} <- emission_tuple4(alpha, :ionosphere),
+         {:ok, beta} <- emission_tuple4(beta, :ionosphere) do
+      {:ok, {"klobuchar", alpha, beta}}
+    end
+  end
+
+  defp emission_ionosphere({:ionex, handle}) when is_reference(handle), do: {:ok, {"ionex", handle}}
+
+  defp emission_ionosphere(_other), do: {:error, {:invalid_option, :ionosphere}}
+
+  defp min_elevation_rad(nil), do: {:ok, nil}
+
+  defp min_elevation_rad(deg) when is_number(deg), do: {:ok, deg / 1.0 * :math.pi() / 180.0}
+
+  defp min_elevation_rad(_other), do: {:error, {:invalid_option, :min_elevation_deg}}
+
+  defp emission_number(value, _option) when is_number(value), do: {:ok, value / 1.0}
+  defp emission_number(_value, option), do: {:error, {:invalid_option, option}}
+
+  defp emission_media_map({positions, clocks, ionosphere_slant_delays, troposphere_delays, statuses, element_errors}) do
+    %{
+      positions_ecef_m: positions,
+      clocks_s: clocks,
+      ionosphere_slant_delays_m: ionosphere_slant_delays,
+      troposphere_delays_m: troposphere_delays,
+      statuses: statuses,
+      element_errors: element_errors
     }
   end
 
@@ -405,4 +569,11 @@ defmodule Sidereon.GNSS.Observables do
 
   defp extrapolate?(opts) when is_list(opts), do: Keyword.get(opts, :extrapolate, false) == true
   defp extrapolate?(_opts), do: false
+
+  defp emission_tuple4({a, b, c, d}, option), do: emission_tuple4([a, b, c, d], option)
+
+  defp emission_tuple4([a, b, c, d], _option) when is_number(a) and is_number(b) and is_number(c) and is_number(d),
+    do: {:ok, {a / 1.0, b / 1.0, c / 1.0, d / 1.0}}
+
+  defp emission_tuple4(_value, option), do: {:error, {:invalid_option, option}}
 end

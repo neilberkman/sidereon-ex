@@ -4,14 +4,15 @@
 //! interpolation, gap classification, and batch contracts stay in
 //! `sidereon-core`.
 
-use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, Error, NifResult, OwnedBinary, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit};
 use sidereon_core::ephemeris::{
     observable_states_at_j2000_s as core_states_at_j2000_s,
     observable_states_at_shared_j2000_s as core_states_at_shared_j2000_s,
+    precise_interpolant_store_checksum64, MmapPreciseEphemerisInterpolant,
     ObservableEphemerisSource, ObservableStateBatch, ObservableStateElementStatus,
     ObservablesError, PreciseEphemerisInterpolant, PreciseEphemerisSample, PreciseInterpolantError,
-    PreciseSamplesError, OBSERVABLE_STATE_MISSING_POSITION_ECEF_M,
+    PreciseInterpolantStoreError, PreciseSamplesError, OBSERVABLE_STATE_MISSING_POSITION_ECEF_M,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId};
 
@@ -39,7 +40,17 @@ mod atoms {
         mixed_timescale,
         non_finite,
         out_of_range,
-        nan
+        nan,
+        corrupt,
+        truncated,
+        io,
+        parse,
+        unsupported_version,
+        unsupported_time_scale,
+        unsupported_satellite_system,
+        duplicate_satellite,
+        checksum,
+        satellite_checksum
     }
 }
 
@@ -50,6 +61,14 @@ pub struct PreciseInterpolantResource {
 
 #[rustler::resource_impl]
 impl rustler::Resource for PreciseInterpolantResource {}
+
+/// Resource handle holding an opened memory-mappable precise-interpolant store.
+pub struct MappedPreciseInterpolantResource {
+    pub interpolant: MmapPreciseEphemerisInterpolant<'static>,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for MappedPreciseInterpolantResource {}
 
 /// Build a cached interpolant from a parsed SP3 product.
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -102,20 +121,90 @@ pub fn precise_interpolant_from_precise_samples<'a>(
 
 /// Time-scale abbreviation for the interpolant's source epochs.
 #[rustler::nif]
-pub fn precise_interpolant_time_scale(handle: ResourceArc<PreciseInterpolantResource>) -> String {
-    handle.interpolant.time_scale().abbrev().to_string()
+pub fn precise_interpolant_time_scale(source: Term<'_>) -> NifResult<String> {
+    if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        Ok(handle.interpolant.time_scale().abbrev().to_string())
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
+        Ok(handle.interpolant.time_scale().abbrev().to_string())
+    } else {
+        Err(Error::Term(Box::new(
+            "expected a precise-interpolant handle",
+        )))
+    }
 }
 
 /// Satellite ids available in the cached interpolant.
 #[rustler::nif]
-pub fn precise_interpolant_satellite_ids(
+pub fn precise_interpolant_satellite_ids(source: Term<'_>) -> NifResult<Vec<String>> {
+    if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        Ok(handle
+            .interpolant
+            .satellites()
+            .map(|sat| sat.to_string())
+            .collect())
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
+        Ok(handle
+            .interpolant
+            .satellites()
+            .iter()
+            .map(|sat| sat.to_string())
+            .collect())
+    } else {
+        Err(Error::Term(Box::new(
+            "expected a precise-interpolant handle",
+        )))
+    }
+}
+
+/// Build canonical precise-interpolant store bytes from a parsed SP3 product.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_bytes_from_sp3<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+) -> Term<'a> {
+    match handle.sp3.precise_interpolant_store_bytes() {
+        Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Build canonical precise-interpolant store bytes from a fitted interpolant.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_bytes_from_interpolant<'a>(
+    env: Env<'a>,
     handle: ResourceArc<PreciseInterpolantResource>,
-) -> Vec<String> {
-    handle
-        .interpolant
-        .satellites()
-        .map(|sat| sat.to_string())
-        .collect()
+) -> Term<'a> {
+    match handle.interpolant.to_mmap_store_bytes() {
+        Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Open canonical precise-interpolant store bytes into an evaluation handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_open<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
+    match MmapPreciseEphemerisInterpolant::from_vec(bytes.as_slice().to_vec()) {
+        Ok(interpolant) => (
+            atoms::ok(),
+            ResourceArc::new(MappedPreciseInterpolantResource { interpolant }),
+        )
+            .encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Return the checksum for precise-interpolant store bytes.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_checksum64_bytes(bytes: Binary<'_>) -> u64 {
+    precise_interpolant_store_checksum64(bytes.as_slice())
+}
+
+/// Return the checksum for an opened precise-interpolant store handle.
+#[rustler::nif]
+pub fn precise_interpolant_store_checksum64_handle(
+    handle: ResourceArc<MappedPreciseInterpolantResource>,
+) -> u64 {
+    handle.interpolant.checksum64()
 }
 
 /// Position sentinel used by failed observable-state batch rows.
@@ -167,6 +256,8 @@ where
     } else if let Ok(handle) = source.decode::<ResourceArc<SampleSourceResource>>() {
         Ok(f(&handle.source))
     } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        Ok(f(&handle.interpolant))
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
         Ok(f(&handle.interpolant))
     } else {
         Err(Error::Term(Box::new(
@@ -253,6 +344,9 @@ fn observables_error_reason<'a>(env: Env<'a>, error: &ObservablesError) -> Term<
             (atoms::invalid_input(), field.to_string(), kind.to_string()).encode(env)
         }
         ObservablesError::NoEphemeris => atoms::no_ephemeris().encode(env),
+        ObservablesError::Media(err) => {
+            (atoms::invalid_input(), "media".to_string(), err.to_string()).encode(env)
+        }
         ObservablesError::Ephemeris(CoreError::EpochOutOfRange) => {
             atoms::epoch_out_of_range().encode(env)
         }
@@ -278,4 +372,67 @@ fn encode_float_or_nan<'a>(env: Env<'a>, value: f64) -> Term<'a> {
     } else {
         value.encode(env)
     }
+}
+
+fn bytes_to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut binary =
+        OwnedBinary::new(bytes.len()).expect("allocate precise interpolant store binary");
+    binary.as_mut_slice().copy_from_slice(bytes);
+    binary.release(env).encode(env)
+}
+
+fn store_error_term<'a>(env: Env<'a>, error: PreciseInterpolantStoreError) -> Term<'a> {
+    match error {
+        PreciseInterpolantStoreError::Io { path, message } => {
+            (atoms::io(), path.display().to_string(), message).encode(env)
+        }
+        PreciseInterpolantStoreError::Parse { reason } if parse_reason_is_truncated(&reason) => {
+            (atoms::truncated(), reason).encode(env)
+        }
+        PreciseInterpolantStoreError::Parse { reason } => {
+            (atoms::corrupt(), (atoms::parse(), reason)).encode(env)
+        }
+        PreciseInterpolantStoreError::UnsupportedVersion { version } => {
+            (atoms::corrupt(), (atoms::unsupported_version(), version)).encode(env)
+        }
+        PreciseInterpolantStoreError::UnsupportedTimeScale { tag } => {
+            (atoms::corrupt(), (atoms::unsupported_time_scale(), tag)).encode(env)
+        }
+        PreciseInterpolantStoreError::UnsupportedSatelliteSystem { tag } => (
+            atoms::corrupt(),
+            (atoms::unsupported_satellite_system(), tag),
+        )
+            .encode(env),
+        PreciseInterpolantStoreError::DuplicateSatellite { sat } => (
+            atoms::corrupt(),
+            (atoms::duplicate_satellite(), sat.to_string()),
+        )
+            .encode(env),
+        PreciseInterpolantStoreError::Checksum { expected, found } => {
+            (atoms::corrupt(), (atoms::checksum(), expected, found)).encode(env)
+        }
+        PreciseInterpolantStoreError::SatelliteChecksum {
+            sat,
+            expected,
+            found,
+        } => (
+            atoms::corrupt(),
+            (
+                atoms::satellite_checksum(),
+                sat.to_string(),
+                expected,
+                found,
+            ),
+        )
+            .encode(env),
+    }
+}
+
+fn parse_reason_is_truncated(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("trunc")
+        || lower.contains("short")
+        || lower.contains("needs at least")
+        || lower.contains("out of bounds")
+        || lower.contains("past end")
 }

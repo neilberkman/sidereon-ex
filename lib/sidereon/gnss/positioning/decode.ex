@@ -7,13 +7,27 @@ defmodule Sidereon.GNSS.Positioning.Decode do
   def decode(
         {:ok, {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops}}
       ) do
+    decode(
+      {:ok,
+       {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops, nil,
+        {nil, nil}}}
+    )
+  end
+
+  def decode(
+        {:ok,
+         {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops,
+          rx_clock_drift_s_s, position_covariance}}
+      ) do
     {:ok,
      %Solution{
        position: position_map(position),
        geodetic: geodetic_map(geodetic),
        rx_clock_s: rx_clock_s,
+       rx_clock_drift_s_s: rx_clock_drift_s_s,
        system_clocks_s: Map.new(system_clocks),
        system_tdops: Map.new(system_tdops),
+       position_covariance: covariance_map(position_covariance),
        dop: dop_map(dop),
        residuals_m: residuals,
        used_sats: used,
@@ -47,6 +61,10 @@ defmodule Sidereon.GNSS.Positioning.Decode do
   defp dop_map(nil), do: nil
 
   defp dop_map({gdop, pdop, hdop, vdop, tdop}), do: %{gdop: gdop, pdop: pdop, hdop: hdop, vdop: vdop, tdop: tdop}
+
+  defp covariance_map({nil, nil}), do: %{ecef_m2: [], enu_m2: []}
+
+  defp covariance_map({ecef_m2, enu_m2}), do: %{ecef_m2: ecef_m2, enu_m2: enu_m2}
 
   defp metadata_map(
          {iterations, converged, status, iono, tropo, outer_iterations, final_robust_scale_m, used_count, systems,

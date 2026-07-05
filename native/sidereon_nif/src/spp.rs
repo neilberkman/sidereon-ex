@@ -22,13 +22,15 @@ use sidereon_core::{
         estimate, EstimateError, EstimateInput, EstimateOptions, EstimateOutput, StrategyId,
     },
     positioning::{
-        solve_spp_batch_parallel, solve_spp_batch_serial, solve_with_fallback, BroadcastReason,
-        Corrections, EphemerisSource, FallbackError, FixSource, KlobucharCoeffs, Observation,
-        ReceiverSolution, RejectionReason, RobustConfig, SolveInputs, SolvePolicy,
-        SolvePolicyError, SourcedSolution, SppError, SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
+        solve_spp_batch_parallel, solve_spp_batch_serial, solve_with_doppler_velocity,
+        solve_with_fallback, BroadcastReason, Corrections, DopplerObservation, EphemerisSource,
+        FallbackError, FixSource, KlobucharCoeffs, Observation, ReceiverSolution, RejectionReason,
+        RobustConfig, SolveInputs, SolvePolicy, SolvePolicyError, SourcedSolution,
+        SppDopplerSolution, SppError, SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
     },
     quality::{SolutionValidationError, SolutionValidationOptions},
     staleness::StalenessPolicy,
+    velocity::{VelocityError, VelocitySolution},
     GnssSatelliteId, GnssSystem,
 };
 
@@ -41,6 +43,8 @@ use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
 use crate::sp3::Sp3Resource;
 use std::collections::BTreeMap;
+
+type DopplerObservationTerm = (String, f64, f64, f64);
 
 #[rustler::nif]
 fn spp_residual_rms_m(residuals_m: Vec<f64>) -> f64 {
@@ -199,7 +203,9 @@ fn solve_policy_error_term<'a>(env: Env<'a>, error: &SolvePolicyError) -> Term<'
 /// surfaced as `Solution.metadata.status`.
 ///
 /// [`Status`]: sidereon_core::astro::math::least_squares::Status
-fn status_atom_name(status: sidereon_core::astro::math::least_squares::Status) -> &'static str {
+pub(crate) fn status_atom_name(
+    status: sidereon_core::astro::math::least_squares::Status,
+) -> &'static str {
     use sidereon_core::astro::math::least_squares::Status;
     match status {
         Status::GradientTolerance => "gradient_tolerance",
@@ -236,7 +242,9 @@ pub(crate) fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///   raim_checkable,
 ///   geometry_quality},                   # observability diagnostics
 ///  [{"G", clock_s}, {"E", clock_s}],     # per-system receiver clocks, seconds
-///  [{"G", tdop}, {"E", tdop}]}           # per-system TDOP, ascending system order
+///  [{"G", tdop}, {"E", tdop}],           # per-system TDOP, ascending system order
+///  rx_clock_drift_s_s | nil,             # populated by SPP+Doppler solves
+///  {ecef_m2, enu_m2}}                    # position covariance blocks
 /// ```
 pub(crate) fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
     (atom::ok(), encode_solution_body(env, sol)).encode(env)
@@ -259,6 +267,14 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
         Some(d) => (d.gdop, d.pdop, d.hdop, d.vdop, d.tdop).encode(env),
         None => atom::nil().encode(env),
     };
+    let rx_clock_drift: Term<'a> = match sol.rx_clock_drift_s_s {
+        Some(clock_drift) => clock_drift.encode(env),
+        None => atom::nil().encode(env),
+    };
+    let position_covariance = (
+        matrix3_to_rows(sol.position_covariance.ecef_m2),
+        matrix3_to_rows(sol.position_covariance.enu_m2),
+    );
 
     // A3: per-constellation TDOP as [{system_letter, tdop}, ...] in ascending
     // system order (mirrors `system_clocks`). Empty only when the geometry is
@@ -321,7 +337,7 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
         ],
     );
 
-    // The body has nine fields, past the arity of the blanket tuple `Encoder`,
+    // The body exceeds the arity of the blanket tuple `Encoder`,
     // so it is assembled with `make_tuple` over the already-encoded terms.
     make_tuple(
         env,
@@ -336,8 +352,112 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             metadata,
             system_clocks.encode(env),
             system_tdops.encode(env),
+            rx_clock_drift,
+            position_covariance.encode(env),
         ],
     )
+}
+
+pub(crate) fn matrix3_to_rows(matrix: [[f64; 3]; 3]) -> Vec<Vec<f64>> {
+    matrix.map(|row| row.to_vec()).to_vec()
+}
+
+fn matrix4_to_rows(matrix: [[f64; 4]; 4]) -> Vec<Vec<f64>> {
+    matrix.map(|row| row.to_vec()).to_vec()
+}
+
+fn decode_doppler_observations(
+    observations: Vec<DopplerObservationTerm>,
+) -> NifResult<Vec<DopplerObservation>> {
+    observations
+        .into_iter()
+        .map(|(token, doppler_hz, carrier_hz, sat_clock_drift_s_s)| {
+            let (letter, rest) = token.split_at(token.char_indices().nth(1).map_or(0, |(i, _)| i));
+            let system = system_from_letter(letter)?;
+            let prn: u8 = rest
+                .parse()
+                .map_err(|_| Error::Term(Box::new(format!("bad satellite token {token:?}"))))?;
+            Ok(DopplerObservation {
+                satellite_id: GnssSatelliteId::new(system, prn)
+                    .map_err(crate::errors::invalid_input)?,
+                doppler_hz,
+                carrier_hz,
+                sat_clock_drift_s_s,
+            })
+        })
+        .collect()
+}
+
+fn encode_velocity_body<'a>(env: Env<'a>, velocity: &VelocitySolution) -> Term<'a> {
+    let residuals: Vec<(String, f64)> = velocity
+        .residuals_m_s
+        .iter()
+        .map(|(sat, residual)| (sat.to_string(), *residual))
+        .collect();
+    let used_sats: Vec<String> = velocity.used_sats.iter().map(ToString::to_string).collect();
+    (
+        (
+            velocity.velocity_m_s[0],
+            velocity.velocity_m_s[1],
+            velocity.velocity_m_s[2],
+        ),
+        velocity.speed_m_s,
+        velocity.clock_drift_s_s,
+        matrix4_to_rows(velocity.state_covariance),
+        residuals,
+        used_sats,
+    )
+        .encode(env)
+}
+
+fn velocity_error_reason<'a>(env: Env<'a>, error: &VelocityError) -> Term<'a> {
+    match error {
+        VelocityError::NoObservations => atom_from(env, "no_observations"),
+        VelocityError::TooFewSatellites { used, required } => (
+            atom_from(env, "too_few_satellites"),
+            *used as i64,
+            *required as i64,
+        )
+            .encode(env),
+        VelocityError::SingularGeometry => atom_from(env, "singular_geometry"),
+        VelocityError::DuplicateObservation { satellite_id } => (
+            atom_from(env, "duplicate_observation"),
+            satellite_id.to_string(),
+        )
+            .encode(env),
+        VelocityError::InvalidCarrier { satellite_id } => {
+            (atom_from(env, "invalid_carrier"), satellite_id.to_string()).encode(env)
+        }
+        VelocityError::InvalidInput { field, reason } => {
+            (atom_from(env, "invalid_input"), *field, *reason).encode(env)
+        }
+        VelocityError::InvalidObservation { satellite_id } => (
+            atom_from(env, "invalid_observation"),
+            satellite_id.to_string(),
+        )
+            .encode(env),
+        VelocityError::InvalidReceiverState => atom_from(env, "invalid_receiver_state"),
+    }
+}
+
+fn encode_spp_doppler_solution<'a>(env: Env<'a>, solution: &SppDopplerSolution) -> Term<'a> {
+    let velocity = match &solution.velocity {
+        Some(velocity) => encode_velocity_body(env, velocity),
+        None => atom::nil().encode(env),
+    };
+    let velocity_error = match &solution.velocity_error {
+        Some(error) => velocity_error_reason(env, error),
+        None => atom::nil().encode(env),
+    };
+    (
+        atom::ok(),
+        (
+            encode_solution_body(env, &solution.receiver),
+            velocity,
+            velocity_error,
+        ),
+    )
+        .encode(env)
 }
 
 /// Solve single-point positioning for one receive epoch against a loaded SP3
@@ -368,7 +488,7 @@ pub(crate) fn is_nil(term: Term<'_>) -> bool {
             .unwrap_or(false)
 }
 
-fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
+pub(crate) fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
     if term.is_atom() {
         // The only valid atom is `nil` (off). Any other atom is a contract error.
         let name: String = term.atom_to_string().unwrap_or_default();
@@ -658,6 +778,124 @@ fn spp_solve_broadcast<'a>(
         with_geodetic,
         policy,
     ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_solve_with_doppler<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    observations: Vec<(String, f64)>,
+    doppler_observations: Vec<DopplerObservationTerm>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    robust: Term<'a>,
+    glonass_channels: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let robust = decode_robust(robust)?;
+    let glonass_channels = decode_glonass_channels(glonass_channels)?;
+    let mut inputs = build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    inputs.glonass_channels = glonass_channels;
+    let doppler_observations = decode_doppler_observations(doppler_observations)?;
+
+    Ok(
+        match solve_with_doppler_velocity(
+            &handle.sp3,
+            &inputs,
+            &doppler_observations,
+            with_geodetic,
+        ) {
+            Ok(solution) => encode_spp_doppler_solution(env, &solution),
+            Err(error) => spp_error_term(env, &error),
+        },
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_solve_broadcast_with_doppler<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<BroadcastResource>,
+    observations: Vec<(String, f64)>,
+    doppler_observations: Vec<DopplerObservationTerm>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    robust: Term<'a>,
+    glonass_channels: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let robust = decode_robust(robust)?;
+    let glonass_channels = decode_glonass_channels(glonass_channels)?;
+    let mut inputs = build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    inputs.glonass_channels = glonass_channels;
+    let iono = handle.store.iono_corrections();
+    if let Some(bds) = iono.beidou {
+        inputs.beidou_klobuchar = Some(KlobucharCoeffs {
+            alpha: bds.alpha,
+            beta: bds.beta,
+        });
+    }
+    inputs.galileo_nequick = iono.galileo;
+    let doppler_observations = decode_doppler_observations(doppler_observations)?;
+
+    Ok(
+        match solve_with_doppler_velocity(
+            &handle.store,
+            &inputs,
+            &doppler_observations,
+            with_geodetic,
+        ) {
+            Ok(solution) => encode_spp_doppler_solution(env, &solution),
+            Err(error) => spp_error_term(env, &error),
+        },
+    )
 }
 
 /// One epoch's solve inputs in a batch request, as the Elixir map the binding
