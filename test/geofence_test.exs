@@ -58,8 +58,12 @@ defmodule Sidereon.GeofenceTest do
     assert {:ok, planar} =
              Geofence.containment_probability(fence, @near_south_boundary, @uncertainty, method: :planar_quadrature)
 
-    assert_in_delta boundary_normal, 0.6706009594981661, 1.0e-15
-    assert_in_delta planar, 0.6704721891040564, 1.0e-15
+    # These probabilities are functions of the iterative geodesic boundary
+    # distance (accurate to 1e-8 m, not bit-reproducible across architectures);
+    # with the scenario's probability sensitivity that admits ~1e-11 of noise,
+    # so pin at 1e-9 rather than machine epsilon.
+    assert_in_delta boundary_normal, 0.6706009594981661, 1.0e-9
+    assert_in_delta planar, 0.6704721891040564, 1.0e-9
 
     assert {:error, :invalid_probability_method} =
              Geofence.containment_probability(fence, @near_south_boundary, @uncertainty, method: :unknown)
