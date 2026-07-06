@@ -365,6 +365,115 @@ defmodule Sidereon.Estimation.TrackFilterConfig do
   end
 end
 
+defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
+  @moduledoc """
+  Builder for a forward track-filter pass that can be RTS-smoothed.
+  """
+
+  alias Sidereon.Estimation.TrackFilter
+  alias Sidereon.Estimation.TrackRtsHistory
+  alias Sidereon.NIF
+
+  @enforce_keys [:handle]
+  defstruct [:handle]
+
+  @type t :: %__MODULE__{handle: reference()}
+
+  @doc """
+  Start an empty history builder.
+  """
+  @spec new() :: t()
+  def new, do: %__MODULE__{handle: NIF.track_rts_history_builder_new()}
+
+  @doc """
+  Start a history builder from the current filter state.
+  """
+  @spec from_filter(TrackFilter.t()) :: {:ok, t()} | {:error, term()}
+  def from_filter(%TrackFilter{handle: handle}) do
+    case NIF.track_rts_history_builder_from_filter(handle) do
+      {:ok, history} when is_reference(history) -> {:ok, %__MODULE__{handle: history}}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Finish the builder and return a smoothing-ready history.
+  """
+  @spec finish(t()) :: {:ok, TrackRtsHistory.t()} | {:error, term()}
+  def finish(%__MODULE__{handle: handle}) do
+    case NIF.track_rts_history_builder_finish(handle) do
+      {:ok, history} when is_reference(history) -> {:ok, struct(TrackRtsHistory, handle: history)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+end
+
+defmodule Sidereon.Estimation.TrackRtsHistory do
+  @moduledoc """
+  Recorded forward-filter history accepted by the RTS smoother.
+  """
+
+  alias Sidereon.Estimation.TrackRtsEpoch
+  alias Sidereon.Estimation.TrackTerms
+  alias Sidereon.NIF
+
+  @enforce_keys [:handle]
+  defstruct [:handle]
+
+  @type t :: %__MODULE__{handle: reference()}
+
+  @doc """
+  Return the number of recorded epochs.
+  """
+  @spec epoch_count(t()) :: non_neg_integer()
+  def epoch_count(%__MODULE__{handle: handle}), do: NIF.track_rts_history_epoch_count(handle)
+
+  @doc """
+  Return recorded epochs as Elixir structs.
+  """
+  @spec epochs(t()) :: [TrackRtsEpoch.t()]
+  def epochs(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.track_rts_history_epochs()
+    |> Enum.map(&TrackTerms.rts_epoch_from_map/1)
+  end
+end
+
+defmodule Sidereon.Estimation.SmoothedTrack do
+  @moduledoc """
+  Fixed-interval RTS-smoothed track.
+  """
+
+  alias Sidereon.Estimation.SmoothedTrackEpoch
+  alias Sidereon.Estimation.TrackTerms
+  alias Sidereon.NIF
+
+  @enforce_keys [:handle]
+  defstruct [:handle]
+
+  @type t :: %__MODULE__{handle: reference()}
+
+  @doc """
+  Return the number of smoothed epochs.
+  """
+  @spec epoch_count(t()) :: non_neg_integer()
+  def epoch_count(%__MODULE__{handle: handle}), do: NIF.track_smoothed_epoch_count(handle)
+
+  @doc """
+  Return smoothed epochs as Elixir structs.
+  """
+  @spec epochs(t()) :: [SmoothedTrackEpoch.t()]
+  def epochs(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.track_smoothed_epochs()
+    |> Enum.map(&TrackTerms.smoothed_epoch_from_map/1)
+  end
+end
+
 defmodule Sidereon.Estimation.TrackFilter do
   @moduledoc """
   Stateful no-IMU constant-velocity track filter.
@@ -577,115 +686,6 @@ defmodule Sidereon.Estimation.TrackFilter do
       {:ok, :ok} -> :ok
       {:error, _reason} = err -> err
     end
-  end
-end
-
-defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
-  @moduledoc """
-  Builder for a forward track-filter pass that can be RTS-smoothed.
-  """
-
-  alias Sidereon.Estimation.TrackFilter
-  alias Sidereon.Estimation.TrackRtsHistory
-  alias Sidereon.NIF
-
-  @enforce_keys [:handle]
-  defstruct [:handle]
-
-  @type t :: %__MODULE__{handle: reference()}
-
-  @doc """
-  Start an empty history builder.
-  """
-  @spec new() :: t()
-  def new, do: %__MODULE__{handle: NIF.track_rts_history_builder_new()}
-
-  @doc """
-  Start a history builder from the current filter state.
-  """
-  @spec from_filter(TrackFilter.t()) :: {:ok, t()} | {:error, term()}
-  def from_filter(%TrackFilter{handle: handle}) do
-    case NIF.track_rts_history_builder_from_filter(handle) do
-      {:ok, history} when is_reference(history) -> {:ok, %__MODULE__{handle: history}}
-      {:error, _reason} = err -> err
-    end
-  rescue
-    e in ErlangError -> {:error, e.original}
-  end
-
-  @doc """
-  Finish the builder and return a smoothing-ready history.
-  """
-  @spec finish(t()) :: {:ok, TrackRtsHistory.t()} | {:error, term()}
-  def finish(%__MODULE__{handle: handle}) do
-    case NIF.track_rts_history_builder_finish(handle) do
-      {:ok, history} when is_reference(history) -> {:ok, struct(TrackRtsHistory, handle: history)}
-      {:error, _reason} = err -> err
-    end
-  rescue
-    e in ErlangError -> {:error, e.original}
-  end
-end
-
-defmodule Sidereon.Estimation.TrackRtsHistory do
-  @moduledoc """
-  Recorded forward-filter history accepted by the RTS smoother.
-  """
-
-  alias Sidereon.Estimation.TrackRtsEpoch
-  alias Sidereon.Estimation.TrackTerms
-  alias Sidereon.NIF
-
-  @enforce_keys [:handle]
-  defstruct [:handle]
-
-  @type t :: %__MODULE__{handle: reference()}
-
-  @doc """
-  Return the number of recorded epochs.
-  """
-  @spec epoch_count(t()) :: non_neg_integer()
-  def epoch_count(%__MODULE__{handle: handle}), do: NIF.track_rts_history_epoch_count(handle)
-
-  @doc """
-  Return recorded epochs as Elixir structs.
-  """
-  @spec epochs(t()) :: [TrackRtsEpoch.t()]
-  def epochs(%__MODULE__{handle: handle}) do
-    handle
-    |> NIF.track_rts_history_epochs()
-    |> Enum.map(&TrackTerms.rts_epoch_from_map/1)
-  end
-end
-
-defmodule Sidereon.Estimation.SmoothedTrack do
-  @moduledoc """
-  Fixed-interval RTS-smoothed track.
-  """
-
-  alias Sidereon.Estimation.SmoothedTrackEpoch
-  alias Sidereon.Estimation.TrackTerms
-  alias Sidereon.NIF
-
-  @enforce_keys [:handle]
-  defstruct [:handle]
-
-  @type t :: %__MODULE__{handle: reference()}
-
-  @doc """
-  Return the number of smoothed epochs.
-  """
-  @spec epoch_count(t()) :: non_neg_integer()
-  def epoch_count(%__MODULE__{handle: handle}), do: NIF.track_smoothed_epoch_count(handle)
-
-  @doc """
-  Return smoothed epochs as Elixir structs.
-  """
-  @spec epochs(t()) :: [SmoothedTrackEpoch.t()]
-  def epochs(%__MODULE__{handle: handle}) do
-    handle
-    |> NIF.track_smoothed_epochs()
-    |> Enum.map(&TrackTerms.smoothed_epoch_from_map/1)
   end
 end
 
