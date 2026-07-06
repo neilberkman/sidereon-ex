@@ -262,6 +262,17 @@ defmodule Sidereon.NIF do
 
   def position_error_metrics_from_ecef_covariance(_covariance, _receiver), do: :erlang.nif_error(:nif_not_loaded)
 
+  def position_error_metrics_from_position_covariance(_covariance_ecef_m2, _covariance_enu_m2),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_error_ellipse_from_enu_covariance(_covariance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_horizontal_radius_at(_covariance, _probability), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_spherical_radius_at(_covariance, _probability), do: :erlang.nif_error(:nif_not_loaded)
+
+  def position_error_metrics_vertical_radius_at(_sigma_u_m2, _probability), do: :erlang.nif_error(:nif_not_loaded)
+
   def position_error_metrics_from_kinematic_solution(_position_m, _position_covariance_m2),
     do: :erlang.nif_error(:nif_not_loaded)
 
