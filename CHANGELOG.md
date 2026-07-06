@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.1]
+
+### Added
+
+- The GNSS/INS fusion surface (`Sidereon.GNSS.Fusion`): strapdown mechanization,
+  loose and tight coupling with the robust update configuration, fixed-interval
+  RTS smoothing over recorded fusion history, and static fusion, with parity
+  tests against core values.
+
 ## [0.19.0]
 
 ### Added
