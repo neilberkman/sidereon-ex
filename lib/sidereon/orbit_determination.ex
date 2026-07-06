@@ -239,6 +239,9 @@ defmodule Sidereon.OrbitDetermination do
     "earth_phase_b:#{degree}:#{order}"
   end
 
+  defp force_token(:solid_earth_tide), do: "solid_earth_tide"
+  defp force_token(:solid_earth_pole_tide), do: "solid_earth_pole_tide"
+
   defp force_token(value), do: to_string(value)
 
   defp sample_terms(samples) do

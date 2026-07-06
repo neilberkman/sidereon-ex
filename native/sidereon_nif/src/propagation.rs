@@ -5,17 +5,20 @@ use crate::errors;
 use rustler::Error;
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::astro::forces::{
-    DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SpaceWeatherSource,
-    SphericalHarmonicGravityConfig, ThirdBodyGravity, ZonalCoefficients, ZonalDegrees,
-    ZonalGravity,
+    DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SolidEarthPoleTideGravity,
+    SolidEarthTideGravity, SpaceWeatherSource, SphericalHarmonicGravityConfig, ThirdBodyGravity,
+    ZonalCoefficients, ZonalDegrees, ZonalGravity,
 };
+use sidereon_core::astro::frames::TdbEarthOrientationProvider;
 use sidereon_core::astro::propagator::{
-    ForceModelComponents, ForceModelKind, IntegratorKind, IntegratorOptions, StatePropagator,
+    ForceModelComponents, ForceModelKind, IntegratorKind, IntegratorOptions, PropagationContext,
+    StatePropagator,
 };
 use sidereon_core::astro::sgp4::{ElementSet, JulianDate, OpsMode, Satellite};
 use sidereon_core::astro::state::CartesianState;
 use sidereon_core::astro::time::civil;
 use sidereon_core::astro::tle::TleElements;
+use std::sync::Arc;
 
 type DateTuple = (i32, i32, i32);
 type TimeTuple = (i32, i32, i32, i32);
@@ -205,12 +208,17 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
     let wants_moon = has_force(&tokens, &["moon", "third_body_moon"]);
     let wants_third_body = has_force(&tokens, &["third_body", "third-body", "sun_moon"]);
     let wants_relativity = has_force(&tokens, &["relativity", "schwarzschild"]);
+    let wants_solid_earth_tide = has_force(&tokens, &["solid_earth_tide", "solid-earth-tide"]);
+    let wants_solid_earth_pole_tide =
+        has_force(&tokens, &["solid_earth_pole_tide", "solid-earth-pole-tide"]);
     let wants_composite = has_force(&tokens, &["composite"])
         || wants_full_zonal
         || wants_sun
         || wants_moon
         || wants_third_body
         || wants_relativity
+        || wants_solid_earth_tide
+        || wants_solid_earth_pole_tide
         || spherical_harmonic.is_some()
         || srp.is_some();
 
@@ -247,8 +255,36 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
     if wants_relativity {
         components = components.with_relativity(SchwarzschildRelativity::default());
     }
+    if wants_solid_earth_tide {
+        components = components.with_solid_earth_tide(SolidEarthTideGravity::default());
+    }
+    if wants_solid_earth_pole_tide {
+        components = components.with_solid_earth_pole_tide(SolidEarthPoleTideGravity::default());
+    }
 
     Ok(ForceModelKind::composite(components))
+}
+
+pub(crate) fn propagation_context_for_force_model(
+    force_model: ForceModelKind,
+) -> PropagationContext {
+    if force_model_requires_body_fixed_frame(force_model) {
+        PropagationContext::new()
+            .with_body_fixed_frame_provider(Arc::new(TdbEarthOrientationProvider::new()))
+    } else {
+        PropagationContext::default()
+    }
+}
+
+fn force_model_requires_body_fixed_frame(force_model: ForceModelKind) -> bool {
+    match force_model {
+        ForceModelKind::Composite { components } => {
+            components.spherical_harmonic.is_some()
+                || components.solid_earth_tide.is_some()
+                || components.solid_earth_pole_tide.is_some()
+        }
+        ForceModelKind::TwoBody { .. } | ForceModelKind::TwoBodyJ2 { .. } => false,
+    }
 }
 
 pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResult<ElementSet> {
@@ -367,20 +403,22 @@ pub(crate) fn propagate_dp54_impl_with_drag(
         rel_tol,
         ..IntegratorOptions::default()
     };
+    let force_model = force_model_kind(&forces)?;
+    let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {
         initial: CartesianState::new(
             0.0,
             [position_km.0, position_km.1, position_km.2],
             [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
         ),
-        force_model: force_model_kind(&forces)?,
+        force_model,
         integrator: IntegratorKind::Dp54,
         options,
         drag,
         space_weather: None,
     };
 
-    match propagator.ephemeris(&[dt_seconds]) {
+    match propagator.ephemeris_with_context(&[dt_seconds], &context) {
         Ok(states) => {
             let state = states[0];
             let pos = state.position_array();
@@ -417,20 +455,22 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
         rel_tol,
         ..IntegratorOptions::default()
     };
+    let force_model = force_model_kind(&forces)?;
+    let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {
         initial: CartesianState::new(
             epoch_tdb_seconds,
             [position_km.0, position_km.1, position_km.2],
             [velocity_km_s.0, velocity_km_s.1, velocity_km_s.2],
         ),
-        force_model: force_model_kind(&forces)?,
+        force_model,
         integrator: IntegratorKind::Dp54,
         options,
         drag: Some(drag),
         space_weather: Some(SpaceWeatherSource::Table(table.table.clone())),
     };
 
-    match propagator.ephemeris(&[epoch_tdb_seconds + dt_seconds]) {
+    match propagator.ephemeris_with_context(&[epoch_tdb_seconds + dt_seconds], &context) {
         Ok(states) => {
             let state = states[0];
             let pos = state.position_array();

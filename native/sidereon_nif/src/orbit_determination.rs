@@ -110,8 +110,10 @@ fn vec3(value: [f64; 3]) -> Vec3 {
 fn options(
     (forces, abs_tol, rel_tol, max_nfev, min_ledger_samples): OptionsTerm,
 ) -> NifResult<OrbitFitOptions> {
+    let force_model = crate::propagation::force_model_kind(&forces)?;
     let mut options = OrbitFitOptions {
-        force_model: crate::propagation::force_model_kind(&forces)?,
+        force_model,
+        propagation_context: crate::propagation::propagation_context_for_force_model(force_model),
         min_ledger_samples,
         ..OrbitFitOptions::default()
     };

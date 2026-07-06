@@ -2130,6 +2130,59 @@ defmodule Sidereon.NIF do
   def estimation_cfar_ca_false_alarm_probability(_searched_cells, _threshold, _noise_level),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  # --- no-IMU track filter and RTS smoother --------------------------
+
+  def track_filter_config_new(_config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_config_from_position(_config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_new(_config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_dimension(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_acceleration_variance_spectral_density_m2_s3(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_predict(_handle, _dt_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_predict_recorded(_handle, _dt_s, _history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_position_innovation(_handle, _position_m, _covariance_m2), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_state_innovation(_handle, _state, _covariance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_update_position(_handle, _position_m, _covariance_m2), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_update_state(_handle, _state, _covariance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_update_position_gated(_handle, _position_m, _covariance_m2, _confidence),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_update_position_recorded(_handle, _position_m, _covariance_m2, _history),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_update_position_gated_recorded(_handle, _position_m, _covariance_m2, _confidence, _history),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_filter_record_prediction_only(_handle, _history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_rts_history_builder_new, do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_rts_history_builder_from_filter(_filter), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_rts_history_builder_finish(_builder), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_rts_history_epoch_count(_history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_rts_history_epochs(_history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_smooth_rts(_history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_smoothed_epoch_count(_track), do: :erlang.nif_error(:nif_not_loaded)
+
+  def track_smoothed_epochs(_track), do: :erlang.nif_error(:nif_not_loaded)
+
   # --- source localization -------------------------------------------
 
   def source_localization_locate(_sensors, _arrival_times_s, _propagation_speed_m_s, _options),
