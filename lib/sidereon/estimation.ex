@@ -229,6 +229,142 @@ defmodule Sidereon.Estimation.SmoothedTrackEpoch do
         }
 end
 
+defmodule Sidereon.Estimation.TrackFilterConfig do
+  @moduledoc """
+  Configuration for a no-IMU constant-velocity track filter.
+
+  ## Example
+
+      alias Sidereon.Estimation.{TrackFilter, TrackFilterConfig}
+
+      {:ok, config} =
+        TrackFilterConfig.from_position(
+          :ecef,
+          0.0,
+          [1.0, 2.0, 3.0],
+          [[25.0, 0.0, 0.0], [0.0, 25.0, 0.0], [0.0, 0.0, 25.0]],
+          100.0,
+          0.05
+        )
+
+      {:ok, filter} = TrackFilter.new(config)
+      {:ok, _prediction} = TrackFilter.predict(filter, 1.0)
+      {:ok, update} =
+        TrackFilter.update_position(
+          filter,
+          [1.5, 2.0, 3.0],
+          [[9.0, 0.0, 0.0], [0.0, 9.0, 0.0], [0.0, 0.0, 9.0]]
+        )
+
+      update.updated.position_m
+  """
+
+  alias Sidereon.Estimation.TrackState
+  alias Sidereon.Estimation.TrackTerms
+  alias Sidereon.NIF
+
+  @enforce_keys [
+    :frame,
+    :initial_t_s,
+    :initial_position_m,
+    :initial_velocity_m_s,
+    :initial_covariance,
+    :acceleration_variance_spectral_density_m2_s3,
+    :dimension
+  ]
+  defstruct [
+    :frame,
+    :initial_t_s,
+    :initial_position_m,
+    :initial_velocity_m_s,
+    :initial_covariance,
+    :acceleration_variance_spectral_density_m2_s3,
+    :dimension
+  ]
+
+  @type t :: %__MODULE__{
+          frame: TrackState.frame(),
+          initial_t_s: float(),
+          initial_position_m: [float()],
+          initial_velocity_m_s: [float()],
+          initial_covariance: [[float()]],
+          acceleration_variance_spectral_density_m2_s3: float(),
+          dimension: pos_integer()
+        }
+
+  @doc """
+  Build a config from position, velocity, full covariance, and acceleration PSD.
+  """
+  @spec new(keyword() | map()) :: {:ok, t()} | {:error, term()}
+  def new(opts) do
+    case NIF.track_filter_config_new(TrackTerms.config_term(opts)) do
+      {:ok, config} -> {:ok, TrackTerms.config_from_map(config)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Build a config from position, velocity, full covariance, and acceleration PSD.
+  """
+  @spec new(
+          TrackState.frame(),
+          number(),
+          [number()] | tuple(),
+          [number()] | tuple(),
+          [[number()]],
+          number()
+        ) :: {:ok, t()} | {:error, term()}
+  def new(frame, initial_t_s, initial_position_m, initial_velocity_m_s, initial_covariance, q_m2_s3) do
+    new(%{
+      frame: frame,
+      initial_t_s: initial_t_s,
+      initial_position_m: initial_position_m,
+      initial_velocity_m_s: initial_velocity_m_s,
+      initial_covariance: initial_covariance,
+      acceleration_variance_spectral_density_m2_s3: q_m2_s3
+    })
+  end
+
+  @doc """
+  Build a config from a position fix and uncertain zero initial velocity.
+  """
+  @spec from_position(keyword() | map()) :: {:ok, t()} | {:error, term()}
+  def from_position(opts) do
+    case NIF.track_filter_config_from_position(TrackTerms.position_config_term(opts)) do
+      {:ok, config} -> {:ok, TrackTerms.config_from_map(config)}
+      {:error, _reason} = err -> err
+    end
+  rescue
+    e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Build a config from a position fix and uncertain zero initial velocity.
+  """
+  @spec from_position(
+          TrackState.frame(),
+          number(),
+          [number()] | tuple(),
+          [[number()]],
+          number(),
+          number()
+        ) :: {:ok, t()} | {:error, term()}
+  def from_position(frame, initial_t_s, initial_position_m, position_covariance_m2, velocity_variance_m2_s2, q_m2_s3) do
+    from_position(%{
+      frame: frame,
+      initial_t_s: initial_t_s,
+      initial_position_m: initial_position_m,
+      position_covariance_m2: position_covariance_m2,
+      initial_velocity_variance_m2_s2: velocity_variance_m2_s2,
+      acceleration_variance_spectral_density_m2_s3: q_m2_s3
+    })
+  end
+end
+
 defmodule Sidereon.Estimation.TrackTerms do
   @moduledoc false
 
@@ -391,142 +527,6 @@ defmodule Sidereon.Estimation.TrackTerms do
 
   defp field!(opts, key) when is_list(opts) do
     Keyword.fetch!(opts, key)
-  end
-end
-
-defmodule Sidereon.Estimation.TrackFilterConfig do
-  @moduledoc """
-  Configuration for a no-IMU constant-velocity track filter.
-
-  ## Example
-
-      alias Sidereon.Estimation.{TrackFilter, TrackFilterConfig}
-
-      {:ok, config} =
-        TrackFilterConfig.from_position(
-          :ecef,
-          0.0,
-          [1.0, 2.0, 3.0],
-          [[25.0, 0.0, 0.0], [0.0, 25.0, 0.0], [0.0, 0.0, 25.0]],
-          100.0,
-          0.05
-        )
-
-      {:ok, filter} = TrackFilter.new(config)
-      {:ok, _prediction} = TrackFilter.predict(filter, 1.0)
-      {:ok, update} =
-        TrackFilter.update_position(
-          filter,
-          [1.5, 2.0, 3.0],
-          [[9.0, 0.0, 0.0], [0.0, 9.0, 0.0], [0.0, 0.0, 9.0]]
-        )
-
-      update.updated.position_m
-  """
-
-  alias Sidereon.Estimation.TrackState
-  alias Sidereon.Estimation.TrackTerms
-  alias Sidereon.NIF
-
-  @enforce_keys [
-    :frame,
-    :initial_t_s,
-    :initial_position_m,
-    :initial_velocity_m_s,
-    :initial_covariance,
-    :acceleration_variance_spectral_density_m2_s3,
-    :dimension
-  ]
-  defstruct [
-    :frame,
-    :initial_t_s,
-    :initial_position_m,
-    :initial_velocity_m_s,
-    :initial_covariance,
-    :acceleration_variance_spectral_density_m2_s3,
-    :dimension
-  ]
-
-  @type t :: %__MODULE__{
-          frame: TrackState.frame(),
-          initial_t_s: float(),
-          initial_position_m: [float()],
-          initial_velocity_m_s: [float()],
-          initial_covariance: [[float()]],
-          acceleration_variance_spectral_density_m2_s3: float(),
-          dimension: pos_integer()
-        }
-
-  @doc """
-  Build a config from position, velocity, full covariance, and acceleration PSD.
-  """
-  @spec new(keyword() | map()) :: {:ok, t()} | {:error, term()}
-  def new(opts) do
-    case NIF.track_filter_config_new(TrackTerms.config_term(opts)) do
-      {:ok, config} -> {:ok, TrackTerms.config_from_map(config)}
-      {:error, _reason} = err -> err
-    end
-  rescue
-    e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
-    e in ErlangError -> {:error, e.original}
-  end
-
-  @doc """
-  Build a config from position, velocity, full covariance, and acceleration PSD.
-  """
-  @spec new(
-          TrackState.frame(),
-          number(),
-          [number()] | tuple(),
-          [number()] | tuple(),
-          [[number()]],
-          number()
-        ) :: {:ok, t()} | {:error, term()}
-  def new(frame, initial_t_s, initial_position_m, initial_velocity_m_s, initial_covariance, q_m2_s3) do
-    new(%{
-      frame: frame,
-      initial_t_s: initial_t_s,
-      initial_position_m: initial_position_m,
-      initial_velocity_m_s: initial_velocity_m_s,
-      initial_covariance: initial_covariance,
-      acceleration_variance_spectral_density_m2_s3: q_m2_s3
-    })
-  end
-
-  @doc """
-  Build a config from a position fix and uncertain zero initial velocity.
-  """
-  @spec from_position(keyword() | map()) :: {:ok, t()} | {:error, term()}
-  def from_position(opts) do
-    case NIF.track_filter_config_from_position(TrackTerms.position_config_term(opts)) do
-      {:ok, config} -> {:ok, TrackTerms.config_from_map(config)}
-      {:error, _reason} = err -> err
-    end
-  rescue
-    e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
-    e in ErlangError -> {:error, e.original}
-  end
-
-  @doc """
-  Build a config from a position fix and uncertain zero initial velocity.
-  """
-  @spec from_position(
-          TrackState.frame(),
-          number(),
-          [number()] | tuple(),
-          [[number()]],
-          number(),
-          number()
-        ) :: {:ok, t()} | {:error, term()}
-  def from_position(frame, initial_t_s, initial_position_m, position_covariance_m2, velocity_variance_m2_s2, q_m2_s3) do
-    from_position(%{
-      frame: frame,
-      initial_t_s: initial_t_s,
-      initial_position_m: initial_position_m,
-      position_covariance_m2: position_covariance_m2,
-      initial_velocity_variance_m2_s2: velocity_variance_m2_s2,
-      acceleration_variance_spectral_density_m2_s3: q_m2_s3
-    })
   end
 end
 
