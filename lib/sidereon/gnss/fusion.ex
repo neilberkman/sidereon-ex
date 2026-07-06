@@ -22,6 +22,142 @@ defmodule Sidereon.GNSS.Fusion do
     @type t :: %__MODULE__{handle: reference()}
   end
 
+  defmodule FusionRtsEpoch do
+    @moduledoc """
+    One recorded GNSS/INS fusion epoch for RTS smoothing.
+    """
+
+    @enforce_keys [:t_j2000_s, :predicted, :updated, :transition_from_previous]
+    defstruct [:t_j2000_s, :predicted, :updated, :transition_from_previous]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: float(),
+            predicted: map(),
+            updated: map(),
+            transition_from_previous: [[float()]] | nil
+          }
+  end
+
+  defmodule FusionRtsHistory do
+    @moduledoc """
+    Recorded forward-pass history accepted by the fusion RTS smoother.
+    """
+
+    alias Sidereon.GNSS.Fusion.FusionRtsEpoch
+    alias Sidereon.NIF
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @type t :: %__MODULE__{handle: reference()}
+
+    @doc """
+    Return the number of recorded epochs.
+    """
+    @spec epoch_count(t()) :: non_neg_integer()
+    def epoch_count(%__MODULE__{handle: handle}), do: NIF.fusion_rts_history_epoch_count(handle)
+
+    @doc """
+    Return recorded epochs as structs.
+    """
+    @spec epochs(t()) :: [FusionRtsEpoch.t()]
+    def epochs(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.fusion_rts_history_epochs()
+      |> Enum.map(&struct(FusionRtsEpoch, &1))
+    end
+  end
+
+  defmodule FusionRtsHistoryBuilder do
+    @moduledoc """
+    Builder for a recorded GNSS/INS fusion forward pass.
+    """
+
+    alias Sidereon.GNSS.Fusion.Filter
+    alias Sidereon.GNSS.Fusion.FusionRtsHistory
+    alias Sidereon.NIF
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @type t :: %__MODULE__{handle: reference()}
+
+    @doc """
+    Start an empty recorded history builder.
+    """
+    @spec new() :: t()
+    def new, do: %__MODULE__{handle: NIF.fusion_rts_history_builder_new()}
+
+    @doc """
+    Start a recorded history from the filter's current checkpoint.
+    """
+    @spec from_filter(Filter.t()) :: {:ok, t()} | {:error, term()}
+    def from_filter(%Filter{handle: handle}) do
+      case NIF.fusion_rts_history_builder_from_filter(handle) do
+        {:ok, history} when is_reference(history) -> {:ok, %__MODULE__{handle: history}}
+        {:error, _reason} = err -> err
+      end
+    end
+
+    @doc """
+    Finish the builder and return a smoothing-ready history.
+    """
+    @spec finish(t()) :: {:ok, FusionRtsHistory.t()} | {:error, term()}
+    def finish(%__MODULE__{handle: handle}) do
+      case NIF.fusion_rts_history_builder_finish(handle) do
+        {:ok, history} when is_reference(history) -> {:ok, %FusionRtsHistory{handle: history}}
+        {:error, _reason} = err -> err
+      end
+    end
+  end
+
+  defmodule SmoothedFusionEpoch do
+    @moduledoc """
+    One fixed-interval smoothed GNSS/INS fusion epoch.
+    """
+
+    @enforce_keys [:t_j2000_s, :snapshot, :error_state_correction, :covariance, :rts_gain_to_next]
+    defstruct [:t_j2000_s, :snapshot, :error_state_correction, :covariance, :rts_gain_to_next]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: float(),
+            snapshot: map(),
+            error_state_correction: [float()],
+            covariance: [[float()]],
+            rts_gain_to_next: [[float()]] | nil
+          }
+  end
+
+  defmodule SmoothedFusionTrajectory do
+    @moduledoc """
+    Fixed-interval RTS-smoothed GNSS/INS fusion trajectory.
+    """
+
+    alias Sidereon.GNSS.Fusion.SmoothedFusionEpoch
+    alias Sidereon.NIF
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @type t :: %__MODULE__{handle: reference()}
+
+    @doc """
+    Return the number of smoothed epochs.
+    """
+    @spec epoch_count(t()) :: non_neg_integer()
+    def epoch_count(%__MODULE__{handle: handle}), do: NIF.fusion_smoothed_trajectory_epoch_count(handle)
+
+    @doc """
+    Return smoothed epochs as structs.
+    """
+    @spec epochs(t()) :: [SmoothedFusionEpoch.t()]
+    def epochs(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.fusion_smoothed_trajectory_epochs()
+      |> Enum.map(&struct(SmoothedFusionEpoch, &1))
+    end
+  end
+
   @typedoc "Three-vector in ECEF or body axes, depending on field name."
   @type vec3 :: {number(), number(), number()} | [number()]
 
@@ -87,7 +223,8 @@ defmodule Sidereon.GNSS.Fusion do
   Build a fusion filter config from an IMU spec and options.
 
   Options include `:filter_kind` (`:ekf` or `:ukf`), `:mechanization`,
-  `:loose`, `:tight`, `:imu_model`, and `:ukf_update_options`.
+  `:loose`, `:tight`, `:imu_model`, and `:ukf_update_options`. Loose config
+  may include `:measurement_reweighting` and `:prediction_adaptation`.
   """
   @spec filter_config(imu_spec(), keyword() | map()) :: filter_config()
   def filter_config(spec \\ :mems, opts \\ []) do
@@ -99,6 +236,25 @@ defmodule Sidereon.GNSS.Fusion do
       loose: normalize_loose_config(field(opts, :loose, %{})),
       tight: normalize_tight_config(field(opts, :tight, %{})),
       ukf_update_options: normalize_ukf_options(field(opts, :ukf_update_options, %{}))
+    }
+  end
+
+  @doc """
+  Return standard IGG-III measurement reweighting settings for loose updates.
+  """
+  @spec igg_iii_measurement_reweighting(keyword() | map()) :: map()
+  def igg_iii_measurement_reweighting(opts \\ []) do
+    %{k0_sigma: field(opts, :k0_sigma, 2.0) / 1.0, k1_sigma: field(opts, :k1_sigma, 5.0) / 1.0}
+  end
+
+  @doc """
+  Return standard Yang predicted-covariance adaptation settings for loose updates.
+  """
+  @spec yang_prediction_adaptive_factor(keyword() | map()) :: map()
+  def yang_prediction_adaptive_factor(opts \\ []) do
+    %{
+      threshold: field(opts, :threshold, 1.0) / 1.0,
+      outlier_gate_probability: field(opts, :outlier_gate_probability, 0.99) / 1.0
     }
   end
 
@@ -137,11 +293,28 @@ defmodule Sidereon.GNSS.Fusion do
   def propagate(%Filter{handle: handle}, sample), do: NIF.fusion_propagate(handle, imu_sample_term(sample))
 
   @doc """
+  Propagate the filter by one IMU sample and record the transition for RTS smoothing.
+  """
+  @spec propagate_recorded(Filter.t(), imu_sample(), FusionRtsHistoryBuilder.t()) :: {:ok, map()} | {:error, term()}
+  def propagate_recorded(%Filter{handle: handle}, sample, %FusionRtsHistoryBuilder{handle: history}) do
+    NIF.fusion_propagate_recorded(handle, imu_sample_term(sample), history)
+  end
+
+  @doc """
   Apply a loose GNSS position or position-velocity fix at the current filter epoch.
   """
   @spec update_loose(Filter.t(), loose_measurement()) :: {:ok, map()} | {:error, term()}
   def update_loose(%Filter{handle: handle}, measurement) do
     NIF.fusion_update_loose(handle, loose_measurement_term(measurement))
+  end
+
+  @doc """
+  Apply a loose GNSS fix and record before/after checkpoints for RTS smoothing.
+  """
+  @spec update_loose_recorded(Filter.t(), loose_measurement(), FusionRtsHistoryBuilder.t()) ::
+          {:ok, map()} | {:error, term()}
+  def update_loose_recorded(%Filter{handle: handle}, measurement, %FusionRtsHistoryBuilder{handle: history}) do
+    NIF.fusion_update_loose_recorded(handle, loose_measurement_term(measurement), history)
   end
 
   @doc """
@@ -164,6 +337,23 @@ defmodule Sidereon.GNSS.Fusion do
 
   def update_tight(%Filter{handle: handle}, %Broadcast{handle: source}, epoch) do
     NIF.fusion_update_tight_broadcast(handle, source, tight_epoch_term(epoch))
+  end
+
+  @doc """
+  Apply a tight raw GNSS epoch and record before/after checkpoints for RTS smoothing.
+  """
+  @spec update_tight_recorded(Filter.t(), SP3.t() | Broadcast.t(), tight_epoch(), FusionRtsHistoryBuilder.t()) ::
+          {:ok, map()} | {:error, term()}
+  def update_tight_recorded(%Filter{handle: handle}, %SP3{handle: source}, epoch, %FusionRtsHistoryBuilder{
+        handle: history
+      }) do
+    NIF.fusion_update_tight_recorded_sp3(handle, source, tight_epoch_term(epoch), history)
+  end
+
+  def update_tight_recorded(%Filter{handle: handle}, %Broadcast{handle: source}, epoch, %FusionRtsHistoryBuilder{
+        handle: history
+      }) do
+    NIF.fusion_update_tight_recorded_broadcast(handle, source, tight_epoch_term(epoch), history)
   end
 
   @doc """
@@ -216,6 +406,17 @@ defmodule Sidereon.GNSS.Fusion do
   @spec restore_state(Filter.t(), binary()) :: {:ok, map()} | {:error, term()}
   def restore_state(%Filter{handle: handle}, bytes) when is_binary(bytes) do
     NIF.fusion_restore_state(handle, bytes)
+  end
+
+  @doc """
+  Apply fixed-interval RTS smoothing to recorded GNSS/INS fusion history.
+  """
+  @spec smooth_fusion_rts(FusionRtsHistory.t()) :: {:ok, SmoothedFusionTrajectory.t()} | {:error, term()}
+  def smooth_fusion_rts(%FusionRtsHistory{handle: handle}) do
+    case NIF.fusion_smooth_rts(handle) do
+      {:ok, smoothed} when is_reference(smoothed) -> {:ok, %SmoothedFusionTrajectory{handle: smoothed}}
+      {:error, _reason} = err -> err
+    end
   end
 
   defp state_term(state) do
@@ -296,7 +497,9 @@ defmodule Sidereon.GNSS.Fusion do
   defp normalize_loose_config(config) do
     %{
       lever_arm_body_m: vec3(field(config, :lever_arm_body_m, {0.0, 0.0, 0.0})),
-      update_options: normalize_ekf_options(field(config, :update_options, %{}))
+      update_options: normalize_ekf_options(field(config, :update_options, %{})),
+      measurement_reweighting: normalize_igg_iii(field(config, :measurement_reweighting, nil)),
+      prediction_adaptation: normalize_yang(field(config, :prediction_adaptation, nil))
     }
   end
 
@@ -333,7 +536,12 @@ defmodule Sidereon.GNSS.Fusion do
   end
 
   defp loose_config_term(config) do
-    %{lever_arm_body_m: vec3(config.lever_arm_body_m), update_options: ekf_options_term(config.update_options)}
+    %{
+      lever_arm_body_m: vec3(config.lever_arm_body_m),
+      update_options: ekf_options_term(config.update_options),
+      measurement_reweighting: optional_igg_iii(config.measurement_reweighting),
+      prediction_adaptation: optional_yang(config.prediction_adaptation)
+    }
   end
 
   defp tight_config_term(config) do
@@ -359,6 +567,29 @@ defmodule Sidereon.GNSS.Fusion do
       beta: options.beta / 1.0,
       kappa: options.kappa / 1.0,
       innovation_gate: options.innovation_gate
+    }
+  end
+
+  defp normalize_igg_iii(nil), do: nil
+  defp normalize_igg_iii(:standard), do: igg_iii_measurement_reweighting()
+  defp normalize_igg_iii(config), do: igg_iii_measurement_reweighting(config)
+
+  defp normalize_yang(nil), do: nil
+  defp normalize_yang(:standard), do: yang_prediction_adaptive_factor()
+  defp normalize_yang(config), do: yang_prediction_adaptive_factor(config)
+
+  defp optional_igg_iii(nil), do: nil
+
+  defp optional_igg_iii(config) do
+    %{k0_sigma: config.k0_sigma / 1.0, k1_sigma: config.k1_sigma / 1.0}
+  end
+
+  defp optional_yang(nil), do: nil
+
+  defp optional_yang(config) do
+    %{
+      threshold: config.threshold / 1.0,
+      outlier_gate_probability: config.outlier_gate_probability / 1.0
     }
   end
 

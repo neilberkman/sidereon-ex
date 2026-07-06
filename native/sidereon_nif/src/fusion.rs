@@ -12,17 +12,22 @@ use sidereon_core::fusion::ekf::{
     EkfCorrectionReport, EkfUpdateOptions, InnovationGate, InnovationGateReport,
 };
 use sidereon_core::fusion::loose::{
-    FusionUpdate, GnssFixMeasurement, InertialFilter, InertialFilterConfig, LooseCouplingConfig,
+    FusionUpdate, GnssFixMeasurement, IggIiiMeasurementReweighting, InertialFilter,
+    InertialFilterConfig, LooseCouplingConfig, YangPredictionAdaptiveFactor,
+};
+use sidereon_core::fusion::smoother::{
+    smooth_fusion_rts as core_smooth_fusion_rts, FusionRtsEpoch, FusionRtsHistory,
+    FusionRtsHistoryBuilder, SmoothedFusionEpoch, SmoothedFusionTrajectory,
 };
 use sidereon_core::fusion::state::{
     ErrorStateLayout, FusionError, FusionFilterKind, InsFilterState,
 };
 use sidereon_core::fusion::tight::{
-    TightCarrierPhaseObservation, TightClockState, TightCouplingConfig, TightGnssEpoch,
-    TightGnssObservation, TightRangeRateObservation,
+    TightCarrierPhaseObservation, TightClockState, TightCouplingConfig, TightFilterSnapshot,
+    TightGnssEpoch, TightGnssObservation, TightRangeRateObservation,
 };
 use sidereon_core::fusion::timesync::{
-    TimeSyncHistoryConfig, TimeSyncHistoryStatus, TimeSyncUpdate,
+    InertialFilterSnapshot, TimeSyncHistoryConfig, TimeSyncHistoryStatus, TimeSyncUpdate,
 };
 use sidereon_core::fusion::ukf::{UkfUpdateOptions, UnscentedTransformOptions};
 use sidereon_core::inertial::{
@@ -58,6 +63,27 @@ struct FusionFilterResource {
 
 #[rustler::resource_impl]
 impl rustler::Resource for FusionFilterResource {}
+
+struct FusionRtsHistoryBuilderResource {
+    builder: Mutex<FusionRtsHistoryBuilder>,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for FusionRtsHistoryBuilderResource {}
+
+struct FusionRtsHistoryResource {
+    history: FusionRtsHistory,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for FusionRtsHistoryResource {}
+
+struct SmoothedFusionTrajectoryResource {
+    trajectory: SmoothedFusionTrajectory,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for SmoothedFusionTrajectoryResource {}
 
 /// Return one built-in core IMU preset.
 #[rustler::nif]
@@ -147,9 +173,23 @@ struct EkfOptionsTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+struct IggIiiMeasurementReweightingTerm {
+    k0_sigma: f64,
+    k1_sigma: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct YangPredictionAdaptiveFactorTerm {
+    threshold: f64,
+    outlier_gate_probability: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
 struct LooseConfigTerm {
     lever_arm_body_m: Vec3Term,
     update_options: EkfOptionsTerm,
+    measurement_reweighting: Option<IggIiiMeasurementReweightingTerm>,
+    prediction_adaptation: Option<YangPredictionAdaptiveFactorTerm>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -259,6 +299,37 @@ struct FilterStateOut {
     covariance: Vec<Vec<f64>>,
     accel_scale_factor: Vec<f64>,
     gyro_scale_factor: Vec<f64>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct TightFilterSnapshotOut {
+    clock_bias_m: f64,
+    clock_drift_m_s: f64,
+    augmented_covariance: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct InertialFilterSnapshotOut {
+    state: FilterStateOut,
+    last_body_rate_wrt_ecef_rps: Vec<f64>,
+    tight: TightFilterSnapshotOut,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct FusionRtsEpochOut {
+    t_j2000_s: f64,
+    predicted: InertialFilterSnapshotOut,
+    updated: InertialFilterSnapshotOut,
+    transition_from_previous: Option<Vec<Vec<f64>>>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SmoothedFusionEpochOut {
+    t_j2000_s: f64,
+    snapshot: InertialFilterSnapshotOut,
+    error_state_correction: Vec<f64>,
+    covariance: Vec<Vec<f64>>,
+    rts_gain_to_next: Option<Vec<Vec<f64>>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -405,6 +476,32 @@ fn fusion_propagate<'a>(
     })
 }
 
+/// Propagate the filter and record the transition for RTS smoothing.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_propagate_recorded<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    sample: ImuSampleTerm,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let sample = match decode_imu_sample(sample) {
+        Ok(sample) => sample,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.propagate_recorded(sample, &mut history) {
+        Ok(state) => (atoms::ok(), encode_state(state)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
 /// Apply one loose GNSS position or position-velocity update.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn fusion_update_loose<'a>(
@@ -422,6 +519,32 @@ fn fusion_update_loose<'a>(
             Err(error) => Ok(fusion_error(env, error)),
         }
     })
+}
+
+/// Apply one loose GNSS update and record before/after checkpoints.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_loose_recorded<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    measurement: LooseMeasurementTerm,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let measurement = match decode_loose_measurement(measurement) {
+        Ok(measurement) => measurement,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.update_loose_recorded(&measurement, &mut history) {
+        Ok(update) => (atoms::ok(), encode_update(update)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
 }
 
 /// Apply one time-synchronized loose GNSS update.
@@ -481,6 +604,60 @@ fn fusion_update_tight_broadcast<'a>(
             Err(error) => Ok(fusion_error(env, error)),
         }
     })
+}
+
+/// Apply and record one tight GNSS update using an SP3 ephemeris resource.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_tight_recorded_sp3<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    source: ResourceArc<Sp3Resource>,
+    epoch: TightEpochTerm,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let epoch = match decode_tight_epoch(epoch) {
+        Ok(epoch) => epoch,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.update_tight_recorded(&source.sp3, &epoch, &mut history) {
+        Ok(update) => (atoms::ok(), encode_update(update)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
+/// Apply and record one tight GNSS update using a broadcast ephemeris resource.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_tight_recorded_broadcast<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    source: ResourceArc<BroadcastResource>,
+    epoch: TightEpochTerm,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let epoch = match decode_tight_epoch(epoch) {
+        Ok(epoch) => epoch,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.update_tight_recorded(&source.store, &epoch, &mut history) {
+        Ok(update) => (atoms::ok(), encode_update(update)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
 }
 
 /// Apply one time-synchronized tight GNSS update using an SP3 ephemeris resource.
@@ -597,6 +774,98 @@ fn fusion_restore_state<'a>(
     })
 }
 
+/// Create an empty fusion RTS history builder.
+#[rustler::nif]
+fn fusion_rts_history_builder_new() -> ResourceArc<FusionRtsHistoryBuilderResource> {
+    ResourceArc::new(FusionRtsHistoryBuilderResource {
+        builder: Mutex::new(FusionRtsHistoryBuilder::empty()),
+    })
+}
+
+/// Create a fusion RTS history builder from the filter's current checkpoint.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_rts_history_builder_from_filter<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+) -> Term<'a> {
+    match handle.filter.lock() {
+        Ok(filter) => match FusionRtsHistoryBuilder::from_filter(&filter) {
+            Ok(builder) => (
+                atoms::ok(),
+                ResourceArc::new(FusionRtsHistoryBuilderResource {
+                    builder: Mutex::new(builder),
+                }),
+            )
+                .encode(env),
+            Err(error) => fusion_error(env, error),
+        },
+        Err(_) => (atoms::error(), atoms::poisoned_resource()).encode(env),
+    }
+}
+
+/// Finish a fusion RTS history builder.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_rts_history_builder_finish<'a>(
+    env: Env<'a>,
+    builder: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    match builder.builder.lock() {
+        Ok(builder) => match builder.clone().finish() {
+            Ok(history) => (
+                atoms::ok(),
+                ResourceArc::new(FusionRtsHistoryResource { history }),
+            )
+                .encode(env),
+            Err(error) => fusion_error(env, error),
+        },
+        Err(_) => (atoms::error(), atoms::poisoned_resource()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn fusion_rts_history_epoch_count(handle: ResourceArc<FusionRtsHistoryResource>) -> u64 {
+    handle.history.epochs.len() as u64
+}
+
+#[rustler::nif]
+fn fusion_rts_history_epochs(
+    handle: ResourceArc<FusionRtsHistoryResource>,
+) -> Vec<FusionRtsEpochOut> {
+    handle.history.epochs.iter().map(encode_rts_epoch).collect()
+}
+
+/// Smooth a finished fusion RTS history.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_smooth_rts<'a>(env: Env<'a>, history: ResourceArc<FusionRtsHistoryResource>) -> Term<'a> {
+    match core_smooth_fusion_rts(&history.history) {
+        Ok(trajectory) => (
+            atoms::ok(),
+            ResourceArc::new(SmoothedFusionTrajectoryResource { trajectory }),
+        )
+            .encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
+#[rustler::nif]
+fn fusion_smoothed_trajectory_epoch_count(
+    handle: ResourceArc<SmoothedFusionTrajectoryResource>,
+) -> u64 {
+    handle.trajectory.epochs.len() as u64
+}
+
+#[rustler::nif]
+fn fusion_smoothed_trajectory_epochs(
+    handle: ResourceArc<SmoothedFusionTrajectoryResource>,
+) -> Vec<SmoothedFusionEpochOut> {
+    handle
+        .trajectory
+        .epochs
+        .iter()
+        .map(encode_smoothed_epoch)
+        .collect()
+}
+
 fn with_filter<'a, F>(env: Env<'a>, handle: ResourceArc<FusionFilterResource>, f: F) -> Term<'a>
 where
     F: FnOnce(&mut InertialFilter) -> Result<Term<'a>, ()>,
@@ -651,7 +920,14 @@ fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionE
     config.loose = LooseCouplingConfig {
         lever_arm_body_m: vec3(term.loose.lever_arm_body_m, "loose.lever_arm_body_m")?,
         update_options: decode_ekf_options(term.loose.update_options)?,
-        ..LooseCouplingConfig::default()
+        measurement_reweighting: term
+            .loose
+            .measurement_reweighting
+            .map(decode_igg_iii_reweighting),
+        prediction_adaptation: term
+            .loose
+            .prediction_adaptation
+            .map(decode_yang_prediction_adaptive_factor),
     };
     config.tight = TightCouplingConfig {
         lever_arm_body_m: vec3(term.tight.lever_arm_body_m, "tight.lever_arm_body_m")?,
@@ -724,6 +1000,24 @@ fn decode_ekf_options(term: EkfOptionsTerm) -> Result<EkfUpdateOptions, FusionEr
             min_rows: gate.min_rows as usize,
         }),
     })
+}
+
+fn decode_igg_iii_reweighting(
+    term: IggIiiMeasurementReweightingTerm,
+) -> IggIiiMeasurementReweighting {
+    IggIiiMeasurementReweighting {
+        k0_sigma: term.k0_sigma,
+        k1_sigma: term.k1_sigma,
+    }
+}
+
+fn decode_yang_prediction_adaptive_factor(
+    term: YangPredictionAdaptiveFactorTerm,
+) -> YangPredictionAdaptiveFactor {
+    YangPredictionAdaptiveFactor {
+        threshold: term.threshold,
+        outlier_gate_probability: term.outlier_gate_probability,
+    }
 }
 
 fn decode_ukf_options(term: UkfOptionsTerm) -> Result<UkfUpdateOptions, FusionError> {
@@ -929,6 +1223,41 @@ fn encode_state(state: &InsFilterState) -> FilterStateOut {
         covariance: state.covariance.clone(),
         accel_scale_factor: state.accel_scale_factor.to_vec(),
         gyro_scale_factor: state.gyro_scale_factor.to_vec(),
+    }
+}
+
+fn encode_tight_snapshot(snapshot: &TightFilterSnapshot) -> TightFilterSnapshotOut {
+    TightFilterSnapshotOut {
+        clock_bias_m: snapshot.clock_bias_m,
+        clock_drift_m_s: snapshot.clock_drift_m_s,
+        augmented_covariance: snapshot.augmented_covariance.clone(),
+    }
+}
+
+fn encode_snapshot(snapshot: &InertialFilterSnapshot) -> InertialFilterSnapshotOut {
+    InertialFilterSnapshotOut {
+        state: encode_state(&snapshot.state),
+        last_body_rate_wrt_ecef_rps: snapshot.last_body_rate_wrt_ecef_rps.to_vec(),
+        tight: encode_tight_snapshot(&snapshot.tight),
+    }
+}
+
+fn encode_rts_epoch(epoch: &FusionRtsEpoch) -> FusionRtsEpochOut {
+    FusionRtsEpochOut {
+        t_j2000_s: epoch.t_j2000_s,
+        predicted: encode_snapshot(&epoch.predicted),
+        updated: encode_snapshot(&epoch.updated),
+        transition_from_previous: epoch.transition_from_previous.clone(),
+    }
+}
+
+fn encode_smoothed_epoch(epoch: &SmoothedFusionEpoch) -> SmoothedFusionEpochOut {
+    SmoothedFusionEpochOut {
+        t_j2000_s: epoch.t_j2000_s,
+        snapshot: encode_snapshot(&epoch.snapshot),
+        error_state_correction: epoch.error_state_correction.clone(),
+        covariance: epoch.covariance.clone(),
+        rts_gain_to_next: epoch.rts_gain_to_next.clone(),
     }
 }
 

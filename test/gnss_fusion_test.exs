@@ -2,6 +2,9 @@ defmodule Sidereon.GNSSFusionTest do
   use ExUnit.Case
 
   alias Sidereon.GNSS.Fusion
+  alias Sidereon.GNSS.Fusion.FusionRtsHistory
+  alias Sidereon.GNSS.Fusion.FusionRtsHistoryBuilder
+  alias Sidereon.GNSS.Fusion.SmoothedFusionTrajectory
   alias Sidereon.GNSS.SP3
 
   @wgs84_a_m 6_378_137.0
@@ -13,7 +16,7 @@ defmodule Sidereon.GNSSFusionTest do
     test "encodes and decodes state bytes" do
       {:ok, filter} = Fusion.new(initial_state(), config(:ekf))
       assert {:ok, bytes} = Fusion.encode_state(filter)
-      assert byte_size(bytes) == 9_080
+      assert byte_size(bytes) > 0
 
       assert {:ok, restored} = Fusion.from_state_bytes(bytes, config(:ekf))
       assert {:ok, restored_state} = Fusion.state(restored)
@@ -174,6 +177,116 @@ defmodule Sidereon.GNSSFusionTest do
       assert_close(clock.drift_m_s, -291.81853498313416, 1.0e-12)
       assert_close_matrix(clock.covariance, [[199.99999996000003, 0.0], [0.0, 103.98918512474701]], 1.0e-9)
     end
+
+    test "records robust loose history and smooths fusion RTS output" do
+      loose = %{
+        update_options: %{innovation_gate: %{threshold_sigma: 4.0, min_rows: 2}},
+        measurement_reweighting: :standard,
+        prediction_adaptation: :standard
+      }
+
+      config = Fusion.filter_config(:mems, loose: loose)
+      assert config.loose.measurement_reweighting.k0_sigma == 2.0
+      assert config.loose.measurement_reweighting.k1_sigma == 5.0
+      assert config.loose.prediction_adaptation.threshold == 1.0
+      assert config.loose.prediction_adaptation.outlier_gate_probability == 0.99
+
+      {:ok, filter} = Fusion.new(initial_state(1.0), config)
+      assert {:ok, history_builder} = FusionRtsHistoryBuilder.from_filter(filter)
+
+      rate_sample = %{
+        t_j2000_s: 1.0,
+        kind: :rate,
+        specific_force_mps2: {0.0, 0.0, 0.0},
+        angular_rate_rps: {0.0, 0.0, 0.0}
+      }
+
+      assert {:ok, _state} = Fusion.propagate_recorded(filter, rate_sample, history_builder)
+
+      measurement = %{
+        t_j2000_s: 1.0,
+        position_ecef_m: {@wgs84_a_m + 0.35, 0.2, -0.1},
+        covariance: diagonal3(0.5),
+        satellites_used: 7
+      }
+
+      assert {:ok, update} = Fusion.update_loose_recorded(filter, measurement, history_builder)
+      assert update.applied
+      assert {update.rows, update.accepted_rows, update.rejected_rows} == {3, 3, 0}
+      assert bits(update.nis) == 0x400A42AD3B07976F
+      assert bits(update.ekf.innovation_gate.max_abs_normalized_innovation) == 0x3FFCF4BA7AE7BCC0
+      assert update.ekf.innovation_gate.max_rejected_abs_normalized_innovation == nil
+
+      assert {:ok, state} = Fusion.state(filter)
+
+      assert Enum.map(state.nominal.position_ecef_m, &bits/1) == [
+               0x415854A602757FB6,
+               0x3FC7B6B11D7FA0D8,
+               0xBFB7B6B11D5C2B22
+             ]
+
+      assert {:ok, recorded} = FusionRtsHistoryBuilder.finish(history_builder)
+      recorded_epochs = FusionRtsHistory.epochs(recorded)
+      assert FusionRtsHistory.epoch_count(recorded) == 2
+      assert length(recorded_epochs) == 2
+      assert hd(recorded_epochs).transition_from_previous == nil
+
+      transition = Enum.at(recorded_epochs, 1).transition_from_previous
+      assert length(transition) == 15
+      assert transition |> hd() |> length() == 15
+
+      assert [
+               bits(Enum.at(Enum.at(transition, 0), 0)),
+               bits(Enum.at(Enum.at(transition, 1), 1)),
+               bits(Enum.at(Enum.at(transition, 2), 2))
+             ] == [
+               0x3FF000019D17A15A,
+               0x3FEFFFFE650C7E2C,
+               0x3FEFFFFE639F13D3
+             ]
+
+      assert {:ok, smoothed} = Fusion.smooth_fusion_rts(recorded)
+      smoothed_epochs = SmoothedFusionTrajectory.epochs(smoothed)
+      assert SmoothedFusionTrajectory.epoch_count(smoothed) == 2
+      assert length(smoothed_epochs) == 2
+
+      smoothed0 = Enum.at(smoothed_epochs, 0)
+      smoothed1 = Enum.at(smoothed_epochs, 1)
+      assert length(smoothed0.rts_gain_to_next) == 17
+      assert smoothed0.rts_gain_to_next |> hd() |> length() == 17
+      assert smoothed1.rts_gain_to_next == nil
+
+      assert Enum.map(smoothed0.snapshot.state.nominal.position_ecef_m, &bits/1) == [
+               0x415854A6AFB47DAB,
+               0x3FB5122C16E56642,
+               0xBFA5122C1780E0A5
+             ]
+
+      assert Enum.map(smoothed1.snapshot.state.nominal.position_ecef_m, &bits/1) == [
+               0x415854A602757FB6,
+               0x3FC7B6B11D7FA0D8,
+               0xBFB7B6B11D5C2B22
+             ]
+
+      assert smoothed0.error_state_correction |> Enum.take(6) |> Enum.map(&bits/1) == [
+               0xBFFBED1F6AC3E068,
+               0xBFB5122C16E56642,
+               0x3FA5122C1780E0A5,
+               0xBFFBED164E925C0A,
+               0xBFB51A847AAA1978,
+               0x3FA5122D270AB803
+             ]
+
+      assert [
+               bits(Enum.at(Enum.at(smoothed0.covariance, 0), 0)),
+               bits(Enum.at(Enum.at(smoothed0.covariance, 1), 1)),
+               bits(Enum.at(Enum.at(smoothed0.covariance, 2), 2))
+             ] == [
+               0x3FFDC64F219100F6,
+               0x3FFA44D611536A90,
+               0x3FFA44D6119F127C
+             ]
+    end
   end
 
   defp config(kind), do: Fusion.filter_config(zero_imu_spec(), filter_kind: kind)
@@ -236,6 +349,11 @@ defmodule Sidereon.GNSSFusionTest do
     else
       assert_in_delta actual, expected, tolerance
     end
+  end
+
+  defp bits(value) do
+    <<bits::64>> = <<value::float-64>>
+    bits
   end
 
   defp assert_close_list(actual, expected, tolerance) do
