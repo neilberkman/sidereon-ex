@@ -168,6 +168,13 @@ positioning, and conjunction screening; more notebooks live under
   cache-first download of GNSS products (SP3, CLK, NAV, IONEX) and DTED tiles
   from public archives, with canonical filenames and archive URLs for callers
   who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
+- **GNSS/INS fusion** strapdown mechanization with an error-state EKF (UKF
+  option), loose and tight coupling, robust loose updates, an RTS smoother,
+  and a serializable filter state. See `Sidereon.GNSS.Fusion`.
+- **Scenario simulation** deterministic synthetic observables plus a
+  ground-truth error ledger from a versioned scenario. See `Sidereon.GNSS.Scenario`.
+- **Signal analysis** closed-form BPSK/BOC spectra, spectral separation
+  coefficients, DLL jitter, and multipath envelopes. See `Sidereon.GNSS.Signal.Analysis`.
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
   CCSDS OPM / OEM / CDM / TDM, and the GNSS products above. See `Sidereon.Format.TLE`,
   `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`, `Sidereon.CCSDS.TDM`.

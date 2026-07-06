@@ -1058,6 +1058,59 @@ defmodule Sidereon.NIF do
 
   def signal_snr_post_db(_cn0_dbhz, _integration_time_s), do: :erlang.nif_error(:nif_not_loaded)
 
+  def signal_analysis_psd_hz(_modulation, _offsets_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_fraction_power(_modulation, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_rms_bandwidth_hz(_modulation, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_ssc_hz(_desired, _interference, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_ssc_db_hz(_desired, _interference, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_effective_cn0_degradation(_desired, _cn0_db_hz, _receiver_bandwidth_hz, _interferences),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_dll_jitter(_modulation, _options, _processing), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_dll_lower_bound(_modulation, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_multipath_envelope(_modulation, _options, _delay_chips), do: :erlang.nif_error(:nif_not_loaded)
+
+  def scenario_simulate_json(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_imu_spec_preset(_grade), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_new(_state, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_from_state_bytes(_bytes, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_propagate(_handle, _sample), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_loose(_handle, _measurement), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_loose_time_sync(_handle, _measurement), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_sp3(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_broadcast(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_time_sync_sp3(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_time_sync_broadcast(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_configure_time_sync(_handle, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_time_sync_status(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_tight_clock_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_encode_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_restore_state(_handle, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+
   def reduced_orbit_fit(_samples, _scale, _model), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_piecewise_fit(_samples, _scale, _model, _window_start, _window_end, _segment_s),

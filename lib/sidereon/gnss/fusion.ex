@@ -1,0 +1,476 @@
+defmodule Sidereon.GNSS.Fusion do
+  @moduledoc """
+  Stateful GNSS/INS fusion filters.
+
+  The filter is an opaque native resource. Calls mutate the native filter and
+  return snapshots, update reports, or versioned state bytes.
+  """
+
+  alias Sidereon.GNSS.Broadcast
+  alias Sidereon.GNSS.SP3
+  alias Sidereon.NIF
+
+  defmodule Filter do
+    @moduledoc """
+    Opaque native GNSS/INS fusion filter handle.
+    """
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @typedoc "Stateful fusion filter resource."
+    @type t :: %__MODULE__{handle: reference()}
+  end
+
+  @typedoc "Three-vector in ECEF or body axes, depending on field name."
+  @type vec3 :: {number(), number(), number()} | [number()]
+
+  @typedoc "Three-by-three row-major matrix."
+  @type mat3 :: [vec3()]
+
+  @typedoc "Initial closed-loop INS state and covariance."
+  @type filter_state :: map()
+
+  @typedoc "IMU specification map accepted by `filter_config/2`."
+  @type imu_spec :: map() | :mems | :tactical | :navigation
+
+  @typedoc "Fusion filter configuration map."
+  @type filter_config :: map()
+
+  @typedoc "IMU sample map accepted by `propagate/2`."
+  @type imu_sample :: map()
+
+  @typedoc "Loose GNSS position or position-velocity fix."
+  @type loose_measurement :: map()
+
+  @typedoc "Tight GNSS raw-observation epoch."
+  @type tight_epoch :: map()
+
+  @doc """
+  Return a strapdown mechanization config.
+
+  The current core surface exposes `:off` coning correction.
+  """
+  @spec strapdown_config(keyword() | map()) :: map()
+  def strapdown_config(opts \\ []) do
+    %{coning_correction: field(opts, :coning_correction, :off)}
+  end
+
+  @doc """
+  Return an IMU stochastic specification.
+
+  Presets are `:mems`, `:tactical`, and `:navigation`. A map is passed through
+  after numeric normalization.
+  """
+  @spec imu_spec(imu_spec()) :: map()
+  def imu_spec(grade) when grade in [:mems, :tactical, :navigation] do
+    case NIF.fusion_imu_spec_preset(Atom.to_string(grade)) do
+      {:ok, spec} -> spec
+      {:error, reason} -> raise ArgumentError, "invalid IMU preset #{inspect(grade)}: #{inspect(reason)}"
+    end
+  end
+
+  def imu_spec(spec) when is_map(spec) or is_list(spec) do
+    %{
+      accel_vrw_mps_sqrt_s: field!(spec, :accel_vrw_mps_sqrt_s) / 1.0,
+      gyro_arw_rad_sqrt_s: field!(spec, :gyro_arw_rad_sqrt_s) / 1.0,
+      accel_bias_instab_mps2: field!(spec, :accel_bias_instab_mps2) / 1.0,
+      gyro_bias_instab_rps: field!(spec, :gyro_bias_instab_rps) / 1.0,
+      accel_bias_tau_s: field!(spec, :accel_bias_tau_s) / 1.0,
+      gyro_bias_tau_s: field!(spec, :gyro_bias_tau_s) / 1.0,
+      accel_scale_instab_ppm: optional_float(field(spec, :accel_scale_instab_ppm, nil)),
+      gyro_scale_instab_ppm: optional_float(field(spec, :gyro_scale_instab_ppm, nil))
+    }
+  end
+
+  @doc """
+  Build a fusion filter config from an IMU spec and options.
+
+  Options include `:filter_kind` (`:ekf` or `:ukf`), `:mechanization`,
+  `:loose`, `:tight`, `:imu_model`, and `:ukf_update_options`.
+  """
+  @spec filter_config(imu_spec(), keyword() | map()) :: filter_config()
+  def filter_config(spec \\ :mems, opts \\ []) do
+    %{
+      imu_spec: imu_spec(spec),
+      filter_kind: field(opts, :filter_kind, :ekf),
+      imu_model: normalize_imu_model(field(opts, :imu_model, %{})),
+      mechanization: strapdown_config(field(opts, :mechanization, %{})),
+      loose: normalize_loose_config(field(opts, :loose, %{})),
+      tight: normalize_tight_config(field(opts, :tight, %{})),
+      ukf_update_options: normalize_ukf_options(field(opts, :ukf_update_options, %{}))
+    }
+  end
+
+  @doc """
+  Build a new stateful filter.
+  """
+  @spec new(filter_state(), filter_config()) :: {:ok, Filter.t()} | {:error, term()}
+  def new(state, config \\ filter_config()) do
+    case NIF.fusion_new(state_term(state), config_term(config)) do
+      {:ok, handle} when is_reference(handle) -> {:ok, %Filter{handle: handle}}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  @doc """
+  Restore a new stateful filter from versioned fusion state bytes.
+  """
+  @spec from_state_bytes(binary(), filter_config()) :: {:ok, Filter.t()} | {:error, term()}
+  def from_state_bytes(bytes, config \\ filter_config()) when is_binary(bytes) do
+    case NIF.fusion_from_state_bytes(bytes, config_term(config)) do
+      {:ok, handle} when is_reference(handle) -> {:ok, %Filter{handle: handle}}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  @doc """
+  Return the current closed-loop filter state.
+  """
+  @spec state(Filter.t()) :: {:ok, map()} | {:error, term()}
+  def state(%Filter{handle: handle}), do: NIF.fusion_state(handle)
+
+  @doc """
+  Propagate the filter by one IMU sample.
+  """
+  @spec propagate(Filter.t(), imu_sample()) :: {:ok, map()} | {:error, term()}
+  def propagate(%Filter{handle: handle}, sample), do: NIF.fusion_propagate(handle, imu_sample_term(sample))
+
+  @doc """
+  Apply a loose GNSS position or position-velocity fix at the current filter epoch.
+  """
+  @spec update_loose(Filter.t(), loose_measurement()) :: {:ok, map()} | {:error, term()}
+  def update_loose(%Filter{handle: handle}, measurement) do
+    NIF.fusion_update_loose(handle, loose_measurement_term(measurement))
+  end
+
+  @doc """
+  Apply a time-synchronized loose GNSS fix, replaying retained history if needed.
+  """
+  @spec update_loose_time_sync(Filter.t(), loose_measurement()) :: {:ok, map()} | {:error, term()}
+  def update_loose_time_sync(%Filter{handle: handle}, measurement) do
+    NIF.fusion_update_loose_time_sync(handle, loose_measurement_term(measurement))
+  end
+
+  @doc """
+  Apply a tight raw GNSS epoch at the current filter epoch.
+
+  The ephemeris source must be an existing SP3 or broadcast resource.
+  """
+  @spec update_tight(Filter.t(), SP3.t() | Broadcast.t(), tight_epoch()) :: {:ok, map()} | {:error, term()}
+  def update_tight(%Filter{handle: handle}, %SP3{handle: source}, epoch) do
+    NIF.fusion_update_tight_sp3(handle, source, tight_epoch_term(epoch))
+  end
+
+  def update_tight(%Filter{handle: handle}, %Broadcast{handle: source}, epoch) do
+    NIF.fusion_update_tight_broadcast(handle, source, tight_epoch_term(epoch))
+  end
+
+  @doc """
+  Apply a time-synchronized tight raw GNSS epoch.
+  """
+  @spec update_tight_time_sync(Filter.t(), SP3.t() | Broadcast.t(), tight_epoch()) ::
+          {:ok, map()} | {:error, term()}
+  def update_tight_time_sync(%Filter{handle: handle}, %SP3{handle: source}, epoch) do
+    NIF.fusion_update_tight_time_sync_sp3(handle, source, tight_epoch_term(epoch))
+  end
+
+  def update_tight_time_sync(%Filter{handle: handle}, %Broadcast{handle: source}, epoch) do
+    NIF.fusion_update_tight_time_sync_broadcast(handle, source, tight_epoch_term(epoch))
+  end
+
+  @doc """
+  Configure retained IMU samples and GNSS checkpoints for time synchronization.
+  """
+  @spec configure_time_sync(Filter.t(), keyword() | map()) :: {:ok, map()} | {:error, term()}
+  def configure_time_sync(%Filter{handle: handle}, opts) do
+    config = %{
+      imu_capacity: field(opts, :imu_capacity, 256),
+      checkpoint_capacity: field(opts, :checkpoint_capacity, 64)
+    }
+
+    NIF.fusion_configure_time_sync(handle, config)
+  end
+
+  @doc """
+  Return retained-history occupancy for time synchronization.
+  """
+  @spec time_sync_status(Filter.t()) :: {:ok, map()} | {:error, term()}
+  def time_sync_status(%Filter{handle: handle}), do: NIF.fusion_time_sync_status(handle)
+
+  @doc """
+  Return the tight receiver-clock state.
+  """
+  @spec tight_clock_state(Filter.t()) :: {:ok, map()} | {:error, term()}
+  def tight_clock_state(%Filter{handle: handle}), do: NIF.fusion_tight_clock_state(handle)
+
+  @doc """
+  Encode the current filter state and retained time-sync history as bytes.
+  """
+  @spec encode_state(Filter.t()) :: {:ok, binary()} | {:error, term()}
+  def encode_state(%Filter{handle: handle}), do: NIF.fusion_encode_state(handle)
+
+  @doc """
+  Restore an existing filter from bytes produced by `encode_state/1`.
+  """
+  @spec restore_state(Filter.t(), binary()) :: {:ok, map()} | {:error, term()}
+  def restore_state(%Filter{handle: handle}, bytes) when is_binary(bytes) do
+    NIF.fusion_restore_state(handle, bytes)
+  end
+
+  defp state_term(state) do
+    nominal = field(state, :nominal, state)
+
+    %{
+      nominal: %{
+        t_j2000_s: field!(nominal, :t_j2000_s) / 1.0,
+        position_ecef_m: vec3(field!(nominal, :position_ecef_m)),
+        velocity_ecef_mps: vec3(field!(nominal, :velocity_ecef_mps)),
+        attitude_body_to_ecef: mat3(field(nominal, :attitude_body_to_ecef, identity3())),
+        accel_bias_mps2: vec3(field(nominal, :accel_bias_mps2, {0.0, 0.0, 0.0})),
+        gyro_bias_rps: vec3(field(nominal, :gyro_bias_rps, {0.0, 0.0, 0.0}))
+      },
+      layout: state |> field(:layout, :fifteen) |> label(),
+      covariance: optional_matrix(field(state, :covariance, nil)),
+      covariance_diagonal: optional_vector(field(state, :covariance_diagonal, nil)),
+      accel_scale_factor: vec3(field(state, :accel_scale_factor, {0.0, 0.0, 0.0})),
+      gyro_scale_factor: vec3(field(state, :gyro_scale_factor, {0.0, 0.0, 0.0}))
+    }
+  end
+
+  defp config_term(config) do
+    config =
+      if has_field?(config, :imu_model) and has_field?(config, :loose) and has_field?(config, :tight) do
+        config
+      else
+        filter_config(field(config, :imu_spec, :mems), config)
+      end
+
+    %{
+      imu_spec: imu_spec_term(config.imu_spec),
+      filter_kind: label(config.filter_kind),
+      imu_model: imu_model_term(config.imu_model),
+      mechanization: %{coning_correction: label(config.mechanization.coning_correction)},
+      loose: loose_config_term(config.loose),
+      tight: tight_config_term(config.tight),
+      ukf_update_options: ukf_options_term(config.ukf_update_options)
+    }
+  end
+
+  defp imu_spec_term(spec) do
+    %{
+      accel_vrw_mps_sqrt_s: spec.accel_vrw_mps_sqrt_s / 1.0,
+      gyro_arw_rad_sqrt_s: spec.gyro_arw_rad_sqrt_s / 1.0,
+      accel_bias_instab_mps2: spec.accel_bias_instab_mps2 / 1.0,
+      gyro_bias_instab_rps: spec.gyro_bias_instab_rps / 1.0,
+      accel_bias_tau_s: spec.accel_bias_tau_s / 1.0,
+      gyro_bias_tau_s: spec.gyro_bias_tau_s / 1.0,
+      accel_scale_instab_ppm: optional_float(spec.accel_scale_instab_ppm),
+      gyro_scale_instab_ppm: optional_float(spec.gyro_scale_instab_ppm)
+    }
+  end
+
+  defp normalize_imu_model(model) do
+    %{
+      bias: %{
+        accel_mps2: vec3(field(model, :accel_mps2, field(model, :accel_bias_mps2, {0.0, 0.0, 0.0}))),
+        gyro_rps: vec3(field(model, :gyro_rps, field(model, :gyro_bias_rps, {0.0, 0.0, 0.0})))
+      },
+      calibration: %{
+        accel_scale_misalignment: mat3(field(model, :accel_scale_misalignment, zero3())),
+        gyro_scale_misalignment: mat3(field(model, :gyro_scale_misalignment, zero3()))
+      }
+    }
+  end
+
+  defp imu_model_term(model) do
+    %{
+      bias: %{accel_mps2: vec3(model.bias.accel_mps2), gyro_rps: vec3(model.bias.gyro_rps)},
+      calibration: %{
+        accel_scale_misalignment: mat3(model.calibration.accel_scale_misalignment),
+        gyro_scale_misalignment: mat3(model.calibration.gyro_scale_misalignment)
+      }
+    }
+  end
+
+  defp normalize_loose_config(config) do
+    %{
+      lever_arm_body_m: vec3(field(config, :lever_arm_body_m, {0.0, 0.0, 0.0})),
+      update_options: normalize_ekf_options(field(config, :update_options, %{}))
+    }
+  end
+
+  defp normalize_tight_config(config) do
+    %{
+      lever_arm_body_m: vec3(field(config, :lever_arm_body_m, {0.0, 0.0, 0.0})),
+      light_time: field(config, :light_time, true),
+      sagnac: field(config, :sagnac, true),
+      initial_clock_bias_variance_m2: field(config, :initial_clock_bias_variance_m2, 1.0e12) / 1.0,
+      initial_clock_drift_variance_m2_s2: field(config, :initial_clock_drift_variance_m2_s2, 1.0e6) / 1.0,
+      clock_bias_random_walk_m2_s: field(config, :clock_bias_random_walk_m2_s, 1.0) / 1.0,
+      clock_drift_random_walk_m2_s3: field(config, :clock_drift_random_walk_m2_s3, 1.0e-2) / 1.0,
+      update_options: normalize_ekf_options(field(config, :update_options, %{}))
+    }
+  end
+
+  defp normalize_ekf_options(options) do
+    %{
+      innovation_gate:
+        case field(options, :innovation_gate, nil) do
+          nil -> nil
+          gate -> %{threshold_sigma: field!(gate, :threshold_sigma) / 1.0, min_rows: field(gate, :min_rows, 1)}
+        end
+    }
+  end
+
+  defp normalize_ukf_options(options) do
+    %{
+      alpha: field(options, :alpha, 0.5) / 1.0,
+      beta: field(options, :beta, 2.0) / 1.0,
+      kappa: field(options, :kappa, 0.0) / 1.0,
+      innovation_gate: normalize_ekf_options(options).innovation_gate
+    }
+  end
+
+  defp loose_config_term(config) do
+    %{lever_arm_body_m: vec3(config.lever_arm_body_m), update_options: ekf_options_term(config.update_options)}
+  end
+
+  defp tight_config_term(config) do
+    %{
+      lever_arm_body_m: vec3(config.lever_arm_body_m),
+      light_time: config.light_time,
+      sagnac: config.sagnac,
+      initial_clock_bias_variance_m2: config.initial_clock_bias_variance_m2 / 1.0,
+      initial_clock_drift_variance_m2_s2: config.initial_clock_drift_variance_m2_s2 / 1.0,
+      clock_bias_random_walk_m2_s: config.clock_bias_random_walk_m2_s / 1.0,
+      clock_drift_random_walk_m2_s3: config.clock_drift_random_walk_m2_s3 / 1.0,
+      update_options: ekf_options_term(config.update_options)
+    }
+  end
+
+  defp ekf_options_term(options) do
+    %{innovation_gate: options.innovation_gate}
+  end
+
+  defp ukf_options_term(options) do
+    %{
+      alpha: options.alpha / 1.0,
+      beta: options.beta / 1.0,
+      kappa: options.kappa / 1.0,
+      innovation_gate: options.innovation_gate
+    }
+  end
+
+  defp imu_sample_term(sample) do
+    kind = field!(sample, :kind)
+
+    %{
+      t_j2000_s: field!(sample, :t_j2000_s) / 1.0,
+      kind: label(kind),
+      specific_force_mps2: vec3(field(sample, :specific_force_mps2, {0.0, 0.0, 0.0})),
+      angular_rate_rps: vec3(field(sample, :angular_rate_rps, {0.0, 0.0, 0.0})),
+      delta_velocity_mps: vec3(field(sample, :delta_velocity_mps, {0.0, 0.0, 0.0})),
+      delta_theta_rad: vec3(field(sample, :delta_theta_rad, {0.0, 0.0, 0.0})),
+      dt_s: field(sample, :dt_s, 0.0) / 1.0
+    }
+  end
+
+  defp loose_measurement_term(measurement) do
+    %{
+      t_j2000_s: field!(measurement, :t_j2000_s) / 1.0,
+      position_ecef_m: vec3(field!(measurement, :position_ecef_m)),
+      velocity_ecef_mps: optional_vec3(field(measurement, :velocity_ecef_mps, nil)),
+      covariance: matrix(field!(measurement, :covariance)),
+      satellites_used: field(measurement, :satellites_used, 4),
+      solution_valid: field(measurement, :solution_valid, true)
+    }
+  end
+
+  defp tight_epoch_term(epoch) do
+    %{
+      t_j2000_s: field!(epoch, :t_j2000_s) / 1.0,
+      observations: Enum.map(field!(epoch, :observations), &tight_observation_term/1)
+    }
+  end
+
+  defp tight_observation_term(observation) do
+    %{
+      satellite_id: field!(observation, :satellite_id),
+      pseudorange_m: field!(observation, :pseudorange_m) / 1.0,
+      pseudorange_sigma_m: field!(observation, :pseudorange_sigma_m) / 1.0,
+      range_rate: optional_range_rate(field(observation, :range_rate, nil)),
+      carrier_phase: optional_carrier_phase(field(observation, :carrier_phase, nil)),
+      ionosphere_delay_m: field(observation, :ionosphere_delay_m, 0.0) / 1.0,
+      troposphere_delay_m: field(observation, :troposphere_delay_m, 0.0) / 1.0
+    }
+  end
+
+  defp optional_range_rate(nil), do: nil
+
+  defp optional_range_rate(range_rate) do
+    %{
+      measured_range_rate_m_s: field!(range_rate, :measured_range_rate_m_s) / 1.0,
+      sigma_m_s: field!(range_rate, :sigma_m_s) / 1.0,
+      satellite_clock_drift_m_s: field(range_rate, :satellite_clock_drift_m_s, 0.0) / 1.0
+    }
+  end
+
+  defp optional_carrier_phase(nil), do: nil
+
+  defp optional_carrier_phase(carrier_phase) do
+    %{
+      phase_range_m: field!(carrier_phase, :phase_range_m) / 1.0,
+      sigma_m: field!(carrier_phase, :sigma_m) / 1.0,
+      float_ambiguity_m: field(carrier_phase, :float_ambiguity_m, 0.0) / 1.0
+    }
+  end
+
+  defp optional_float(nil), do: nil
+  defp optional_float(value), do: value / 1.0
+  defp optional_vec3(nil), do: nil
+  defp optional_vec3(value), do: vec3(value)
+  defp optional_vector(nil), do: nil
+  defp optional_vector(value), do: Enum.map(value, &(&1 / 1.0))
+  defp optional_matrix(nil), do: nil
+  defp optional_matrix(value), do: matrix(value)
+
+  defp vec3({x, y, z}), do: [x / 1.0, y / 1.0, z / 1.0]
+  defp vec3([x, y, z]), do: [x / 1.0, y / 1.0, z / 1.0]
+
+  defp mat3(value), do: matrix(value)
+  defp matrix(value), do: Enum.map(value, &row/1)
+  defp row(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> row()
+  defp row(list) when is_list(list), do: Enum.map(list, &(&1 / 1.0))
+
+  defp identity3, do: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+  defp zero3, do: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+  defp label(value) when is_atom(value), do: Atom.to_string(value)
+  defp label(value) when is_binary(value), do: value
+
+  defp has_field?(map, key), do: match?({:ok, _value}, fetch(map, key))
+
+  defp field!(map, key) do
+    case fetch(map, key) do
+      {:ok, value} -> value
+      :error -> raise KeyError, key: key, term: map
+    end
+  end
+
+  defp field(map, key, default) do
+    case fetch(map, key) do
+      {:ok, value} -> value
+      :error -> default
+    end
+  end
+
+  defp fetch(map, key) when is_map(map) do
+    Map.fetch(map, key)
+    |> case do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(map, Atom.to_string(key))
+    end
+  end
+
+  defp fetch(keyword, key) when is_list(keyword), do: Keyword.fetch(keyword, key)
+end
