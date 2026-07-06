@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0]
+
+### Added
+
+- The no-IMU track filter and RTS smoother (`Sidereon.Estimation`):
+  covariance-weighted constant-velocity filtering of position fixes so
+  weak-geometry fixes cannot spike the track, with fixed-interval smoothing.
+- Solid Earth and pole tide forces for numerical propagation, and station
+  displacement corrections (solid tide, pole tide, ocean loading from BLQ).
+
 ## [0.18.0]
 
 ### Added
