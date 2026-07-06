@@ -87,6 +87,7 @@ mod tides;
 mod time;
 mod tle;
 mod tle_fit;
+mod track_estimation;
 mod trls;
 mod tropo;
 mod velocity;

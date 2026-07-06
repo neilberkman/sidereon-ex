@@ -11,6 +11,18 @@ defmodule Sidereon.MixProject do
   alias Sidereon.Estimation.AlphaBetaStep
   alias Sidereon.Estimation.NisGate
   alias Sidereon.Estimation.ScalarKalmanGains
+  alias Sidereon.Estimation.SmoothedTrack
+  alias Sidereon.Estimation.SmoothedTrackEpoch
+  alias Sidereon.Estimation.TrackFilter
+  alias Sidereon.Estimation.TrackFilterConfig
+  alias Sidereon.Estimation.TrackGatedUpdate
+  alias Sidereon.Estimation.TrackInnovation
+  alias Sidereon.Estimation.TrackPrediction
+  alias Sidereon.Estimation.TrackRtsEpoch
+  alias Sidereon.Estimation.TrackRtsHistory
+  alias Sidereon.Estimation.TrackRtsHistoryBuilder
+  alias Sidereon.Estimation.TrackState
+  alias Sidereon.Estimation.TrackUpdate
   alias Sidereon.Format.OMM
   alias Sidereon.Format.TLE
   alias Sidereon.Geofence
@@ -198,6 +210,18 @@ defmodule Sidereon.MixProject do
           AlphaBetaStep,
           NisGate,
           ScalarKalmanGains,
+          TrackFilterConfig,
+          TrackFilter,
+          TrackState,
+          TrackPrediction,
+          TrackInnovation,
+          TrackUpdate,
+          TrackGatedUpdate,
+          TrackRtsHistoryBuilder,
+          TrackRtsHistory,
+          TrackRtsEpoch,
+          SmoothedTrack,
+          SmoothedTrackEpoch,
           SourceLocalization,
           Sensor,
           Options,

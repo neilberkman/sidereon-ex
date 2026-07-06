@@ -26,6 +26,7 @@ defmodule Sidereon.Propagator do
     * `:forces` - List of active force models: `[:twobody, :j2]`,
       `[:composite, :j2_j6, :third_body, {:srp, cr, area_to_mass_m2_kg}, :relativity]`,
       `[:composite, {:geopotential, degree, order}]`,
+      `[:composite, :solid_earth_tide, :solid_earth_pole_tide]`,
       or `[:earth_phase_a]` (default: `[:twobody]`)
     * `:drag` - optional `%Sidereon.Drag.Parameters{}` drag model
     * `:space_weather_table` - optional `%Sidereon.SpaceWeather{}` used with `:drag`
@@ -156,6 +157,9 @@ defmodule Sidereon.Propagator do
   defp force_token({:earth_phase_b, degree, order}) when is_integer(degree) and is_integer(order) do
     "earth_phase_b:#{degree}:#{order}"
   end
+
+  defp force_token(:solid_earth_tide), do: "solid_earth_tide"
+  defp force_token(:solid_earth_pole_tide), do: "solid_earth_pole_tide"
 
   defp force_token(value), do: to_string(value)
 
