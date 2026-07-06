@@ -389,7 +389,10 @@ defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
   Start a history builder from the current filter state.
   """
   @spec from_filter(TrackFilter.t()) :: {:ok, t()} | {:error, term()}
-  def from_filter(%TrackFilter{handle: handle}) do
+  # Matched via __struct__ rather than struct expansion: TrackFilter and this
+  # module reference each other's structs, and expanding both directions in one
+  # file fails to compile on Elixir 1.19.
+  def from_filter(%{__struct__: TrackFilter, handle: handle}) do
     case NIF.track_rts_history_builder_from_filter(handle) do
       {:ok, history} when is_reference(history) -> {:ok, %__MODULE__{handle: history}}
       {:error, _reason} = err -> err
