@@ -365,171 +365,6 @@ defmodule Sidereon.Estimation.TrackFilterConfig do
   end
 end
 
-defmodule Sidereon.Estimation.TrackTerms do
-  @moduledoc false
-
-  alias Sidereon.Estimation.NisGate
-  alias Sidereon.Estimation.SmoothedTrackEpoch
-  alias Sidereon.Estimation.TrackFilterConfig
-  alias Sidereon.Estimation.TrackGatedUpdate
-  alias Sidereon.Estimation.TrackInnovation
-  alias Sidereon.Estimation.TrackPrediction
-  alias Sidereon.Estimation.TrackRtsEpoch
-  alias Sidereon.Estimation.TrackState
-  alias Sidereon.Estimation.TrackUpdate
-
-  def config_from_map(map) do
-    struct(TrackFilterConfig, %{
-      frame: frame_atom(map.frame),
-      initial_t_s: map.initial_t_s,
-      initial_position_m: map.initial_position_m,
-      initial_velocity_m_s: map.initial_velocity_m_s,
-      initial_covariance: map.initial_covariance,
-      acceleration_variance_spectral_density_m2_s3: map.acceleration_variance_spectral_density_m2_s3,
-      dimension: map.dimension
-    })
-  end
-
-  def config_term(%TrackFilterConfig{} = config) do
-    %{
-      frame: frame_label(config.frame),
-      initial_t_s: config.initial_t_s / 1.0,
-      initial_position_m: vector(config.initial_position_m),
-      initial_velocity_m_s: vector(config.initial_velocity_m_s),
-      initial_covariance: matrix(config.initial_covariance),
-      acceleration_variance_spectral_density_m2_s3: config.acceleration_variance_spectral_density_m2_s3 / 1.0
-    }
-  end
-
-  def config_term(opts) do
-    %{
-      frame: frame_label(field!(opts, :frame)),
-      initial_t_s: field!(opts, :initial_t_s) / 1.0,
-      initial_position_m: vector(field!(opts, :initial_position_m)),
-      initial_velocity_m_s: vector(field!(opts, :initial_velocity_m_s)),
-      initial_covariance: matrix(field!(opts, :initial_covariance)),
-      acceleration_variance_spectral_density_m2_s3: field!(opts, :acceleration_variance_spectral_density_m2_s3) / 1.0
-    }
-  end
-
-  def position_config_term(opts) do
-    %{
-      frame: frame_label(field!(opts, :frame)),
-      initial_t_s: field!(opts, :initial_t_s) / 1.0,
-      initial_position_m: vector(field!(opts, :initial_position_m)),
-      position_covariance_m2: matrix(field!(opts, :position_covariance_m2)),
-      initial_velocity_variance_m2_s2: field!(opts, :initial_velocity_variance_m2_s2) / 1.0,
-      acceleration_variance_spectral_density_m2_s3: field!(opts, :acceleration_variance_spectral_density_m2_s3) / 1.0
-    }
-  end
-
-  def state_from_map(map) do
-    %TrackState{
-      frame: frame_atom(map.frame),
-      t_s: map.t_s,
-      position_m: map.position_m,
-      velocity_m_s: map.velocity_m_s,
-      covariance: map.covariance,
-      state_vector: map.state_vector,
-      position_covariance_m2: map.position_covariance_m2,
-      dimension: map.dimension,
-      state_dimension: map.state_dimension
-    }
-  end
-
-  def prediction_from_map(map) do
-    %TrackPrediction{
-      dt_s: map.dt_s,
-      transition: map.transition,
-      process_noise: map.process_noise,
-      predicted: state_from_map(map.predicted)
-    }
-  end
-
-  def innovation_from_map(map) do
-    %TrackInnovation{
-      innovation: map.innovation,
-      innovation_covariance: map.innovation_covariance,
-      nis: map.nis
-    }
-  end
-
-  def update_from_map(map) do
-    %TrackUpdate{
-      predicted: state_from_map(map.predicted),
-      updated: state_from_map(map.updated),
-      innovation: innovation_from_map(map.innovation),
-      kalman_gain: map.kalman_gain
-    }
-  end
-
-  def gated_update_from_map(map) do
-    %TrackGatedUpdate{
-      gate: gate_from_map(map.gate),
-      update: maybe_update(map.update),
-      state: state_from_map(map.state)
-    }
-  end
-
-  def rts_epoch_from_map(map) do
-    %TrackRtsEpoch{
-      t_s: map.t_s,
-      predicted: state_from_map(map.predicted),
-      updated: state_from_map(map.updated),
-      transition_from_previous: map.transition_from_previous
-    }
-  end
-
-  def smoothed_epoch_from_map(map) do
-    %SmoothedTrackEpoch{
-      t_s: map.t_s,
-      state: state_from_map(map.state),
-      rts_gain_to_next: map.rts_gain_to_next
-    }
-  end
-
-  def vector(values) when is_tuple(values), do: values |> Tuple.to_list() |> vector()
-  def vector(values) when is_list(values), do: Enum.map(values, &(&1 / 1.0))
-
-  def matrix(rows) when is_list(rows), do: Enum.map(rows, &vector/1)
-
-  def frame_label(:ecef), do: "ecef"
-  def frame_label(:enu), do: "enu"
-  def frame_label(:caller_defined_cartesian), do: "caller_defined_cartesian"
-  def frame_label(value) when is_binary(value), do: value
-
-  def frame_atom(:ecef), do: :ecef
-  def frame_atom(:enu), do: :enu
-  def frame_atom(:caller_defined_cartesian), do: :caller_defined_cartesian
-
-  def frame_atom(value) when is_binary(value) do
-    value
-    |> String.replace("-", "_")
-    |> String.replace("callerDefinedCartesian", "caller_defined_cartesian")
-    |> case do
-      "ecef" -> :ecef
-      "enu" -> :enu
-      "caller_defined_cartesian" -> :caller_defined_cartesian
-      other -> raise ArgumentError, "invalid track frame #{inspect(other)}"
-    end
-  end
-
-  defp gate_from_map(map) do
-    %NisGate{nis: map.nis, threshold: map.threshold, in_gate: map.in_gate, dof: map.dof}
-  end
-
-  defp maybe_update(nil), do: nil
-  defp maybe_update(map), do: update_from_map(map)
-
-  defp field!(opts, key) when is_map(opts) do
-    Map.fetch!(opts, key)
-  end
-
-  defp field!(opts, key) when is_list(opts) do
-    Keyword.fetch!(opts, key)
-  end
-end
-
 defmodule Sidereon.Estimation.TrackFilter do
   @moduledoc """
   Stateful no-IMU constant-velocity track filter.
@@ -851,6 +686,171 @@ defmodule Sidereon.Estimation.SmoothedTrack do
     handle
     |> NIF.track_smoothed_epochs()
     |> Enum.map(&TrackTerms.smoothed_epoch_from_map/1)
+  end
+end
+
+defmodule Sidereon.Estimation.TrackTerms do
+  @moduledoc false
+
+  alias Sidereon.Estimation.NisGate
+  alias Sidereon.Estimation.SmoothedTrackEpoch
+  alias Sidereon.Estimation.TrackFilterConfig
+  alias Sidereon.Estimation.TrackGatedUpdate
+  alias Sidereon.Estimation.TrackInnovation
+  alias Sidereon.Estimation.TrackPrediction
+  alias Sidereon.Estimation.TrackRtsEpoch
+  alias Sidereon.Estimation.TrackState
+  alias Sidereon.Estimation.TrackUpdate
+
+  def config_from_map(map) do
+    struct(TrackFilterConfig, %{
+      frame: frame_atom(map.frame),
+      initial_t_s: map.initial_t_s,
+      initial_position_m: map.initial_position_m,
+      initial_velocity_m_s: map.initial_velocity_m_s,
+      initial_covariance: map.initial_covariance,
+      acceleration_variance_spectral_density_m2_s3: map.acceleration_variance_spectral_density_m2_s3,
+      dimension: map.dimension
+    })
+  end
+
+  def config_term(%TrackFilterConfig{} = config) do
+    %{
+      frame: frame_label(config.frame),
+      initial_t_s: config.initial_t_s / 1.0,
+      initial_position_m: vector(config.initial_position_m),
+      initial_velocity_m_s: vector(config.initial_velocity_m_s),
+      initial_covariance: matrix(config.initial_covariance),
+      acceleration_variance_spectral_density_m2_s3: config.acceleration_variance_spectral_density_m2_s3 / 1.0
+    }
+  end
+
+  def config_term(opts) do
+    %{
+      frame: frame_label(field!(opts, :frame)),
+      initial_t_s: field!(opts, :initial_t_s) / 1.0,
+      initial_position_m: vector(field!(opts, :initial_position_m)),
+      initial_velocity_m_s: vector(field!(opts, :initial_velocity_m_s)),
+      initial_covariance: matrix(field!(opts, :initial_covariance)),
+      acceleration_variance_spectral_density_m2_s3: field!(opts, :acceleration_variance_spectral_density_m2_s3) / 1.0
+    }
+  end
+
+  def position_config_term(opts) do
+    %{
+      frame: frame_label(field!(opts, :frame)),
+      initial_t_s: field!(opts, :initial_t_s) / 1.0,
+      initial_position_m: vector(field!(opts, :initial_position_m)),
+      position_covariance_m2: matrix(field!(opts, :position_covariance_m2)),
+      initial_velocity_variance_m2_s2: field!(opts, :initial_velocity_variance_m2_s2) / 1.0,
+      acceleration_variance_spectral_density_m2_s3: field!(opts, :acceleration_variance_spectral_density_m2_s3) / 1.0
+    }
+  end
+
+  def state_from_map(map) do
+    %TrackState{
+      frame: frame_atom(map.frame),
+      t_s: map.t_s,
+      position_m: map.position_m,
+      velocity_m_s: map.velocity_m_s,
+      covariance: map.covariance,
+      state_vector: map.state_vector,
+      position_covariance_m2: map.position_covariance_m2,
+      dimension: map.dimension,
+      state_dimension: map.state_dimension
+    }
+  end
+
+  def prediction_from_map(map) do
+    %TrackPrediction{
+      dt_s: map.dt_s,
+      transition: map.transition,
+      process_noise: map.process_noise,
+      predicted: state_from_map(map.predicted)
+    }
+  end
+
+  def innovation_from_map(map) do
+    %TrackInnovation{
+      innovation: map.innovation,
+      innovation_covariance: map.innovation_covariance,
+      nis: map.nis
+    }
+  end
+
+  def update_from_map(map) do
+    %TrackUpdate{
+      predicted: state_from_map(map.predicted),
+      updated: state_from_map(map.updated),
+      innovation: innovation_from_map(map.innovation),
+      kalman_gain: map.kalman_gain
+    }
+  end
+
+  def gated_update_from_map(map) do
+    %TrackGatedUpdate{
+      gate: gate_from_map(map.gate),
+      update: maybe_update(map.update),
+      state: state_from_map(map.state)
+    }
+  end
+
+  def rts_epoch_from_map(map) do
+    %TrackRtsEpoch{
+      t_s: map.t_s,
+      predicted: state_from_map(map.predicted),
+      updated: state_from_map(map.updated),
+      transition_from_previous: map.transition_from_previous
+    }
+  end
+
+  def smoothed_epoch_from_map(map) do
+    %SmoothedTrackEpoch{
+      t_s: map.t_s,
+      state: state_from_map(map.state),
+      rts_gain_to_next: map.rts_gain_to_next
+    }
+  end
+
+  def vector(values) when is_tuple(values), do: values |> Tuple.to_list() |> vector()
+  def vector(values) when is_list(values), do: Enum.map(values, &(&1 / 1.0))
+
+  def matrix(rows) when is_list(rows), do: Enum.map(rows, &vector/1)
+
+  def frame_label(:ecef), do: "ecef"
+  def frame_label(:enu), do: "enu"
+  def frame_label(:caller_defined_cartesian), do: "caller_defined_cartesian"
+  def frame_label(value) when is_binary(value), do: value
+
+  def frame_atom(:ecef), do: :ecef
+  def frame_atom(:enu), do: :enu
+  def frame_atom(:caller_defined_cartesian), do: :caller_defined_cartesian
+
+  def frame_atom(value) when is_binary(value) do
+    value
+    |> String.replace("-", "_")
+    |> String.replace("callerDefinedCartesian", "caller_defined_cartesian")
+    |> case do
+      "ecef" -> :ecef
+      "enu" -> :enu
+      "caller_defined_cartesian" -> :caller_defined_cartesian
+      other -> raise ArgumentError, "invalid track frame #{inspect(other)}"
+    end
+  end
+
+  defp gate_from_map(map) do
+    %NisGate{nis: map.nis, threshold: map.threshold, in_gate: map.in_gate, dof: map.dof}
+  end
+
+  defp maybe_update(nil), do: nil
+  defp maybe_update(map), do: update_from_map(map)
+
+  defp field!(opts, key) when is_map(opts) do
+    Map.fetch!(opts, key)
+  end
+
+  defp field!(opts, key) when is_list(opts) do
+    Keyword.fetch!(opts, key)
   end
 end
 
