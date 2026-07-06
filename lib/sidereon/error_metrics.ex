@@ -9,8 +9,18 @@ defmodule Sidereon.ErrorMetrics do
 
   alias __MODULE__.ErrorEllipse
   alias __MODULE__.PercentileRadius
+  alias __MODULE__.PositionCovariance
   alias __MODULE__.PositionErrorMetrics
   alias Sidereon.NIF
+
+  @type covariance3 :: [[number()]]
+  @type geodetic_radians_m :: {number(), number(), number()}
+  @type error_reason ::
+          :non_finite
+          | :not_positive_semidefinite
+          | :invalid_probability
+          | :rotation
+          | term()
 
   defmodule ErrorEllipse do
     @moduledoc """
@@ -40,6 +50,20 @@ defmodule Sidereon.ErrorMetrics do
             radius_m: float(),
             approx_m: float(),
             approx_valid: boolean()
+          }
+  end
+
+  defmodule PositionCovariance do
+    @moduledoc """
+    Position covariance in ECEF and local ENU coordinates.
+    """
+
+    @enforce_keys [:ecef_m2, :enu_m2]
+    defstruct [:ecef_m2, :enu_m2]
+
+    @type t :: %__MODULE__{
+            ecef_m2: Sidereon.ErrorMetrics.covariance3(),
+            enu_m2: Sidereon.ErrorMetrics.covariance3()
           }
   end
 
@@ -93,15 +117,6 @@ defmodule Sidereon.ErrorMetrics do
           }
   end
 
-  @type covariance3 :: [[number()]]
-  @type geodetic_radians_m :: {number(), number(), number()}
-  @type error_reason ::
-          :non_finite
-          | :not_positive_semidefinite
-          | :invalid_probability
-          | :rotation
-          | term()
-
   @doc """
   Compute position error metrics from an ENU covariance matrix in square metres.
   """
@@ -134,6 +149,25 @@ defmodule Sidereon.ErrorMetrics do
   end
 
   @doc """
+  Compute position error metrics from a position covariance value.
+  """
+  @spec from_position_covariance(PositionCovariance.t() | map()) ::
+          {:ok, PositionErrorMetrics.t()} | {:error, error_reason()}
+  def from_position_covariance(%PositionCovariance{} = covariance) do
+    from_position_covariance(Map.from_struct(covariance))
+  end
+
+  def from_position_covariance(%{ecef_m2: ecef_m2, enu_m2: enu_m2}) do
+    case NIF.position_error_metrics_from_position_covariance(rows(ecef_m2), rows(enu_m2)) do
+      {:ok, metrics} -> {:ok, metrics(metrics)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Compute position error metrics from a kinematic solution-like map or struct.
 
   The value must provide `:position_m` and `:position_covariance_m2`.
@@ -145,6 +179,62 @@ defmodule Sidereon.ErrorMetrics do
 
     case NIF.position_error_metrics_from_kinematic_solution(vec3(position_m), rows(covariance_m2)) do
       {:ok, metrics} -> {:ok, metrics(metrics)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Compute the horizontal one-sigma error ellipse from an ENU covariance matrix.
+  """
+  @spec error_ellipse_from_enu_covariance(covariance3()) :: {:ok, ErrorEllipse.t()} | {:error, error_reason()}
+  def error_ellipse_from_enu_covariance(covariance_enu_m2) do
+    case NIF.position_error_metrics_error_ellipse_from_enu_covariance(rows(covariance_enu_m2)) do
+      {:ok, ellipse} -> {:ok, ellipse(ellipse)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Compute a horizontal percentile circle radius from an ENU covariance matrix.
+  """
+  @spec horizontal_radius_at(covariance3(), number()) :: {:ok, PercentileRadius.t()} | {:error, error_reason()}
+  def horizontal_radius_at(covariance_enu_m2, probability) do
+    case NIF.position_error_metrics_horizontal_radius_at(rows(covariance_enu_m2), probability / 1.0) do
+      {:ok, radius} -> {:ok, percentile(radius)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Compute a three-dimensional percentile sphere radius from an ENU covariance matrix.
+  """
+  @spec spherical_radius_at(covariance3(), number()) :: {:ok, PercentileRadius.t()} | {:error, error_reason()}
+  def spherical_radius_at(covariance_enu_m2, probability) do
+    case NIF.position_error_metrics_spherical_radius_at(rows(covariance_enu_m2), probability / 1.0) do
+      {:ok, radius} -> {:ok, percentile(radius)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Compute a vertical percentile radius from an up variance in square metres.
+  """
+  @spec vertical_radius_at(number(), number()) :: {:ok, float()} | {:error, error_reason()}
+  def vertical_radius_at(sigma_u_m2, probability) do
+    case NIF.position_error_metrics_vertical_radius_at(sigma_u_m2 / 1.0, probability / 1.0) do
+      {:ok, radius_m} -> {:ok, radius_m}
       {:error, _} = err -> err
       other -> {:error, other}
     end

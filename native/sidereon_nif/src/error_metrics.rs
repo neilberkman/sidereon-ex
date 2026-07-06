@@ -4,11 +4,13 @@ use std::collections::BTreeMap;
 
 use rustler::{Encoder, Env, Error, NifResult, Term};
 use sidereon_core::error_metrics::{
-    metrics_from_ecef_covariance_m2, metrics_from_enu_covariance_m2,
-    metrics_from_kinematic_solution, ErrorEllipse, ErrorMetricsError, PercentileRadius,
-    PositionErrorMetrics,
+    error_ellipse_from_enu_m2, horizontal_radius_at, metrics_from_ecef_covariance_m2,
+    metrics_from_enu_covariance_m2, metrics_from_kinematic_solution,
+    metrics_from_position_covariance, spherical_radius_at, vertical_radius_at, ErrorEllipse,
+    ErrorMetricsError, PercentileRadius, PositionErrorMetrics,
 };
 use sidereon_core::frame::Wgs84Geodetic;
+use sidereon_core::geometry::PositionCovariance;
 use sidereon_core::precise_positioning::{KinematicEpochSolution, KinematicEpochStatus};
 
 mod atoms {
@@ -123,6 +125,30 @@ fn encode_metrics<'a>(
     }
 }
 
+fn encode_ellipse<'a>(env: Env<'a>, result: Result<ErrorEllipse, ErrorMetricsError>) -> Term<'a> {
+    match result {
+        Ok(value) => (atoms::ok(), ellipse_term(value)).encode(env),
+        Err(error) => (atoms::error(), error_atom(error)).encode(env),
+    }
+}
+
+fn encode_percentile<'a>(
+    env: Env<'a>,
+    result: Result<PercentileRadius, ErrorMetricsError>,
+) -> Term<'a> {
+    match result {
+        Ok(value) => (atoms::ok(), percentile_term(value)).encode(env),
+        Err(error) => (atoms::error(), error_atom(error)).encode(env),
+    }
+}
+
+fn encode_float<'a>(env: Env<'a>, result: Result<f64, ErrorMetricsError>) -> Term<'a> {
+    match result {
+        Ok(value) => (atoms::ok(), value).encode(env),
+        Err(error) => (atoms::error(), error_atom(error)).encode(env),
+    }
+}
+
 /// Compute position error metrics from an ENU covariance matrix in m^2.
 #[rustler::nif]
 fn position_error_metrics_from_enu_covariance<'a>(
@@ -151,7 +177,75 @@ fn position_error_metrics_from_ecef_covariance<'a>(
     ))
 }
 
-/// Compute position error metrics from the public kinematic solution shape.
+/// Compute position error metrics from ECEF and ENU covariance matrices.
+#[rustler::nif]
+fn position_error_metrics_from_position_covariance<'a>(
+    env: Env<'a>,
+    covariance_ecef_m2: Vec<Vec<f64>>,
+    covariance_enu_m2: Vec<Vec<f64>>,
+) -> NifResult<Term<'a>> {
+    let covariance = PositionCovariance {
+        ecef_m2: matrix3(covariance_ecef_m2)?,
+        enu_m2: matrix3(covariance_enu_m2)?,
+    };
+    Ok(encode_metrics(
+        env,
+        metrics_from_position_covariance(&covariance),
+    ))
+}
+
+/// Compute the horizontal one-sigma ellipse from an ENU covariance matrix.
+#[rustler::nif]
+fn position_error_metrics_error_ellipse_from_enu_covariance<'a>(
+    env: Env<'a>,
+    covariance_enu_m2: Vec<Vec<f64>>,
+) -> NifResult<Term<'a>> {
+    Ok(encode_ellipse(
+        env,
+        error_ellipse_from_enu_m2(matrix3(covariance_enu_m2)?),
+    ))
+}
+
+/// Compute a horizontal percentile circle radius from an ENU covariance matrix.
+#[rustler::nif]
+fn position_error_metrics_horizontal_radius_at<'a>(
+    env: Env<'a>,
+    covariance_enu_m2: Vec<Vec<f64>>,
+    probability: f64,
+) -> NifResult<Term<'a>> {
+    Ok(encode_percentile(
+        env,
+        horizontal_radius_at(matrix3(covariance_enu_m2)?, probability),
+    ))
+}
+
+/// Compute a three-dimensional percentile sphere radius from an ENU covariance matrix.
+#[rustler::nif]
+fn position_error_metrics_spherical_radius_at<'a>(
+    env: Env<'a>,
+    covariance_enu_m2: Vec<Vec<f64>>,
+    probability: f64,
+) -> NifResult<Term<'a>> {
+    Ok(encode_percentile(
+        env,
+        spherical_radius_at(matrix3(covariance_enu_m2)?, probability),
+    ))
+}
+
+/// Compute a vertical percentile radius from an up variance.
+#[rustler::nif]
+fn position_error_metrics_vertical_radius_at<'a>(
+    env: Env<'a>,
+    sigma_u_m2: f64,
+    probability: f64,
+) -> NifResult<Term<'a>> {
+    Ok(encode_float(
+        env,
+        vertical_radius_at(sigma_u_m2, probability),
+    ))
+}
+
+/// Compute position error metrics from a public kinematic solution input.
 #[rustler::nif]
 fn position_error_metrics_from_kinematic_solution<'a>(
     env: Env<'a>,
