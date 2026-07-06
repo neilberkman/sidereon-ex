@@ -1089,13 +1089,21 @@ defmodule Sidereon.NIF do
 
   def fusion_propagate(_handle, _sample), do: :erlang.nif_error(:nif_not_loaded)
 
+  def fusion_propagate_recorded(_handle, _sample, _history), do: :erlang.nif_error(:nif_not_loaded)
+
   def fusion_update_loose(_handle, _measurement), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_loose_recorded(_handle, _measurement, _history), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_update_loose_time_sync(_handle, _measurement), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_update_tight_sp3(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_update_tight_broadcast(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_recorded_sp3(_handle, _source, _epoch, _history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_tight_recorded_broadcast(_handle, _source, _epoch, _history), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_update_tight_time_sync_sp3(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1110,6 +1118,22 @@ defmodule Sidereon.NIF do
   def fusion_encode_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_restore_state(_handle, _bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_rts_history_builder_new, do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_rts_history_builder_from_filter(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_rts_history_builder_finish(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_rts_history_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_rts_history_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_smooth_rts(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_smoothed_trajectory_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_smoothed_trajectory_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_fit(_samples, _scale, _model), do: :erlang.nif_error(:nif_not_loaded)
 
