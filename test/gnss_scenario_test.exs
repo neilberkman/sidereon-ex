@@ -9,8 +9,10 @@ defmodule Sidereon.GNSSScenarioTest do
       assert {:ok, bytes2, fingerprint2} = Scenario.simulate_bytes(scenario())
 
       assert bytes1 == bytes2
+      # The fingerprint stamps the engine version by design (the determinism
+      # contract is scenario + seed + version), so it changes every release;
+      # determinism is the invariant, the observable values below are the pins.
       assert fingerprint1 == fingerprint2
-      assert fingerprint1 == 14_477_122_350_862_481_408
 
       decoded = Jason.decode!(bytes1)
       observations = decoded["observations"]
@@ -18,7 +20,7 @@ defmodule Sidereon.GNSSScenarioTest do
       receiver = decoded["receiver_truth"]
 
       assert decoded["schema_version"] == 1
-      assert decoded["engine_version"] == "0.17.0:scenario-observables-v1"
+      assert decoded["engine_version"] =~ ~r/^\d+\.\d+\.\d+:scenario-observables-v1$/
       assert observations["epoch_offsets"] == [0, 1, 2]
       assert observations["epoch_index"] == [0, 1]
 
@@ -37,7 +39,8 @@ defmodule Sidereon.GNSSScenarioTest do
     test "returns decoded observable and truth arrays" do
       assert {:ok, result} = Scenario.simulate(scenario())
 
-      assert result.determinism_fingerprint == 14_477_122_350_862_481_408
+      assert {:ok, again} = Scenario.simulate(scenario())
+      assert result.determinism_fingerprint == again.determinism_fingerprint
       assert result.observations.satellite_id == [%{prn: 1, system: "Gps"}, %{prn: 1, system: "Gps"}]
       assert_close_list(result.truth_terms.thermal_noise_m, [0.0, 0.0], 0.0)
     end
@@ -45,7 +48,9 @@ defmodule Sidereon.GNSSScenarioTest do
     test "accepts string-keyed scenario maps" do
       string_keyed = scenario() |> Jason.encode!() |> Jason.decode!()
 
-      assert {:ok, bytes, 14_477_122_350_862_481_408} = Scenario.simulate_bytes(string_keyed)
+      assert {:ok, atom_bytes, atom_fp} = Scenario.simulate_bytes(scenario())
+      assert {:ok, bytes, ^atom_fp} = Scenario.simulate_bytes(string_keyed)
+      assert bytes == atom_bytes
       decoded = Jason.decode!(bytes)
 
       assert_close_list(decoded["observations"]["pseudorange_m"], [19_950_610.11293578, 19_953_170.84944195], 1.0e-8)

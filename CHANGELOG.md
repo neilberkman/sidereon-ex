@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0]
+
+### Added
+
+- GNSS/INS fusion (`Sidereon.GNSS.Fusion`): mechanization configuration, EKF
+  and UKF filtering, loose and tight measurements, robust loose update
+  options, the RTS smoother, time synchronization, and the serializable
+  filter state.
+- The deterministic scenario simulator (`Sidereon.GNSS.Scenario`):
+  bit-reproducible synthetic observables plus the ground-truth term ledger.
+- Closed-form signal analysis (`Sidereon.GNSS.Signal.Analysis`): spectra,
+  spectral separation coefficients, DLL jitter, and multipath envelopes.
+
 ## [0.17.0]
 
 ### Added
