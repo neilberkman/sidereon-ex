@@ -16,9 +16,9 @@ use sidereon_core::combinations::IonosphereFreeError;
 use sidereon_core::positioning::{
     solve_static_reference_station_rinex, RinexSppOptions, StaticReferenceCarrierRinexOptions,
     StaticReferenceCarrierSolution, StaticReferenceCodeSolution, StaticReferenceEpochDiagnostic,
-    StaticReferenceFixStatus, StaticReferenceModeReport, StaticReferenceModeStatus,
-    StaticReferenceStationCovariance, StaticReferenceStationMode,
-    StaticReferenceStationRinexOptions, StaticReferenceStationSolution,
+    StaticReferenceFixStatus, StaticReferenceModeError, StaticReferenceModeReport,
+    StaticReferenceModeStatus, StaticReferenceStationCovariance, StaticReferenceStationError,
+    StaticReferenceStationMode, StaticReferenceStationRinexOptions, StaticReferenceStationSolution,
 };
 use sidereon_core::rtk::{
     apply_elevation_mask, baseline_reference_satellites, hatch_smooth_baseline_code_epochs,
@@ -1479,7 +1479,11 @@ pub fn rtk_solve_static_reference_station_rinex<'a>(
                 encode_static_reference_solution(env, &solution),
             )
                 .encode(env),
-            Err(error) => (atoms::error(), error.to_string()).encode(env),
+            Err(error) => (
+                atoms::error(),
+                encode_static_reference_station_error(env, error),
+            )
+                .encode(env),
         },
     )
 }
@@ -2131,7 +2135,7 @@ fn encode_static_reference_mode_report<'a>(
             (report.skipped_epochs as u64).encode(env),
             (report.used_measurements as u64).encode(env),
             match &report.error {
-                Some(error) => error.encode(env),
+                Some(error) => encode_static_reference_mode_error(env, error),
                 None => atom::nil().encode(env),
             },
         ],
@@ -2184,6 +2188,60 @@ fn encode_static_reference_mode_status<'a>(
             StaticReferenceModeStatus::Failed => "failed",
         },
     )
+}
+
+fn encode_static_reference_station_error<'a>(
+    env: Env<'a>,
+    error: StaticReferenceStationError,
+) -> Term<'a> {
+    match error {
+        StaticReferenceStationError::InvalidInput { field, reason } => {
+            (atom_from(env, "invalid_input"), field, reason).encode(env)
+        }
+        StaticReferenceStationError::NoEnabledModes => atom_from(env, "no_enabled_modes"),
+        StaticReferenceStationError::AllModesFailed { mode_reports } => {
+            let reports: Vec<Term<'a>> = mode_reports
+                .iter()
+                .map(|report| encode_static_reference_mode_report(env, report))
+                .collect();
+            (atom_from(env, "all_modes_failed"), reports).encode(env)
+        }
+    }
+}
+
+fn encode_static_reference_mode_error<'a>(
+    env: Env<'a>,
+    error: &StaticReferenceModeError,
+) -> Term<'a> {
+    match error {
+        StaticReferenceModeError::RinexAssembly { side, reason } => {
+            (atom_from(env, "rinex_assembly"), *side, reason).encode(env)
+        }
+        StaticReferenceModeError::NoMatchedCodeEpochs => atom_from(env, "no_matched_code_epochs"),
+        StaticReferenceModeError::CodeDgnss { reason } => {
+            (atom_from(env, "code_dgnss"), reason).encode(env)
+        }
+        StaticReferenceModeError::StaticSolve { reason } => {
+            (atom_from(env, "static_solve"), reason).encode(env)
+        }
+        StaticReferenceModeError::CarrierArc { reason } => {
+            (atom_from(env, "carrier_arc"), reason).encode(env)
+        }
+        StaticReferenceModeError::CarrierSolve { reason } => {
+            (atom_from(env, "carrier_solve"), reason).encode(env)
+        }
+        StaticReferenceModeError::Frame { field, reason } => {
+            (atom_from(env, "frame"), *field, reason).encode(env)
+        }
+        StaticReferenceModeError::CorrectedObservation { reason } => {
+            (atom_from(env, "corrected_observation"), reason).encode(env)
+        }
+        StaticReferenceModeError::InvalidCorrectedSatelliteId { satellite_id } => (
+            atom_from(env, "invalid_corrected_satellite_id"),
+            satellite_id,
+        )
+            .encode(env),
+    }
 }
 
 fn encode_static_arc_error<'a>(env: Env<'a>, error: RtkStaticArcError) -> Term<'a> {

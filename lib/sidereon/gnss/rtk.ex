@@ -282,13 +282,24 @@ defmodule Sidereon.GNSS.RTK do
     @enforce_keys [:mode, :status, :used_epochs, :skipped_epochs, :used_measurements, :error]
     defstruct [:mode, :status, :used_epochs, :skipped_epochs, :used_measurements, :error]
 
+    @type mode_error ::
+            {:rinex_assembly, String.t(), String.t()}
+            | :no_matched_code_epochs
+            | {:code_dgnss, String.t()}
+            | {:static_solve, String.t()}
+            | {:carrier_arc, String.t()}
+            | {:carrier_solve, String.t()}
+            | {:frame, String.t(), String.t()}
+            | {:corrected_observation, String.t()}
+            | {:invalid_corrected_satellite_id, String.t()}
+
     @type t :: %__MODULE__{
             mode: :code_dgnss | :carrier_float | :carrier_fixed,
             status: :solved | :failed,
             used_epochs: non_neg_integer(),
             skipped_epochs: non_neg_integer(),
             used_measurements: non_neg_integer(),
-            error: String.t() | nil
+            error: mode_error() | nil
           }
   end
 
@@ -811,7 +822,7 @@ defmodule Sidereon.GNSS.RTK do
          {:ok, config} <- static_reference_station_config_term(reference_position, opts) do
       case NIF.rtk_solve_static_reference_station_rinex(sp3_handle, reference_handle, rover_handle, config) do
         {:ok, solution_term} -> {:ok, decode_static_reference_station_solution(solution_term)}
-        {:error, reason} -> {:error, reason}
+        {:error, reason} -> {:error, decode_static_reference_station_error(reason)}
       end
     end
   rescue
@@ -1291,6 +1302,12 @@ defmodule Sidereon.GNSS.RTK do
       error: error
     }
   end
+
+  defp decode_static_reference_station_error({:all_modes_failed, mode_reports}) do
+    {:all_modes_failed, Enum.map(mode_reports, &decode_static_reference_mode_report/1)}
+  end
+
+  defp decode_static_reference_station_error(reason), do: reason
 
   defp decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
     static = decode_static_arc_solution(solution_term)
