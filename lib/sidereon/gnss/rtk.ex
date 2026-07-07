@@ -225,6 +225,182 @@ defmodule Sidereon.GNSS.RTK do
           }
   end
 
+  defmodule StaticReferenceStationCovariance do
+    @moduledoc """
+    Position covariance blocks for a static reference-station coordinate.
+    """
+
+    @enforce_keys [:position_ecef_m2, :position_enu_m2]
+    defstruct [:position_ecef_m2, :position_enu_m2]
+
+    @type t :: %__MODULE__{
+            position_ecef_m2: [[float()]],
+            position_enu_m2: [[float()]]
+          }
+  end
+
+  defmodule StaticReferenceEpochDiagnostic do
+    @moduledoc """
+    Per-epoch diagnostic row from a static reference-station mode.
+    """
+
+    @enforce_keys [
+      :mode,
+      :epoch_index,
+      :used_satellites,
+      :rejected_satellite_count,
+      :code_residual_rms_m,
+      :phase_residual_rms_m,
+      :residual_rms_m
+    ]
+    defstruct [
+      :mode,
+      :epoch_index,
+      :used_satellites,
+      :rejected_satellite_count,
+      :code_residual_rms_m,
+      :phase_residual_rms_m,
+      :residual_rms_m
+    ]
+
+    @type t :: %__MODULE__{
+            mode: :code_dgnss | :carrier_float | :carrier_fixed,
+            epoch_index: non_neg_integer(),
+            used_satellites: [String.t()],
+            rejected_satellite_count: non_neg_integer(),
+            code_residual_rms_m: float() | nil,
+            phase_residual_rms_m: float() | nil,
+            residual_rms_m: float() | nil
+          }
+  end
+
+  defmodule StaticReferenceModeReport do
+    @moduledoc """
+    Per-mode attempt report for the static reference-station solver.
+    """
+
+    @enforce_keys [:mode, :status, :used_epochs, :skipped_epochs, :used_measurements, :error]
+    defstruct [:mode, :status, :used_epochs, :skipped_epochs, :used_measurements, :error]
+
+    @type t :: %__MODULE__{
+            mode: :code_dgnss | :carrier_float | :carrier_fixed,
+            status: :solved | :failed,
+            used_epochs: non_neg_integer(),
+            skipped_epochs: non_neg_integer(),
+            used_measurements: non_neg_integer(),
+            error: String.t() | nil
+          }
+  end
+
+  defmodule StaticReferenceCodeSolution do
+    @moduledoc """
+    Code-DGNSS detail from a static reference-station solve.
+    """
+
+    @enforce_keys [:position_m, :geodetic, :covariance, :baseline_vector_m, :baseline_m, :diagnostics]
+    defstruct [:position_m, :geodetic, :covariance, :baseline_vector_m, :baseline_m, :diagnostics]
+
+    @type t :: %__MODULE__{
+            position_m: ecef(),
+            geodetic: map() | nil,
+            covariance: StaticReferenceStationCovariance.t(),
+            baseline_vector_m: ecef(),
+            baseline_m: float(),
+            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+          }
+
+    @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
+  end
+
+  defmodule StaticReferenceCarrierSolution do
+    @moduledoc """
+    Carrier RTK detail from a static reference-station solve.
+    """
+
+    @enforce_keys [
+      :position_m,
+      :geodetic,
+      :covariance,
+      :baseline_vector_m,
+      :baseline_m,
+      :integer_status,
+      :integer_ratio,
+      :diagnostics
+    ]
+    defstruct [
+      :position_m,
+      :geodetic,
+      :covariance,
+      :baseline_vector_m,
+      :baseline_m,
+      :integer_status,
+      :integer_ratio,
+      :diagnostics
+    ]
+
+    @type t :: %__MODULE__{
+            position_m: ecef(),
+            geodetic: map() | nil,
+            covariance: StaticReferenceStationCovariance.t(),
+            baseline_vector_m: ecef(),
+            baseline_m: float(),
+            integer_status: :fixed | :not_fixed,
+            integer_ratio: float() | nil,
+            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+          }
+
+    @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
+  end
+
+  defmodule StaticReferenceStationSolution do
+    @moduledoc """
+    Static reference-station coordinate with covariance and mode diagnostics.
+    """
+
+    @enforce_keys [
+      :mode,
+      :fix_status,
+      :position_m,
+      :geodetic,
+      :covariance,
+      :baseline_vector_m,
+      :baseline_m,
+      :code_solution,
+      :carrier_solution,
+      :mode_reports,
+      :diagnostics
+    ]
+    defstruct [
+      :mode,
+      :fix_status,
+      :position_m,
+      :geodetic,
+      :covariance,
+      :baseline_vector_m,
+      :baseline_m,
+      :code_solution,
+      :carrier_solution,
+      :mode_reports,
+      :diagnostics
+    ]
+
+    @type t :: %__MODULE__{
+            mode: :code_dgnss | :carrier_float | :carrier_fixed,
+            fix_status: :code_dgnss | :carrier_float | :carrier_fixed,
+            position_m: ecef(),
+            geodetic: map() | nil,
+            covariance: StaticReferenceStationCovariance.t(),
+            baseline_vector_m: ecef(),
+            baseline_m: float(),
+            code_solution: StaticReferenceCodeSolution.t() | nil,
+            carrier_solution: StaticReferenceCarrierSolution.t() | nil,
+            mode_reports: [StaticReferenceModeReport.t()],
+            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+          }
+
+    @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
+  end
+
   @typedoc """
   Code and carrier-phase observation in metres.
 
@@ -607,6 +783,45 @@ defmodule Sidereon.GNSS.RTK do
   def solve_static_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts), do: {:error, :invalid_input}
 
   @doc """
+  Solve a static reference-station coordinate from paired RINEX OBS handles and SP3.
+
+  `reference_position_m` is the known reference receiver ECEF position in
+  metres. Options mirror `solve_static_rinex_rtk_baseline/5` for the carrier
+  path and also accept `:enable_code_dgnss`, `:enable_carrier_rtk`, and
+  `:with_geodetic`.
+  """
+  @spec solve_static_reference_station_rinex(
+          SP3.t(),
+          RinexObservations.t(),
+          RinexObservations.t(),
+          ecef_input(),
+          keyword() | map()
+        ) :: {:ok, StaticReferenceStationSolution.t()} | {:error, term()}
+  def solve_static_reference_station_rinex(sp3, reference_obs, rover_obs, reference_position_m, opts \\ [])
+
+  def solve_static_reference_station_rinex(
+        %SP3{handle: sp3_handle},
+        %RinexObservations{handle: reference_handle},
+        %RinexObservations{handle: rover_handle},
+        reference_position_m,
+        opts
+      ) do
+    with {:ok, opts} <- rinex_opts_map(opts),
+         {:ok, reference_position} <- Types.normalize_ecef(reference_position_m, :invalid_reference_position),
+         {:ok, config} <- static_reference_station_config_term(reference_position, opts) do
+      case NIF.rtk_solve_static_reference_station_rinex(sp3_handle, reference_handle, rover_handle, config) do
+        {:ok, solution_term} -> {:ok, decode_static_reference_station_solution(solution_term)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def solve_static_reference_station_rinex(_sp3, _reference_obs, _rover_obs, _reference_position_m, _opts),
+    do: {:error, :invalid_input}
+
+  @doc """
   Solve a static dual-frequency wide-lane fixed RTK baseline from RINEX OBS and SP3.
 
   The result contains the decoded static float and fixed solutions plus
@@ -735,6 +950,22 @@ defmodule Sidereon.GNSS.RTK do
          },
          weights: weights,
          preprocessing: preprocessing
+       }}
+    end
+  end
+
+  defp static_reference_station_config_term(reference_position, opts) do
+    with {:ok, enable_code_dgnss} <- boolean_option(Map.get(opts, :enable_code_dgnss, true), :enable_code_dgnss),
+         {:ok, enable_carrier_rtk} <- boolean_option(Map.get(opts, :enable_carrier_rtk, true), :enable_carrier_rtk),
+         {:ok, with_geodetic} <- boolean_option(Map.get(opts, :with_geodetic, true), :with_geodetic),
+         {:ok, carrier_config} <- rinex_static_config_term(reference_position, opts) do
+      {:ok,
+       %{
+         reference_position_m: arc_vec3(reference_position),
+         enable_code_dgnss: enable_code_dgnss,
+         enable_carrier_rtk: enable_carrier_rtk,
+         with_geodetic: with_geodetic,
+         carrier: carrier_config.term
        }}
     end
   end
@@ -973,6 +1204,94 @@ defmodule Sidereon.GNSS.RTK do
     end
   end
 
+  defp decode_static_reference_station_solution(
+         {mode, fix_status, position, geodetic, covariance, baseline_vector, baseline_m, code_solution,
+          carrier_solution, mode_reports, diagnostics}
+       ) do
+    %StaticReferenceStationSolution{
+      mode: mode,
+      fix_status: fix_status,
+      position_m: ecef_map(position),
+      geodetic: decode_static_reference_geodetic(geodetic),
+      covariance: decode_static_reference_covariance(covariance),
+      baseline_vector_m: ecef_map(baseline_vector),
+      baseline_m: baseline_m,
+      code_solution: decode_static_reference_code_solution(code_solution),
+      carrier_solution: decode_static_reference_carrier_solution(carrier_solution),
+      mode_reports: Enum.map(mode_reports, &decode_static_reference_mode_report/1),
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+    }
+  end
+
+  defp decode_static_reference_code_solution(nil), do: nil
+
+  defp decode_static_reference_code_solution({position, geodetic, covariance, baseline_vector, baseline_m, diagnostics}) do
+    %StaticReferenceCodeSolution{
+      position_m: ecef_map(position),
+      geodetic: decode_static_reference_geodetic(geodetic),
+      covariance: decode_static_reference_covariance(covariance),
+      baseline_vector_m: ecef_map(baseline_vector),
+      baseline_m: baseline_m,
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+    }
+  end
+
+  defp decode_static_reference_carrier_solution(nil), do: nil
+
+  defp decode_static_reference_carrier_solution(
+         {position, geodetic, covariance, baseline_vector, baseline_m, integer_status, integer_ratio, diagnostics}
+       ) do
+    %StaticReferenceCarrierSolution{
+      position_m: ecef_map(position),
+      geodetic: decode_static_reference_geodetic(geodetic),
+      covariance: decode_static_reference_covariance(covariance),
+      baseline_vector_m: ecef_map(baseline_vector),
+      baseline_m: baseline_m,
+      integer_status: decode_fixed_integer_status(integer_status),
+      integer_ratio: integer_ratio,
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+    }
+  end
+
+  defp decode_static_reference_covariance({position_ecef_m2, position_enu_m2}) do
+    %StaticReferenceStationCovariance{
+      position_ecef_m2: position_ecef_m2,
+      position_enu_m2: position_enu_m2
+    }
+  end
+
+  defp decode_static_reference_geodetic(nil), do: nil
+
+  defp decode_static_reference_geodetic({lat_rad, lon_rad, height_m}) do
+    %{lat_rad: lat_rad, lon_rad: lon_rad, height_m: height_m}
+  end
+
+  defp decode_static_reference_diagnostic(
+         {mode, epoch_index, used_satellites, rejected_satellite_count, code_residual_rms_m, phase_residual_rms_m,
+          residual_rms_m}
+       ) do
+    %StaticReferenceEpochDiagnostic{
+      mode: mode,
+      epoch_index: epoch_index,
+      used_satellites: used_satellites,
+      rejected_satellite_count: rejected_satellite_count,
+      code_residual_rms_m: code_residual_rms_m,
+      phase_residual_rms_m: phase_residual_rms_m,
+      residual_rms_m: residual_rms_m
+    }
+  end
+
+  defp decode_static_reference_mode_report({mode, status, used_epochs, skipped_epochs, used_measurements, error}) do
+    %StaticReferenceModeReport{
+      mode: mode,
+      status: status,
+      used_epochs: used_epochs,
+      skipped_epochs: skipped_epochs,
+      used_measurements: used_measurements,
+      error: error
+    }
+  end
+
   defp decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
     static = decode_static_arc_solution(solution_term)
     epochs = rinex_static_epochs(epoch_count)
@@ -1079,6 +1398,9 @@ defmodule Sidereon.GNSS.RTK do
 
   defp direct_epochs(%{epochs: epochs}) when is_list(epochs), do: {:ok, epochs}
   defp direct_epochs(_config), do: {:error, {:missing_field, :epochs}}
+
+  defp boolean_option(value, _option) when is_boolean(value), do: {:ok, value}
+  defp boolean_option(_value, option), do: {:error, {:invalid_option, option}}
 
   defp direct_base(config) do
     case Map.fetch(config, :base) do

@@ -1106,6 +1106,14 @@ defmodule Sidereon.NIF do
 
   def fusion_update_loose_recorded(_handle, _measurement, _history), do: :erlang.nif_error(:nif_not_loaded)
 
+  def fusion_update_stationary(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_stationary_recorded(_handle, _history), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_non_holonomic(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_update_non_holonomic_recorded(_handle, _history), do: :erlang.nif_error(:nif_not_loaded)
+
   def fusion_update_loose_time_sync(_handle, _measurement), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_update_tight_sp3(_handle, _source, _epoch), do: :erlang.nif_error(:nif_not_loaded)
@@ -1145,6 +1153,8 @@ defmodule Sidereon.NIF do
   def fusion_smoothed_trajectory_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_smoothed_trajectory_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_velocity_match_outage(_states, _first_good_fix, _config), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_fit(_samples, _scale, _model), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1220,6 +1230,9 @@ defmodule Sidereon.NIF do
   def rtk_prepare_ionosphere_free_arc(_epochs, _wide_lane_cycles, _config), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_solve_static_rinex_baseline(_sp3, _base_obs, _rover_obs, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_solve_static_reference_station_rinex(_sp3, _reference_obs, _rover_obs, _config),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_solve_wide_lane_fixed_rinex_baseline(_sp3, _base_obs, _rover_obs, _config),
     do: :erlang.nif_error(:nif_not_loaded)

@@ -81,6 +81,207 @@ defmodule Sidereon.GNSSFusionTest do
       assert_close_matrix(top_left(state.covariance, 6), diagonal(6, 0.8), 0.0)
     end
 
+    test "field-mode omission keeps loose updates bit-identical" do
+      {:ok, plain} = Fusion.new(initial_state(), Fusion.filter_config(zero_imu_spec_infinite()))
+      {:ok, omitted} = Fusion.new(initial_state(), Fusion.filter_config(zero_imu_spec_infinite(), loose: %{}))
+
+      assert {:ok, plain_update} = Fusion.update_loose(plain, position_velocity_fix())
+      assert {:ok, omitted_update} = Fusion.update_loose(omitted, position_velocity_fix())
+      assert plain_update == omitted_update
+
+      assert {:ok, plain_state} = Fusion.state(plain)
+      assert {:ok, omitted_state} = Fusion.state(omitted)
+      assert plain_state == omitted_state
+      assert {plain_update.rows, plain_update.accepted_rows, plain_update.rejected_rows} == {6, 6, 0}
+      assert bits(plain_update.nis) == 0x401C6B851EB851E9
+
+      assert Enum.map(plain_state.nominal.position_ecef_m, &bits/1) == [
+               0x415854A660000000,
+               0x3FEFFFFFFFFFFFFF,
+               0xBFF7FFFFFFFFFFFF
+             ]
+
+      assert Enum.map(plain_state.nominal.velocity_ecef_mps, &bits/1) == [
+               0x3FC9999999999999,
+               0xBFB9999999999999,
+               0x3FA9999999999999
+             ]
+
+      assert covariance_diag_bits(plain_state.covariance, 0, 6) ==
+               List.duplicate(0x3FDFFFFFFFFFFFFF, 6)
+    end
+
+    test "stationary ZUPT and ZARU update matches core bits" do
+      loose = %{
+        stationary_updates: %{
+          detector: %{
+            window_len: 1,
+            max_specific_force_norm_error_mps2: 100.0,
+            max_body_rate_wrt_ecef_norm_rps: 1.0
+          },
+          zero_velocity_sigma_mps: 0.5,
+          zero_angular_rate_sigma_rps: 0.05
+        }
+      }
+
+      config = Fusion.filter_config(zero_imu_spec_infinite(), loose: loose)
+      assert config.loose.stationary_updates.detector.window_len == 1
+      assert config.loose.stationary_updates.zero_velocity_sigma_mps == 0.5
+      assert config.loose.stationary_updates.zero_angular_rate_sigma_rps == 0.05
+
+      {:ok, filter} = Fusion.new(initial_state(), config)
+      assert {:ok, _state} = Fusion.propagate(filter, zero_increment_sample(1.0, 1.0))
+      assert {:ok, update} = Fusion.update_stationary(filter)
+      assert update.applied
+      assert {update.rows, update.accepted_rows, update.rejected_rows} == {6, 6, 0}
+      assert bits(update.nis) == 0x404541AF8E65B9FC
+
+      assert {:ok, state} = Fusion.state(filter)
+
+      assert Enum.map(state.nominal.velocity_ecef_mps, &bits/1) == [
+               0xBFF16320EDFCD4C0,
+               0xBDE64EF6EFBB7204,
+               0x0000000000000000
+             ]
+
+      assert Enum.map(state.nominal.gyro_bias_rps, &bits/1) == [
+               0x0000000000000000,
+               0x0000000000000000,
+               0xBF131173B6B2C903
+             ]
+
+      assert covariance_diag_bits(state.covariance, 3, 6) == [
+               0x3FCC71C76E2F216E,
+               0x3FCC71C6F3FF694D,
+               0x3FCC71C6F3B73AFD,
+               0x3FF00A36E71A6702,
+               0x3FF00A36E71A6702,
+               0x3FF00A36E71A2CB0
+             ]
+
+      {:ok, plain} = Fusion.new(initial_state(), Fusion.filter_config(zero_imu_spec_infinite()))
+      assert Fusion.update_stationary(plain) == {:ok, nil}
+    end
+
+    test "fix-status weighting orders covariance by core bits" do
+      loose = %{
+        fix_status_weighting: %{single_sigma_multiplier: 3.0, float_sigma_multiplier: 2.0, fixed_sigma_multiplier: 1.0}
+      }
+
+      results =
+        [:single, :float, :fixed]
+        |> Map.new(fn status ->
+          {:ok, filter} = Fusion.new(initial_state(), Fusion.filter_config(zero_imu_spec_infinite(), loose: loose))
+          assert {:ok, update} = Fusion.update_loose(filter, position_velocity_fix(status))
+          assert update.applied
+          assert update.rows == 6
+          {:ok, state} = Fusion.state(filter)
+          {status, {update, state}}
+        end)
+
+      assert bits(elem(results.single, 0).nis) == 0x3FF6BC6A7EF9DB22
+      assert bits(elem(results.float, 0).nis) == 0x4006BC6A7EF9DB22
+      assert bits(elem(results.fixed, 0).nis) == 0x401C6B851EB851E9
+
+      single_x = elem(results.single, 1).covariance |> hd() |> hd()
+      float_x = elem(results.float, 1).covariance |> hd() |> hd()
+      fixed_x = elem(results.fixed, 1).covariance |> hd() |> hd()
+      assert fixed_x < float_x and float_x < single_x
+
+      assert covariance_diag_bits(elem(results.fixed, 1).covariance, 0, 6) ==
+               List.duplicate(0x3FDFFFFFFFFFFFFF, 6)
+
+      assert covariance_diag_bits(elem(results.float, 1).covariance, 0, 6) ==
+               List.duplicate(0x3FE999999999999A, 6)
+
+      assert covariance_diag_bits(elem(results.single, 1).covariance, 0, 6) ==
+               List.duplicate(0x3FECCCCCCCCCCCCD, 6)
+    end
+
+    test "velocity matching, IMU-to-body config, and NHC match core bits" do
+      states = [
+        %{t_j2000_s: 0.0, position_ecef_m: {0.0, 0.0, 0.0}, velocity_ecef_mps: {1.0, 0.0, 0.0}},
+        %{t_j2000_s: 1.0, position_ecef_m: {1.0, 0.0, 0.0}, velocity_ecef_mps: {1.0, 0.0, 0.0}},
+        %{t_j2000_s: 2.0, position_ecef_m: {2.0, 0.0, 0.0}, velocity_ecef_mps: {1.0, 0.0, 0.0}}
+      ]
+
+      assert {:ok, matched} =
+               Fusion.velocity_match_outage(
+                 states,
+                 position_velocity_fix(:single, 2.0, {4.0, 1.0, 0.0}, {2.0, 0.0, 0.0}),
+                 max_outage_duration_s: 5.0
+               )
+
+      assert Enum.map(matched.endpoint_position_correction_ecef_m, &bits/1) == [
+               0x4000000000000000,
+               0x3FF0000000000000,
+               0x0000000000000000
+             ]
+
+      assert Enum.map(matched.endpoint_velocity_correction_ecef_mps, &bits/1) == [
+               0x3FF0000000000000,
+               0x0000000000000000,
+               0x0000000000000000
+             ]
+
+      middle = Enum.at(matched.states, 1)
+
+      assert Enum.map(middle.position_ecef_m, &bits/1) == [
+               0x3FFC000000000000,
+               0x3FE0000000000000,
+               0x0000000000000000
+             ]
+
+      assert Enum.map(middle.velocity_ecef_mps, &bits/1) == [
+               0x4002000000000000,
+               0x3FE8000000000000,
+               0x0000000000000000
+             ]
+
+      imu_to_body = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+      config = Fusion.filter_config(zero_imu_spec_infinite(), imu_to_body_dcm: imu_to_body)
+
+      assert Enum.flat_map(config.imu_to_body_dcm, & &1) |> Enum.map(&bits/1) == [
+               0x0000000000000000,
+               0xBFF0000000000000,
+               0x0000000000000000,
+               0x3FF0000000000000,
+               0x0000000000000000,
+               0x0000000000000000,
+               0x0000000000000000,
+               0x0000000000000000,
+               0x3FF0000000000000
+             ]
+
+      nhc_config =
+        Fusion.filter_config(zero_imu_spec_infinite(),
+          imu_to_body_dcm: imu_to_body,
+          loose: %{
+            non_holonomic: %{
+              lateral_velocity_sigma_mps: 0.5,
+              vertical_velocity_sigma_mps: 0.5,
+              min_speed_mps: 0.1,
+              max_body_rate_wrt_ecef_norm_rps: 1.0
+            }
+          }
+        )
+
+      {:ok, nhc_filter} =
+        Fusion.new(%{initial_state() | velocity_ecef_mps: {2.0, 0.4, -0.2}}, nhc_config)
+
+      assert {:ok, update} = Fusion.update_non_holonomic(nhc_filter)
+      assert update.applied
+      assert {update.rows, update.accepted_rows, update.rejected_rows} == {2, 2, 0}
+      assert bits(update.nis) == 0x3FA3813813813814
+      assert {:ok, state} = Fusion.state(nhc_filter)
+
+      assert Enum.map(state.nominal.velocity_ecef_mps, &bits/1) == [
+               0x4000000000000000,
+               0x3FD4B94B94B94B95,
+               0xBFC4B94B94B94B95
+             ]
+    end
+
     test "replays a late loose fix through time-sync checkpoints" do
       {:ok, filter} = Fusion.new(initial_state(), config(:ekf))
       assert {:ok, status0} = Fusion.configure_time_sync(filter, imu_capacity: 4, checkpoint_capacity: 4)
@@ -304,6 +505,10 @@ defmodule Sidereon.GNSSFusionTest do
     }
   end
 
+  defp zero_imu_spec_infinite do
+    %{zero_imu_spec() | accel_bias_tau_s: nil, gyro_bias_tau_s: nil}
+  end
+
   defp initial_state(covariance \\ 1.0) do
     %{
       t_j2000_s: 0.0,
@@ -323,12 +528,38 @@ defmodule Sidereon.GNSSFusionTest do
     }
   end
 
+  defp position_velocity_fix(
+         status \\ :single,
+         t_j2000_s \\ 0.0,
+         position \\ {@wgs84_a_m + 1.0, 2.0, -3.0},
+         velocity \\ {0.4, -0.2, 0.1}
+       ) do
+    %{
+      t_j2000_s: t_j2000_s,
+      position_ecef_m: position,
+      velocity_ecef_mps: velocity,
+      covariance: diagonal(6, 1.0),
+      satellites_used: 8,
+      fix_status: status
+    }
+  end
+
   defp increment_sample(t_j2000_s, dt_s) do
     %{
       t_j2000_s: t_j2000_s,
       kind: :increment,
       delta_velocity_mps: {0.015625 * dt_s, -0.0078125 * dt_s, 0.00390625 * dt_s},
       delta_theta_rad: {@omega_e_dot_rad_s * dt_s, 0.0009765625 * dt_s, -0.00048828125 * dt_s},
+      dt_s: dt_s
+    }
+  end
+
+  defp zero_increment_sample(t_j2000_s, dt_s) do
+    %{
+      t_j2000_s: t_j2000_s,
+      kind: :increment,
+      delta_velocity_mps: {0.0, 0.0, 0.0},
+      delta_theta_rad: {0.0, 0.0, 0.0},
       dt_s: dt_s
     }
   end
@@ -354,6 +585,11 @@ defmodule Sidereon.GNSSFusionTest do
   defp bits(value) do
     <<bits::64>> = <<value::float-64>>
     bits
+  end
+
+  defp covariance_diag_bits(covariance, offset, count) do
+    offset..(offset + count - 1)
+    |> Enum.map(fn index -> covariance |> Enum.at(index) |> Enum.at(index) |> bits() end)
   end
 
   defp assert_close_list(actual, expected, tolerance) do
