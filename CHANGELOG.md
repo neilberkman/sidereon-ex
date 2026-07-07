@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0]
+
+### Added
+
+- Fusion field mode (`Sidereon.GNSS.Fusion`): zero-velocity and zero-angular-rate
+  updates with a stationarity detector, non-holonomic vehicle constraints,
+  per-fix-status measurement weighting, and the IMU-to-body mounting matrix,
+  all off by default with parity tests against core values.
+- Multi-epoch reference-station static solve (`Sidereon.GNSS.RTK`): rover and
+  reference observations in, one station coordinate with covariance and typed
+  per-mode errors out, verified against a published ITRF station pair.
+
 ## [0.20.0]
 
 ### Added
