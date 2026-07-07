@@ -293,7 +293,13 @@ defmodule Sidereon.GNSS.RTKTest do
       assert solution.fix_status == :carrier_fixed
       assert solution.code_solution == nil
       assert solution.carrier_solution.integer_status == :fixed
-      assert bits(solution.carrier_solution.integer_ratio) == 0x40552D1856B255BA
+      # The validation ratio comes out of the iterative ILS search, whose last
+      # bits differ across architectures (arm64 vs x86_64 libm), so the pin is
+      # a tight relative band around the canonical value plus the acceptance
+      # threshold that actually gates fixing.
+      canonical_ratio = from_bits(0x40552D1856B255BA)
+      assert_in_delta solution.carrier_solution.integer_ratio, canonical_ratio, 1.0e-6 * canonical_ratio
+      assert solution.carrier_solution.integer_ratio > 3.0
       assert length(solution.diagnostics) == 24
       assert length(solution.carrier_solution.diagnostics) == 24
       assert length(solution.mode_reports) == 1
@@ -556,6 +562,11 @@ defmodule Sidereon.GNSS.RTKTest do
   defp bits(value) do
     <<bits::64>> = <<value::float-64>>
     bits
+  end
+
+  defp from_bits(bits) do
+    <<value::float-64>> = <<bits::64>>
+    value
   end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
