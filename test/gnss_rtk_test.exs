@@ -310,29 +310,50 @@ defmodule Sidereon.GNSS.RTKTest do
       assert hd(solution.mode_reports).used_measurements == 432
       assert norm(sub3(ecef_tuple(solution.baseline_vector_m), ctx.truth_baseline)) < 0.005
 
-      assert solution.position_m |> ecef_tuple() |> Tuple.to_list() |> Enum.map(&bits/1) == [
-               0x414F181DAF5EFC9B,
-               0x412C701AD358462B,
-               0x4152510859BC4562
-             ]
+      # All three outputs come from the iterative solve chain, whose last bits
+      # differ across architectures, so each pin is a tight band around the
+      # canonical value rather than exact bits (same policy as the ratio pin
+      # above). One micrometre on positions and a relative band on covariance
+      # are far below any real regression and far above cross-arch ULP noise.
+      canonical_position = [0x414F181DAF5EFC9B, 0x412C701AD358462B, 0x4152510859BC4562]
 
-      assert solution.baseline_vector_m |> ecef_tuple() |> Tuple.to_list() |> Enum.map(&bits/1) == [
-               0xBFEF911D96FBE6B2,
-               0xBFE4DC7080D098F8,
-               0x3FF11595629A56D4
-             ]
+      solution.position_m
+      |> ecef_tuple()
+      |> Tuple.to_list()
+      |> Enum.zip(canonical_position)
+      |> Enum.each(fn {got, expected} ->
+        assert_in_delta got, from_bits(expected), 1.0e-6
+      end)
 
-      assert solution.covariance.position_ecef_m2 |> List.flatten() |> Enum.map(&bits/1) == [
-               0x3F04ACAF48E915F6,
-               0x3EDF5DA71E914413,
-               0x3EF32E401D0C7CB0,
-               0x3EDF5DA71E914413,
-               0x3EEC4A84FC5F278A,
-               0x3ED882C671817361,
-               0x3EF32E401D0C7CAF,
-               0x3ED882C671817360,
-               0x3F08FCE97D368DEE
-             ]
+      canonical_baseline = [0xBFEF911D96FBE6B2, 0xBFE4DC7080D098F8, 0x3FF11595629A56D4]
+
+      solution.baseline_vector_m
+      |> ecef_tuple()
+      |> Tuple.to_list()
+      |> Enum.zip(canonical_baseline)
+      |> Enum.each(fn {got, expected} ->
+        assert_in_delta got, from_bits(expected), 1.0e-9
+      end)
+
+      canonical_covariance = [
+        0x3F04ACAF48E915F6,
+        0x3EDF5DA71E914413,
+        0x3EF32E401D0C7CB0,
+        0x3EDF5DA71E914413,
+        0x3EEC4A84FC5F278A,
+        0x3ED882C671817361,
+        0x3EF32E401D0C7CAF,
+        0x3ED882C671817360,
+        0x3F08FCE97D368DEE
+      ]
+
+      solution.covariance.position_ecef_m2
+      |> List.flatten()
+      |> Enum.zip(canonical_covariance)
+      |> Enum.each(fn {got, expected} ->
+        canonical = from_bits(expected)
+        assert_in_delta got, canonical, 1.0e-9 * max(abs(canonical), 1.0e-12)
+      end)
     end
   end
 
