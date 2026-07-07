@@ -19,7 +19,8 @@ use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
 use sidereon_core::ephemeris::{
     align_clock_reference, clock_reference_offset, merge as crate_merge, AgreementMetric,
-    EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergeReport, Sp3, Sp3State,
+    EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergeReport, Sp3, Sp3FrameLabelSet,
+    Sp3FrameReconciliation, Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3State,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -287,6 +288,23 @@ type AgreementCellTuple = (
 );
 type EpochAgreementTuple = ((f64, f64), u64, (f64, f64), (Option<f64>, Option<f64>));
 type AgreementAggregateTuple = (Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+type HelmertParametersTuple = (Vec<f64>, f64, Vec<f64>);
+type HelmertRatesTuple = (Vec<f64>, f64, Vec<f64>);
+type FrameReconciliationTuple = (
+    (u64, String, String, String),
+    (Option<Vec<String>>, (Option<String>, Option<String>)),
+    (
+        (Option<String>, Option<String>, bool),
+        Option<f64>,
+        Option<HelmertParametersTuple>,
+    ),
+    (
+        Option<HelmertRatesTuple>,
+        Option<String>,
+        Option<(f64, f64)>,
+        (u64, bool),
+    ),
+);
 
 /// Split an [`Instant`] into the `(jd_whole, jd_fraction)` pair the SP3 epoch
 /// tuples use, in the product's own time scale.
@@ -340,6 +358,55 @@ fn agreement_aggregate(report: &MergeReport) -> AgreementAggregateTuple {
         report.position_agreement_max_m(),
         report.clock_agreement_rms_s(),
         report.clock_agreement_max_s(),
+    )
+}
+
+fn frame_reconciliation_to_tuple(value: &Sp3FrameReconciliation) -> FrameReconciliationTuple {
+    (
+        (
+            value.source_index as u64,
+            value.source_label.clone(),
+            value.target_label.clone(),
+            match value.method {
+                Sp3FrameReconciliationMethod::AssertedEquivalence => "asserted_equivalence",
+                Sp3FrameReconciliationMethod::Helmert => "helmert",
+            }
+            .to_string(),
+        ),
+        (
+            value.asserted_label_set.clone(),
+            (
+                value.source_frame.map(|frame| frame.to_string()),
+                value.target_frame.map(|frame| frame.to_string()),
+            ),
+        ),
+        (
+            (
+                value.catalog_source_frame.map(|frame| frame.to_string()),
+                value.catalog_target_frame.map(|frame| frame.to_string()),
+                value.catalog_inverse,
+            ),
+            value.reference_epoch_year,
+            value.parameters.map(|parameters| {
+                (
+                    parameters.translation_mm.to_vec(),
+                    parameters.scale_ppb,
+                    parameters.rotation_mas.to_vec(),
+                )
+            }),
+        ),
+        (
+            value.rates.map(|rates| {
+                (
+                    rates.translation_mm_per_year.to_vec(),
+                    rates.scale_ppb_per_year,
+                    rates.rotation_mas_per_year.to_vec(),
+                )
+            }),
+            value.provenance.clone(),
+            value.epoch_year_span.map(|span| (span[0], span[1])),
+            (value.records_affected as u64, value.identity),
+        ),
     )
 }
 
@@ -404,6 +471,8 @@ fn sp3_merge<'a>(
     combine: String,
     target_epoch_interval_s: Option<f64>,
     system_letters: Vec<String>,
+    asserted_frame_label_sets: Vec<Vec<String>>,
+    helmert_frame_reconciliation: bool,
 ) -> NifResult<Term<'a>> {
     let combine = match combine.as_str() {
         "mean" => MergeCombine::Mean,
@@ -415,6 +484,28 @@ fn sp3_merge<'a>(
             ))))
         }
     };
+    let asserted_equivalent_label_sets = asserted_frame_label_sets
+        .into_iter()
+        .enumerate()
+        .map(|(idx, labels)| {
+            if labels.len() < 2 {
+                return Err(Error::Term(Box::new(format!(
+                    "asserted_frame_label_sets[{idx}] must contain at least two labels"
+                ))));
+            }
+            let labels = labels
+                .into_iter()
+                .map(|label| label.trim().to_string())
+                .collect::<Vec<_>>();
+            if labels.iter().any(String::is_empty) {
+                return Err(Error::Term(Box::new(format!(
+                    "asserted_frame_label_sets[{idx}] contains an empty label"
+                ))));
+            }
+            Ok(Sp3FrameLabelSet::new(labels))
+        })
+        .collect::<NifResult<Vec<_>>>()?;
+
     let opts = MergeOptions {
         position_tolerance_m,
         clock_tolerance_s,
@@ -426,6 +517,10 @@ fn sp3_merge<'a>(
             None
         } else {
             Some(systems_from_letters(system_letters)?)
+        },
+        frame_reconciliation: Sp3FrameReconciliationOptions {
+            asserted_equivalent_label_sets,
+            helmert: helmert_frame_reconciliation,
         },
     };
 
@@ -439,6 +534,11 @@ fn sp3_merge<'a>(
     let quarantined: Vec<_> = report.quarantined.iter().map(flag_to_tuple).collect();
     let single_source: Vec<_> = report.single_source.iter().map(flag_to_tuple).collect();
     let position_outliers: Vec<_> = report.position_outliers.iter().map(flag_to_tuple).collect();
+    let frame_reconciliations: Vec<_> = report
+        .frame_reconciliations
+        .iter()
+        .map(frame_reconciliation_to_tuple)
+        .collect();
 
     // B2: per-cell + per-epoch agreement statistics and the whole-product
     // aggregate, so the caller can quantify how tightly the analysis centers
@@ -457,7 +557,10 @@ fn sp3_merge<'a>(
             quarantined,
             single_source,
             position_outliers,
-            (aggregate, agreement, per_epoch_agreement),
+            (
+                frame_reconciliations,
+                (aggregate, agreement, per_epoch_agreement),
+            ),
         ),
     )
         .encode(env))
