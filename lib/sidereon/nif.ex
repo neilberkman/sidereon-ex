@@ -1219,6 +1219,11 @@ defmodule Sidereon.NIF do
 
   def rtk_prepare_ionosphere_free_arc(_epochs, _wide_lane_cycles, _config), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rtk_solve_static_rinex_baseline(_sp3, _base_obs, _rover_obs, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_solve_wide_lane_fixed_rinex_baseline(_sp3, _base_obs, _rover_obs, _config),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def reduced_orbit_position(_epoch, _scale, _elements, _query, _frame), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_position_velocity(_epoch, _scale, _elements, _query, _frame), do: :erlang.nif_error(:nif_not_loaded)

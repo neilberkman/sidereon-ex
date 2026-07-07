@@ -533,8 +533,7 @@ dependencies = [
 [[package]]
 name = "sidereon-core"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff780da343d9ea3dc4a580766a7c7e75843f073f6d819dfd7ee14563dedf5db5"
+source = "git+file:///Users/neil/xuku/sidereon?branch=build%2Frtk-arc-api#8706340ebc68481b999e09ab8a5cdb8882cc3010"
 dependencies = [
  "cc",
  "libm",
@@ -544,7 +543,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "trust-region-least-squares",
+ "trust-region-least-squares 0.9.1 (git+file:///Users/neil/xuku/sidereon?branch=build%2Frtk-arc-api)",
 ]
 
 [[package]]
@@ -557,7 +556,7 @@ dependencies = [
  "serde_json",
  "sidereon",
  "sidereon-core",
- "trust-region-least-squares",
+ "trust-region-least-squares 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -621,6 +620,16 @@ name = "trust-region-least-squares"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27e8bc54a4c2fab2d007c2bf0287217718ba05b410517c5dd120e93a281fe55"
+dependencies = [
+ "libloading 0.8.9",
+ "nalgebra",
+ "rayon",
+]
+
+[[package]]
+name = "trust-region-least-squares"
+version = "0.9.1"
+source = "git+file:///Users/neil/xuku/sidereon?branch=build%2Frtk-arc-api#8706340ebc68481b999e09ab8a5cdb8882cc3010"
 dependencies = [
  "libloading 0.8.9",
  "nalgebra",

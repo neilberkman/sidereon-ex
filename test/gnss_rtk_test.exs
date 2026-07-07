@@ -2,10 +2,17 @@ defmodule Sidereon.GNSS.RTKTest do
   use ExUnit.Case, async: true
 
   alias Sidereon.GeometryQuality
+  alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
   alias Sidereon.GNSS.RTK
+  alias Sidereon.GNSS.SP3
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
+  @rtk_sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_120epoch.sp3")
+  @wtzr_obs_path Path.join(__DIR__, "fixtures/obs/WTZR00DEU_R_20201770000_01D_30S_MO_120epoch.rnx")
+  @wtzz_obs_path Path.join(__DIR__, "fixtures/obs/WTZZ00DEU_R_20201770000_01D_30S_MO_120epoch.rnx")
+  @wtzr_marker {4_075_580.3111, 931_854.0543, 4_801_568.2808}
+  @wtzz_marker {4_075_579.1913, 931_853.3696, 4_801_569.1897}
   @c 299_792_458.0
   @f_l1 1_575_420_000.0
   @f_l2 1_227_600_000.0
@@ -193,6 +200,73 @@ defmodule Sidereon.GNSS.RTKTest do
     end
   end
 
+  describe "RINEX RTK baseline conveniences" do
+    setup do
+      base_obs = RinexObservations.load!(@wtzr_obs_path)
+      rover_obs = RinexObservations.load!(@wtzz_obs_path)
+      base_arp = arp_position(@wtzr_marker, base_obs)
+      rover_arp = arp_position(@wtzz_marker, rover_obs)
+
+      {:ok,
+       %{
+         sp3: SP3.load!(@rtk_sp3_path),
+         base_obs: base_obs,
+         rover_obs: rover_obs,
+         base_arp: base_arp,
+         truth_baseline: sub3(rover_arp, base_arp)
+       }}
+    end
+
+    test "solves the WTZR to WTZZ static baseline from raw RINEX", ctx do
+      assert {:ok, solution} =
+               RTK.solve_static_rinex_rtk_baseline(
+                 ctx.sp3,
+                 ctx.base_obs,
+                 ctx.rover_obs,
+                 ctx.base_arp,
+                 rinex_oracle_opts()
+               )
+
+      assert solution.epoch_count == 120
+      assert solution.skipped_epoch_count == 0
+      assert solution.references == %{"G" => "G30"}
+
+      float_error_m = norm(sub3(ecef_tuple(solution.float_solution.baseline_m), ctx.truth_baseline))
+      fixed_error_m = norm(sub3(ecef_tuple(solution.fixed_solution.baseline_m), ctx.truth_baseline))
+
+      assert float_error_m < 0.02
+      assert fixed_error_m < 0.01
+      assert solution.fixed_solution.metadata.integer_status == :not_fixed
+      assert solution.fixed_solution.metadata.integer_ratio < 3.0
+      assert length(solution.float_solution.metadata.ambiguity_float.covariance_m) == 11
+    end
+
+    test "solves the WTZR to WTZZ wide-lane fixed baseline from raw dual-frequency RINEX", ctx do
+      assert {:ok, solution} =
+               RTK.solve_wide_lane_fixed_rinex_rtk_baseline(
+                 ctx.sp3,
+                 ctx.base_obs,
+                 ctx.rover_obs,
+                 ctx.base_arp,
+                 rinex_oracle_opts()
+               )
+
+      assert solution.epoch_count == 120
+      assert solution.skipped_epoch_count == 0
+      assert solution.wide_lane.fixed?
+      assert solution.wide_lane.ambiguity_count == 7
+
+      float_error_m = norm(sub3(ecef_tuple(solution.float_solution.baseline_m), ctx.truth_baseline))
+      fixed_error_m = norm(sub3(ecef_tuple(solution.fixed_solution.baseline_m), ctx.truth_baseline))
+
+      assert float_error_m < 0.1
+      assert fixed_error_m < 0.01
+      assert solution.fixed_solution.metadata.integer_status == :fixed
+      assert solution.fixed_solution.metadata.integer_ratio > 3.0
+      assert length(solution.float_solution.metadata.ambiguity_float.covariance_m) == 7
+    end
+  end
+
   defp prepared_epochs do
     @sat_positions
     |> Enum.with_index()
@@ -354,6 +428,36 @@ defmodule Sidereon.GNSS.RTKTest do
     }
   end
 
+  defp rinex_oracle_opts do
+    [
+      max_epochs: 120,
+      model: %{
+        code_sigma_m: 2.0,
+        phase_sigma_m: 0.01,
+        stochastic_model: :simple,
+        elevation_weighting?: true,
+        sagnac?: true
+      },
+      preprocessing: %{cycle_slip: :split_arc},
+      float_options: %{max_iterations: 10},
+      fixed_options: %{ratio_threshold: 3.0},
+      residual_options: %{threshold_sigma: nil, max_exclusions: 0},
+      apply_troposphere: true
+    ]
+  end
+
+  defp arp_position(marker, obs) do
+    {height_m, east_m, north_m} = RinexObservations.antenna_delta_hen(obs)
+    up = unit3(marker)
+    east = unit3({-elem(up, 1), elem(up, 0), 0.0})
+    north = unit3(cross3(up, east))
+
+    marker
+    |> add3(scale3(up, height_m))
+    |> add3(scale3(east, east_m))
+    |> add3(scale3(north, north_m))
+  end
+
   defp model do
     %{
       code_sigma_m: 0.3,
@@ -388,5 +492,14 @@ defmodule Sidereon.GNSS.RTKTest do
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
+  defp scale3({x, y, z}, scale), do: {x * scale, y * scale, z * scale}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+
+  defp unit3(vec) do
+    scale3(vec, 1.0 / norm(vec))
+  end
+
+  defp cross3({ax, ay, az}, {bx, by, bz}) do
+    {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
+  end
 end

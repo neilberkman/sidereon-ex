@@ -2,3 +2,8 @@
 resolver = "2"
 
 members = ["native/sidereon_nif"]
+
+[patch.crates-io]
+# Pre-release core API override for the RTK RINEX arc builders.
+# Remove this once the core crate release includes build/rtk-arc-api.
+sidereon-core = { git = "file:///Users/neil/xuku/sidereon", branch = "build/rtk-arc-api" }
