@@ -170,7 +170,13 @@ positioning, and conjunction screening; more notebooks live under
   who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
 - **GNSS/INS fusion** strapdown mechanization with an error-state EKF (UKF
   option), loose and tight coupling, robust loose updates, an RTS smoother,
-  and a serializable filter state. See `Sidereon.GNSS.Fusion`.
+  a serializable filter state, and field mode: zero-velocity and
+  zero-angular-rate updates, non-holonomic constraints, per-fix-status
+  weighting, and the IMU-to-body mounting matrix, all off by default. See
+  `Sidereon.GNSS.Fusion`.
+- **Reference-station static solve** rover and reference observations in, one
+  station coordinate with covariance and typed per-mode errors out. See
+  `Sidereon.GNSS.RTK`.
 - **Scenario simulation** deterministic synthetic observables plus a
   ground-truth error ledger from a versioned scenario. See `Sidereon.GNSS.Scenario`.
 - **Signal analysis** closed-form BPSK/BOC spectra, spectral separation
