@@ -37,18 +37,23 @@ defmodule Sidereon.GNSS.RTK do
   alias Sidereon.GNSS.Core.AntennaTerms
   alias Sidereon.GNSS.Core.Observations
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
+  alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
   # Sourced from the canonical core defaults (`sidereon_core::rtk_filter::defaults`,
   # mirrored by `Sidereon.NIF.core_defaults/0`). `test/constants_test.exs` pins the
   # core values and `test/gnss_rtk_test.exs` checks the default flows through the
   # solve metadata, so the binding default cannot drift from the core.
+  @default_code_sigma_m 0.3
+  @default_phase_sigma_m 0.003
   @default_max_iterations 10
   @default_position_tolerance_m 1.0e-4
   @default_ambiguity_tolerance_m 1.0e-4
   @default_integer_ratio_threshold 3.0
   @default_partial_min_ambiguities 4
   @default_max_residual_exclusions 1
+  @default_prior_sigma_m 30.0
   @gap_reference ~N[2000-01-01 00:00:00]
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
@@ -560,6 +565,91 @@ defmodule Sidereon.GNSS.RTK do
 
   def prepare_ionosphere_free_rtk_arc(_epochs, _wide_lane_cycles, _config), do: {:error, :invalid_epochs}
 
+  @doc """
+  Solve a static RTK baseline directly from parsed RINEX OBS handles and SP3.
+
+  `base_m` is the base antenna reference point in ECEF metres. Options include
+  `:model`, `:reference`, `:max_epochs`, `:arc_options`, `:preprocessing`,
+  `:float_options`, `:fixed_options`, `:residual_options`, `:float_only_systems`,
+  `:initial_baseline_m`, and `:receiver_antenna_corrections`.
+  """
+  @spec solve_static_rinex_rtk_baseline(
+          SP3.t(),
+          RinexObservations.t(),
+          RinexObservations.t(),
+          ecef_input(),
+          keyword() | map()
+        ) :: {:ok, map()} | {:error, term()}
+  def solve_static_rinex_rtk_baseline(sp3, base_obs, rover_obs, base_m, opts \\ [])
+
+  def solve_static_rinex_rtk_baseline(
+        %SP3{handle: sp3_handle},
+        %RinexObservations{handle: base_handle},
+        %RinexObservations{handle: rover_handle},
+        base_m,
+        opts
+      ) do
+    with {:ok, opts} <- rinex_opts_map(opts),
+         {:ok, base} <- Types.normalize_ecef(base_m, :invalid_base_position),
+         {:ok, config} <- rinex_static_config_term(base, opts) do
+      case NIF.rtk_solve_static_rinex_baseline(sp3_handle, base_handle, rover_handle, config.term) do
+        {:ok, {solution_term, skipped_epoch_count, epoch_count}} ->
+          decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def solve_static_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts), do: {:error, :invalid_input}
+
+  @doc """
+  Solve a static dual-frequency wide-lane fixed RTK baseline from RINEX OBS and SP3.
+
+  The result contains the decoded static float and fixed solutions plus
+  `:wide_lane` metadata for the wide-lane integers used before the final
+  narrow-lane solve.
+  """
+  @spec solve_wide_lane_fixed_rinex_rtk_baseline(
+          SP3.t(),
+          RinexObservations.t(),
+          RinexObservations.t(),
+          ecef_input(),
+          keyword() | map()
+        ) :: {:ok, map()} | {:error, term()}
+  def solve_wide_lane_fixed_rinex_rtk_baseline(sp3, base_obs, rover_obs, base_m, opts \\ [])
+
+  def solve_wide_lane_fixed_rinex_rtk_baseline(
+        %SP3{handle: sp3_handle},
+        %RinexObservations{handle: base_handle},
+        %RinexObservations{handle: rover_handle},
+        base_m,
+        opts
+      ) do
+    with {:ok, opts} <- rinex_opts_map(opts),
+         {:ok, base} <- Types.normalize_ecef(base_m, :invalid_base_position),
+         {:ok, config} <- rinex_wide_lane_fixed_config_term(base, opts) do
+      case NIF.rtk_solve_wide_lane_fixed_rinex_baseline(sp3_handle, base_handle, rover_handle, config.term) do
+        {:ok, {solution_term, metadata_term, skipped_epoch_count, epoch_count}} ->
+          with {:ok, solution} <-
+                 decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
+            {:ok, Map.put(solution, :wide_lane, decode_wide_lane_fixed_metadata(metadata_term))}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def solve_wide_lane_fixed_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts),
+    do: {:error, :invalid_input}
+
   defp static_arc_config_term(config) do
     solve_opts = Map.fetch!(config, :float_opts)
     fixed_opts = Map.fetch!(config, :fixed_opts)
@@ -602,6 +692,384 @@ defmodule Sidereon.GNSS.RTK do
       geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
+
+  defp rinex_opts_map(opts) when is_map(opts), do: {:ok, opts}
+
+  defp rinex_opts_map(opts) when is_list(opts) do
+    if Keyword.keyword?(opts), do: {:ok, Map.new(opts)}, else: {:error, {:invalid_option, :opts}}
+  end
+
+  defp rinex_opts_map(_opts), do: {:error, {:invalid_option, :opts}}
+
+  defp rinex_static_config_term(base, opts) do
+    with {:ok, reference} <- rinex_reference(opts),
+         {:ok, arc_options} <- rinex_single_arc_options_term(opts),
+         {:ok, _model, model_term, weights} <- rinex_model(opts),
+         {:ok, initial_baseline} <- rinex_initial_baseline(opts),
+         {:ok, float_options} <- rinex_nested_options(opts, :float_options),
+         {:ok, fixed_options} <- rinex_nested_options(opts, :fixed_options),
+         {:ok, residual_options} <- rinex_nested_options(opts, :residual_options),
+         {:ok, preprocessing} <- rinex_nested_options(opts, :preprocessing),
+         {:ok, float_only_systems} <- direct_float_only_systems(Map.get(opts, :float_only_systems, [])),
+         {:ok, float_opts} <- direct_float_opts(float_options, initial_baseline),
+         {:ok, fixed_opts} <- direct_fixed_opts(fixed_options, float_only_systems),
+         {:ok, residual_opts} <- direct_residual_opts(residual_options),
+         {:ok, update_opts} <- rinex_update_opts_term(opts, float_options, fixed_options, float_only_systems),
+         {:ok, receiver_antenna_corrections} <- direct_receiver_antenna_corrections(opts) do
+      {:ok,
+       %{
+         term: %{
+           base_m: arc_vec3(base),
+           arc_options: arc_options,
+           reference: arc_reference_term(reference),
+           model: model_term,
+           baseline_prior_sigma_m: Map.get(opts, :baseline_prior_sigma_m, @default_prior_sigma_m) / 1.0,
+           ambiguity_prior_sigma_m: Map.get(opts, :ambiguity_prior_sigma_m, @default_prior_sigma_m) / 1.0,
+           initial_baseline_m: arc_vec3(initial_baseline),
+           update_opts: update_opts,
+           preprocessing: arc_preprocessing_term(preprocessing),
+           float_opts: float_opts,
+           fixed_opts: fixed_opts,
+           residual_opts: residual_opts,
+           receiver_antenna_corrections: rust_receiver_antenna_corrections_term(receiver_antenna_corrections)
+         },
+         weights: weights,
+         preprocessing: preprocessing
+       }}
+    end
+  end
+
+  defp rinex_wide_lane_fixed_config_term(base, opts) do
+    with {:ok, reference} <- rinex_reference(opts),
+         {:ok, arc_options} <- rinex_dual_arc_options_term(opts),
+         {:ok, _model, model_term, weights} <- rinex_model(opts),
+         {:ok, initial_baseline} <- rinex_initial_baseline(opts),
+         {:ok, float_options} <- rinex_nested_options(opts, :float_options),
+         {:ok, fixed_options} <- rinex_nested_options(opts, :fixed_options),
+         {:ok, residual_options} <- rinex_nested_options(opts, :residual_options),
+         {:ok, float_only_systems} <- direct_float_only_systems(Map.get(opts, :float_only_systems, [])),
+         {:ok, float_opts} <- direct_float_opts(float_options, initial_baseline),
+         {:ok, fixed_opts} <- direct_fixed_opts(fixed_options, float_only_systems),
+         {:ok, residual_opts} <- direct_residual_opts(residual_options),
+         {:ok, update_opts} <- rinex_update_opts_term(opts, float_options, fixed_options, float_only_systems),
+         {:ok, receiver_antenna_corrections} <- direct_receiver_antenna_corrections(opts) do
+      {:ok,
+       %{
+         term: %{
+           base_m: arc_vec3(base),
+           arc_options: arc_options,
+           reference: arc_reference_term(reference),
+           model: model_term,
+           baseline_prior_sigma_m: Map.get(opts, :baseline_prior_sigma_m, @default_prior_sigma_m) / 1.0,
+           ambiguity_prior_sigma_m: Map.get(opts, :ambiguity_prior_sigma_m, @default_prior_sigma_m) / 1.0,
+           initial_baseline_m: arc_vec3(initial_baseline),
+           update_opts: update_opts,
+           float_opts: float_opts,
+           fixed_opts: fixed_opts,
+           residual_opts: residual_opts,
+           receiver_antenna_corrections: rust_receiver_antenna_corrections_term(receiver_antenna_corrections),
+           apply_troposphere: Map.get(opts, :apply_troposphere, true)
+         },
+         weights: weights,
+         preprocessing: %{}
+       }}
+    end
+  end
+
+  defp rinex_model(opts) do
+    model = Map.get(opts, :model, default_rinex_model())
+
+    with {:ok, model_term} <- direct_model(%{model: model}),
+         {:ok, weights} <- direct_weights(%{model: model}) do
+      {:ok, model, model_term, weights}
+    end
+  end
+
+  defp default_rinex_model do
+    %{
+      code_sigma_m: @default_code_sigma_m,
+      phase_sigma_m: @default_phase_sigma_m,
+      stochastic_model: :simple,
+      elevation_weighting?: false,
+      sagnac?: true
+    }
+  end
+
+  defp rinex_reference(opts) do
+    case Map.get(opts, :reference, Map.get(opts, :reference_satellite_id, :auto)) do
+      :auto -> {:ok, :auto}
+      sat when is_binary(sat) -> {:ok, {:satellite, sat}}
+      {:satellite, sat} when is_binary(sat) -> {:ok, {:satellite, sat}}
+      {:per_system, refs} when is_map(refs) -> {:ok, {:per_system, refs}}
+      refs when is_map(refs) -> {:ok, {:per_system, refs}}
+      _other -> {:error, {:invalid_option, :reference}}
+    end
+  end
+
+  defp rinex_initial_baseline(opts) do
+    opts
+    |> Map.get(:initial_baseline_m, {0.0, 0.0, 0.0})
+    |> Types.normalize_ecef(:invalid_initial_baseline)
+  end
+
+  defp rinex_nested_options(opts, key) do
+    case Map.get(opts, key, %{}) do
+      value when is_map(value) ->
+        {:ok, value}
+
+      value when is_list(value) ->
+        if Keyword.keyword?(value), do: {:ok, Map.new(value)}, else: {:error, {:invalid_option, key}}
+
+      _value ->
+        {:error, {:invalid_option, key}}
+    end
+  end
+
+  defp rinex_single_arc_options_term(opts) do
+    with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
+         {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :single) do
+      {:ok,
+       %{
+         signal_pairs: signal_pairs,
+         max_epochs: Map.get(arc_options, :max_epochs, Map.get(opts, :max_epochs)),
+         min_common_satellites: Map.get(arc_options, :min_common_satellites, 4),
+         include_prediction_time: Map.get(arc_options, :include_prediction_time, true)
+       }}
+    end
+  end
+
+  defp rinex_dual_arc_options_term(opts) do
+    with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
+         {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :dual) do
+      {:ok,
+       %{
+         signal_pairs: signal_pairs,
+         max_epochs: Map.get(arc_options, :max_epochs, Map.get(opts, :max_epochs)),
+         min_common_satellites: Map.get(arc_options, :min_common_satellites, 4),
+         include_prediction_time: Map.get(arc_options, :include_prediction_time, true)
+       }}
+    end
+  end
+
+  defp rinex_signal_pair_terms(pairs, kind) when is_list(pairs) do
+    pairs
+    |> Enum.reduce_while({:ok, []}, fn pair, {:ok, acc} ->
+      case rinex_signal_pair_term(pair, kind) do
+        {:ok, term} -> {:cont, {:ok, [term | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, terms} -> {:ok, Enum.reverse(terms)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp rinex_signal_pair_terms(_pairs, _kind), do: {:error, {:invalid_option, :signal_pairs}}
+
+  defp rinex_signal_pair_term(%{system: system, code_observable: code, phase_observable: phase}, :single)
+       when is_binary(code) and is_binary(phase) do
+    with {:ok, system} <- rinex_system_term(system) do
+      {:ok, %{system: system, code_observable: code, phase_observable: phase}}
+    end
+  end
+
+  defp rinex_signal_pair_term({system, code, phase}, :single) when is_binary(code) and is_binary(phase) do
+    with {:ok, system} <- rinex_system_term(system) do
+      {:ok, %{system: system, code_observable: code, phase_observable: phase}}
+    end
+  end
+
+  defp rinex_signal_pair_term(
+         %{
+           system: system,
+           code1_observable: code1,
+           phase1_observable: phase1,
+           code2_observable: code2,
+           phase2_observable: phase2
+         },
+         :dual
+       )
+       when is_binary(code1) and is_binary(phase1) and is_binary(code2) and is_binary(phase2) do
+    with {:ok, system} <- rinex_system_term(system) do
+      {:ok,
+       %{
+         system: system,
+         code1_observable: code1,
+         phase1_observable: phase1,
+         code2_observable: code2,
+         phase2_observable: phase2
+       }}
+    end
+  end
+
+  defp rinex_signal_pair_term({system, code1, phase1, code2, phase2}, :dual)
+       when is_binary(code1) and is_binary(phase1) and is_binary(code2) and is_binary(phase2) do
+    with {:ok, system} <- rinex_system_term(system) do
+      {:ok,
+       %{
+         system: system,
+         code1_observable: code1,
+         phase1_observable: phase1,
+         code2_observable: code2,
+         phase2_observable: phase2
+       }}
+    end
+  end
+
+  defp rinex_signal_pair_term(_pair, _kind), do: {:error, {:invalid_option, :signal_pairs}}
+
+  defp rinex_system_term(system) when is_binary(system), do: {:ok, system}
+  defp rinex_system_term(system) when is_atom(system), do: {:ok, Atom.to_string(system)}
+  defp rinex_system_term(_system), do: {:error, {:invalid_option, :signal_pairs}}
+
+  defp rinex_update_opts_term(opts, float_options, fixed_options, float_only_systems) do
+    with {:ok, update_options} <- rinex_update_options_map(opts) do
+      position_tol_m =
+        Map.get(
+          float_options,
+          :position_tol_m,
+          Map.get(float_options, :position_tolerance_m, @default_position_tolerance_m)
+        )
+
+      ambiguity_tol_m =
+        Map.get(
+          float_options,
+          :ambiguity_tol_m,
+          Map.get(float_options, :ambiguity_tolerance_m, @default_ambiguity_tolerance_m)
+        )
+
+      update_options =
+        %{
+          hold_sigma_m: @default_ambiguity_tolerance_m,
+          position_tol_m: position_tol_m,
+          ambiguity_tol_m: ambiguity_tol_m,
+          max_iterations: Map.get(float_options, :max_iterations, @default_max_iterations),
+          process_noise_baseline_sigma_m: 0.0,
+          ratio_threshold: Map.get(fixed_options, :ratio_threshold, @default_integer_ratio_threshold),
+          dynamics_model: :constant_position,
+          float_only_systems: float_only_systems,
+          innovation_screen_sigma: 0.0,
+          innovation_screen_min_rows: 0,
+          report_residuals?: false
+        }
+        |> Map.merge(update_options)
+        |> Map.put(:float_only_systems, float_only_systems)
+
+      {:ok, arc_update_opts_term(update_options)}
+    end
+  end
+
+  defp rinex_update_options_map(opts) do
+    case Map.get(opts, :update_options, Map.get(opts, :update_opts, %{})) do
+      value when is_map(value) ->
+        {:ok, value}
+
+      value when is_list(value) ->
+        if Keyword.keyword?(value), do: {:ok, Map.new(value)}, else: {:error, {:invalid_option, :update_options}}
+
+      _value ->
+        {:error, {:invalid_option, :update_options}}
+    end
+  end
+
+  defp decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
+    static = decode_static_arc_solution(solution_term)
+    epochs = rinex_static_epochs(epoch_count)
+    prep_meta = rinex_static_prep_meta(static, config)
+
+    with {:ok, float_solution} <-
+           decode_rtk_float_solution(
+             static.float_term,
+             base,
+             epochs,
+             static.references,
+             rinex_physical_sats(static),
+             static.ambiguity_ids,
+             static.ambiguity_satellites,
+             config.weights,
+             prep_meta
+           ) do
+      {_float_term, fixed_term, validation_term, used_ids, used_satellite_terms} = static.fixed_term
+      used_satellites = Map.new(used_satellite_terms)
+      used_physical_sats = used_satellites |> Map.values() |> Enum.uniq() |> Enum.sort()
+
+      with {:ok, fixed_solution} <-
+             decode_rtk_fixed_solution(
+               fixed_term,
+               base,
+               epochs,
+               static.references,
+               used_physical_sats,
+               used_ids,
+               used_satellites,
+               config.weights,
+               float_solution
+             ) do
+        {:ok,
+         %{
+           references: static.references,
+           ambiguity_ids: static.ambiguity_ids,
+           ambiguity_satellites: static.ambiguity_satellites,
+           float_solution: float_solution,
+           fixed_solution: %{
+             fixed_solution
+             | metadata: maybe_put_residual_validation(fixed_solution.metadata, validation_term, epochs)
+           },
+           dropped_sats: static.dropped_sats,
+           split_cycle_slip_arcs: static.split_cycle_slip_arcs,
+           elevation_masked_sats: static.elevation_masked_sats,
+           geometry_quality: static.geometry_quality,
+           skipped_epoch_count: skipped_epoch_count,
+           epoch_count: epoch_count
+         }}
+      end
+    end
+  end
+
+  defp rinex_static_epochs(epoch_count) when epoch_count <= 0, do: []
+
+  defp rinex_static_epochs(epoch_count) do
+    for idx <- 0..(epoch_count - 1), do: %{idx: idx, epoch: idx}
+  end
+
+  defp rinex_static_prep_meta(static, config) do
+    %{
+      dropped_sats: static.dropped_sats,
+      split_arcs: static.split_cycle_slip_arcs,
+      code_smoothing: Map.has_key?(config.preprocessing, :hatch_window_cap),
+      code_smoothing_window_cap: Map.get(config.preprocessing, :hatch_window_cap),
+      elevation_mask_deg: Map.get(config.preprocessing, :elevation_mask_deg),
+      elevation_masked_sats: static.elevation_masked_sats
+    }
+  end
+
+  defp rinex_physical_sats(static) do
+    static.ambiguity_satellites
+    |> Map.values()
+    |> Kernel.++(Map.values(static.references))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp decode_wide_lane_fixed_metadata(
+         {method, fixed?, wide_lane_cycles, dropped_cycle_slip_sats, split_cycle_slip_arcs}
+       ) do
+    cycles = Map.new(wide_lane_cycles)
+
+    %{
+      integer_method: decode_wide_lane_fixed_integer_method(method),
+      fixed?: fixed?,
+      cycles: cycles,
+      ambiguity_count: map_size(cycles),
+      dropped_cycle_slip_sats: dropped_cycle_slip_sats,
+      split_cycle_slip_arcs: Enum.map(split_cycle_slip_arcs, &decode_arc_split_cycle_slip_arc/1)
+    }
+  end
+
+  defp decode_wide_lane_fixed_integer_method("wide_lane_narrow_lane_lambda"), do: :wide_lane_narrow_lane_lambda
+
+  defp decode_wide_lane_fixed_integer_method("wide_lane_narrow_lane_sequential"), do: :wide_lane_narrow_lane_sequential
 
   defp static_decode_epochs(input_epochs) do
     input_epochs
@@ -855,6 +1323,9 @@ defmodule Sidereon.GNSS.RTK do
   defp arc_cycle_slip_policy_term(:error), do: "error"
   defp arc_cycle_slip_policy_term(:drop_satellite), do: "drop_satellite"
   defp arc_cycle_slip_policy_term(:split_arc), do: "split_arc"
+  defp arc_cycle_slip_policy_term("error"), do: "error"
+  defp arc_cycle_slip_policy_term("drop_satellite"), do: "drop_satellite"
+  defp arc_cycle_slip_policy_term("split_arc"), do: "split_arc"
 
   defp arc_reference_term(:auto), do: %{mode: "auto", satellite: nil, per_system: []}
 

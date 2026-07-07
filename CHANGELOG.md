@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0]
+
+### Added
+
+- Carrier-phase RTK baselines built straight from raw RINEX
+  (`Sidereon.GNSS.RTK.solve_static_rinex_rtk_baseline/5` and
+  `Sidereon.GNSS.RTK.solve_wide_lane_fixed_rinex_rtk_baseline/5`): rover and base
+  observations plus ephemeris and base coordinates in, float and wide-lane
+  fixed baselines out with covariance and fix status, verified to millimeters
+  against a published ITRF station pair.
+- Position error metrics (`Sidereon.ErrorMetrics`): CEP, DRMS, 2DRMS, R95/R99,
+  SEP, MRSE, per-axis sigmas, percentile radii with probability and validity,
+  and the error ellipse, from ENU or ECEF covariances or a kinematic solution.
+
 ## [0.19.1]
 
 ### Added

@@ -6,8 +6,10 @@
 //! into Rust without introducing a second Elixir struct layer.
 
 use crate::geometry_quality::geometry_quality_to_term;
+use crate::rinex_obs::RinexObsResource;
+use crate::sp3::Sp3Resource;
 use rustler::types::tuple::make_tuple;
-use rustler::{Encoder, Env, NifResult, Term};
+use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 use sidereon_core::carrier_phase::{SlipReason, FREQ_EPSILON_HZ};
 use sidereon_core::combinations::IonosphereFreeError;
 use sidereon_core::rtk::{
@@ -17,24 +19,29 @@ use sidereon_core::rtk::{
     DoubleDifferenceError, ElevationMaskEpoch,
 };
 use sidereon_core::rtk_filter::{
-    fix_wide_lane_rtk_arc, prepare_ionosphere_free_rtk_arc, solve_fixed_baseline_validated,
-    solve_float_baseline, solve_moving_baseline, solve_rtk_arc, solve_static_rtk_arc, update_epoch,
-    AmbiguityScale, AmbiguitySet, CycleSlipOptions, CycleSlipPolicy, CycleSlipSplitArc,
-    DynamicsModel, Epoch, FilterState, FixedBaselineSolution, FixedSolveError, FixedSolveOpts,
-    FloatBaselineSolution, FloatResidual, FloatSolveError, FloatSolveOpts, FloatSolveStatus,
-    FullSetIntegerSummary, InnovationScreen, InnovationScreenOpts, IntegerSearchMeta,
-    IntegerStatus, IonosphereFreeBaselineError, MeasModel, MovingBaselineEpoch,
+    build_dual_frequency_rinex_rtk_arc, build_rinex_rtk_arc, fix_wide_lane_rtk_arc,
+    prepare_ionosphere_free_rtk_arc, solve_fixed_baseline_validated, solve_float_baseline,
+    solve_moving_baseline, solve_rtk_arc, solve_static_rtk_arc, solve_wide_lane_fixed_rtk_arc,
+    update_epoch, AmbiguityScale, AmbiguitySet, CycleSlipOptions, CycleSlipPolicy,
+    CycleSlipSplitArc, DynamicsModel, Epoch, FilterState, FixedBaselineSolution, FixedSolveError,
+    FixedSolveOpts, FloatBaselineSolution, FloatResidual, FloatSolveError, FloatSolveOpts,
+    FloatSolveStatus, FullSetIntegerSummary, InnovationScreen, InnovationScreenOpts,
+    IntegerSearchMeta, IntegerStatus, IonosphereFreeBaselineError, MeasModel, MovingBaselineEpoch,
     MovingBaselineEpochSolution, MovingBaselineError, MovingBaselineOpts, MovingBaselineStatus,
     ReceiverAntennaCalibration, ReceiverAntennaCorrections, ResidualComponentKind,
     ResidualValidationMeta, ResidualValidationOpts, ResidualValidationOutlier, RtkArcConfig,
     RtkArcEpoch, RtkArcEpochSolution, RtkArcError, RtkArcObservation, RtkArcPreprocessing,
     RtkArcSolution, RtkDualCycleSlipConfig, RtkDualFrequencyArcEpoch, RtkDualFrequencyObservation,
     RtkDualFrequencySatelliteObservation, RtkIonosphereFreeArcConfig, RtkIonosphereFreeArcError,
-    RtkIonosphereFreeArcSolution, RtkStaticArcConfig, RtkStaticArcError, RtkStaticArcSolution,
-    RtkWideLaneArcConfig, RtkWideLaneArcError, RtkWideLaneArcSolution, SatMeas, SearchOpts,
-    StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
-    ValidatedFixedSolveError, ValidatedFixedSolveOpts, WideLaneError,
+    RtkIonosphereFreeArcSolution, RtkRinexArcError, RtkRinexArcOptions, RtkRinexDualArcOptions,
+    RtkRinexDualSignalPair, RtkRinexSignalPair, RtkStaticArcConfig, RtkStaticArcError,
+    RtkStaticArcSolution, RtkWideLaneArcConfig, RtkWideLaneArcError, RtkWideLaneArcSolution,
+    RtkWideLaneFixedArcConfig, RtkWideLaneFixedArcError, RtkWideLaneFixedArcIntegerMethod,
+    RtkWideLaneFixedArcMetadata, RtkWideLaneFixedArcSolution, RtkWideLaneFixedArcSolveConfig,
+    SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
+    ValidatedFixedSolveError, ValidatedFixedSolveOpts, WideLaneError, WideLaneOptions,
 };
+use sidereon_core::GnssSystem;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Vec3 = (f64, f64, f64);
@@ -172,7 +179,13 @@ mod atoms {
         wide_lane_not_integer,
         inconsistent_frequencies,
         ionosphere_free_failed,
-        invalid_observation
+        invalid_observation,
+        no_signal_pairs,
+        no_usable_epochs,
+        missing_frequency,
+        ephemeris_failed,
+        rinex_observation_failed,
+        unsupported_multi_gnss
     }
 }
 
@@ -1189,6 +1202,72 @@ struct RtkIonosphereFreeArcConfigTerm {
     apply_troposphere: bool,
 }
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexSignalPairTerm {
+    system: String,
+    code_observable: String,
+    phase_observable: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexArcOptionsTerm {
+    signal_pairs: Vec<RtkRinexSignalPairTerm>,
+    max_epochs: Option<usize>,
+    min_common_satellites: usize,
+    include_prediction_time: bool,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexDualSignalPairTerm {
+    system: String,
+    code1_observable: String,
+    phase1_observable: String,
+    code2_observable: String,
+    phase2_observable: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexDualArcOptionsTerm {
+    signal_pairs: Vec<RtkRinexDualSignalPairTerm>,
+    max_epochs: Option<usize>,
+    min_common_satellites: usize,
+    include_prediction_time: bool,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexStaticBaselineConfigTerm {
+    base_m: Vec3,
+    arc_options: RtkRinexArcOptionsTerm,
+    reference: RtkArcReferenceTerm,
+    model: ModelTerm,
+    baseline_prior_sigma_m: f64,
+    ambiguity_prior_sigma_m: f64,
+    initial_baseline_m: Vec3,
+    update_opts: UpdateOptsTerm,
+    preprocessing: RtkArcPreprocessingTerm,
+    float_opts: FloatSolveOptsTerm,
+    fixed_opts: FixedSolveOptsTerm,
+    residual_opts: ResidualValidationOptsTerm,
+    receiver_antenna_corrections: Option<ReceiverAntennaCorrectionsTerm>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RtkRinexWideLaneFixedConfigTerm {
+    base_m: Vec3,
+    arc_options: RtkRinexDualArcOptionsTerm,
+    reference: RtkArcReferenceTerm,
+    model: ModelTerm,
+    baseline_prior_sigma_m: f64,
+    ambiguity_prior_sigma_m: f64,
+    initial_baseline_m: Vec3,
+    update_opts: UpdateOptsTerm,
+    float_opts: FloatSolveOptsTerm,
+    fixed_opts: FixedSolveOptsTerm,
+    residual_opts: ResidualValidationOptsTerm,
+    receiver_antenna_corrections: Option<ReceiverAntennaCorrectionsTerm>,
+    apply_troposphere: bool,
+}
+
 /// Solve a sequential RTK baseline arc from raw rover+base epochs.
 ///
 /// Pure glue over `sidereon_core::rtk_filter::solve_rtk_arc`: decode the raw
@@ -1282,6 +1361,100 @@ pub fn rtk_prepare_ionosphere_free_arc<'a>(
             }
         },
     )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_solve_static_rinex_baseline<'a>(
+    env: Env<'a>,
+    sp3: ResourceArc<Sp3Resource>,
+    base_obs: ResourceArc<RinexObsResource>,
+    rover_obs: ResourceArc<RinexObsResource>,
+    config: RtkRinexStaticBaselineConfigTerm,
+) -> NifResult<Term<'a>> {
+    let options = match decode_rinex_arc_options(&config.arc_options) {
+        Some(options) => options,
+        None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
+    };
+    let arc = match build_rinex_rtk_arc(&sp3.sp3, &base_obs.obs, &rover_obs.obs, &options) {
+        Ok(arc) => arc,
+        Err(error) => return Ok((atoms::error(), encode_rinex_arc_error(env, error)).encode(env)),
+    };
+    let config =
+        match decode_rinex_static_config(&config, arc.wavelengths_m.clone(), arc.offsets_m.clone())
+        {
+            Ok(config) => config,
+            Err(error) => return Ok((atoms::error(), error).encode(env)),
+        };
+    let epoch_count = arc.epochs.len();
+    let skipped_epoch_count = arc.skipped_epoch_count;
+
+    Ok(match solve_static_rtk_arc(&arc.epochs, &config) {
+        Ok(solution) => (
+            atoms::ok(),
+            make_tuple(
+                env,
+                &[
+                    encode_static_arc_solution(env, solution),
+                    skipped_epoch_count.encode(env),
+                    epoch_count.encode(env),
+                ],
+            ),
+        )
+            .encode(env),
+        Err(error) => (atoms::error(), encode_static_arc_error(env, error)).encode(env),
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_solve_wide_lane_fixed_rinex_baseline<'a>(
+    env: Env<'a>,
+    sp3: ResourceArc<Sp3Resource>,
+    base_obs: ResourceArc<RinexObsResource>,
+    rover_obs: ResourceArc<RinexObsResource>,
+    config: RtkRinexWideLaneFixedConfigTerm,
+) -> NifResult<Term<'a>> {
+    let options = match decode_rinex_dual_arc_options(&config.arc_options) {
+        Some(options) => options,
+        None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
+    };
+    let arc =
+        match build_dual_frequency_rinex_rtk_arc(&sp3.sp3, &base_obs.obs, &rover_obs.obs, &options)
+        {
+            Ok(arc) => arc,
+            Err(error) => {
+                return Ok((atoms::error(), encode_rinex_arc_error(env, error)).encode(env))
+            }
+        };
+    let config = match decode_rinex_wide_lane_fixed_config(&config) {
+        Ok(config) => config,
+        Err(error) => return Ok((atoms::error(), error).encode(env)),
+    };
+    let epoch_count = arc.epochs.len();
+    let skipped_epoch_count = arc.skipped_epoch_count;
+
+    Ok(match solve_wide_lane_fixed_rtk_arc(&arc.epochs, &config) {
+        Ok(RtkWideLaneFixedArcSolution::Static(solution)) => (
+            atoms::ok(),
+            make_tuple(
+                env,
+                &[
+                    encode_static_arc_solution(env, solution.solution),
+                    encode_wide_lane_fixed_metadata(env, solution.metadata),
+                    skipped_epoch_count.encode(env),
+                    epoch_count.encode(env),
+                ],
+            ),
+        )
+            .encode(env),
+        Ok(RtkWideLaneFixedArcSolution::Sequential(_solution)) => {
+            (atoms::error(), atoms::invalid_option()).encode(env)
+        }
+        Err(error) => (
+            atoms::error(),
+            encode_wide_lane_fixed_arc_error(env, error, &arc.epochs),
+        )
+            .encode(env),
+    })
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -1818,6 +1991,189 @@ fn decode_ionosphere_free_arc_config(
     })
 }
 
+fn decode_rinex_arc_options(term: &RtkRinexArcOptionsTerm) -> Option<RtkRinexArcOptions> {
+    let mut options = if term.signal_pairs.is_empty() {
+        RtkRinexArcOptions::gps_l1_c()
+    } else {
+        RtkRinexArcOptions {
+            signal_pairs: term
+                .signal_pairs
+                .iter()
+                .map(decode_rinex_signal_pair)
+                .collect::<Option<Vec<_>>>()?,
+            max_epochs: None,
+            min_common_satellites: 4,
+            include_prediction_time: true,
+        }
+    };
+    options.max_epochs = term.max_epochs;
+    options.min_common_satellites = term.min_common_satellites;
+    options.include_prediction_time = term.include_prediction_time;
+    Some(options)
+}
+
+fn decode_rinex_signal_pair(term: &RtkRinexSignalPairTerm) -> Option<RtkRinexSignalPair> {
+    Some(RtkRinexSignalPair {
+        system: decode_rinex_system(&term.system)?,
+        code_observable: term.code_observable.clone(),
+        phase_observable: term.phase_observable.clone(),
+    })
+}
+
+fn decode_rinex_dual_arc_options(
+    term: &RtkRinexDualArcOptionsTerm,
+) -> Option<RtkRinexDualArcOptions> {
+    let mut options = if term.signal_pairs.is_empty() {
+        RtkRinexDualArcOptions::gps_l1_l2_cw()
+    } else {
+        RtkRinexDualArcOptions {
+            signal_pairs: term
+                .signal_pairs
+                .iter()
+                .map(decode_rinex_dual_signal_pair)
+                .collect::<Option<Vec<_>>>()?,
+            max_epochs: None,
+            min_common_satellites: 4,
+            include_prediction_time: true,
+        }
+    };
+    options.max_epochs = term.max_epochs;
+    options.min_common_satellites = term.min_common_satellites;
+    options.include_prediction_time = term.include_prediction_time;
+    Some(options)
+}
+
+fn decode_rinex_dual_signal_pair(
+    term: &RtkRinexDualSignalPairTerm,
+) -> Option<RtkRinexDualSignalPair> {
+    Some(RtkRinexDualSignalPair {
+        system: decode_rinex_system(&term.system)?,
+        code1_observable: term.code1_observable.clone(),
+        phase1_observable: term.phase1_observable.clone(),
+        code2_observable: term.code2_observable.clone(),
+        phase2_observable: term.phase2_observable.clone(),
+    })
+}
+
+fn decode_rinex_system(system: &str) -> Option<GnssSystem> {
+    let upper = system.to_ascii_uppercase();
+    match upper.as_str() {
+        "G" | "GPS" => Some(GnssSystem::Gps),
+        "R" | "GLONASS" => Some(GnssSystem::Glonass),
+        "E" | "GALILEO" => Some(GnssSystem::Galileo),
+        "C" | "BEIDOU" | "BDS" => Some(GnssSystem::BeiDou),
+        "J" | "QZSS" => Some(GnssSystem::Qzss),
+        "I" | "NAVIC" | "IRNSS" => Some(GnssSystem::Navic),
+        "S" | "SBAS" => Some(GnssSystem::Sbas),
+        _ => None,
+    }
+}
+
+fn decode_rinex_static_config(
+    term: &RtkRinexStaticBaselineConfigTerm,
+    wavelengths_m: BTreeMap<String, f64>,
+    offsets_m: BTreeMap<String, f64>,
+) -> Result<RtkStaticArcConfig, rustler::Atom> {
+    let model = decode_model(term.model.clone()).ok_or_else(atoms::invalid_stochastic_model)?;
+    let reference =
+        decode_arc_reference(term.reference.clone()).ok_or_else(atoms::invalid_option)?;
+    let preprocessing =
+        decode_arc_preprocessing(term.preprocessing.clone()).ok_or_else(atoms::invalid_option)?;
+    let mut update_opts =
+        decode_opts(term.update_opts.clone()).ok_or_else(atoms::invalid_dynamics_model)?;
+    update_opts.receiver_antenna_corrections = term
+        .receiver_antenna_corrections
+        .clone()
+        .map(decode_receiver_antenna_corrections);
+    let float = decode_float_solve_opts(term.float_opts);
+    let (fixed, float_only_systems) = decode_static_fixed_solve_opts(term.fixed_opts.clone());
+    update_opts.float_only_systems = float_only_systems;
+    update_opts.search.ratio_threshold = fixed.ratio_threshold;
+    let residual = decode_residual_validation_opts(term.residual_opts);
+
+    Ok(RtkStaticArcConfig {
+        arc: RtkArcConfig {
+            base_m: vec3(term.base_m),
+            reference,
+            model,
+            baseline_prior_sigma_m: term.baseline_prior_sigma_m,
+            ambiguity_prior_sigma_m: term.ambiguity_prior_sigma_m,
+            initial_baseline_m: vec3(term.initial_baseline_m),
+            wavelengths_m,
+            offsets_m,
+            update_opts,
+            preprocessing,
+        },
+        opts: ValidatedFixedSolveOpts {
+            float,
+            fixed,
+            residual,
+        },
+    })
+}
+
+fn decode_rinex_wide_lane_fixed_config(
+    term: &RtkRinexWideLaneFixedConfigTerm,
+) -> Result<RtkWideLaneFixedArcConfig, rustler::Atom> {
+    let model = decode_model(term.model.clone()).ok_or_else(atoms::invalid_stochastic_model)?;
+    let reference =
+        decode_arc_reference(term.reference.clone()).ok_or_else(atoms::invalid_option)?;
+    let mut update_opts =
+        decode_opts(term.update_opts.clone()).ok_or_else(atoms::invalid_dynamics_model)?;
+    update_opts.receiver_antenna_corrections = term
+        .receiver_antenna_corrections
+        .clone()
+        .map(decode_receiver_antenna_corrections);
+    let float = decode_float_solve_opts(term.float_opts);
+    let (fixed, float_only_systems) = decode_static_fixed_solve_opts(term.fixed_opts.clone());
+    update_opts.float_only_systems = float_only_systems;
+    update_opts.search.ratio_threshold = fixed.ratio_threshold;
+    let residual = decode_residual_validation_opts(term.residual_opts);
+
+    let static_config = RtkStaticArcConfig {
+        arc: RtkArcConfig {
+            base_m: vec3(term.base_m),
+            reference: reference.clone(),
+            model,
+            baseline_prior_sigma_m: term.baseline_prior_sigma_m,
+            ambiguity_prior_sigma_m: term.ambiguity_prior_sigma_m,
+            initial_baseline_m: vec3(term.initial_baseline_m),
+            wavelengths_m: BTreeMap::new(),
+            offsets_m: BTreeMap::new(),
+            update_opts,
+            preprocessing: RtkArcPreprocessing::default(),
+        },
+        opts: ValidatedFixedSolveOpts {
+            float,
+            fixed,
+            residual,
+        },
+    };
+
+    Ok(RtkWideLaneFixedArcConfig {
+        wide_lane: RtkWideLaneArcConfig {
+            base_m: vec3(term.base_m),
+            reference: reference.clone(),
+            options: WideLaneOptions {
+                min_epochs: 2,
+                tolerance_cycles: 0.5,
+                skip_short_fragments: false,
+            },
+            cycle_slip: Some(RtkDualCycleSlipConfig {
+                policy: CycleSlipPolicy::DropSatellite,
+                options: CycleSlipOptions::default(),
+            }),
+        },
+        ionosphere_free: RtkIonosphereFreeArcConfig {
+            base_m: vec3(term.base_m),
+            initial_baseline_m: vec3(term.initial_baseline_m),
+            reference,
+            apply_troposphere: term.apply_troposphere,
+        },
+        solve: RtkWideLaneFixedArcSolveConfig::Static(static_config),
+    })
+}
+
 fn encode_wide_lane_arc_solution<'a>(env: Env<'a>, solution: RtkWideLaneArcSolution) -> Term<'a> {
     make_tuple(
         env,
@@ -1922,6 +2278,80 @@ fn encode_ionosphere_free_arc_solution(
         solution.wavelengths_m.into_iter().collect(),
         solution.offsets_m.into_iter().collect(),
     )
+}
+
+fn encode_rinex_arc_error<'a>(env: Env<'a>, error: RtkRinexArcError) -> Term<'a> {
+    match error {
+        RtkRinexArcError::InvalidInput { field, reason } => {
+            (atoms::invalid_input(), field, reason).encode(env)
+        }
+        RtkRinexArcError::Observation(error) => {
+            (atoms::rinex_observation_failed(), error.to_string()).encode(env)
+        }
+        RtkRinexArcError::Ephemeris {
+            satellite_id,
+            epoch_j2000_s,
+            reason,
+        } => (
+            atoms::ephemeris_failed(),
+            satellite_id,
+            epoch_j2000_s,
+            reason,
+        )
+            .encode(env),
+        RtkRinexArcError::NoSignalPairs => atoms::no_signal_pairs().encode(env),
+        RtkRinexArcError::NoUsableEpochs => atoms::no_usable_epochs().encode(env),
+        RtkRinexArcError::MissingFrequency {
+            satellite_id,
+            observable_code,
+        } => (atoms::missing_frequency(), satellite_id, observable_code).encode(env),
+    }
+}
+
+fn encode_wide_lane_fixed_metadata<'a>(
+    env: Env<'a>,
+    metadata: RtkWideLaneFixedArcMetadata,
+) -> Term<'a> {
+    let method = match metadata.integer_method {
+        RtkWideLaneFixedArcIntegerMethod::WideLaneNarrowLaneLambda => {
+            "wide_lane_narrow_lane_lambda"
+        }
+        RtkWideLaneFixedArcIntegerMethod::WideLaneNarrowLaneSequential => {
+            "wide_lane_narrow_lane_sequential"
+        }
+    };
+    make_tuple(
+        env,
+        &[
+            method.encode(env),
+            metadata.wide_lane_fixed.encode(env),
+            metadata
+                .wide_lane_ambiguities_cycles
+                .into_iter()
+                .collect::<Vec<_>>()
+                .encode(env),
+            metadata.dropped_cycle_slip_sats.encode(env),
+            encode_arc_split_cycle_slip_arcs(metadata.split_cycle_slip_arcs).encode(env),
+        ],
+    )
+}
+
+fn encode_wide_lane_fixed_arc_error<'a>(
+    env: Env<'a>,
+    error: RtkWideLaneFixedArcError,
+    epochs: &[RtkDualFrequencyArcEpoch],
+) -> Term<'a> {
+    match error {
+        RtkWideLaneFixedArcError::UnsupportedMultiGnss => {
+            atoms::unsupported_multi_gnss().encode(env)
+        }
+        RtkWideLaneFixedArcError::WideLane(error) => encode_wide_lane_arc_error(env, error, epochs),
+        RtkWideLaneFixedArcError::IonosphereFree(error) => {
+            encode_ionosphere_free_arc_error(env, error)
+        }
+        RtkWideLaneFixedArcError::Static(error) => encode_static_arc_error(env, error),
+        RtkWideLaneFixedArcError::Sequential(error) => encode_arc_error(env, error),
+    }
 }
 
 fn encode_wide_lane_arc_error<'a>(
