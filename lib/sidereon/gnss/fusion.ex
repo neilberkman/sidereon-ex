@@ -182,6 +182,9 @@ defmodule Sidereon.GNSS.Fusion do
   @typedoc "Tight GNSS raw-observation epoch."
   @type tight_epoch :: map()
 
+  @typedoc "One position and velocity sample used by outage velocity matching."
+  @type velocity_match_state :: map()
+
   @doc """
   Return a strapdown mechanization config.
 
@@ -212,8 +215,8 @@ defmodule Sidereon.GNSS.Fusion do
       gyro_arw_rad_sqrt_s: field!(spec, :gyro_arw_rad_sqrt_s) / 1.0,
       accel_bias_instab_mps2: field!(spec, :accel_bias_instab_mps2) / 1.0,
       gyro_bias_instab_rps: field!(spec, :gyro_bias_instab_rps) / 1.0,
-      accel_bias_tau_s: field!(spec, :accel_bias_tau_s) / 1.0,
-      gyro_bias_tau_s: field!(spec, :gyro_bias_tau_s) / 1.0,
+      accel_bias_tau_s: tau_float(field!(spec, :accel_bias_tau_s)),
+      gyro_bias_tau_s: tau_float(field!(spec, :gyro_bias_tau_s)),
       accel_scale_instab_ppm: optional_float(field(spec, :accel_scale_instab_ppm, nil)),
       gyro_scale_instab_ppm: optional_float(field(spec, :gyro_scale_instab_ppm, nil))
     }
@@ -223,8 +226,10 @@ defmodule Sidereon.GNSS.Fusion do
   Build a fusion filter config from an IMU spec and options.
 
   Options include `:filter_kind` (`:ekf` or `:ukf`), `:mechanization`,
-  `:loose`, `:tight`, `:imu_model`, and `:ukf_update_options`. Loose config
-  may include `:measurement_reweighting` and `:prediction_adaptation`.
+  `:loose`, `:tight`, `:imu_model`, `:imu_to_body_dcm`, and
+  `:ukf_update_options`. Loose config may include `:fix_status_weighting`,
+  `:measurement_reweighting`, `:prediction_adaptation`, `:stationary_updates`,
+  and `:non_holonomic`.
   """
   @spec filter_config(imu_spec(), keyword() | map()) :: filter_config()
   def filter_config(spec \\ :mems, opts \\ []) do
@@ -232,11 +237,69 @@ defmodule Sidereon.GNSS.Fusion do
       imu_spec: imu_spec(spec),
       filter_kind: field(opts, :filter_kind, :ekf),
       imu_model: normalize_imu_model(field(opts, :imu_model, %{})),
+      imu_to_body_dcm: mat3(field(opts, :imu_to_body_dcm, identity3())),
       mechanization: strapdown_config(field(opts, :mechanization, %{})),
       loose: normalize_loose_config(field(opts, :loose, %{})),
       tight: normalize_tight_config(field(opts, :tight, %{})),
       ukf_update_options: normalize_ukf_options(field(opts, :ukf_update_options, %{}))
     }
+  end
+
+  @doc """
+  Return per-fix-status sigma multipliers for loose GNSS updates.
+  """
+  @spec gnss_fix_status_weighting(keyword() | map()) :: map()
+  def gnss_fix_status_weighting(opts \\ []) do
+    %{
+      single_sigma_multiplier: field(opts, :single_sigma_multiplier, 1.0) / 1.0,
+      float_sigma_multiplier: field(opts, :float_sigma_multiplier, 1.0) / 1.0,
+      fixed_sigma_multiplier: field(opts, :fixed_sigma_multiplier, 1.0) / 1.0
+    }
+  end
+
+  @doc """
+  Return windowed IMU thresholds for stationary update detection.
+  """
+  @spec stationary_detector_config(keyword() | map()) :: map()
+  def stationary_detector_config(opts) do
+    %{
+      window_len: field!(opts, :window_len),
+      max_specific_force_norm_error_mps2: field!(opts, :max_specific_force_norm_error_mps2) / 1.0,
+      max_body_rate_wrt_ecef_norm_rps: field!(opts, :max_body_rate_wrt_ecef_norm_rps) / 1.0
+    }
+  end
+
+  @doc """
+  Return zero-velocity and zero-angular-rate stationary update settings.
+  """
+  @spec stationary_update_config(keyword() | map()) :: map()
+  def stationary_update_config(opts) do
+    %{
+      detector: stationary_detector_config(field!(opts, :detector)),
+      zero_velocity_sigma_mps: field!(opts, :zero_velocity_sigma_mps) / 1.0,
+      zero_angular_rate_sigma_rps: field!(opts, :zero_angular_rate_sigma_rps) / 1.0
+    }
+  end
+
+  @doc """
+  Return wheeled-vehicle lateral and vertical velocity constraint settings.
+  """
+  @spec non_holonomic_constraint_config(keyword() | map()) :: map()
+  def non_holonomic_constraint_config(opts) do
+    %{
+      lateral_velocity_sigma_mps: field!(opts, :lateral_velocity_sigma_mps) / 1.0,
+      vertical_velocity_sigma_mps: field!(opts, :vertical_velocity_sigma_mps) / 1.0,
+      min_speed_mps: field!(opts, :min_speed_mps) / 1.0,
+      max_body_rate_wrt_ecef_norm_rps: field!(opts, :max_body_rate_wrt_ecef_norm_rps) / 1.0
+    }
+  end
+
+  @doc """
+  Return endpoint velocity matching settings for one GNSS outage.
+  """
+  @spec velocity_matching_config(keyword() | map()) :: map()
+  def velocity_matching_config(opts) do
+    %{max_outage_duration_s: field!(opts, :max_outage_duration_s) / 1.0}
   end
 
   @doc """
@@ -315,6 +378,36 @@ defmodule Sidereon.GNSS.Fusion do
           {:ok, map()} | {:error, term()}
   def update_loose_recorded(%Filter{handle: handle}, measurement, %FusionRtsHistoryBuilder{handle: history}) do
     NIF.fusion_update_loose_recorded(handle, loose_measurement_term(measurement), history)
+  end
+
+  @doc """
+  Apply configured stationary zero-velocity and zero-angular-rate constraints.
+  """
+  @spec update_stationary(Filter.t()) :: {:ok, map() | nil} | {:error, term()}
+  def update_stationary(%Filter{handle: handle}), do: NIF.fusion_update_stationary(handle)
+
+  @doc """
+  Apply configured stationary constraints and record checkpoints when applied.
+  """
+  @spec update_stationary_recorded(Filter.t(), FusionRtsHistoryBuilder.t()) ::
+          {:ok, map() | nil} | {:error, term()}
+  def update_stationary_recorded(%Filter{handle: handle}, %FusionRtsHistoryBuilder{handle: history}) do
+    NIF.fusion_update_stationary_recorded(handle, history)
+  end
+
+  @doc """
+  Apply configured non-holonomic vehicle constraints.
+  """
+  @spec update_non_holonomic(Filter.t()) :: {:ok, map() | nil} | {:error, term()}
+  def update_non_holonomic(%Filter{handle: handle}), do: NIF.fusion_update_non_holonomic(handle)
+
+  @doc """
+  Apply configured non-holonomic constraints and record checkpoints when applied.
+  """
+  @spec update_non_holonomic_recorded(Filter.t(), FusionRtsHistoryBuilder.t()) ::
+          {:ok, map() | nil} | {:error, term()}
+  def update_non_holonomic_recorded(%Filter{handle: handle}, %FusionRtsHistoryBuilder{handle: history}) do
+    NIF.fusion_update_non_holonomic_recorded(handle, history)
   end
 
   @doc """
@@ -419,6 +512,19 @@ defmodule Sidereon.GNSS.Fusion do
     end
   end
 
+  @doc """
+  Blend a first good post-outage position/velocity fix back over an outage span.
+  """
+  @spec velocity_match_outage([velocity_match_state()], loose_measurement(), keyword() | map()) ::
+          {:ok, map()} | {:error, term()}
+  def velocity_match_outage(states, first_good_fix, config) when is_list(states) do
+    NIF.fusion_velocity_match_outage(
+      Enum.map(states, &velocity_match_state_term/1),
+      loose_measurement_term(first_good_fix),
+      velocity_matching_config(config)
+    )
+  end
+
   defp state_term(state) do
     nominal = field(state, :nominal, state)
 
@@ -441,7 +547,8 @@ defmodule Sidereon.GNSS.Fusion do
 
   defp config_term(config) do
     config =
-      if has_field?(config, :imu_model) and has_field?(config, :loose) and has_field?(config, :tight) do
+      if has_field?(config, :imu_model) and has_field?(config, :imu_to_body_dcm) and has_field?(config, :loose) and
+           has_field?(config, :tight) do
         config
       else
         filter_config(field(config, :imu_spec, :mems), config)
@@ -451,6 +558,7 @@ defmodule Sidereon.GNSS.Fusion do
       imu_spec: imu_spec_term(config.imu_spec),
       filter_kind: label(config.filter_kind),
       imu_model: imu_model_term(config.imu_model),
+      imu_to_body_dcm: mat3(config.imu_to_body_dcm),
       mechanization: %{coning_correction: label(config.mechanization.coning_correction)},
       loose: loose_config_term(config.loose),
       tight: tight_config_term(config.tight),
@@ -464,8 +572,8 @@ defmodule Sidereon.GNSS.Fusion do
       gyro_arw_rad_sqrt_s: spec.gyro_arw_rad_sqrt_s / 1.0,
       accel_bias_instab_mps2: spec.accel_bias_instab_mps2 / 1.0,
       gyro_bias_instab_rps: spec.gyro_bias_instab_rps / 1.0,
-      accel_bias_tau_s: spec.accel_bias_tau_s / 1.0,
-      gyro_bias_tau_s: spec.gyro_bias_tau_s / 1.0,
+      accel_bias_tau_s: tau_float(spec.accel_bias_tau_s),
+      gyro_bias_tau_s: tau_float(spec.gyro_bias_tau_s),
       accel_scale_instab_ppm: optional_float(spec.accel_scale_instab_ppm),
       gyro_scale_instab_ppm: optional_float(spec.gyro_scale_instab_ppm)
     }
@@ -498,8 +606,11 @@ defmodule Sidereon.GNSS.Fusion do
     %{
       lever_arm_body_m: vec3(field(config, :lever_arm_body_m, {0.0, 0.0, 0.0})),
       update_options: normalize_ekf_options(field(config, :update_options, %{})),
+      fix_status_weighting: normalize_fix_status_weighting(field(config, :fix_status_weighting, %{})),
       measurement_reweighting: normalize_igg_iii(field(config, :measurement_reweighting, nil)),
-      prediction_adaptation: normalize_yang(field(config, :prediction_adaptation, nil))
+      prediction_adaptation: normalize_yang(field(config, :prediction_adaptation, nil)),
+      stationary_updates: normalize_stationary_update(field(config, :stationary_updates, nil)),
+      non_holonomic: normalize_non_holonomic(field(config, :non_holonomic, nil))
     }
   end
 
@@ -539,8 +650,11 @@ defmodule Sidereon.GNSS.Fusion do
     %{
       lever_arm_body_m: vec3(config.lever_arm_body_m),
       update_options: ekf_options_term(config.update_options),
+      fix_status_weighting: fix_status_weighting_term(config.fix_status_weighting),
       measurement_reweighting: optional_igg_iii(config.measurement_reweighting),
-      prediction_adaptation: optional_yang(config.prediction_adaptation)
+      prediction_adaptation: optional_yang(config.prediction_adaptation),
+      stationary_updates: optional_stationary_update(config.stationary_updates),
+      non_holonomic: optional_non_holonomic(config.non_holonomic)
     }
   end
 
@@ -578,6 +692,22 @@ defmodule Sidereon.GNSS.Fusion do
   defp normalize_yang(:standard), do: yang_prediction_adaptive_factor()
   defp normalize_yang(config), do: yang_prediction_adaptive_factor(config)
 
+  defp normalize_fix_status_weighting(config), do: gnss_fix_status_weighting(config)
+
+  defp normalize_stationary_update(nil), do: nil
+  defp normalize_stationary_update(config), do: stationary_update_config(config)
+
+  defp normalize_non_holonomic(nil), do: nil
+  defp normalize_non_holonomic(config), do: non_holonomic_constraint_config(config)
+
+  defp fix_status_weighting_term(config) do
+    %{
+      single_sigma_multiplier: config.single_sigma_multiplier / 1.0,
+      float_sigma_multiplier: config.float_sigma_multiplier / 1.0,
+      fixed_sigma_multiplier: config.fixed_sigma_multiplier / 1.0
+    }
+  end
+
   defp optional_igg_iii(nil), do: nil
 
   defp optional_igg_iii(config) do
@@ -590,6 +720,31 @@ defmodule Sidereon.GNSS.Fusion do
     %{
       threshold: config.threshold / 1.0,
       outlier_gate_probability: config.outlier_gate_probability / 1.0
+    }
+  end
+
+  defp optional_stationary_update(nil), do: nil
+
+  defp optional_stationary_update(config) do
+    %{
+      detector: %{
+        window_len: config.detector.window_len,
+        max_specific_force_norm_error_mps2: config.detector.max_specific_force_norm_error_mps2 / 1.0,
+        max_body_rate_wrt_ecef_norm_rps: config.detector.max_body_rate_wrt_ecef_norm_rps / 1.0
+      },
+      zero_velocity_sigma_mps: config.zero_velocity_sigma_mps / 1.0,
+      zero_angular_rate_sigma_rps: config.zero_angular_rate_sigma_rps / 1.0
+    }
+  end
+
+  defp optional_non_holonomic(nil), do: nil
+
+  defp optional_non_holonomic(config) do
+    %{
+      lateral_velocity_sigma_mps: config.lateral_velocity_sigma_mps / 1.0,
+      vertical_velocity_sigma_mps: config.vertical_velocity_sigma_mps / 1.0,
+      min_speed_mps: config.min_speed_mps / 1.0,
+      max_body_rate_wrt_ecef_norm_rps: config.max_body_rate_wrt_ecef_norm_rps / 1.0
     }
   end
 
@@ -614,7 +769,16 @@ defmodule Sidereon.GNSS.Fusion do
       velocity_ecef_mps: optional_vec3(field(measurement, :velocity_ecef_mps, nil)),
       covariance: matrix(field!(measurement, :covariance)),
       satellites_used: field(measurement, :satellites_used, 4),
-      solution_valid: field(measurement, :solution_valid, true)
+      solution_valid: field(measurement, :solution_valid, true),
+      fix_status: measurement |> field(:fix_status, :single) |> label()
+    }
+  end
+
+  defp velocity_match_state_term(state) do
+    %{
+      t_j2000_s: field!(state, :t_j2000_s) / 1.0,
+      position_ecef_m: vec3(field!(state, :position_ecef_m)),
+      velocity_ecef_mps: vec3(field!(state, :velocity_ecef_mps))
     }
   end
 
@@ -659,6 +823,10 @@ defmodule Sidereon.GNSS.Fusion do
 
   defp optional_float(nil), do: nil
   defp optional_float(value), do: value / 1.0
+  defp tau_float(nil), do: nil
+  defp tau_float(:infinity), do: nil
+  defp tau_float("infinity"), do: nil
+  defp tau_float(value), do: value / 1.0
   defp optional_vec3(nil), do: nil
   defp optional_vec3(value), do: vec3(value)
   defp optional_vector(nil), do: nil

@@ -30,6 +30,11 @@ use sidereon_core::fusion::timesync::{
     InertialFilterSnapshot, TimeSyncHistoryConfig, TimeSyncHistoryStatus, TimeSyncUpdate,
 };
 use sidereon_core::fusion::ukf::{UkfUpdateOptions, UnscentedTransformOptions};
+use sidereon_core::fusion::{
+    velocity_match_outage, GnssFixStatus, GnssFixStatusWeighting, NonHolonomicConstraintConfig,
+    StationaryDetectorConfig, StationaryUpdateConfig, VelocityMatchState,
+    VelocityMatchedTrajectory, VelocityMatchingConfig,
+};
 use sidereon_core::inertial::{
     ConingCorrection, ImuBias, ImuCalibration, ImuErrorModel, ImuGrade, ImuSample, ImuSpec,
     MechanizationConfig, NavState,
@@ -132,8 +137,8 @@ struct ImuSpecTerm {
     gyro_arw_rad_sqrt_s: f64,
     accel_bias_instab_mps2: f64,
     gyro_bias_instab_rps: f64,
-    accel_bias_tau_s: f64,
-    gyro_bias_tau_s: f64,
+    accel_bias_tau_s: Option<f64>,
+    gyro_bias_tau_s: Option<f64>,
     accel_scale_instab_ppm: Option<f64>,
     gyro_scale_instab_ppm: Option<f64>,
 }
@@ -185,11 +190,55 @@ struct YangPredictionAdaptiveFactorTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+struct FixStatusWeightingTerm {
+    single_sigma_multiplier: f64,
+    float_sigma_multiplier: f64,
+    fixed_sigma_multiplier: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct StationaryDetectorTerm {
+    window_len: u64,
+    max_specific_force_norm_error_mps2: f64,
+    max_body_rate_wrt_ecef_norm_rps: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct StationaryUpdateTerm {
+    detector: StationaryDetectorTerm,
+    zero_velocity_sigma_mps: f64,
+    zero_angular_rate_sigma_rps: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct NonHolonomicTerm {
+    lateral_velocity_sigma_mps: f64,
+    vertical_velocity_sigma_mps: f64,
+    min_speed_mps: f64,
+    max_body_rate_wrt_ecef_norm_rps: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct VelocityMatchingConfigTerm {
+    max_outage_duration_s: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct VelocityMatchStateTerm {
+    t_j2000_s: f64,
+    position_ecef_m: Vec3Term,
+    velocity_ecef_mps: Vec3Term,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
 struct LooseConfigTerm {
     lever_arm_body_m: Vec3Term,
     update_options: EkfOptionsTerm,
+    fix_status_weighting: FixStatusWeightingTerm,
     measurement_reweighting: Option<IggIiiMeasurementReweightingTerm>,
     prediction_adaptation: Option<YangPredictionAdaptiveFactorTerm>,
+    stationary_updates: Option<StationaryUpdateTerm>,
+    non_holonomic: Option<NonHolonomicTerm>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -217,6 +266,7 @@ struct FilterConfigTerm {
     imu_spec: ImuSpecTerm,
     filter_kind: String,
     imu_model: ImuModelTerm,
+    imu_to_body_dcm: MatrixTerm,
     mechanization: MechanizationTerm,
     loose: LooseConfigTerm,
     tight: TightConfigTerm,
@@ -242,6 +292,7 @@ struct LooseMeasurementTerm {
     covariance: MatrixTerm,
     satellites_used: u64,
     solution_valid: bool,
+    fix_status: String,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -394,6 +445,13 @@ struct TightClockStateOut {
     covariance: Vec<Vec<f64>>,
 }
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct VelocityMatchedTrajectoryOut {
+    states: Vec<VelocityMatchStateTerm>,
+    endpoint_position_correction_ecef_m: Vec<f64>,
+    endpoint_velocity_correction_ecef_mps: Vec<f64>,
+}
+
 /// Build an opaque stateful inertial fusion filter.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn fusion_new<'a>(env: Env<'a>, state: FilterStateTerm, config: FilterConfigTerm) -> Term<'a> {
@@ -543,6 +601,72 @@ fn fusion_update_loose_recorded<'a>(
     };
     match filter.update_loose_recorded(&measurement, &mut history) {
         Ok(update) => (atoms::ok(), encode_update(update)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
+/// Apply configured stationary ZUPT/ZARU constraints when the detector fires.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_stationary<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+) -> Term<'a> {
+    with_filter(env, handle, |filter| match filter.update_stationary() {
+        Ok(update) => Ok((atoms::ok(), update.map(encode_update)).encode(env)),
+        Err(error) => Ok(fusion_error(env, error)),
+    })
+}
+
+/// Apply configured stationary constraints and record checkpoints when applied.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_stationary_recorded<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.update_stationary_recorded(&mut history) {
+        Ok(update) => (atoms::ok(), update.map(encode_update)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
+/// Apply configured non-holonomic vehicle constraints when motion gates pass.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_non_holonomic<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+) -> Term<'a> {
+    with_filter(env, handle, |filter| match filter.update_non_holonomic() {
+        Ok(update) => Ok((atoms::ok(), update.map(encode_update)).encode(env)),
+        Err(error) => Ok(fusion_error(env, error)),
+    })
+}
+
+/// Apply configured non-holonomic constraints and record when applied.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_update_non_holonomic_recorded<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<FusionFilterResource>,
+    history: ResourceArc<FusionRtsHistoryBuilderResource>,
+) -> Term<'a> {
+    let mut filter = match handle.filter.lock() {
+        Ok(filter) => filter,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    let mut history = match history.builder.lock() {
+        Ok(history) => history,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match filter.update_non_holonomic_recorded(&mut history) {
+        Ok(update) => (atoms::ok(), update.map(encode_update)).encode(env),
         Err(error) => fusion_error(env, error),
     }
 }
@@ -866,6 +990,36 @@ fn fusion_smoothed_trajectory_epochs(
         .collect()
 }
 
+/// Blend a first good GNSS position/velocity fix back over an outage span.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_velocity_match_outage<'a>(
+    env: Env<'a>,
+    states: Vec<VelocityMatchStateTerm>,
+    first_good_fix: LooseMeasurementTerm,
+    config: VelocityMatchingConfigTerm,
+) -> Term<'a> {
+    let states = match states
+        .into_iter()
+        .map(decode_velocity_match_state)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(states) => states,
+        Err(error) => return fusion_error(env, error),
+    };
+    let first_good_fix = match decode_loose_measurement(first_good_fix) {
+        Ok(measurement) => measurement,
+        Err(error) => return fusion_error(env, error),
+    };
+    let config = VelocityMatchingConfig {
+        max_outage_duration_s: config.max_outage_duration_s,
+    };
+
+    match velocity_match_outage(&states, &first_good_fix, config) {
+        Ok(matched) => (atoms::ok(), encode_velocity_matched_trajectory(matched)).encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
 fn with_filter<'a, F>(env: Env<'a>, handle: ResourceArc<FusionFilterResource>, f: F) -> Term<'a>
 where
     F: FnOnce(&mut InertialFilter) -> Result<Term<'a>, ()>,
@@ -916,10 +1070,12 @@ fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionE
     let mut config = InertialFilterConfig::new(decode_imu_spec(term.imu_spec)?)?;
     config.filter_kind = decode_filter_kind(&term.filter_kind)?;
     config.imu_model = decode_imu_model(term.imu_model)?;
+    config.imu_to_body_dcm = mat3(term.imu_to_body_dcm, "imu_to_body_dcm")?;
     config.mechanization = decode_mechanization(term.mechanization)?;
     config.loose = LooseCouplingConfig {
         lever_arm_body_m: vec3(term.loose.lever_arm_body_m, "loose.lever_arm_body_m")?,
         update_options: decode_ekf_options(term.loose.update_options)?,
+        fix_status_weighting: decode_fix_status_weighting(term.loose.fix_status_weighting),
         measurement_reweighting: term
             .loose
             .measurement_reweighting
@@ -928,6 +1084,8 @@ fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionE
             .loose
             .prediction_adaptation
             .map(decode_yang_prediction_adaptive_factor),
+        stationary_updates: term.loose.stationary_updates.map(decode_stationary_update),
+        non_holonomic: term.loose.non_holonomic.map(decode_non_holonomic),
     };
     config.tight = TightCouplingConfig {
         lever_arm_body_m: vec3(term.tight.lever_arm_body_m, "tight.lever_arm_body_m")?,
@@ -950,8 +1108,8 @@ fn decode_imu_spec(term: ImuSpecTerm) -> Result<ImuSpec, FusionError> {
         term.gyro_arw_rad_sqrt_s,
         term.accel_bias_instab_mps2,
         term.gyro_bias_instab_rps,
-        term.accel_bias_tau_s,
-        term.gyro_bias_tau_s,
+        term.accel_bias_tau_s.unwrap_or(f64::INFINITY),
+        term.gyro_bias_tau_s.unwrap_or(f64::INFINITY),
         term.accel_scale_instab_ppm,
         term.gyro_scale_instab_ppm,
     );
@@ -1020,6 +1178,35 @@ fn decode_yang_prediction_adaptive_factor(
     }
 }
 
+fn decode_fix_status_weighting(term: FixStatusWeightingTerm) -> GnssFixStatusWeighting {
+    GnssFixStatusWeighting {
+        single_sigma_multiplier: term.single_sigma_multiplier,
+        float_sigma_multiplier: term.float_sigma_multiplier,
+        fixed_sigma_multiplier: term.fixed_sigma_multiplier,
+    }
+}
+
+fn decode_stationary_update(term: StationaryUpdateTerm) -> StationaryUpdateConfig {
+    StationaryUpdateConfig {
+        detector: StationaryDetectorConfig {
+            window_len: term.detector.window_len as usize,
+            max_specific_force_norm_error_mps2: term.detector.max_specific_force_norm_error_mps2,
+            max_body_rate_wrt_ecef_norm_rps: term.detector.max_body_rate_wrt_ecef_norm_rps,
+        },
+        zero_velocity_sigma_mps: term.zero_velocity_sigma_mps,
+        zero_angular_rate_sigma_rps: term.zero_angular_rate_sigma_rps,
+    }
+}
+
+fn decode_non_holonomic(term: NonHolonomicTerm) -> NonHolonomicConstraintConfig {
+    NonHolonomicConstraintConfig {
+        lateral_velocity_sigma_mps: term.lateral_velocity_sigma_mps,
+        vertical_velocity_sigma_mps: term.vertical_velocity_sigma_mps,
+        min_speed_mps: term.min_speed_mps,
+        max_body_rate_wrt_ecef_norm_rps: term.max_body_rate_wrt_ecef_norm_rps,
+    }
+}
+
 fn decode_ukf_options(term: UkfOptionsTerm) -> Result<UkfUpdateOptions, FusionError> {
     let options = UkfUpdateOptions {
         transform: UnscentedTransformOptions {
@@ -1066,9 +1253,32 @@ fn decode_loose_measurement(term: LooseMeasurementTerm) -> Result<GnssFixMeasure
         covariance: term.covariance,
         satellites_used: term.satellites_used as usize,
         solution_valid: term.solution_valid,
+        fix_status: decode_fix_status(&term.fix_status)?,
     };
     measurement.validate()?;
     Ok(measurement)
+}
+
+fn decode_fix_status(label: &str) -> Result<GnssFixStatus, FusionError> {
+    match label {
+        "single" => Ok(GnssFixStatus::Single),
+        "float" => Ok(GnssFixStatus::Float),
+        "fixed" => Ok(GnssFixStatus::Fixed),
+        _ => Err(FusionError::InvalidInput {
+            field: "fix_status",
+            reason: "must be single, float, or fixed",
+        }),
+    }
+}
+
+fn decode_velocity_match_state(
+    term: VelocityMatchStateTerm,
+) -> Result<VelocityMatchState, FusionError> {
+    VelocityMatchState::new(
+        term.t_j2000_s,
+        vec3(term.position_ecef_m, "position_ecef_m")?,
+        vec3(term.velocity_ecef_mps, "velocity_ecef_mps")?,
+    )
 }
 
 fn decode_tight_epoch(term: TightEpochTerm) -> Result<TightGnssEpoch, FusionError> {
@@ -1167,8 +1377,8 @@ fn encode_imu_spec(spec: ImuSpec) -> ImuSpecTerm {
         gyro_arw_rad_sqrt_s: spec.gyro_arw_rad_sqrt_s,
         accel_bias_instab_mps2: spec.accel_bias_instab_mps2,
         gyro_bias_instab_rps: spec.gyro_bias_instab_rps,
-        accel_bias_tau_s: spec.accel_bias_tau_s,
-        gyro_bias_tau_s: spec.gyro_bias_tau_s,
+        accel_bias_tau_s: Some(spec.accel_bias_tau_s),
+        gyro_bias_tau_s: Some(spec.gyro_bias_tau_s),
         accel_scale_instab_ppm: spec.accel_scale_instab_ppm,
         gyro_scale_instab_ppm: spec.gyro_scale_instab_ppm,
     }
@@ -1318,6 +1528,24 @@ fn encode_time_sync_status(status: TimeSyncHistoryStatus) -> TimeSyncStatusOut {
         newest_imu_epoch_j2000_s: status.newest_imu_epoch_j2000_s,
         oldest_checkpoint_epoch_j2000_s: status.oldest_checkpoint_epoch_j2000_s,
         newest_checkpoint_epoch_j2000_s: status.newest_checkpoint_epoch_j2000_s,
+    }
+}
+
+fn encode_velocity_matched_trajectory(
+    value: VelocityMatchedTrajectory,
+) -> VelocityMatchedTrajectoryOut {
+    VelocityMatchedTrajectoryOut {
+        states: value
+            .states
+            .into_iter()
+            .map(|state| VelocityMatchStateTerm {
+                t_j2000_s: state.t_j2000_s,
+                position_ecef_m: state.position_ecef_m.to_vec(),
+                velocity_ecef_mps: state.velocity_ecef_mps.to_vec(),
+            })
+            .collect(),
+        endpoint_position_correction_ecef_m: value.endpoint_position_correction_ecef_m.to_vec(),
+        endpoint_velocity_correction_ecef_mps: value.endpoint_velocity_correction_ecef_mps.to_vec(),
     }
 }
 

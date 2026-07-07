@@ -265,6 +265,69 @@ defmodule Sidereon.GNSS.RTKTest do
       assert solution.fixed_solution.metadata.integer_ratio > 3.0
       assert length(solution.float_solution.metadata.ambiguity_float.covariance_m) == 7
     end
+
+    test "solves the WTZR to WTZZ static reference-station coordinate", ctx do
+      opts =
+        rinex_oracle_opts()
+        |> Keyword.put(:enable_code_dgnss, false)
+        |> Keyword.put(:enable_carrier_rtk, true)
+        |> Keyword.put(:with_geodetic, true)
+        |> Keyword.put(:max_epochs, 24)
+        |> Keyword.put(:arc_options, %{include_prediction_time: false})
+        |> Keyword.put(:fixed_options, %{
+          ratio_threshold: 3.0,
+          partial_ambiguity_resolution?: true,
+          partial_min_ambiguities: 4
+        })
+
+      assert {:ok, solution} =
+               RTK.solve_static_reference_station_rinex(
+                 ctx.sp3,
+                 ctx.base_obs,
+                 ctx.rover_obs,
+                 ctx.base_arp,
+                 opts
+               )
+
+      assert solution.mode == :carrier_fixed
+      assert solution.fix_status == :carrier_fixed
+      assert solution.code_solution == nil
+      assert solution.carrier_solution.integer_status == :fixed
+      assert bits(solution.carrier_solution.integer_ratio) == 0x40552D1856B255BA
+      assert length(solution.diagnostics) == 24
+      assert length(solution.carrier_solution.diagnostics) == 24
+      assert length(solution.mode_reports) == 1
+      assert hd(solution.mode_reports).mode == :carrier_fixed
+      assert hd(solution.mode_reports).status == :solved
+      assert hd(solution.mode_reports).used_epochs == 24
+      assert hd(solution.mode_reports).skipped_epochs == 0
+      assert hd(solution.mode_reports).used_measurements == 432
+      assert norm(sub3(ecef_tuple(solution.baseline_vector_m), ctx.truth_baseline)) < 0.005
+
+      assert solution.position_m |> ecef_tuple() |> Tuple.to_list() |> Enum.map(&bits/1) == [
+               0x414F181DAF5EFC9B,
+               0x412C701AD358462B,
+               0x4152510859BC4562
+             ]
+
+      assert solution.baseline_vector_m |> ecef_tuple() |> Tuple.to_list() |> Enum.map(&bits/1) == [
+               0xBFEF911D96FBE6B2,
+               0xBFE4DC7080D098F8,
+               0x3FF11595629A56D4
+             ]
+
+      assert solution.covariance.position_ecef_m2 |> List.flatten() |> Enum.map(&bits/1) == [
+               0x3F04ACAF48E915F6,
+               0x3EDF5DA71E914413,
+               0x3EF32E401D0C7CB0,
+               0x3EDF5DA71E914413,
+               0x3EEC4A84FC5F278A,
+               0x3ED882C671817361,
+               0x3EF32E401D0C7CAF,
+               0x3ED882C671817360,
+               0x3F08FCE97D368DEE
+             ]
+    end
   end
 
   defp prepared_epochs do
@@ -489,6 +552,11 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   defp ecef_tuple(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
+
+  defp bits(value) do
+    <<bits::64>> = <<value::float-64>>
+    bits
+  end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}

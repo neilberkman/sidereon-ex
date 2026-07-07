@@ -8,10 +8,18 @@
 use crate::geometry_quality::geometry_quality_to_term;
 use crate::rinex_obs::RinexObsResource;
 use crate::sp3::Sp3Resource;
-use rustler::types::tuple::make_tuple;
+use crate::spp::atom_from;
+use rustler::types::{atom, tuple::make_tuple};
 use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 use sidereon_core::carrier_phase::{SlipReason, FREQ_EPSILON_HZ};
 use sidereon_core::combinations::IonosphereFreeError;
+use sidereon_core::positioning::{
+    solve_static_reference_station_rinex, RinexSppOptions, StaticReferenceCarrierRinexOptions,
+    StaticReferenceCarrierSolution, StaticReferenceCodeSolution, StaticReferenceEpochDiagnostic,
+    StaticReferenceFixStatus, StaticReferenceModeError, StaticReferenceModeReport,
+    StaticReferenceModeStatus, StaticReferenceStationCovariance, StaticReferenceStationError,
+    StaticReferenceStationMode, StaticReferenceStationRinexOptions, StaticReferenceStationSolution,
+};
 use sidereon_core::rtk::{
     apply_elevation_mask, baseline_reference_satellites, hatch_smooth_baseline_code_epochs,
     prepare_cycle_slip_baseline_epochs, BaselineReferenceEpoch, BaselineReferenceSelection,
@@ -1252,6 +1260,15 @@ struct RtkRinexStaticBaselineConfigTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+struct StaticReferenceStationRinexConfigTerm {
+    reference_position_m: Vec3,
+    enable_code_dgnss: bool,
+    enable_carrier_rtk: bool,
+    with_geodetic: bool,
+    carrier: RtkRinexStaticBaselineConfigTerm,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
 struct RtkRinexWideLaneFixedConfigTerm {
     base_m: Vec3,
     arc_options: RtkRinexDualArcOptionsTerm,
@@ -1403,6 +1420,72 @@ pub fn rtk_solve_static_rinex_baseline<'a>(
             .encode(env),
         Err(error) => (atoms::error(), encode_static_arc_error(env, error)).encode(env),
     })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_solve_static_reference_station_rinex<'a>(
+    env: Env<'a>,
+    sp3: ResourceArc<Sp3Resource>,
+    reference_obs: ResourceArc<RinexObsResource>,
+    rover_obs: ResourceArc<RinexObsResource>,
+    config: StaticReferenceStationRinexConfigTerm,
+) -> NifResult<Term<'a>> {
+    let code_options = if config.enable_code_dgnss {
+        match RinexSppOptions::default_for(&rover_obs.obs) {
+            Ok(options) => Some(options),
+            Err(error) => return Ok((atoms::error(), error.to_string()).encode(env)),
+        }
+    } else {
+        None
+    };
+
+    let carrier_options = if config.enable_carrier_rtk {
+        let mut carrier = config.carrier;
+        carrier.base_m = config.reference_position_m;
+        let arc_options = match decode_rinex_arc_options(&carrier.arc_options) {
+            Some(options) => options,
+            None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
+        };
+        let static_config =
+            match decode_rinex_static_config(&carrier, BTreeMap::new(), BTreeMap::new()) {
+                Ok(config) => config,
+                Err(error) => return Ok((atoms::error(), error).encode(env)),
+            };
+        Some(StaticReferenceCarrierRinexOptions {
+            arc_options,
+            static_config,
+        })
+    } else {
+        None
+    };
+
+    let options = StaticReferenceStationRinexOptions {
+        code_options,
+        carrier_options,
+        with_geodetic: config.with_geodetic,
+    };
+    let reference_position_m = vec3(config.reference_position_m);
+
+    Ok(
+        match solve_static_reference_station_rinex(
+            &sp3.sp3,
+            &reference_obs.obs,
+            &rover_obs.obs,
+            reference_position_m,
+            &options,
+        ) {
+            Ok(solution) => (
+                atoms::ok(),
+                encode_static_reference_solution(env, &solution),
+            )
+                .encode(env),
+            Err(error) => (
+                atoms::error(),
+                encode_static_reference_station_error(env, error),
+            )
+                .encode(env),
+        },
+    )
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -1895,6 +1978,270 @@ fn encode_static_arc_solution<'a>(env: Env<'a>, solution: RtkStaticArcSolution) 
             geometry_quality_to_term(env, solution.geometry_quality),
         ],
     )
+}
+
+fn encode_static_reference_solution<'a>(
+    env: Env<'a>,
+    solution: &StaticReferenceStationSolution,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            encode_static_reference_mode(env, solution.mode),
+            encode_static_reference_fix_status(env, solution.fix_status),
+            tuple3(solution.position.as_array()).encode(env),
+            encode_static_reference_geodetic(env, solution.geodetic),
+            encode_static_reference_covariance(env, solution.covariance),
+            tuple3(solution.baseline_vector_m).encode(env),
+            solution.baseline_m.encode(env),
+            encode_optional_static_reference_code_solution(env, solution.code_solution.as_ref()),
+            encode_optional_static_reference_carrier_solution(
+                env,
+                solution.carrier_solution.as_ref(),
+            ),
+            solution
+                .mode_reports
+                .iter()
+                .map(|report| encode_static_reference_mode_report(env, report))
+                .collect::<Vec<_>>()
+                .encode(env),
+            solution
+                .diagnostics
+                .iter()
+                .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
+                .collect::<Vec<_>>()
+                .encode(env),
+        ],
+    )
+}
+
+fn encode_optional_static_reference_code_solution<'a>(
+    env: Env<'a>,
+    solution: Option<&StaticReferenceCodeSolution>,
+) -> Term<'a> {
+    match solution {
+        Some(solution) => encode_static_reference_code_solution(env, solution),
+        None => atom::nil().encode(env),
+    }
+}
+
+fn encode_optional_static_reference_carrier_solution<'a>(
+    env: Env<'a>,
+    solution: Option<&StaticReferenceCarrierSolution>,
+) -> Term<'a> {
+    match solution {
+        Some(solution) => encode_static_reference_carrier_solution(env, solution),
+        None => atom::nil().encode(env),
+    }
+}
+
+fn encode_static_reference_code_solution<'a>(
+    env: Env<'a>,
+    solution: &StaticReferenceCodeSolution,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            tuple3(solution.position.as_array()).encode(env),
+            encode_static_reference_geodetic(env, solution.geodetic),
+            encode_static_reference_covariance(env, solution.covariance),
+            tuple3(solution.baseline_vector_m).encode(env),
+            solution.baseline_m.encode(env),
+            solution
+                .diagnostics
+                .iter()
+                .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
+                .collect::<Vec<_>>()
+                .encode(env),
+        ],
+    )
+}
+
+fn encode_static_reference_carrier_solution<'a>(
+    env: Env<'a>,
+    solution: &StaticReferenceCarrierSolution,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            tuple3(solution.position.as_array()).encode(env),
+            encode_static_reference_geodetic(env, solution.geodetic),
+            encode_static_reference_covariance(env, solution.covariance),
+            tuple3(solution.baseline_vector_m).encode(env),
+            solution.baseline_m.encode(env),
+            encode_integer_status(solution.integer_status).encode(env),
+            option_f64_term(env, solution.integer_ratio),
+            solution
+                .diagnostics
+                .iter()
+                .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
+                .collect::<Vec<_>>()
+                .encode(env),
+        ],
+    )
+}
+
+fn encode_static_reference_covariance<'a>(
+    env: Env<'a>,
+    covariance: StaticReferenceStationCovariance,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            covariance
+                .position_ecef_m2
+                .iter()
+                .map(|row| row.to_vec())
+                .collect::<Vec<_>>()
+                .encode(env),
+            covariance
+                .position_enu_m2
+                .iter()
+                .map(|row| row.to_vec())
+                .collect::<Vec<_>>()
+                .encode(env),
+        ],
+    )
+}
+
+fn encode_static_reference_diagnostic<'a>(
+    env: Env<'a>,
+    diagnostic: &StaticReferenceEpochDiagnostic,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            encode_static_reference_mode(env, diagnostic.mode),
+            (diagnostic.epoch_index as u64).encode(env),
+            diagnostic.used_satellites.encode(env),
+            (diagnostic.rejected_satellite_count as u64).encode(env),
+            option_f64_term(env, diagnostic.code_residual_rms_m),
+            option_f64_term(env, diagnostic.phase_residual_rms_m),
+            option_f64_term(env, diagnostic.residual_rms_m),
+        ],
+    )
+}
+
+fn encode_static_reference_mode_report<'a>(
+    env: Env<'a>,
+    report: &StaticReferenceModeReport,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            encode_static_reference_mode(env, report.mode),
+            encode_static_reference_mode_status(env, report.status),
+            (report.used_epochs as u64).encode(env),
+            (report.skipped_epochs as u64).encode(env),
+            (report.used_measurements as u64).encode(env),
+            match &report.error {
+                Some(error) => encode_static_reference_mode_error(env, error),
+                None => atom::nil().encode(env),
+            },
+        ],
+    )
+}
+
+fn encode_static_reference_geodetic<'a>(
+    env: Env<'a>,
+    geodetic: Option<sidereon_core::frame::Wgs84Geodetic>,
+) -> Term<'a> {
+    match geodetic {
+        Some(geodetic) => (geodetic.lat_rad, geodetic.lon_rad, geodetic.height_m).encode(env),
+        None => atom::nil().encode(env),
+    }
+}
+
+fn encode_static_reference_mode<'a>(env: Env<'a>, mode: StaticReferenceStationMode) -> Term<'a> {
+    atom_from(
+        env,
+        match mode {
+            StaticReferenceStationMode::CodeDgnss => "code_dgnss",
+            StaticReferenceStationMode::CarrierFloat => "carrier_float",
+            StaticReferenceStationMode::CarrierFixed => "carrier_fixed",
+        },
+    )
+}
+
+fn encode_static_reference_fix_status<'a>(
+    env: Env<'a>,
+    status: StaticReferenceFixStatus,
+) -> Term<'a> {
+    atom_from(
+        env,
+        match status {
+            StaticReferenceFixStatus::CodeDgnss => "code_dgnss",
+            StaticReferenceFixStatus::CarrierFloat => "carrier_float",
+            StaticReferenceFixStatus::CarrierFixed => "carrier_fixed",
+        },
+    )
+}
+
+fn encode_static_reference_mode_status<'a>(
+    env: Env<'a>,
+    status: StaticReferenceModeStatus,
+) -> Term<'a> {
+    atom_from(
+        env,
+        match status {
+            StaticReferenceModeStatus::Solved => "solved",
+            StaticReferenceModeStatus::Failed => "failed",
+        },
+    )
+}
+
+fn encode_static_reference_station_error<'a>(
+    env: Env<'a>,
+    error: StaticReferenceStationError,
+) -> Term<'a> {
+    match error {
+        StaticReferenceStationError::InvalidInput { field, reason } => {
+            (atom_from(env, "invalid_input"), field, reason).encode(env)
+        }
+        StaticReferenceStationError::NoEnabledModes => atom_from(env, "no_enabled_modes"),
+        StaticReferenceStationError::AllModesFailed { mode_reports } => {
+            let reports: Vec<Term<'a>> = mode_reports
+                .iter()
+                .map(|report| encode_static_reference_mode_report(env, report))
+                .collect();
+            (atom_from(env, "all_modes_failed"), reports).encode(env)
+        }
+    }
+}
+
+fn encode_static_reference_mode_error<'a>(
+    env: Env<'a>,
+    error: &StaticReferenceModeError,
+) -> Term<'a> {
+    match error {
+        StaticReferenceModeError::RinexAssembly { side, reason } => {
+            (atom_from(env, "rinex_assembly"), *side, reason).encode(env)
+        }
+        StaticReferenceModeError::NoMatchedCodeEpochs => atom_from(env, "no_matched_code_epochs"),
+        StaticReferenceModeError::CodeDgnss { reason } => {
+            (atom_from(env, "code_dgnss"), reason).encode(env)
+        }
+        StaticReferenceModeError::StaticSolve { reason } => {
+            (atom_from(env, "static_solve"), reason).encode(env)
+        }
+        StaticReferenceModeError::CarrierArc { reason } => {
+            (atom_from(env, "carrier_arc"), reason).encode(env)
+        }
+        StaticReferenceModeError::CarrierSolve { reason } => {
+            (atom_from(env, "carrier_solve"), reason).encode(env)
+        }
+        StaticReferenceModeError::Frame { field, reason } => {
+            (atom_from(env, "frame"), *field, reason).encode(env)
+        }
+        StaticReferenceModeError::CorrectedObservation { reason } => {
+            (atom_from(env, "corrected_observation"), reason).encode(env)
+        }
+        StaticReferenceModeError::InvalidCorrectedSatelliteId { satellite_id } => (
+            atom_from(env, "invalid_corrected_satellite_id"),
+            satellite_id,
+        )
+            .encode(env),
+    }
 }
 
 fn encode_static_arc_error<'a>(env: Env<'a>, error: RtkStaticArcError) -> Term<'a> {
