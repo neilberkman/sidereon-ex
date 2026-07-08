@@ -265,9 +265,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.8.2"
+version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "miniz_oxide"
@@ -522,9 +522,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65b85636dc2d4e98095a3e4bfcf0508b1dd24ee43f3d255bd95c89ad9a8b3dec"
+checksum = "46644abb0a7c5323255f2146b07b4d4c1b71b9beb063a3455827f136d31aa190"
 dependencies = [
  "flate2",
  "sidereon-core",
@@ -532,9 +532,9 @@ dependencies = [
 
 [[package]]
 name = "sidereon-core"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1484bfffb88a996e768d7ccb953a0e7439874f796de6ba5826bc42904d7e23ad"
+checksum = "68a61425346b59870313c259b0abab59602e5d71fedfb057f2164ffd248c38a6"
 dependencies = [
  "cc",
  "libm",
@@ -758,3 +758,11 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "sidereon"
+version = "0.21.0"
+
+[[patch.unused]]
+name = "sidereon-core"
+version = "0.21.0"

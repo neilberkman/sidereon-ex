@@ -414,10 +414,16 @@ defmodule Sidereon.GNSS.SP3 do
     * `:combine`: `:mean` (default), `:median`, or `:precedence`
     * `:epoch_interval_s`: require this target epoch interval, seconds
     * `:systems`: restrict output to systems such as `[:gps]` or `["G", "E"]`
+    * `:asserted_frame_label_sets`: coordinate-label sets the caller asserts
+      are equivalent without frame math
+    * `:helmert`: enable catalog Helmert reconciliation for known ITRF/IGS
+      labels
   """
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
-    with {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])) do
+    with {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])),
+         {:ok, asserted_frame_label_sets} <-
+           normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])) do
       handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
       position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
       clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
@@ -425,6 +431,7 @@ defmodule Sidereon.GNSS.SP3 do
       clock_min_common = Keyword.get(opts, :clock_min_common, 5)
       combine = opts |> Keyword.get(:combine, :mean) |> to_string()
       epoch_interval_s = Keyword.get(opts, :epoch_interval_s)
+      helmert = Keyword.get(opts, :helmert, false)
 
       case NIF.sp3_merge(
              handles,
@@ -434,11 +441,14 @@ defmodule Sidereon.GNSS.SP3 do
              clock_min_common,
              combine,
              epoch_interval_s,
-             system_letters
+             system_letters,
+             asserted_frame_label_sets,
+             helmert
            ) do
-        {handle, {quarantined, single_source, position_outliers, agreement}}
+        {handle, {quarantined, single_source, position_outliers, {frame_reconciliations, agreement}}}
         when is_reference(handle) ->
           report = %{
+            frame_reconciliations: Enum.map(frame_reconciliations, &to_frame_reconciliation/1),
             quarantined: Enum.map(quarantined, &to_flag/1),
             single_source: Enum.map(single_source, &to_flag/1),
             position_outliers: Enum.map(position_outliers, &to_flag/1),
@@ -561,6 +571,48 @@ defmodule Sidereon.GNSS.SP3 do
     %{satellite: satellite, jd_whole: jd_whole, jd_fraction: jd_fraction, sources: sources}
   end
 
+  defp to_frame_reconciliation(
+         {{source_index, source_label, target_label, method}, {asserted_label_set, {source_frame, target_frame}},
+          {{catalog_source_frame, catalog_target_frame, catalog_inverse}, reference_epoch_year, parameters},
+          {rates, provenance, epoch_year_span, {records_affected, identity}}}
+       ) do
+    %{
+      source_index: source_index,
+      source_label: source_label,
+      target_label: target_label,
+      method: String.to_atom(method),
+      asserted_label_set: asserted_label_set,
+      source_frame: source_frame,
+      target_frame: target_frame,
+      catalog_source_frame: catalog_source_frame,
+      catalog_target_frame: catalog_target_frame,
+      catalog_inverse: catalog_inverse,
+      reference_epoch_year: reference_epoch_year,
+      parameters: helmert_parameters(parameters),
+      rates: helmert_rates(rates),
+      provenance: provenance,
+      epoch_year_span: epoch_year_span,
+      records_affected: records_affected,
+      identity: identity
+    }
+  end
+
+  defp helmert_parameters(nil), do: nil
+
+  defp helmert_parameters({translation_mm, scale_ppb, rotation_mas}) do
+    %{translation_mm: translation_mm, scale_ppb: scale_ppb, rotation_mas: rotation_mas}
+  end
+
+  defp helmert_rates(nil), do: nil
+
+  defp helmert_rates({translation_mm_per_year, scale_ppb_per_year, rotation_mas_per_year}) do
+    %{
+      translation_mm_per_year: translation_mm_per_year,
+      scale_ppb_per_year: scale_ppb_per_year,
+      rotation_mas_per_year: rotation_mas_per_year
+    }
+  end
+
   defp to_agreement({aggregate, per_cell, per_epoch}) do
     {position_rms_m, position_max_m, clock_rms_s, clock_max_s} = aggregate
 
@@ -608,6 +660,51 @@ defmodule Sidereon.GNSS.SP3 do
   defp attach_coverage({:ok, %__MODULE__{handle: handle} = sp3, report}) do
     with {:ok, {coverage_start, coverage_end}} <- coverage_from_bytes(NIF.sp3_to_iodata(handle)) do
       {:ok, %{sp3 | coverage_start: coverage_start, coverage_end: coverage_end}, report}
+    end
+  end
+
+  defp normalize_asserted_frame_label_sets(nil), do: {:ok, []}
+
+  defp normalize_asserted_frame_label_sets(label_sets) when is_list(label_sets) do
+    label_sets
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {labels, index}, {:ok, acc} ->
+      cond do
+        not is_list(labels) ->
+          {:halt, {:error, {:invalid_frame_label_set, index, labels}}}
+
+        length(labels) < 2 ->
+          {:halt, {:error, {:invalid_frame_label_set, index, labels}}}
+
+        true ->
+          case normalize_frame_labels(labels, index) do
+            {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+            {:error, _} = err -> {:halt, err}
+          end
+      end
+    end)
+    |> case do
+      {:ok, sets} -> {:ok, Enum.reverse(sets)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_asserted_frame_label_sets(value), do: {:error, {:invalid_frame_label_sets, value}}
+
+  defp normalize_frame_labels(labels, index) do
+    labels
+    |> Enum.reduce_while({:ok, []}, fn label, {:ok, acc} ->
+      normalized = label |> to_string() |> String.trim()
+
+      if normalized == "" do
+        {:halt, {:error, {:invalid_frame_label_set, index, labels}}}
+      else
+        {:cont, {:ok, [normalized | acc]}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _} = err -> err
     end
   end
 

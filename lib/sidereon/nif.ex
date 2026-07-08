@@ -947,7 +947,9 @@ defmodule Sidereon.NIF do
         _clock_min_common,
         _combine,
         _target_epoch_interval_s,
-        _system_letters
+        _system_letters,
+        _asserted_frame_label_sets,
+        _helmert_frame_reconciliation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)

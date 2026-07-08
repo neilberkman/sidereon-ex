@@ -83,6 +83,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     ]
     defstruct [
       :position,
+      :position_covariance,
+      :formal_position_covariance,
       :rx_clock_s,
       :rx_clock_m,
       :ambiguities_m,
@@ -130,6 +132,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     ]
     defstruct [
       :position,
+      :position_covariance,
+      :formal_position_covariance,
       :epoch_clocks,
       :ambiguities_m,
       :ztd_residual_m,
@@ -156,8 +160,12 @@ defmodule Sidereon.GNSS.PrecisePositioning do
             optional(:phase_weight) => float()
           }
 
+    @type covariance :: %{ecef_m2: [[float()]], enu_m2: [[float()]]}
+
     @type t :: %__MODULE__{
             position: position(),
+            position_covariance: covariance(),
+            formal_position_covariance: covariance(),
             epoch_clocks: [epoch_clock()],
             ambiguities_m: %{String.t() => float()},
             ztd_residual_m: float() | nil,
@@ -531,7 +539,13 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            Map.fetch!(solution.metadata, :status),
            Map.fetch!(solution.metadata, :code_rms_m),
            Map.fetch!(solution.metadata, :phase_rms_m),
-           Map.fetch!(solution.metadata, :weighted_rms_m)
+           Map.fetch!(solution.metadata, :weighted_rms_m),
+           {
+             {solution.position_covariance.ecef_m2, solution.position_covariance.enu_m2},
+             {solution.formal_position_covariance.ecef_m2, solution.formal_position_covariance.enu_m2},
+             Map.fetch!(solution.metadata, :posterior_variance_factor),
+             Map.fetch!(solution.metadata, :position_covariance_scale_factor)
+           }
          }
        }}
     end
@@ -631,7 +645,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp core_multi_solution(
          {position, clocks_m, ambiguities, ztd, residuals, used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m}},
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
+           {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu}, posterior_variance_factor,
+            position_covariance_scale_factor}}},
          epochs,
          tropo
        ) do
@@ -640,6 +656,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
     %MultiEpochSolution{
       position: %{x_m: x, y_m: y, z_m: z},
+      position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
+      formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
       epoch_clocks:
         epochs
         |> Enum.map(& &1.epoch)
@@ -675,6 +693,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         code_rms_m: code_rms_m,
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
+        posterior_variance_factor: posterior_variance_factor,
+        position_covariance_scale_factor: position_covariance_scale_factor,
         troposphere_applied: tropo.enabled?,
         ztd_estimated: tropo.estimate_ztd?
       }
@@ -683,7 +703,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp core_single_solution(
          {position, [clock_m], ambiguities, _ztd, residuals, _used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m}},
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
+           {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu}, posterior_variance_factor,
+            position_covariance_scale_factor}}},
          obs,
          tropo
        ) do
@@ -691,6 +713,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
     %Solution{
       position: %{x_m: x, y_m: y, z_m: z},
+      position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
+      formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
       rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
       rx_clock_m: clock_m,
       ambiguities_m: Map.new(ambiguities),
@@ -706,7 +730,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         code_rms_m: code_rms_m,
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
-        troposphere_applied: tropo.enabled?
+        troposphere_applied: tropo.enabled?,
+        posterior_variance_factor: posterior_variance_factor,
+        position_covariance_scale_factor: position_covariance_scale_factor
       }
     }
   end

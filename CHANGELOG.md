@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0]
+
+### Added
+
+- Static PPP posterior position covariance (ECEF and ENU) on float and fixed
+  solutions, with the posterior variance factor and applied scale factor.
+- SP3 multi-center merge coordinate-label reconciliation (asserted equivalence
+  and catalog Helmert), with merge-report audit fields.
+
+### Changed
+
+- Static PPP eliminates per-epoch receiver clocks for tractable day-length arcs,
+  and scales result covariance by the posterior residual variance factor.
+
 ## [0.21.0]
 
 ### Added

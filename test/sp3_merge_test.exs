@@ -145,7 +145,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert report.quarantined == []
     end
 
-    test "rejects differently labeled frames unless an exact transform is applied" do
+    test "rejects differently labeled frames unless reconciliation is explicitly enabled" do
       {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS20"))
       {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGc20"))
 
@@ -158,6 +158,59 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS20"))
 
       assert {:error, _} = SP3.merge([a, b])
+    end
+
+    test "asserted frame equivalence merges and reports no math" do
+      {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS14"))
+      {:ok, b} = SP3.parse(sp3_bytes([{"G02", [16_000.0, -21_000.0, 6000.0], 200.0}], "ITRF2"))
+
+      assert {:ok, merged, report} =
+               SP3.merge([a, b],
+                 asserted_frame_label_sets: [["IGS14", "ITRF2"]],
+                 min_agree: 1
+               )
+
+      assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02"]
+
+      assert [
+               %{
+                 method: :asserted_equivalence,
+                 source_index: 1,
+                 source_label: "ITRF2",
+                 target_label: "IGS14",
+                 asserted_label_set: ["IGS14", "ITRF2"],
+                 parameters: nil,
+                 rates: nil,
+                 records_affected: 1
+               }
+             ] = report.frame_reconciliations
+    end
+
+    test "Helmert frame reconciliation reports published table values" do
+      {:ok, a} = SP3.parse(sp3_bytes([{"G01", [14_000.0, -19_000.0, 4000.0], 100.0}], "IGS14"))
+      {:ok, b} = SP3.parse(sp3_bytes([{"G02", [15_000.0, -20_000.0, 5000.0], 200.0}], "IGS20"))
+
+      assert {:ok, merged, report} = SP3.merge([a, b], helmert: true, min_agree: 1)
+      assert {:ok, state} = SP3.state(merged, "G02", 0)
+      assert_in_delta state.x_m, 14_999_999.992_3, 1.0e-6
+      assert_in_delta state.y_m, -19_999_999.993_048_087, 1.0e-6
+      assert_in_delta state.z_m, 5_000_000.000_396_175, 1.0e-6
+
+      assert [
+               %{
+                 method: :helmert,
+                 source_frame: "ITRF2020",
+                 target_frame: "ITRF2014",
+                 catalog_source_frame: "ITRF2020",
+                 catalog_target_frame: "ITRF2014",
+                 catalog_inverse: false,
+                 records_affected: 1
+               } = reconciliation
+             ] = report.frame_reconciliations
+
+      assert reconciliation.parameters.translation_mm == [-1.4, -0.9, 1.4]
+      assert reconciliation.parameters.scale_ppb == -0.42
+      assert reconciliation.rates.translation_mm_per_year == [0.0, -0.1, 0.2]
     end
 
     test "decimates mixed epoch intervals onto a common grid, rejecting non-divisible ones" do
