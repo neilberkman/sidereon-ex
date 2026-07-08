@@ -12,9 +12,10 @@
 use rustler::{Encoder, Env, Error, NifResult, OwnedBinary, Term};
 use sidereon_core::rtcm::{
     self, derive_lli, minimum_lock_time_ms, msm_epoch_dt_ms, msm_signal_rinex_code,
-    AntennaDescriptor, CellLli, FrameSkip, FrameSkipReason, GlonassEphemeris, GpsEphemeris,
-    LockTimeTracker, Message, MsmHeader, MsmKind, MsmMessage, MsmSatellite, MsmSignal,
-    PreviousLock, StationCoordinates, UnsupportedMessage, LLI_HALF_CYCLE, LLI_LOSS_OF_LOCK,
+    AntennaDescriptor, BeidouEphemeris, CellLli, FrameSkip, FrameSkipReason, GalileoFnavEphemeris,
+    GalileoInavEphemeris, GlonassEphemeris, GpsEphemeris, LockTimeTracker, Message, MsmHeader,
+    MsmKind, MsmMessage, MsmSatellite, MsmSignal, PreviousLock, QzssEphemeris, StationCoordinates,
+    UnsupportedMessage, LLI_HALF_CYCLE, LLI_LOSS_OF_LOCK,
 };
 use sidereon_core::GnssSystem;
 
@@ -26,6 +27,10 @@ mod atoms {
         antenna_descriptor,
         gps_ephemeris,
         glonass_ephemeris,
+        beidou_ephemeris,
+        qzss_ephemeris,
+        galileo_fnav_ephemeris,
+        galileo_inav_ephemeris,
         msm,
         ssr,
         unsupported,
@@ -174,6 +179,282 @@ impl From<GpsEphemeris> for GpsEphemerisFields {
             t_gd: e.t_gd as i64,
             sv_health: e.sv_health as i64,
             l2_p_data_flag: e.l2_p_data_flag,
+            fit_interval: e.fit_interval,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct GalileoFnavEphemerisFields {
+    satellite_id: i64,
+    week_number: i64,
+    iod_nav: i64,
+    sisa: i64,
+    idot: i64,
+    t_oc: i64,
+    a_f2: i64,
+    a_f1: i64,
+    a_f0: i64,
+    c_rs: i64,
+    delta_n: i64,
+    m0: i64,
+    c_uc: i64,
+    eccentricity: i64,
+    c_us: i64,
+    sqrt_a: i64,
+    t_oe: i64,
+    c_ic: i64,
+    omega0: i64,
+    c_is: i64,
+    i0: i64,
+    c_rc: i64,
+    omega: i64,
+    omega_dot: i64,
+    bgd_e5a_e1: i64,
+    e5a_signal_health: i64,
+    e5a_data_validity: bool,
+    reserved: i64,
+}
+
+impl From<GalileoFnavEphemeris> for GalileoFnavEphemerisFields {
+    fn from(e: GalileoFnavEphemeris) -> Self {
+        Self {
+            satellite_id: e.satellite_id as i64,
+            week_number: e.week_number as i64,
+            iod_nav: e.iod_nav as i64,
+            sisa: e.sisa as i64,
+            idot: e.idot as i64,
+            t_oc: e.t_oc as i64,
+            a_f2: e.a_f2 as i64,
+            a_f1: e.a_f1 as i64,
+            a_f0: e.a_f0,
+            c_rs: e.c_rs as i64,
+            delta_n: e.delta_n as i64,
+            m0: e.m0,
+            c_uc: e.c_uc as i64,
+            eccentricity: e.eccentricity as i64,
+            c_us: e.c_us as i64,
+            sqrt_a: e.sqrt_a as i64,
+            t_oe: e.t_oe as i64,
+            c_ic: e.c_ic as i64,
+            omega0: e.omega0,
+            c_is: e.c_is as i64,
+            i0: e.i0,
+            c_rc: e.c_rc as i64,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i64,
+            bgd_e5a_e1: e.bgd_e5a_e1 as i64,
+            e5a_signal_health: e.e5a_signal_health as i64,
+            e5a_data_validity: e.e5a_data_validity,
+            reserved: e.reserved as i64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct GalileoInavEphemerisFields {
+    satellite_id: i64,
+    week_number: i64,
+    iod_nav: i64,
+    sisa_index: i64,
+    idot: i64,
+    t_oc: i64,
+    a_f2: i64,
+    a_f1: i64,
+    a_f0: i64,
+    c_rs: i64,
+    delta_n: i64,
+    m0: i64,
+    c_uc: i64,
+    eccentricity: i64,
+    c_us: i64,
+    sqrt_a: i64,
+    t_oe: i64,
+    c_ic: i64,
+    omega0: i64,
+    c_is: i64,
+    i0: i64,
+    c_rc: i64,
+    omega: i64,
+    omega_dot: i64,
+    bgd_e5a_e1: i64,
+    bgd_e5b_e1: i64,
+    e5b_signal_health: i64,
+    e5b_data_validity: bool,
+    e1b_signal_health: i64,
+    e1b_data_validity: bool,
+    reserved: i64,
+}
+
+impl From<GalileoInavEphemeris> for GalileoInavEphemerisFields {
+    fn from(e: GalileoInavEphemeris) -> Self {
+        Self {
+            satellite_id: e.satellite_id as i64,
+            week_number: e.week_number as i64,
+            iod_nav: e.iod_nav as i64,
+            sisa_index: e.sisa_index as i64,
+            idot: e.idot as i64,
+            t_oc: e.t_oc as i64,
+            a_f2: e.a_f2 as i64,
+            a_f1: e.a_f1 as i64,
+            a_f0: e.a_f0,
+            c_rs: e.c_rs as i64,
+            delta_n: e.delta_n as i64,
+            m0: e.m0,
+            c_uc: e.c_uc as i64,
+            eccentricity: e.eccentricity as i64,
+            c_us: e.c_us as i64,
+            sqrt_a: e.sqrt_a as i64,
+            t_oe: e.t_oe as i64,
+            c_ic: e.c_ic as i64,
+            omega0: e.omega0,
+            c_is: e.c_is as i64,
+            i0: e.i0,
+            c_rc: e.c_rc as i64,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i64,
+            bgd_e5a_e1: e.bgd_e5a_e1 as i64,
+            bgd_e5b_e1: e.bgd_e5b_e1 as i64,
+            e5b_signal_health: e.e5b_signal_health as i64,
+            e5b_data_validity: e.e5b_data_validity,
+            e1b_signal_health: e.e1b_signal_health as i64,
+            e1b_data_validity: e.e1b_data_validity,
+            reserved: e.reserved as i64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct BeidouEphemerisFields {
+    satellite_id: i64,
+    week_number: i64,
+    sv_urai: i64,
+    idot: i64,
+    aode: i64,
+    t_oc: i64,
+    a_f2: i64,
+    a_f1: i64,
+    a_f0: i64,
+    aodc: i64,
+    c_rs: i64,
+    delta_n: i64,
+    m0: i64,
+    c_uc: i64,
+    eccentricity: i64,
+    c_us: i64,
+    sqrt_a: i64,
+    t_oe: i64,
+    c_ic: i64,
+    omega0: i64,
+    c_is: i64,
+    i0: i64,
+    c_rc: i64,
+    omega: i64,
+    omega_dot: i64,
+    t_gd1: i64,
+    t_gd2: i64,
+    sv_health: bool,
+}
+
+impl From<BeidouEphemeris> for BeidouEphemerisFields {
+    fn from(e: BeidouEphemeris) -> Self {
+        Self {
+            satellite_id: e.satellite_id as i64,
+            week_number: e.week_number as i64,
+            sv_urai: e.sv_urai as i64,
+            idot: e.idot as i64,
+            aode: e.aode as i64,
+            t_oc: e.t_oc as i64,
+            a_f2: e.a_f2 as i64,
+            a_f1: e.a_f1 as i64,
+            a_f0: e.a_f0 as i64,
+            aodc: e.aodc as i64,
+            c_rs: e.c_rs as i64,
+            delta_n: e.delta_n as i64,
+            m0: e.m0,
+            c_uc: e.c_uc as i64,
+            eccentricity: e.eccentricity as i64,
+            c_us: e.c_us as i64,
+            sqrt_a: e.sqrt_a as i64,
+            t_oe: e.t_oe as i64,
+            c_ic: e.c_ic as i64,
+            omega0: e.omega0,
+            c_is: e.c_is as i64,
+            i0: e.i0,
+            c_rc: e.c_rc as i64,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i64,
+            t_gd1: e.t_gd1 as i64,
+            t_gd2: e.t_gd2 as i64,
+            sv_health: e.sv_health,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct QzssEphemerisFields {
+    satellite_id: i64,
+    t_oc: i64,
+    a_f2: i64,
+    a_f1: i64,
+    a_f0: i64,
+    iode: i64,
+    c_rs: i64,
+    delta_n: i64,
+    m0: i64,
+    c_uc: i64,
+    eccentricity: i64,
+    c_us: i64,
+    sqrt_a: i64,
+    t_oe: i64,
+    c_ic: i64,
+    omega0: i64,
+    c_is: i64,
+    i0: i64,
+    c_rc: i64,
+    omega: i64,
+    omega_dot: i64,
+    idot: i64,
+    codes_on_l2: i64,
+    week_number: i64,
+    ura: i64,
+    sv_health: i64,
+    t_gd: i64,
+    iodc: i64,
+    fit_interval: bool,
+}
+
+impl From<QzssEphemeris> for QzssEphemerisFields {
+    fn from(e: QzssEphemeris) -> Self {
+        Self {
+            satellite_id: e.satellite_id as i64,
+            t_oc: e.t_oc as i64,
+            a_f2: e.a_f2 as i64,
+            a_f1: e.a_f1 as i64,
+            a_f0: e.a_f0 as i64,
+            iode: e.iode as i64,
+            c_rs: e.c_rs as i64,
+            delta_n: e.delta_n as i64,
+            m0: e.m0,
+            c_uc: e.c_uc as i64,
+            eccentricity: e.eccentricity as i64,
+            c_us: e.c_us as i64,
+            sqrt_a: e.sqrt_a as i64,
+            t_oe: e.t_oe as i64,
+            c_ic: e.c_ic as i64,
+            omega0: e.omega0,
+            c_is: e.c_is as i64,
+            i0: e.i0,
+            c_rc: e.c_rc as i64,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i64,
+            idot: e.idot as i64,
+            codes_on_l2: e.codes_on_l2 as i64,
+            week_number: e.week_number as i64,
+            ura: e.ura as i64,
+            sv_health: e.sv_health as i64,
+            t_gd: e.t_gd as i64,
+            iodc: e.iodc as i64,
             fit_interval: e.fit_interval,
         }
     }
@@ -542,6 +823,150 @@ impl From<GpsEphemerisFields> for GpsEphemeris {
     }
 }
 
+impl From<GalileoFnavEphemerisFields> for GalileoFnavEphemeris {
+    fn from(e: GalileoFnavEphemerisFields) -> Self {
+        Self {
+            satellite_id: e.satellite_id as u8,
+            week_number: e.week_number as u16,
+            iod_nav: e.iod_nav as u16,
+            sisa: e.sisa as u8,
+            idot: e.idot as i32,
+            t_oc: e.t_oc as u16,
+            a_f2: e.a_f2 as i16,
+            a_f1: e.a_f1 as i32,
+            a_f0: e.a_f0,
+            c_rs: e.c_rs as i32,
+            delta_n: e.delta_n as i32,
+            m0: e.m0,
+            c_uc: e.c_uc as i32,
+            eccentricity: e.eccentricity as u64,
+            c_us: e.c_us as i32,
+            sqrt_a: e.sqrt_a as u64,
+            t_oe: e.t_oe as u16,
+            c_ic: e.c_ic as i32,
+            omega0: e.omega0,
+            c_is: e.c_is as i32,
+            i0: e.i0,
+            c_rc: e.c_rc as i32,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i32,
+            bgd_e5a_e1: e.bgd_e5a_e1 as i16,
+            e5a_signal_health: e.e5a_signal_health as u8,
+            e5a_data_validity: e.e5a_data_validity,
+            reserved: e.reserved as u8,
+        }
+    }
+}
+
+impl From<GalileoInavEphemerisFields> for GalileoInavEphemeris {
+    fn from(e: GalileoInavEphemerisFields) -> Self {
+        Self {
+            satellite_id: e.satellite_id as u8,
+            week_number: e.week_number as u16,
+            iod_nav: e.iod_nav as u16,
+            sisa_index: e.sisa_index as u8,
+            idot: e.idot as i32,
+            t_oc: e.t_oc as u16,
+            a_f2: e.a_f2 as i16,
+            a_f1: e.a_f1 as i32,
+            a_f0: e.a_f0,
+            c_rs: e.c_rs as i32,
+            delta_n: e.delta_n as i32,
+            m0: e.m0,
+            c_uc: e.c_uc as i32,
+            eccentricity: e.eccentricity as u64,
+            c_us: e.c_us as i32,
+            sqrt_a: e.sqrt_a as u64,
+            t_oe: e.t_oe as u16,
+            c_ic: e.c_ic as i32,
+            omega0: e.omega0,
+            c_is: e.c_is as i32,
+            i0: e.i0,
+            c_rc: e.c_rc as i32,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i32,
+            bgd_e5a_e1: e.bgd_e5a_e1 as i16,
+            bgd_e5b_e1: e.bgd_e5b_e1 as i16,
+            e5b_signal_health: e.e5b_signal_health as u8,
+            e5b_data_validity: e.e5b_data_validity,
+            e1b_signal_health: e.e1b_signal_health as u8,
+            e1b_data_validity: e.e1b_data_validity,
+            reserved: e.reserved as u8,
+        }
+    }
+}
+
+impl From<BeidouEphemerisFields> for BeidouEphemeris {
+    fn from(e: BeidouEphemerisFields) -> Self {
+        Self {
+            satellite_id: e.satellite_id as u8,
+            week_number: e.week_number as u16,
+            sv_urai: e.sv_urai as u8,
+            idot: e.idot as i32,
+            aode: e.aode as u8,
+            t_oc: e.t_oc as u32,
+            a_f2: e.a_f2 as i16,
+            a_f1: e.a_f1 as i32,
+            a_f0: e.a_f0 as i32,
+            aodc: e.aodc as u8,
+            c_rs: e.c_rs as i32,
+            delta_n: e.delta_n as i32,
+            m0: e.m0,
+            c_uc: e.c_uc as i32,
+            eccentricity: e.eccentricity as u64,
+            c_us: e.c_us as i32,
+            sqrt_a: e.sqrt_a as u64,
+            t_oe: e.t_oe as u32,
+            c_ic: e.c_ic as i32,
+            omega0: e.omega0,
+            c_is: e.c_is as i32,
+            i0: e.i0,
+            c_rc: e.c_rc as i32,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i32,
+            t_gd1: e.t_gd1 as i16,
+            t_gd2: e.t_gd2 as i16,
+            sv_health: e.sv_health,
+        }
+    }
+}
+
+impl From<QzssEphemerisFields> for QzssEphemeris {
+    fn from(e: QzssEphemerisFields) -> Self {
+        Self {
+            satellite_id: e.satellite_id as u8,
+            t_oc: e.t_oc as u16,
+            a_f2: e.a_f2 as i16,
+            a_f1: e.a_f1 as i32,
+            a_f0: e.a_f0 as i32,
+            iode: e.iode as u8,
+            c_rs: e.c_rs as i32,
+            delta_n: e.delta_n as i32,
+            m0: e.m0,
+            c_uc: e.c_uc as i32,
+            eccentricity: e.eccentricity as u64,
+            c_us: e.c_us as i32,
+            sqrt_a: e.sqrt_a as u64,
+            t_oe: e.t_oe as u16,
+            c_ic: e.c_ic as i32,
+            omega0: e.omega0,
+            c_is: e.c_is as i32,
+            i0: e.i0,
+            c_rc: e.c_rc as i32,
+            omega: e.omega,
+            omega_dot: e.omega_dot as i32,
+            idot: e.idot as i32,
+            codes_on_l2: e.codes_on_l2 as u8,
+            week_number: e.week_number as u16,
+            ura: e.ura as u8,
+            sv_health: e.sv_health as u8,
+            t_gd: e.t_gd as i16,
+            iodc: e.iodc as u16,
+            fit_interval: e.fit_interval,
+        }
+    }
+}
+
 impl From<GlonassEphemerisFields> for GlonassEphemeris {
     fn from(e: GlonassEphemerisFields) -> Self {
         Self {
@@ -668,6 +1093,16 @@ pub(crate) fn build_message(kind: &str, fields: Term<'_>) -> NifResult<Message> 
         "glonass_ephemeris" => {
             Message::GlonassEphemeris(fields.decode::<GlonassEphemerisFields>()?.into())
         }
+        "beidou_ephemeris" => {
+            Message::BeidouEphemeris(fields.decode::<BeidouEphemerisFields>()?.into())
+        }
+        "qzss_ephemeris" => Message::QzssEphemeris(fields.decode::<QzssEphemerisFields>()?.into()),
+        "galileo_fnav_ephemeris" => {
+            Message::GalileoFnavEphemeris(fields.decode::<GalileoFnavEphemerisFields>()?.into())
+        }
+        "galileo_inav_ephemeris" => {
+            Message::GalileoInavEphemeris(fields.decode::<GalileoInavEphemerisFields>()?.into())
+        }
         "msm" => Message::Msm(build_msm(fields.decode::<MsmMessageFields>()?)?),
         "ssr" => build_ssr(fields.decode::<SsrFields>()?)?,
         "unsupported" => {
@@ -701,6 +1136,22 @@ pub(crate) fn encode_message<'a>(env: Env<'a>, message: Message) -> Term<'a> {
         Message::GlonassEphemeris(e) => {
             (atoms::glonass_ephemeris(), GlonassEphemerisFields::from(e)).encode(env)
         }
+        Message::BeidouEphemeris(e) => {
+            (atoms::beidou_ephemeris(), BeidouEphemerisFields::from(e)).encode(env)
+        }
+        Message::QzssEphemeris(e) => {
+            (atoms::qzss_ephemeris(), QzssEphemerisFields::from(e)).encode(env)
+        }
+        Message::GalileoFnavEphemeris(e) => (
+            atoms::galileo_fnav_ephemeris(),
+            GalileoFnavEphemerisFields::from(e),
+        )
+            .encode(env),
+        Message::GalileoInavEphemeris(e) => (
+            atoms::galileo_inav_ephemeris(),
+            GalileoInavEphemerisFields::from(e),
+        )
+            .encode(env),
         Message::Ssr(s) => (
             atoms::ssr(),
             SsrFields {

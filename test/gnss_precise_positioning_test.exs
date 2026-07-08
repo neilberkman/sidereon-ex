@@ -291,6 +291,40 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
       assert sol.metadata.phase_rms_m < 1.0e-4
     end
 
+    test "multi-epoch arcs expose temporal covariance and troposphere gradients", ctx do
+      assert {:ok, sol} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.tropo_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 estimate_tropo_gradients: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert abs(sol.tropo_gradient_north_m) < 1.0e-4
+      assert abs(sol.tropo_gradient_east_m) < 1.0e-4
+      assert square_matrix?(sol.tropo_gradient_covariance_m2, 2)
+      assert square_matrix?(sol.formal_tropo_gradient_covariance_m2, 2)
+      assert square_matrix?(sol.temporal_position_covariance.ecef_m2, 3)
+      assert square_matrix?(sol.temporal_position_covariance.enu_m2, 3)
+      assert sol.metadata.tropo_gradients_estimated
+      assert sol.metadata.temporal_position_covariance_scale_factor >= 1.0
+      assert sol.metadata.temporal_correlation.nominal_sample_count == 48
+      assert sol.metadata.temporal_correlation.arcs_used > 0
+    end
+
+    test "elevation cutoff reaches the core PPP solver", ctx do
+      assert {:error, {:insufficient_observations_after_elevation_cutoff, 89.0, retained, required}} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 elevation_cutoff_deg: 89.0
+               )
+
+      assert retained < required
+    end
+
     test "can seed a multi-epoch arc from code-only SPP solutions", ctx do
       assert {:ok, sol} =
                PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
@@ -432,20 +466,27 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
                PrecisePositioning.solve_ppp_float(
                  ctx.sp3,
                  ctx.fixed_epoch_observations,
-                 initial_state
+                 initial_state,
+                 estimate_residual_ionosphere: true
                )
 
       assert position_error(float_direct.position, @truth) < 1.0e-3
+      assert map_size(float_direct.residual_ionosphere_m) == length(float_direct.used_sats)
+      assert square_matrix?(float_direct.temporal_position_covariance.ecef_m2, 3)
 
       assert {:ok, %FixedSolution{} = fixed_direct} =
                PrecisePositioning.solve_ppp_fixed(
                  ctx.sp3,
                  ctx.fixed_epoch_observations,
                  float_direct,
-                 ambiguity_wavelength_m: @l1_wavelength_m
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 estimate_residual_ionosphere: true
                )
 
       assert fixed_direct.metadata.integer_status == :fixed
+      assert fixed_direct.float_solution == float_direct
+      assert map_size(fixed_direct.residual_ionosphere_m) == length(fixed_direct.used_sats)
+      assert square_matrix?(fixed_direct.temporal_position_covariance.ecef_m2, 3)
 
       for {sat, cycles} <- true_fixed_cycles(ctx.multi_sats) do
         assert fixed_direct.fixed_ambiguities_cycles[sat] == cycles

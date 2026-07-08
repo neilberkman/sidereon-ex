@@ -24,28 +24,61 @@ type TimeTuple = (i32, i32, i32, i32);
 type DateTimeTuple = (DateTuple, TimeTuple);
 type ObservationTerm = (String, String, f64, f64, f64, f64);
 type EpochTerm = (DateTimeTuple, f64, f64, Vec<ObservationTerm>);
-type InitialStateTerm = (Vec3, Vec<f64>, Vec<(String, f64)>, Option<f64>);
-type CovarianceMatrixTerm = (Vec<Vec<f64>>, Vec<Vec<f64>>);
-// (position_covariance, formal_position_covariance, posterior_variance_factor,
-//  position_covariance_scale_factor); each covariance is (ecef_m2, enu_m2) as
-//  3x3 row lists. This carries the 0.22 float-solution covariance losslessly
-//  across the Elixir round trip so the fixed solve receives the real Q_a.
-type FloatCovarianceTerm = (CovarianceMatrixTerm, CovarianceMatrixTerm, f64, f64);
-type FloatPayloadTerm<'a> = (
+type InitialStateTerm = (
     Vec3,
     Vec<f64>,
     Vec<(String, f64)>,
     Option<f64>,
+    Option<(f64, f64)>,
+    Vec<(String, f64)>,
+);
+type CovarianceMatrixTerm = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+type OptionalMatrixTerm = Option<Vec<Vec<f64>>>;
+type TemporalCorrelationTerm = (f64, f64, Option<f64>, u64, f64, f64, u64);
+// (position_covariance, formal_position_covariance, posterior_variance_factor,
+//  position_covariance_scale_factor, temporal_position_covariance,
+//  temporal_position_covariance_scale_factor, temporal_correlation,
+//  tropo_gradient_covariance_m2, formal_tropo_gradient_covariance_m2).
+// Position covariances are (ecef_m2, enu_m2) 3x3 row lists; gradient
+// covariances are optional north/east 2x2 row lists.
+type FloatCovarianceTerm = (
+    CovarianceMatrixTerm,
+    CovarianceMatrixTerm,
+    (f64, f64),
+    CovarianceMatrixTerm,
+    (f64, TemporalCorrelationTerm),
+    OptionalMatrixTerm,
+    OptionalMatrixTerm,
+);
+type FloatStateExtrasTerm = (
+    Vec<(String, f64)>,
+    Vec<(String, f64)>,
+    Option<f64>,
+    Option<(f64, f64)>,
+);
+type FloatPayloadTerm<'a> = (
+    Vec3,
+    Vec<f64>,
+    FloatStateExtrasTerm,
     Vec<(u64, String, f64, f64, f64, f64)>,
     Vec<String>,
     (u64, bool, Term<'a>, f64, f64, f64, FloatCovarianceTerm),
 );
 type WeightsTerm = (f64, f64, bool);
-type SolveOptionsTerm = (u64, f64, f64, f64, f64);
-// (enabled, estimate_ztd, pressure_hpa, temperature_k, relative_humidity,
-//  vmf1_site_samples | nil). The trailing element selects the tropospheric
-// mapping: `nil` is Niell (the default), `Some([{mjd, ah, aw}, ...])` is VMF1.
-type TropoTerm = (bool, bool, f64, f64, f64, Option<Vec<(f64, f64, f64)>>);
+type SolveOptionsTerm = (u64, f64, f64, f64, f64, Option<f64>, bool);
+// (enabled, estimate_ztd, estimate_tropo_gradients, pressure_hpa,
+//  temperature_k, relative_humidity, vmf1_site_samples | nil). The trailing
+//  element selects the tropospheric mapping: `nil` is Niell (the default),
+//  `Some([{mjd, ah, aw}, ...])` is VMF1.
+type TropoTerm = (
+    bool,
+    bool,
+    bool,
+    f64,
+    f64,
+    f64,
+    Option<Vec<(f64, f64, f64)>>,
+);
 type FixedAmbiguityTerm = (Vec<(String, f64)>, Vec<(String, f64)>, f64);
 type ReceiverFrequencyTerm = (String, Vec3, Vec<(Option<f64>, f64, f64)>);
 type ReceiverAntennaTerm = (String, f64, String, f64, Vec<ReceiverFrequencyTerm>);
@@ -100,6 +133,7 @@ mod atoms {
         invalid_clock_count,
         invalid_solve_option,
         invalid_input,
+        insufficient_observations_after_elevation_cutoff,
         no_epochs,
         code_seed_failed
     }
@@ -143,7 +177,9 @@ pub fn precise_positioning_solve_float<'a>(
                 ppp: core::PppCorrectionLookup::default(),
             },
             opts: decode_solve_options(solve_options),
+            elevation_cutoff_deg: solve_options.5,
             residual_screen: false,
+            estimate_residual_ionosphere: solve_options.6,
         },
     );
     Ok(encode_result(env, result))
@@ -170,7 +206,9 @@ pub fn precise_positioning_solve_ppp_float<'a>(
         tropo: decode_tropo(&tropo)?,
         corrections: direct_range_corrections(&handle, &epochs, initial.position_m, &corrections)?,
         opts: decode_solve_options(solve_options),
+        elevation_cutoff_deg: solve_options.5,
         residual_screen,
+        estimate_residual_ionosphere: solve_options.6,
     };
     Ok(encode_result(
         env,
@@ -204,7 +242,9 @@ pub fn precise_positioning_solve_ppp_fixed<'a>(
             &corrections,
         )?,
         opts: decode_solve_options(solve_options),
+        elevation_cutoff_deg: solve_options.5,
         ambiguity: decode_fixed_ambiguity(ambiguity),
+        estimate_residual_ionosphere: solve_options.6,
     };
     Ok(encode_fixed_result(
         env,
@@ -241,7 +281,9 @@ pub fn precise_positioning_solve_ppp_auto_init_float<'a>(
         tropo: decode_tropo(&tropo)?,
         corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
         opts: decode_solve_options(solve_options),
+        elevation_cutoff_deg: solve_options.5,
         residual_screen,
+        estimate_residual_ionosphere: solve_options.6,
     };
     let result = solve_ppp_auto_init_float(&handle.sp3, &epochs, options, config);
     Ok(match result {
@@ -279,14 +321,18 @@ pub fn precise_positioning_solve_ppp_auto_init_fixed<'a>(
         tropo: decode_tropo(&tropo)?,
         corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
         opts: decode_solve_options(solve_options),
+        elevation_cutoff_deg: solve_options.5,
         residual_screen,
+        estimate_residual_ionosphere: solve_options.6,
     };
     let fixed_config = core::FixedSolveConfig {
         weights: decode_weights(weights),
         tropo: decode_tropo(&tropo)?,
         corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
         opts: decode_solve_options(solve_options),
+        elevation_cutoff_deg: solve_options.5,
         ambiguity: decode_fixed_ambiguity(ambiguity),
+        estimate_residual_ionosphere: solve_options.6,
     };
     let result =
         solve_ppp_auto_init_fixed(&handle.sp3, &epochs, options, float_config, fixed_config);
@@ -450,12 +496,16 @@ fn decode_epoch(epoch: EpochTerm) -> NifResult<core::FloatEpoch> {
 }
 
 fn decode_initial(initial: InitialStateTerm) -> core::FloatState {
-    let (position, clocks_m, ambiguities, ztd_m) = initial;
+    let (position, clocks_m, ambiguities, ztd_m, tropo_gradients, residual_ionosphere) = initial;
+    let (tropo_gradient_north_m, tropo_gradient_east_m) = tropo_gradients.unwrap_or((0.0, 0.0));
     core::FloatState {
         position_m: vec3_to_array(position),
         clocks_m,
         ambiguities_m: ambiguities.into_iter().collect(),
         ztd_m: ztd_m.unwrap_or(0.0),
+        tropo_gradient_north_m,
+        tropo_gradient_east_m,
+        residual_ionosphere_m: residual_ionosphere.into_iter().collect(),
     }
 }
 
@@ -476,12 +526,24 @@ fn lists_to_matrix3(v: &[Vec<f64>]) -> NifResult<[[f64; 3]; 3]> {
     ])
 }
 
+fn matrix2_to_lists(m: [[f64; 2]; 2]) -> Vec<Vec<f64>> {
+    m.iter().map(|row| row.to_vec()).collect()
+}
+
+fn lists_to_matrix2(v: &[Vec<f64>]) -> NifResult<[[f64; 2]; 2]> {
+    if v.len() != 2 || v.iter().any(|row| row.len() != 2) {
+        return Err(Error::Term(Box::new(
+            "expected a 2x2 covariance matrix".to_string(),
+        )));
+    }
+    Ok([[v[0][0], v[0][1]], [v[1][0], v[1][1]]])
+}
+
 fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::FloatSolution> {
     let (
         position,
         epoch_clocks_m,
-        ambiguities_m,
-        ztd_residual_m,
+        (ambiguities_m, residual_ionosphere_m, ztd_residual_m, tropo_gradients),
         residuals_m,
         used_sats,
         (
@@ -494,16 +556,34 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
             (
                 (position_cov_ecef, position_cov_enu),
                 (formal_cov_ecef, formal_cov_enu),
-                posterior_variance_factor,
-                position_covariance_scale_factor,
+                (posterior_variance_factor, position_covariance_scale_factor),
+                (temporal_cov_ecef, temporal_cov_enu),
+                (temporal_position_covariance_scale_factor, temporal_correlation),
+                tropo_gradient_covariance_m2,
+                formal_tropo_gradient_covariance_m2,
             ),
         ),
     ) = term;
+    let (tropo_gradient_north_m, tropo_gradient_east_m) = match tropo_gradients {
+        Some((north, east)) => (Some(north), Some(east)),
+        None => (None, None),
+    };
     Ok(core::FloatSolution {
         position_m: vec3_to_array(position),
         epoch_clocks_m,
         ambiguities_m: ambiguities_m.into_iter().collect(),
+        residual_ionosphere_m: residual_ionosphere_m.into_iter().collect(),
         ztd_residual_m,
+        tropo_gradient_north_m,
+        tropo_gradient_east_m,
+        tropo_gradient_covariance_m2: tropo_gradient_covariance_m2
+            .as_deref()
+            .map(lists_to_matrix2)
+            .transpose()?,
+        formal_tropo_gradient_covariance_m2: formal_tropo_gradient_covariance_m2
+            .as_deref()
+            .map(lists_to_matrix2)
+            .transpose()?,
         residuals_m: residuals_m
             .into_iter()
             .map(
@@ -536,7 +616,25 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
         },
         posterior_variance_factor,
         position_covariance_scale_factor,
+        temporal_position_covariance: core::PositionCovariance {
+            ecef_m2: lists_to_matrix3(&temporal_cov_ecef)?,
+            enu_m2: lists_to_matrix3(&temporal_cov_enu)?,
+        },
+        temporal_position_covariance_scale_factor,
+        temporal_correlation: decode_temporal_correlation(temporal_correlation),
     })
+}
+
+fn decode_temporal_correlation(term: TemporalCorrelationTerm) -> core::TemporalCorrelationSummary {
+    core::TemporalCorrelationSummary {
+        lag1_autocorrelation: term.0,
+        decorrelation_time_epochs: term.1,
+        decorrelation_time_s: term.2,
+        nominal_sample_count: term.3 as usize,
+        effective_sample_count: term.4,
+        variance_inflation_factor: term.5,
+        arcs_used: term.6 as usize,
+    }
 }
 
 fn decode_float_status(status: Term<'_>) -> NifResult<core::FloatStatus> {
@@ -571,9 +669,10 @@ fn decode_tropo(tropo: &TropoTerm) -> NifResult<core::TroposphereOptions> {
     Ok(core::TroposphereOptions {
         enabled: tropo.0,
         estimate_ztd: tropo.1,
-        met: sidereon_core::atmosphere::troposphere::Met::new(tropo.2, tropo.3, tropo.4)
+        estimate_tropo_gradients: tropo.2,
+        met: sidereon_core::atmosphere::troposphere::Met::new(tropo.3, tropo.4, tropo.5)
             .map_err(crate::errors::invalid_input)?,
-        mapping: decode_tropo_mapping(tropo.5.clone())?,
+        mapping: decode_tropo_mapping(tropo.6.clone())?,
     })
 }
 
@@ -756,9 +855,17 @@ fn encode_result<'a>(
 }
 
 fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term<'a> {
+    let covariance_bundle = encode_float_covariance_bundle(&solution);
     let ztd = match solution.ztd_residual_m {
         Some(value) => value.encode(env),
         None => atoms::nil().encode(env),
+    };
+    let tropo_gradients: Term<'a> = match (
+        solution.tropo_gradient_north_m,
+        solution.tropo_gradient_east_m,
+    ) {
+        (Some(north), Some(east)) => (north, east).encode(env),
+        _ => atoms::nil().encode(env),
     };
     let status = encode_float_status(solution.status);
     let residuals: Vec<(u64, String, f64, f64, f64, f64)> = solution
@@ -778,8 +885,15 @@ fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term
     (
         array_to_vec3(solution.position_m),
         solution.epoch_clocks_m,
-        solution.ambiguities_m.into_iter().collect::<Vec<_>>(),
-        ztd,
+        (
+            solution.ambiguities_m.into_iter().collect::<Vec<_>>(),
+            solution
+                .residual_ionosphere_m
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ztd,
+            tropo_gradients,
+        ),
         residuals,
         solution.used_sats,
         (
@@ -789,21 +903,82 @@ fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term
             solution.code_rms_m,
             solution.phase_rms_m,
             solution.weighted_rms_m,
-            (
-                (
-                    matrix3_to_lists(solution.position_covariance.ecef_m2),
-                    matrix3_to_lists(solution.position_covariance.enu_m2),
-                ),
-                (
-                    matrix3_to_lists(solution.formal_position_covariance.ecef_m2),
-                    matrix3_to_lists(solution.formal_position_covariance.enu_m2),
-                ),
-                solution.posterior_variance_factor,
-                solution.position_covariance_scale_factor,
-            ),
+            covariance_bundle,
         ),
     )
         .encode(env)
+}
+
+fn encode_float_covariance_bundle(solution: &core::FloatSolution) -> FloatCovarianceTerm {
+    (
+        (
+            matrix3_to_lists(solution.position_covariance.ecef_m2),
+            matrix3_to_lists(solution.position_covariance.enu_m2),
+        ),
+        (
+            matrix3_to_lists(solution.formal_position_covariance.ecef_m2),
+            matrix3_to_lists(solution.formal_position_covariance.enu_m2),
+        ),
+        (
+            solution.posterior_variance_factor,
+            solution.position_covariance_scale_factor,
+        ),
+        (
+            matrix3_to_lists(solution.temporal_position_covariance.ecef_m2),
+            matrix3_to_lists(solution.temporal_position_covariance.enu_m2),
+        ),
+        (
+            solution.temporal_position_covariance_scale_factor,
+            encode_temporal_correlation(solution.temporal_correlation),
+        ),
+        solution.tropo_gradient_covariance_m2.map(matrix2_to_lists),
+        solution
+            .formal_tropo_gradient_covariance_m2
+            .map(matrix2_to_lists),
+    )
+}
+
+fn encode_fixed_covariance_bundle(solution: &core::FixedSolution) -> FloatCovarianceTerm {
+    (
+        (
+            matrix3_to_lists(solution.position_covariance.ecef_m2),
+            matrix3_to_lists(solution.position_covariance.enu_m2),
+        ),
+        (
+            matrix3_to_lists(solution.formal_position_covariance.ecef_m2),
+            matrix3_to_lists(solution.formal_position_covariance.enu_m2),
+        ),
+        (
+            solution.posterior_variance_factor,
+            solution.position_covariance_scale_factor,
+        ),
+        (
+            matrix3_to_lists(solution.temporal_position_covariance.ecef_m2),
+            matrix3_to_lists(solution.temporal_position_covariance.enu_m2),
+        ),
+        (
+            solution.temporal_position_covariance_scale_factor,
+            encode_temporal_correlation(solution.temporal_correlation),
+        ),
+        solution.tropo_gradient_covariance_m2.map(matrix2_to_lists),
+        solution
+            .formal_tropo_gradient_covariance_m2
+            .map(matrix2_to_lists),
+    )
+}
+
+fn encode_temporal_correlation(
+    temporal: core::TemporalCorrelationSummary,
+) -> TemporalCorrelationTerm {
+    (
+        temporal.lag1_autocorrelation,
+        temporal.decorrelation_time_epochs,
+        temporal.decorrelation_time_s,
+        temporal.nominal_sample_count as u64,
+        temporal.effective_sample_count,
+        temporal.variance_inflation_factor,
+        temporal.arcs_used as u64,
+    )
 }
 
 fn encode_fixed_result<'a>(
@@ -812,10 +987,6 @@ fn encode_fixed_result<'a>(
 ) -> Term<'a> {
     match result {
         Ok(solution) => {
-            let ztd = match solution.ztd_residual_m {
-                Some(value) => value.encode(env),
-                None => atoms::nil().encode(env),
-            };
             let status = encode_float_status(solution.status);
             let integer_status = match solution.integer.integer_status {
                 core::IntegerStatus::Fixed => atoms::fixed(),
@@ -830,6 +1001,25 @@ fn encode_fixed_result<'a>(
                 Some(value) => value.encode(env),
                 None => atoms::nil().encode(env),
             };
+            let ztd = match solution.ztd_residual_m {
+                Some(value) => value.encode(env),
+                None => atoms::nil().encode(env),
+            };
+            let tropo_gradients: Term<'a> = match (
+                solution.tropo_gradient_north_m,
+                solution.tropo_gradient_east_m,
+            ) {
+                (Some(north), Some(east)) => (north, east).encode(env),
+                _ => atoms::nil().encode(env),
+            };
+            let residual_ionosphere_m = solution
+                .residual_ionosphere_m
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let covariance_bundle = encode_fixed_covariance_bundle(&solution);
+            let integer_best_score = solution.integer.integer_best_score;
+            let integer_candidates = solution.integer.integer_candidates as u64;
             let residuals: Vec<(u64, String, f64, f64, f64, f64)> = solution
                 .residuals_m
                 .into_iter()
@@ -856,8 +1046,13 @@ fn encode_fixed_result<'a>(
                             .into_iter()
                             .collect::<Vec<_>>(),
                         solution.fixed_ambiguities_m.into_iter().collect::<Vec<_>>(),
+                        residual_ionosphere_m,
                     ),
-                    (ztd, encode_float_payload(env, solution.float_solution)),
+                    (
+                        ztd,
+                        tropo_gradients,
+                        encode_float_payload(env, solution.float_solution),
+                    ),
                     residuals,
                     solution.used_sats,
                     (
@@ -868,17 +1063,20 @@ fn encode_fixed_result<'a>(
                         solution.phase_rms_m,
                         solution.weighted_rms_m,
                         (
-                            integer_status,
-                            ratio_term,
-                            solution.integer.integer_best_score,
-                            second_term,
-                            solution.integer.integer_candidates as u64,
                             (
-                                search.order,
-                                search.float_cycles.into_iter().collect::<Vec<_>>(),
-                                search.covariance_cycles,
-                                search.covariance_inverse_cycles,
+                                integer_status,
+                                ratio_term,
+                                integer_best_score,
+                                second_term,
+                                integer_candidates,
+                                (
+                                    search.order,
+                                    search.float_cycles.into_iter().collect::<Vec<_>>(),
+                                    search.covariance_cycles,
+                                    search.covariance_inverse_cycles,
+                                ),
                             ),
+                            covariance_bundle,
                         ),
                     ),
                 ),
@@ -939,6 +1137,20 @@ fn encode_float_error<'a>(env: Env<'a>, err: core::FloatSolveError) -> Term<'a> 
         core::FloatSolveError::InvalidInput { .. } => {
             (atoms::error(), atoms::invalid_input()).encode(env)
         }
+        core::FloatSolveError::InsufficientObservationsAfterElevationCutoff {
+            cutoff_deg,
+            retained_observations,
+            required_observations,
+        } => (
+            atoms::error(),
+            (
+                atoms::insufficient_observations_after_elevation_cutoff(),
+                cutoff_deg,
+                retained_observations as u64,
+                required_observations as u64,
+            ),
+        )
+            .encode(env),
         core::FloatSolveError::MissingAmbiguity(ambiguity_id) => {
             (atoms::error(), (atoms::missing_ambiguity(), ambiguity_id)).encode(env)
         }
