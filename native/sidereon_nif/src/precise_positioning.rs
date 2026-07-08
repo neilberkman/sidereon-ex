@@ -25,6 +25,12 @@ type DateTimeTuple = (DateTuple, TimeTuple);
 type ObservationTerm = (String, String, f64, f64, f64, f64);
 type EpochTerm = (DateTimeTuple, f64, f64, Vec<ObservationTerm>);
 type InitialStateTerm = (Vec3, Vec<f64>, Vec<(String, f64)>, Option<f64>);
+type CovarianceMatrixTerm = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+// (position_covariance, formal_position_covariance, posterior_variance_factor,
+//  position_covariance_scale_factor); each covariance is (ecef_m2, enu_m2) as
+//  3x3 row lists. This carries the 0.22 float-solution covariance losslessly
+//  across the Elixir round trip so the fixed solve receives the real Q_a.
+type FloatCovarianceTerm = (CovarianceMatrixTerm, CovarianceMatrixTerm, f64, f64);
 type FloatPayloadTerm<'a> = (
     Vec3,
     Vec<f64>,
@@ -32,7 +38,7 @@ type FloatPayloadTerm<'a> = (
     Option<f64>,
     Vec<(u64, String, f64, f64, f64, f64)>,
     Vec<String>,
-    (u64, bool, Term<'a>, f64, f64, f64),
+    (u64, bool, Term<'a>, f64, f64, f64, FloatCovarianceTerm),
 );
 type WeightsTerm = (f64, f64, bool);
 type SolveOptionsTerm = (u64, f64, f64, f64, f64);
@@ -453,6 +459,23 @@ fn decode_initial(initial: InitialStateTerm) -> core::FloatState {
     }
 }
 
+fn matrix3_to_lists(m: [[f64; 3]; 3]) -> Vec<Vec<f64>> {
+    m.iter().map(|row| row.to_vec()).collect()
+}
+
+fn lists_to_matrix3(v: &[Vec<f64>]) -> NifResult<[[f64; 3]; 3]> {
+    if v.len() != 3 || v.iter().any(|row| row.len() != 3) {
+        return Err(Error::Term(Box::new(
+            "expected a 3x3 covariance matrix".to_string(),
+        )));
+    }
+    Ok([
+        [v[0][0], v[0][1], v[0][2]],
+        [v[1][0], v[1][1], v[1][2]],
+        [v[2][0], v[2][1], v[2][2]],
+    ])
+}
+
 fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::FloatSolution> {
     let (
         position,
@@ -461,7 +484,20 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
         ztd_residual_m,
         residuals_m,
         used_sats,
-        (iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m),
+        (
+            iterations,
+            converged,
+            status,
+            code_rms_m,
+            phase_rms_m,
+            weighted_rms_m,
+            (
+                (position_cov_ecef, position_cov_enu),
+                (formal_cov_ecef, formal_cov_enu),
+                posterior_variance_factor,
+                position_covariance_scale_factor,
+            ),
+        ),
     ) = term;
     Ok(core::FloatSolution {
         position_m: vec3_to_array(position),
@@ -490,6 +526,16 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
         code_rms_m,
         phase_rms_m,
         weighted_rms_m,
+        position_covariance: core::PositionCovariance {
+            ecef_m2: lists_to_matrix3(&position_cov_ecef)?,
+            enu_m2: lists_to_matrix3(&position_cov_enu)?,
+        },
+        formal_position_covariance: core::PositionCovariance {
+            ecef_m2: lists_to_matrix3(&formal_cov_ecef)?,
+            enu_m2: lists_to_matrix3(&formal_cov_enu)?,
+        },
+        posterior_variance_factor,
+        position_covariance_scale_factor,
     })
 }
 
@@ -743,6 +789,18 @@ fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term
             solution.code_rms_m,
             solution.phase_rms_m,
             solution.weighted_rms_m,
+            (
+                (
+                    matrix3_to_lists(solution.position_covariance.ecef_m2),
+                    matrix3_to_lists(solution.position_covariance.enu_m2),
+                ),
+                (
+                    matrix3_to_lists(solution.formal_position_covariance.ecef_m2),
+                    matrix3_to_lists(solution.formal_position_covariance.enu_m2),
+                ),
+                solution.posterior_variance_factor,
+                solution.position_covariance_scale_factor,
+            ),
         ),
     )
         .encode(env)
