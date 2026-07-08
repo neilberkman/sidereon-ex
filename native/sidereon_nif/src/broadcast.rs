@@ -136,6 +136,7 @@ fn nav_message_label(message: NavMessage) -> &'static str {
         NavMessage::GpsLnav => "gps_lnav",
         NavMessage::GpsCnav => "gps_cnav",
         NavMessage::GpsCnav2 => "gps_cnav2",
+        NavMessage::QzssLnav => "qzss_lnav",
         NavMessage::QzssCnav => "qzss_cnav",
         NavMessage::QzssCnav2 => "qzss_cnav2",
         NavMessage::GalileoInav => "galileo_inav",

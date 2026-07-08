@@ -7,6 +7,9 @@ defmodule Sidereon.GNSS.RTCMTest do
   # the sidereon-core encoder (reference station 2003, ECEF 0.0001 m integers).
   @frame_1006 <<211, 0, 21, 62, 231, 211, 3, 2, 170, 60, 109, 24, 62, 70, 5, 255, 12, 2, 239, 43, 84, 132, 58, 152, 216,
                 180, 135>>
+  @frame_1046 <<211, 0, 63, 65, 96, 213, 232, 7, 107, 6, 201, 65, 224, 63, 254, 211, 255, 227, 57, 23, 243, 164, 144,
+                233, 132, 210, 8, 155, 244, 244, 1, 16, 48, 176, 52, 58, 168, 19, 171, 93, 65, 239, 255, 183, 228, 79,
+                232, 207, 255, 82, 119, 208, 176, 17, 162, 65, 99, 151, 255, 255, 252, 34, 128, 20, 7, 0, 128, 10, 142>>
 
   test "decode_messages decodes a 1006 station-coordinate frame" do
     assert {:ok, [{:station_coordinates, fields}]} = RTCM.decode_messages(@frame_1006)
@@ -137,6 +140,32 @@ defmodule Sidereon.GNSS.RTCMTest do
       assert_roundtrip(:glonass_ephemeris, glonass_ephemeris_fields())
     end
 
+    test "round-trips a 1042 BeiDou ephemeris built from scratch" do
+      assert_roundtrip(:beidou_ephemeris, beidou_ephemeris_fields())
+    end
+
+    test "round-trips a 1044 QZSS ephemeris built from scratch" do
+      assert_roundtrip(:qzss_ephemeris, qzss_ephemeris_fields())
+    end
+
+    test "round-trips a 1045 Galileo F/NAV ephemeris built from scratch" do
+      assert_roundtrip(:galileo_fnav_ephemeris, galileo_fnav_ephemeris_fields())
+    end
+
+    test "round-trips a 1046 Galileo I/NAV ephemeris built from scratch" do
+      assert_roundtrip(:galileo_inav_ephemeris, galileo_inav_ephemeris_fields())
+    end
+
+    test "decodes a real 1046 Galileo I/NAV frame and re-encodes it exactly" do
+      assert {:ok, [{:galileo_inav_ephemeris, fields}]} = RTCM.decode_messages(@frame_1046)
+      assert fields.satellite_id == 3
+      assert fields.week_number == 1402
+      assert fields.iod_nav == 7
+      assert fields.sqrt_a == 2_852_448_983
+      assert fields.eccentricity == 4_459_564
+      assert {:ok, @frame_1046} = RTCM.encode_message({:galileo_inav_ephemeris, fields})
+    end
+
     test "round-trips an MSM4 observation message built from scratch" do
       fields = msm_fields("msm4", 1074)
       assert {:ok, frame} = RTCM.encode_message({:msm, fields})
@@ -250,6 +279,142 @@ defmodule Sidereon.GNSS.RTCMTest do
       m_n4: 1,
       m_tau_gps: 1,
       m_l_n_fifth: false,
+      reserved: 0
+    }
+  end
+
+  defp beidou_ephemeris_fields do
+    %{
+      satellite_id: 19,
+      week_number: 902,
+      sv_urai: 1,
+      idot: 1,
+      aode: 17,
+      t_oc: 12_000,
+      a_f2: -3,
+      a_f1: 12_345,
+      a_f0: -45_678,
+      aodc: 12,
+      c_rs: -1000,
+      delta_n: 100,
+      m0: 1000,
+      c_uc: -50,
+      eccentricity: 4_459_564,
+      c_us: 51,
+      sqrt_a: 2_852_448_983,
+      t_oe: 12_000,
+      c_ic: -5,
+      omega0: 1000,
+      c_is: 6,
+      i0: 1000,
+      c_rc: 100,
+      omega: 1000,
+      omega_dot: -100,
+      t_gd1: 5,
+      t_gd2: 7,
+      sv_health: false
+    }
+  end
+
+  defp qzss_ephemeris_fields do
+    %{
+      satellite_id: 3,
+      t_oc: 7200,
+      a_f2: 1,
+      a_f1: 1,
+      a_f0: 23_456,
+      iode: 11,
+      c_rs: 1,
+      delta_n: 1,
+      m0: 1,
+      c_uc: 1,
+      eccentricity: 1,
+      c_us: 1,
+      sqrt_a: 2_702_336_448,
+      t_oe: 3600,
+      c_ic: 1,
+      omega0: 1,
+      c_is: 1,
+      i0: 1,
+      c_rc: 1,
+      omega: 1,
+      omega_dot: 1,
+      idot: 1,
+      codes_on_l2: 1,
+      week_number: 123,
+      ura: 1,
+      sv_health: 1,
+      t_gd: 1,
+      iodc: 1,
+      fit_interval: false
+    }
+  end
+
+  defp galileo_fnav_ephemeris_fields do
+    %{
+      satellite_id: 12,
+      week_number: 1402,
+      iod_nav: 7,
+      sisa: 42,
+      idot: 434,
+      t_oc: 5150,
+      a_f2: 0,
+      a_f1: -151,
+      a_f0: -471_483,
+      c_rs: -791,
+      delta_n: 9274,
+      m0: 1_630_831_142,
+      c_uc: -707,
+      eccentricity: 4_459_564,
+      c_us: 3342,
+      sqrt_a: 2_852_448_983,
+      t_oe: 5150,
+      c_ic: -5,
+      omega0: 2_118_450_828,
+      c_is: -11,
+      i0: 662_506_241,
+      c_rc: 6692,
+      omega: 372_867_071,
+      omega_dot: -15_832,
+      bgd_e5a_e1: 5,
+      e5a_signal_health: 0,
+      e5a_data_validity: false,
+      reserved: 0
+    }
+  end
+
+  defp galileo_inav_ephemeris_fields do
+    %{
+      satellite_id: 3,
+      week_number: 1402,
+      iod_nav: 7,
+      sisa_index: 107,
+      idot: 434,
+      t_oc: 5150,
+      a_f2: 0,
+      a_f1: -151,
+      a_f0: -471_483,
+      c_rs: -791,
+      delta_n: 9274,
+      m0: 1_630_831_142,
+      c_uc: -707,
+      eccentricity: 4_459_564,
+      c_us: 3342,
+      sqrt_a: 2_852_448_983,
+      t_oe: 5150,
+      c_ic: -5,
+      omega0: 2_118_450_828,
+      c_is: -11,
+      i0: 662_506_241,
+      c_rc: 6692,
+      omega: 372_867_071,
+      omega_dot: -15_832,
+      bgd_e5a_e1: 5,
+      bgd_e5b_e1: 7,
+      e5b_signal_health: 0,
+      e5b_data_validity: false,
+      e1b_signal_health: 0,
+      e1b_data_validity: false,
       reserved: 0
     }
   end

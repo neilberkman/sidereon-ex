@@ -10,12 +10,14 @@ defmodule Sidereon.GNSS.RTCM do
   `decode_messages/1` scans a whole byte buffer and returns every CRC-valid
   message; `decode_frame/1` decodes the single frame at the start of a buffer.
 
-  ## Message shapes
+  ## Message format
 
   Each decoded message is a `{type, fields}` pair where `type` is one of
   `:station_coordinates` (1005/1006), `:antenna_descriptor` (1007/1008/1033),
-  `:gps_ephemeris` (1019), `:glonass_ephemeris` (1020), `:msm` (MSM4/MSM7
-  observations), or `:unsupported` (any other number, preserved verbatim). The
+  `:gps_ephemeris` (1019), `:glonass_ephemeris` (1020), `:beidou_ephemeris`
+  (1042), `:qzss_ephemeris` (1044), `:galileo_fnav_ephemeris` (1045),
+  `:galileo_inav_ephemeris` (1046), `:msm` (MSM4/MSM7 observations), or
+  `:unsupported` (any other number, preserved verbatim). The
   `fields` map carries the raw transmitted integer fields; station coordinates
   additionally carry the scaled `:x_m` / `:y_m` / `:z_m` / `:antenna_height_m`
   values.
@@ -28,6 +30,10 @@ defmodule Sidereon.GNSS.RTCM do
           | :antenna_descriptor
           | :gps_ephemeris
           | :glonass_ephemeris
+          | :beidou_ephemeris
+          | :qzss_ephemeris
+          | :galileo_fnav_ephemeris
+          | :galileo_inav_ephemeris
           | :msm
           | :unsupported
   @type message :: {message_type(), map()}

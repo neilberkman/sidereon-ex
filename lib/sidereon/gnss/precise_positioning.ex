@@ -77,6 +77,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :rx_clock_s,
       :rx_clock_m,
       :ambiguities_m,
+      :residual_ionosphere_m,
       :residuals_m,
       :used_sats,
       :metadata
@@ -85,9 +86,15 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :position,
       :position_covariance,
       :formal_position_covariance,
+      :temporal_position_covariance,
       :rx_clock_s,
       :rx_clock_m,
       :ambiguities_m,
+      :residual_ionosphere_m,
+      :tropo_gradient_north_m,
+      :tropo_gradient_east_m,
+      :tropo_gradient_covariance_m2,
+      :formal_tropo_gradient_covariance_m2,
       :residuals_m,
       :used_sats,
       :metadata
@@ -124,7 +131,10 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :position,
       :epoch_clocks,
       :ambiguities_m,
+      :residual_ionosphere_m,
       :ztd_residual_m,
+      :tropo_gradient_north_m,
+      :tropo_gradient_east_m,
       :residuals_m,
       :used_sats,
       :epochs,
@@ -134,9 +144,15 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :position,
       :position_covariance,
       :formal_position_covariance,
+      :temporal_position_covariance,
       :epoch_clocks,
       :ambiguities_m,
+      :residual_ionosphere_m,
       :ztd_residual_m,
+      :tropo_gradient_north_m,
+      :tropo_gradient_east_m,
+      :tropo_gradient_covariance_m2,
+      :formal_tropo_gradient_covariance_m2,
       :residuals_m,
       :used_sats,
       :epochs,
@@ -197,7 +213,10 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :epoch_clocks,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :residual_ionosphere_m,
       :ztd_residual_m,
+      :tropo_gradient_north_m,
+      :tropo_gradient_east_m,
       :float_solution,
       :residuals_m,
       :used_sats,
@@ -206,10 +225,18 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     ]
     defstruct [
       :position,
+      :position_covariance,
+      :formal_position_covariance,
+      :temporal_position_covariance,
       :epoch_clocks,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :residual_ionosphere_m,
       :ztd_residual_m,
+      :tropo_gradient_north_m,
+      :tropo_gradient_east_m,
+      :tropo_gradient_covariance_m2,
+      :formal_tropo_gradient_covariance_m2,
       :float_solution,
       :residuals_m,
       :used_sats,
@@ -421,7 +448,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            core_single_initial_state_term(state),
            {weights.code, weights.phase, weights.elevation_weighting?},
            {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
-            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m},
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
            core_tropo_term(tropo),
            core_corrections_term(tropo)
          ) do
@@ -467,15 +495,27 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       position_tuple3(state.position),
       [state.clock_m],
       Map.to_list(state.ambiguities),
-      nil
+      nil,
+      nil,
+      []
     }
   end
 
   defp explicit_initial_state_term(initial_state) do
     with {:ok, position} <- explicit_position(initial_state),
          {:ok, clocks} <- explicit_number_list(initial_state, :clocks_m),
-         {:ok, ambiguities} <- explicit_number_map(initial_state, :ambiguities_m) do
-      {:ok, {position, clocks, Map.to_list(ambiguities), Map.get(initial_state, :ztd_m)}}
+         {:ok, ambiguities} <- explicit_number_map(initial_state, :ambiguities_m),
+         {:ok, residual_ionosphere} <- optional_number_map(initial_state, :residual_ionosphere_m),
+         {:ok, gradients} <- explicit_tropo_gradients(initial_state) do
+      {:ok,
+       {
+         position,
+         clocks,
+         Map.to_list(ambiguities),
+         Map.get(initial_state, :ztd_m),
+         gradients,
+         Map.to_list(residual_ionosphere)
+       }}
     end
   end
 
@@ -517,6 +557,29 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     end
   end
 
+  defp optional_number_map(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, values} -> explicit_number_map(%{key => values}, key)
+      :error -> {:ok, %{}}
+    end
+  end
+
+  defp explicit_tropo_gradients(initial_state) do
+    north = Map.get(initial_state, :tropo_gradient_north_m)
+    east = Map.get(initial_state, :tropo_gradient_east_m)
+
+    cond do
+      is_nil(north) and is_nil(east) ->
+        {:ok, nil}
+
+      is_number(north) and is_number(east) ->
+        {:ok, {north / 1.0, east / 1.0}}
+
+      true ->
+        {:error, {:invalid_field, :tropo_gradient}}
+    end
+  end
+
   defp float_solution_payload(%MultiEpochSolution{} = solution, epochs) do
     epoch_index =
       epochs
@@ -529,8 +592,12 @@ defmodule Sidereon.GNSS.PrecisePositioning do
        {
          position_tuple3(solution.position),
          Enum.map(solution.epoch_clocks, & &1.rx_clock_m),
-         Map.to_list(solution.ambiguities_m),
-         solution.ztd_residual_m,
+         {
+           Map.to_list(solution.ambiguities_m),
+           Map.to_list(Map.get(solution, :residual_ionosphere_m, %{})),
+           solution.ztd_residual_m,
+           tropo_gradients_term(solution)
+         },
          residuals,
          solution.used_sats,
          {
@@ -543,12 +610,38 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            {
              {solution.position_covariance.ecef_m2, solution.position_covariance.enu_m2},
              {solution.formal_position_covariance.ecef_m2, solution.formal_position_covariance.enu_m2},
-             Map.fetch!(solution.metadata, :posterior_variance_factor),
-             Map.fetch!(solution.metadata, :position_covariance_scale_factor)
+             {
+               Map.fetch!(solution.metadata, :posterior_variance_factor),
+               Map.fetch!(solution.metadata, :position_covariance_scale_factor)
+             },
+             {solution.temporal_position_covariance.ecef_m2, solution.temporal_position_covariance.enu_m2},
+             {
+               Map.fetch!(solution.metadata, :temporal_position_covariance_scale_factor),
+               temporal_correlation_term(Map.fetch!(solution.metadata, :temporal_correlation))
+             },
+             solution.tropo_gradient_covariance_m2,
+             solution.formal_tropo_gradient_covariance_m2
            }
          }
        }}
     end
+  end
+
+  defp tropo_gradients_term(%{tropo_gradient_north_m: north, tropo_gradient_east_m: east})
+       when is_number(north) and is_number(east), do: {north, east}
+
+  defp tropo_gradients_term(_solution), do: nil
+
+  defp temporal_correlation_term(summary) do
+    {
+      Map.fetch!(summary, :lag1_autocorrelation),
+      Map.fetch!(summary, :decorrelation_time_epochs),
+      Map.get(summary, :decorrelation_time_s),
+      Map.fetch!(summary, :nominal_sample_count),
+      Map.fetch!(summary, :effective_sample_count),
+      Map.fetch!(summary, :variance_inflation_factor),
+      Map.fetch!(summary, :arcs_used)
+    }
   end
 
   defp float_solution_residuals(residuals, epoch_index) do
@@ -580,11 +673,15 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   end
 
   defp core_tropo_term(%{enabled?: false} = tropo) do
-    {false, false, @default_pressure_hpa, @default_temperature_k, @default_relative_humidity, tropo_mapping_term(tropo)}
+    {false, false, false, @default_pressure_hpa, @default_temperature_k, @default_relative_humidity,
+     tropo_mapping_term(tropo)}
   end
 
-  defp core_tropo_term(%{enabled?: true, estimate_ztd?: estimate_ztd?, met: met} = tropo) do
-    {true, estimate_ztd?, met.pressure_hpa, met.temperature_k, met.relative_humidity, tropo_mapping_term(tropo)}
+  defp core_tropo_term(
+         %{enabled?: true, estimate_ztd?: estimate_ztd?, estimate_tropo_gradients?: gradients?, met: met} = tropo
+       ) do
+    {true, estimate_ztd?, gradients?, met.pressure_hpa, met.temperature_k, met.relative_humidity,
+     tropo_mapping_term(tropo)}
   end
 
   # Tropospheric mapping selection. Absent or `:niell` is the Niell (1996)
@@ -644,20 +741,21 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   end
 
   defp core_multi_solution(
-         {position, clocks_m, ambiguities, ztd, residuals, used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
-           {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu}, posterior_variance_factor,
-            position_covariance_scale_factor}}},
+         {position, clocks_m, {ambiguities, residual_ionosphere, ztd, tropo_gradients}, residuals, used_sats,
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle}},
          epochs,
          tropo
        ) do
     {x, y, z} = position
+    covariance = covariance_fields(covariance_bundle)
+    {tropo_gradient_north_m, tropo_gradient_east_m} = tropo_gradient_fields(tropo_gradients)
     epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
 
     %MultiEpochSolution{
       position: %{x_m: x, y_m: y, z_m: z},
-      position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
-      formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
+      position_covariance: covariance.position_covariance,
+      formal_position_covariance: covariance.formal_position_covariance,
+      temporal_position_covariance: covariance.temporal_position_covariance,
       epoch_clocks:
         epochs
         |> Enum.map(& &1.epoch)
@@ -670,7 +768,12 @@ defmodule Sidereon.GNSS.PrecisePositioning do
           }
         end),
       ambiguities_m: Map.new(ambiguities),
+      residual_ionosphere_m: Map.new(residual_ionosphere),
       ztd_residual_m: ztd,
+      tropo_gradient_north_m: tropo_gradient_north_m,
+      tropo_gradient_east_m: tropo_gradient_east_m,
+      tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
+      formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
       residuals_m:
         Enum.map(residuals, fn {idx, sat, code_m, phase_m, code_weight, phase_weight} ->
           %{
@@ -693,31 +796,40 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         code_rms_m: code_rms_m,
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
-        posterior_variance_factor: posterior_variance_factor,
-        position_covariance_scale_factor: position_covariance_scale_factor,
+        posterior_variance_factor: covariance.posterior_variance_factor,
+        position_covariance_scale_factor: covariance.position_covariance_scale_factor,
+        temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
+        temporal_correlation: covariance.temporal_correlation,
         troposphere_applied: tropo.enabled?,
-        ztd_estimated: tropo.estimate_ztd?
+        ztd_estimated: tropo.estimate_ztd?,
+        tropo_gradients_estimated: tropo.estimate_tropo_gradients?
       }
     }
   end
 
   defp core_single_solution(
-         {position, [clock_m], ambiguities, _ztd, residuals, _used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
-           {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu}, posterior_variance_factor,
-            position_covariance_scale_factor}}},
+         {position, [clock_m], {ambiguities, residual_ionosphere, _ztd, tropo_gradients}, residuals, _used_sats,
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle}},
          obs,
          tropo
        ) do
     {x, y, z} = position
+    covariance = covariance_fields(covariance_bundle)
+    {tropo_gradient_north_m, tropo_gradient_east_m} = tropo_gradient_fields(tropo_gradients)
 
     %Solution{
       position: %{x_m: x, y_m: y, z_m: z},
-      position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
-      formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
+      position_covariance: covariance.position_covariance,
+      formal_position_covariance: covariance.formal_position_covariance,
+      temporal_position_covariance: covariance.temporal_position_covariance,
       rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
       rx_clock_m: clock_m,
       ambiguities_m: Map.new(ambiguities),
+      residual_ionosphere_m: Map.new(residual_ionosphere),
+      tropo_gradient_north_m: tropo_gradient_north_m,
+      tropo_gradient_east_m: tropo_gradient_east_m,
+      tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
+      formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
       residuals_m:
         Map.new(residuals, fn {_idx, sat, code_m, phase_m, _code_weight, _phase_weight} ->
           {sat, %{code_m: code_m, phase_m: phase_m}}
@@ -731,28 +843,74 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
         troposphere_applied: tropo.enabled?,
-        posterior_variance_factor: posterior_variance_factor,
-        position_covariance_scale_factor: position_covariance_scale_factor
+        posterior_variance_factor: covariance.posterior_variance_factor,
+        position_covariance_scale_factor: covariance.position_covariance_scale_factor,
+        temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
+        temporal_correlation: covariance.temporal_correlation,
+        tropo_gradients_estimated: tropo.estimate_tropo_gradients?
       }
     }
   end
+
+  defp covariance_fields(
+         {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu},
+          {posterior_variance_factor, position_covariance_scale_factor}, {temporal_cov_ecef, temporal_cov_enu},
+          {temporal_position_covariance_scale_factor, temporal_correlation}, tropo_gradient_covariance_m2,
+          formal_tropo_gradient_covariance_m2}
+       ) do
+    %{
+      position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
+      formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
+      temporal_position_covariance: %{ecef_m2: temporal_cov_ecef, enu_m2: temporal_cov_enu},
+      posterior_variance_factor: posterior_variance_factor,
+      position_covariance_scale_factor: position_covariance_scale_factor,
+      temporal_position_covariance_scale_factor: temporal_position_covariance_scale_factor,
+      temporal_correlation: temporal_correlation_map(temporal_correlation),
+      tropo_gradient_covariance_m2: tropo_gradient_covariance_m2,
+      formal_tropo_gradient_covariance_m2: formal_tropo_gradient_covariance_m2
+    }
+  end
+
+  defp temporal_correlation_map(
+         {lag1_autocorrelation, decorrelation_time_epochs, decorrelation_time_s, nominal_sample_count,
+          effective_sample_count, variance_inflation_factor, arcs_used}
+       ) do
+    %{
+      lag1_autocorrelation: lag1_autocorrelation,
+      decorrelation_time_epochs: decorrelation_time_epochs,
+      decorrelation_time_s: decorrelation_time_s,
+      nominal_sample_count: nominal_sample_count,
+      effective_sample_count: effective_sample_count,
+      variance_inflation_factor: variance_inflation_factor,
+      arcs_used: arcs_used
+    }
+  end
+
+  defp tropo_gradient_fields({north, east}), do: {north, east}
+  defp tropo_gradient_fields(nil), do: {nil, nil}
 
   defp core_single_status(:state_tolerance), do: :position_tolerance
   defp core_single_status(status), do: status
 
   defp core_fixed_solution(
-         {position, clocks_m, {fixed_cycles, fixed_m}, {ztd, float_payload}, residuals, used_sats,
+         {position, clocks_m, {fixed_cycles, fixed_m, residual_ionosphere}, {ztd, tropo_gradients, float_payload},
+          residuals, used_sats,
           {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
-           {integer_status, integer_ratio, integer_best_score, integer_second_best_score, integer_candidates,
-            {search_order, search_float_cycles, covariance_cycles, covariance_inverse_cycles}}}},
+           {{integer_status, integer_ratio, integer_best_score, integer_second_best_score, integer_candidates,
+             {search_order, search_float_cycles, covariance_cycles, covariance_inverse_cycles}}, covariance_bundle}}},
          epochs,
          tropo
        ) do
     {x, y, z} = position
+    covariance = covariance_fields(covariance_bundle)
+    {tropo_gradient_north_m, tropo_gradient_east_m} = tropo_gradient_fields(tropo_gradients)
     epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
 
     %FixedSolution{
       position: %{x_m: x, y_m: y, z_m: z},
+      position_covariance: covariance.position_covariance,
+      formal_position_covariance: covariance.formal_position_covariance,
+      temporal_position_covariance: covariance.temporal_position_covariance,
       epoch_clocks:
         epochs
         |> Enum.map(& &1.epoch)
@@ -766,7 +924,12 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         end),
       fixed_ambiguities_cycles: Map.new(fixed_cycles),
       fixed_ambiguities_m: Map.new(fixed_m),
+      residual_ionosphere_m: Map.new(residual_ionosphere),
       ztd_residual_m: ztd,
+      tropo_gradient_north_m: tropo_gradient_north_m,
+      tropo_gradient_east_m: tropo_gradient_east_m,
+      tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
+      formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
       float_solution: core_multi_solution(float_payload, epochs, tropo),
       residuals_m:
         Enum.map(residuals, fn {idx, sat, code_m, phase_m, code_weight, phase_weight} ->
@@ -790,6 +953,10 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         code_rms_m: code_rms_m,
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
+        posterior_variance_factor: covariance.posterior_variance_factor,
+        position_covariance_scale_factor: covariance.position_covariance_scale_factor,
+        temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
+        temporal_correlation: covariance.temporal_correlation,
         integer_status: integer_status,
         integer_method: :lambda,
         integer_ratio: integer_ratio,
@@ -798,6 +965,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         integer_candidates: integer_candidates,
         troposphere_applied: tropo.enabled?,
         ztd_estimated: tropo.estimate_ztd?,
+        tropo_gradients_estimated: tropo.estimate_tropo_gradients?,
         ambiguity_search: %{
           order: search_order,
           float_cycles: Map.new(search_float_cycles),
@@ -1023,7 +1191,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            initial,
            {weights.code, weights.phase, weights.elevation_weighting?},
            {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
-            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m},
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
            core_tropo_term(tropo),
            core_corrections_term(tropo),
            screen?
@@ -1050,7 +1219,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            float_payload,
            {weights.code, weights.phase, weights.elevation_weighting?},
            {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
-            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m},
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
            core_tropo_term(tropo),
            core_corrections_term(tropo),
            {Map.to_list(wavelengths), Map.to_list(offsets), integer_opts.ratio_threshold}
@@ -1067,7 +1237,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            auto_init,
            {weights.code, weights.phase, weights.elevation_weighting?},
            {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
-            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m},
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
            core_tropo_term(tropo),
            core_corrections_term(tropo),
            screen?
@@ -1095,7 +1266,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            auto_init,
            {weights.code, weights.phase, weights.elevation_weighting?},
            {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
-            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m},
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
            core_tropo_term(tropo),
            core_corrections_term(tropo),
            screen?,
@@ -1211,7 +1383,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     n_sats = length(multi_satellite_ids(epochs))
     n_observations = multi_observation_count(epochs)
     equations = 2 * n_observations
-    unknowns = 3 + n_epochs + ztd_unknown_count(tropo) + n_sats
+    unknowns = 3 + n_epochs + ztd_unknown_count(tropo) + tropo_gradient_unknown_count(tropo) + n_sats
 
     cond do
       n_sats < 4 ->
@@ -1256,6 +1428,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     clock_tol = Keyword.get(opts, :clock_tolerance_m, @default_clock_tolerance_m)
     ambiguity_tol = Keyword.get(opts, :ambiguity_tolerance_m, @default_position_tolerance_m)
     ztd_tol = Keyword.get(opts, :ztd_tolerance_m, @default_ztd_tolerance_m)
+    elevation_cutoff = Keyword.get(opts, :elevation_cutoff_deg)
+    estimate_residual_ionosphere = Keyword.get(opts, :estimate_residual_ionosphere, false)
 
     cond do
       not is_integer(max_iterations) or max_iterations < 1 ->
@@ -1273,6 +1447,12 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       not is_number(ztd_tol) or ztd_tol < 0.0 ->
         {:error, {:invalid_option, :ztd_tolerance_m}}
 
+      not valid_elevation_cutoff?(elevation_cutoff) ->
+        {:error, {:invalid_option, :elevation_cutoff_deg}}
+
+      estimate_residual_ionosphere not in [true, false] ->
+        {:error, {:invalid_option, :estimate_residual_ionosphere}}
+
       true ->
         {:ok,
          %{
@@ -1280,10 +1460,19 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            position_tolerance_m: pos_tol / 1.0,
            clock_tolerance_m: clock_tol / 1.0,
            ambiguity_tolerance_m: ambiguity_tol / 1.0,
-           ztd_tolerance_m: ztd_tol / 1.0
+           ztd_tolerance_m: ztd_tol / 1.0,
+           elevation_cutoff_deg: normalize_elevation_cutoff(elevation_cutoff),
+           estimate_residual_ionosphere?: estimate_residual_ionosphere
          }}
     end
   end
+
+  defp valid_elevation_cutoff?(nil), do: true
+  defp valid_elevation_cutoff?(value) when is_number(value), do: value >= -90.0 and value <= 90.0
+  defp valid_elevation_cutoff?(_value), do: false
+
+  defp normalize_elevation_cutoff(nil), do: nil
+  defp normalize_elevation_cutoff(value), do: value / 1.0
 
   defp integer_options(opts) do
     radius =
@@ -1328,13 +1517,19 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp base_troposphere_options(opts) do
     estimate_ztd = Keyword.get(opts, :estimate_ztd, false)
+    estimate_tropo_gradients = Keyword.get(opts, :estimate_tropo_gradients, false)
 
     case Keyword.get(opts, :troposphere, false) do
       false ->
-        if estimate_ztd == false do
-          {:ok, %{enabled?: false, met: nil, estimate_ztd?: false}}
-        else
-          {:error, {:invalid_option, :estimate_ztd}}
+        cond do
+          estimate_ztd != false ->
+            {:error, {:invalid_option, :estimate_ztd}}
+
+          estimate_tropo_gradients != false ->
+            {:error, {:invalid_option, :estimate_tropo_gradients}}
+
+          true ->
+            {:ok, %{enabled?: false, met: nil, estimate_ztd?: false, estimate_tropo_gradients?: false}}
         end
 
       true ->
@@ -1356,6 +1551,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
           estimate_ztd not in [true, false] ->
             {:error, {:invalid_option, :estimate_ztd}}
 
+          estimate_tropo_gradients not in [true, false] ->
+            {:error, {:invalid_option, :estimate_tropo_gradients}}
+
           not valid_tropo_mapping?(mapping) ->
             {:error, {:invalid_option, :tropo_mapping}}
 
@@ -1364,6 +1562,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
              %{
                enabled?: true,
                estimate_ztd?: estimate_ztd,
+               estimate_tropo_gradients?: estimate_tropo_gradients,
                mapping: mapping,
                met: %{
                  pressure_hpa: pressure / 1.0,
@@ -1609,7 +1808,13 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   defp ztd_unknown_count(%{estimate_ztd?: true}), do: 1
   defp ztd_unknown_count(_tropo), do: 0
 
+  defp tropo_gradient_unknown_count(%{estimate_tropo_gradients?: true}), do: 2
+  defp tropo_gradient_unknown_count(_tropo), do: 0
+
   defp ensure_single_epoch_troposphere(%{estimate_ztd?: true}), do: {:error, {:invalid_option, :estimate_ztd}}
+
+  defp ensure_single_epoch_troposphere(%{estimate_tropo_gradients?: true}),
+    do: {:error, {:invalid_option, :estimate_tropo_gradients}}
 
   defp ensure_single_epoch_troposphere(_tropo), do: :ok
 
