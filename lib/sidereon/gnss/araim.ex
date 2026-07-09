@@ -25,7 +25,7 @@ defmodule Sidereon.GNSS.ARAIM do
 
     @type t :: %__MODULE__{
             id: String.t(),
-            line_of_sight: {float(), float(), float()},
+            line_of_sight: {float(), float(), float()} | [float()] | map(),
             system: String.t(),
             elevation_rad: float()
           }
@@ -37,7 +37,8 @@ defmodule Sidereon.GNSS.ARAIM do
     `elevation_rad` is radians. If `system` is omitted, it is derived from the
     satellite token's leading letter.
     """
-    @spec new(String.t(), {number(), number(), number()}, number(), atom() | String.t() | nil) :: t()
+    @spec new(String.t(), {number(), number(), number()} | [number()] | map(), number(), atom() | String.t() | nil) ::
+            t()
     def new(id, line_of_sight, elevation_rad, system \\ nil) do
       %__MODULE__{
         id: id,
@@ -47,12 +48,39 @@ defmodule Sidereon.GNSS.ARAIM do
       }
     end
 
+    @doc """
+    Build a row from receiver-relative azimuth and elevation in degrees.
+
+    Azimuth is clockwise from north, elevation is above the local horizon, and
+    `receiver` is `{lat_rad, lon_rad, height_m}`.
+    """
+    @spec from_az_el_deg(String.t(), number(), number(), ARAIM.Geometry.receiver(), atom() | String.t() | nil) ::
+            {:ok, t()} | {:error, term()}
+    def from_az_el_deg(id, azimuth_deg, elevation_deg, receiver, system \\ nil) do
+      case NIF.araim_line_of_sight_from_az_el_deg(azimuth_deg / 1.0, elevation_deg / 1.0, receiver) do
+        {e_x, e_y, e_z} ->
+          {:ok, new(id, {e_x, e_y, e_z}, elevation_deg * :math.pi() / 180.0, system)}
+      end
+    rescue
+      e in ErlangError -> {:error, e.original}
+    end
+
     @doc false
     @spec to_nif_tuple(t()) :: {:ok, tuple()} | {:error, term()}
     def to_nif_tuple(%__MODULE__{id: id, line_of_sight: los, system: system, elevation_rad: elevation_rad}) do
-      with {:ok, {e_x, e_y, e_z}} <- Types.normalize_ecef(los, :bad_line_of_sight),
+      with {:ok, {e_x, e_y, e_z}} <- normalize_los(los),
            {:ok, system} <- ARAIM.system_letter(system) do
         {:ok, {id, {e_x, e_y, e_z}, system, elevation_rad / 1.0}}
+      end
+    end
+
+    defp normalize_los([x, y, z]) when is_number(x) and is_number(y) and is_number(z),
+      do: {:ok, {x / 1.0, y / 1.0, z / 1.0}}
+
+    defp normalize_los(value) do
+      case Types.normalize_ecef(value, :bad_line_of_sight) do
+        {:ok, _} = ok -> ok
+        {:error, :bad_line_of_sight} -> {:error, {:bad_line_of_sight, :expected_ecef_triplet}}
       end
     end
   end
@@ -92,6 +120,44 @@ defmodule Sidereon.GNSS.ARAIM do
       }
     end
 
+    @typedoc "A row as `{id, azimuth_deg, elevation_deg}`, `{id, azimuth_deg, elevation_deg, system}`, or a map."
+    @type az_el_row ::
+            {String.t(), number(), number()}
+            | {String.t(), number(), number(), atom() | String.t()}
+            | %{
+                required(:id) => String.t(),
+                required(:azimuth_deg) => number(),
+                required(:elevation_deg) => number(),
+                optional(:system) => atom() | String.t()
+              }
+
+    @doc """
+    Build ARAIM geometry from per-satellite azimuth and elevation rows.
+
+    Rows may be `{id, azimuth_deg, elevation_deg}`,
+    `{id, azimuth_deg, elevation_deg, system}`, or maps with `:id`,
+    `:azimuth_deg`, `:elevation_deg`, and optional `:system`.
+    """
+    @spec from_az_el_deg([az_el_row()], {number(), number(), number()}, [atom() | String.t()]) ::
+            {:ok, t()} | {:error, term()}
+    def from_az_el_deg(rows, receiver, clock_systems) when is_list(rows) and is_list(clock_systems) do
+      receiver = normalize_receiver(receiver)
+
+      rows
+      |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
+        with {:ok, {id, azimuth_deg, elevation_deg, system}} <- normalize_az_el_row(row),
+             {:ok, geometry_row} <- Row.from_az_el_deg(id, azimuth_deg, elevation_deg, receiver, system) do
+          {:cont, {:ok, [geometry_row | acc]}}
+        else
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+      |> case do
+        {:ok, geometry_rows} -> {:ok, new(Enum.reverse(geometry_rows), receiver, clock_systems)}
+        {:error, _} = err -> err
+      end
+    end
+
     @doc false
     @spec to_nif_terms(t()) :: {:ok, {[tuple()], tuple(), [String.t()]}} | {:error, term()}
     def to_nif_terms(%__MODULE__{rows: rows, receiver: receiver, clock_systems: clock_systems}) do
@@ -128,6 +194,22 @@ defmodule Sidereon.GNSS.ARAIM do
         {:error, _} = err -> err
       end
     end
+
+    defp normalize_receiver({lat_rad, lon_rad, height_m}), do: {lat_rad / 1.0, lon_rad / 1.0, height_m / 1.0}
+
+    defp normalize_az_el_row({id, azimuth_deg, elevation_deg}) do
+      {:ok, {id, azimuth_deg, elevation_deg, nil}}
+    end
+
+    defp normalize_az_el_row({id, azimuth_deg, elevation_deg, system}) do
+      {:ok, {id, azimuth_deg, elevation_deg, system}}
+    end
+
+    defp normalize_az_el_row(%{id: id, azimuth_deg: azimuth_deg, elevation_deg: elevation_deg} = row) do
+      {:ok, {id, azimuth_deg, elevation_deg, Map.get(row, :system)}}
+    end
+
+    defp normalize_az_el_row(_row), do: {:error, :bad_araim_row}
   end
 
   defmodule SatelliteIsmModel do
@@ -468,8 +550,9 @@ defmodule Sidereon.GNSS.ARAIM do
     @moduledoc """
     ARAIM protection-level result.
 
-    `:hpl_m`, `:vpl_m`, `:emt_m`, and sigma fields are meters. `:availability`
+    `:hpl_m`, `:vpl_m`, `:emt_m`, and sigma fields are meters. `:available`
     is true when the protection-level solve met the supplied allocation.
+    `:availability` is kept as an alias.
     """
 
     alias Sidereon.GNSS.ARAIM.FaultMode
@@ -482,6 +565,7 @@ defmodule Sidereon.GNSS.ARAIM do
       :emt_m,
       :fault_modes,
       :p_unmonitored,
+      :available,
       :availability
     ]
     defstruct [
@@ -492,6 +576,7 @@ defmodule Sidereon.GNSS.ARAIM do
       :emt_m,
       :fault_modes,
       :p_unmonitored,
+      :available,
       :availability
     ]
 
@@ -503,6 +588,7 @@ defmodule Sidereon.GNSS.ARAIM do
             emt_m: float(),
             fault_modes: [FaultMode.t()],
             p_unmonitored: float(),
+            available: boolean(),
             availability: boolean()
           }
   end
@@ -538,7 +624,7 @@ defmodule Sidereon.GNSS.ARAIM do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> {:error, Map.get(e, :original, e)}
   end
 
   @doc false
@@ -566,7 +652,8 @@ defmodule Sidereon.GNSS.ARAIM do
       emt_m: fields.emt_m,
       fault_modes: Enum.map(fields.fault_modes, &fault_mode/1),
       p_unmonitored: fields.p_unmonitored,
-      availability: fields.availability
+      available: fields.available,
+      availability: fields.available
     }
   end
 

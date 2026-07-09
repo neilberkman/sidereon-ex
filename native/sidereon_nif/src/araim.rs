@@ -9,6 +9,7 @@ use sidereon_core::araim::{
     araim, AraimError, AraimGeometry, AraimRow, ConstellationIsm, IntegrityAllocation, Ism,
     SatelliteIsm, SatelliteIsmModel,
 };
+use sidereon_core::geometry::line_of_sight_from_az_el_deg;
 use sidereon_core::positioning::LineOfSight;
 use sidereon_core::{GnssSatelliteId, GnssSystem, Wgs84Geodetic};
 
@@ -45,6 +46,7 @@ struct FaultModeTerm {
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct AraimResultTerm {
+    available: bool,
     hpl_m: f64,
     vpl_m: f64,
     sigma_acc_h_m: f64,
@@ -214,16 +216,29 @@ fn error_atom(err: AraimError) -> rustler::Atom {
 }
 
 fn vec3(values: [f64; 3]) -> Vec3 {
-    (values[0], values[1], values[2])
+    (
+        nif_float(values[0]),
+        nif_float(values[1]),
+        nif_float(values[2]),
+    )
+}
+
+fn nif_float(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        f64::MAX
+    }
 }
 
 fn result_term(result: sidereon_core::araim::AraimResult) -> AraimResultTerm {
     AraimResultTerm {
-        hpl_m: result.hpl_m,
-        vpl_m: result.vpl_m,
-        sigma_acc_h_m: result.sigma_acc_h_m,
-        sigma_acc_v_m: result.sigma_acc_v_m,
-        emt_m: result.emt_m,
+        available: result.available,
+        hpl_m: nif_float(result.hpl_m),
+        vpl_m: nif_float(result.vpl_m),
+        sigma_acc_h_m: nif_float(result.sigma_acc_h_m),
+        sigma_acc_v_m: nif_float(result.sigma_acc_v_m),
+        emt_m: nif_float(result.emt_m),
         fault_modes: result
             .fault_modes
             .into_iter()
@@ -238,7 +253,7 @@ fn result_term(result: sidereon_core::araim::AraimResult) -> AraimResultTerm {
             })
             .collect(),
         p_unmonitored: result.p_unmonitored,
-        availability: result.availability,
+        availability: result.available,
     }
 }
 
@@ -246,6 +261,18 @@ fn result_term(result: sidereon_core::araim::AraimResult) -> AraimResultTerm {
 #[rustler::nif]
 fn araim_lpv_200_allocation() -> AllocationTerm {
     allocation_term(IntegrityAllocation::lpv_200())
+}
+
+/// Convert receiver-relative azimuth and elevation to an ECEF LOS vector.
+#[rustler::nif]
+fn araim_line_of_sight_from_az_el_deg(
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    receiver: ReceiverTerm,
+) -> NifResult<Vec3> {
+    let los = line_of_sight_from_az_el_deg(azimuth_deg, elevation_deg, decode_receiver(receiver)?)
+        .map_err(crate::errors::invalid_input)?;
+    Ok((los.e_x, los.e_y, los.e_z))
 }
 
 /// Run ARAIM for a caller-supplied snapshot geometry and ISM.

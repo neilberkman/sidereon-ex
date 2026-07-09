@@ -13,6 +13,7 @@ defmodule Sidereon.GNSS.QC do
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.Positioning.Solution
+  alias Sidereon.GNSS.QC.{RaimInput, RaimResult}
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
@@ -354,16 +355,89 @@ defmodule Sidereon.GNSS.QC do
   @type weight_entry ::
           {String.t(), number()} | {String.t(), number(), number()}
 
+  defmodule RaimInput do
+    @moduledoc """
+    Post-solve RAIM input.
+
+    `:used_sats` and `:residuals_m` must use the same order. Residuals are the
+    post-fit range residuals in meters.
+    """
+
+    @enforce_keys [:used_sats, :residuals_m]
+    defstruct [:used_sats, :residuals_m]
+
+    @type t :: %__MODULE__{
+            used_sats: [String.t()],
+            residuals_m: [float()]
+          }
+
+    @doc """
+    Build post-solve RAIM input from satellite ids and residuals.
+    """
+    @spec new([String.t()], [number()]) :: t()
+    def new(used_sats, residuals_m) when is_list(used_sats) and is_list(residuals_m) do
+      %__MODULE__{
+        used_sats: used_sats,
+        residuals_m: Enum.map(residuals_m, &(&1 / 1.0))
+      }
+    end
+  end
+
+  defmodule RaimResult do
+    @moduledoc """
+    Post-solve RAIM fault-detection result.
+    """
+
+    @enforce_keys [
+      :fault_detected,
+      :test_statistic,
+      :threshold,
+      :worst_sat,
+      :reduced_chi_square,
+      :normalized_residuals,
+      :rms_m,
+      :dof,
+      :testable
+    ]
+    defstruct [
+      :fault_detected,
+      :test_statistic,
+      :threshold,
+      :worst_sat,
+      :reduced_chi_square,
+      :normalized_residuals,
+      :rms_m,
+      :dof,
+      :testable
+    ]
+
+    @type t :: %__MODULE__{
+            fault_detected: boolean(),
+            test_statistic: float(),
+            threshold: float() | nil,
+            worst_sat: String.t() | nil,
+            reduced_chi_square: float() | nil,
+            normalized_residuals: %{String.t() => float()},
+            rms_m: float(),
+            dof: integer(),
+            testable: boolean()
+          }
+  end
+
   @typedoc """
   The result of `raim/2`.
   """
   @type raim_result :: %{
           fault_detected?: boolean(),
+          fault_detected: boolean(),
           test_statistic: float(),
           threshold: float() | nil,
+          reduced_chi_square: float() | nil,
           dof: integer(),
           testable?: boolean(),
+          testable: boolean(),
           normalized_residuals: %{String.t() => float()},
+          rms_m: float(),
           worst_sat: String.t() | nil
         }
 
@@ -418,31 +492,33 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Residual-based RAIM: a chi-square goodness-of-fit test on a positioning solution.
+
+  Pass inverse-variance weights derived from per-satellite residual variances,
+  either as a `%{sat => weight}` map or as weight entries consumed by
+  `weight_vector/2`. Unit weights with metre-scale residuals make
+  `fault_detected` saturate near 100%.
+
+      entries = [
+        %{satellite_id: "G01", elevation_deg: 72.0},
+        %{satellite_id: "G02", elevation_deg: 42.0}
+      ]
+
+      weights = Sidereon.GNSS.QC.weight_vector(entries, a_m: 0.8, b_m: 0.8)
+      Sidereon.GNSS.QC.raim(input, weights: weights)
   """
-  @spec raim(Solution.t(), keyword()) :: raim_result()
-  def raim(%Solution{} = solution, opts \\ []) do
-    p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
-    weights_opt = Keyword.get(opts, :weights, :unit)
+  @spec raim(Solution.t() | RaimInput.t(), keyword()) :: raim_result() | RaimResult.t()
+  def raim(input, opts \\ [])
 
-    validate_p_fa!(p_fa)
-    validate_weights!(weights_opt)
+  def raim(%RaimInput{} = input, opts) do
+    input.used_sats
+    |> run_raim(input.residuals_m, opts)
+    |> decode_raim_result(:struct)
+  end
 
-    unit_weights? = weights_opt == :unit
-    weights = if unit_weights?, do: [], else: string_weight_pairs(weights_opt)
-    n_systems = n_systems_arg(Keyword.get(opts, :n_systems))
-
-    case NIF.qc_raim(
-           solution.used_sats,
-           solution.residuals_m,
-           p_fa / 1.0,
-           unit_weights?,
-           weights,
-           n_systems
-         ) do
-      {:ok, result} -> decode_raim_result(result)
-      {:error, :invalid_probability} -> raise_chi2_error!(1.0 - p_fa, nil)
-      {:error, :invalid_weight} -> raise_weights_error!(weights_opt)
-    end
+  def raim(%Solution{} = solution, opts) do
+    solution.used_sats
+    |> run_raim(solution.residuals_m, opts)
+    |> decode_raim_result(:map)
   end
 
   @doc """
@@ -707,15 +783,55 @@ defmodule Sidereon.GNSS.QC do
     %{satellite_id: sat, elevation_deg: el / 1.0, cn0: cn0 / 1.0}
   end
 
-  defp decode_raim_result({fault_detected?, test_statistic, threshold, dof, testable?, normalized, worst_sat}) do
+  defp run_raim(used_sats, residuals_m, opts) do
+    p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
+    weights_opt = Keyword.get(opts, :weights, :unit)
+
+    validate_p_fa!(p_fa)
+    {unit_weights?, weights} = raim_weight_args(weights_opt, opts)
+    n_systems = n_systems_arg(Keyword.get(opts, :n_systems))
+
+    case NIF.qc_raim(
+           used_sats,
+           residuals_m,
+           p_fa / 1.0,
+           unit_weights?,
+           weights,
+           n_systems
+         ) do
+      {:ok, result} -> result
+      {:error, :invalid_probability} -> raise_chi2_error!(1.0 - p_fa, nil)
+      {:error, :invalid_weight} -> raise_weights_error!(weights_opt)
+    end
+  end
+
+  defp decode_raim_result(fields, :map) do
     %{
-      fault_detected?: fault_detected?,
-      test_statistic: test_statistic,
-      threshold: threshold,
-      dof: dof,
-      testable?: testable?,
-      normalized_residuals: Map.new(normalized),
-      worst_sat: worst_sat
+      fault_detected?: fields.fault_detected,
+      fault_detected: fields.fault_detected,
+      test_statistic: fields.test_statistic,
+      threshold: fields.threshold,
+      reduced_chi_square: fields.reduced_chi_square,
+      dof: fields.dof,
+      testable?: fields.testable,
+      testable: fields.testable,
+      normalized_residuals: Map.new(fields.normalized_residuals),
+      rms_m: fields.rms_m,
+      worst_sat: fields.worst_sat
+    }
+  end
+
+  defp decode_raim_result(fields, :struct) do
+    %RaimResult{
+      fault_detected: fields.fault_detected,
+      test_statistic: fields.test_statistic,
+      threshold: fields.threshold,
+      worst_sat: fields.worst_sat,
+      reduced_chi_square: fields.reduced_chi_square,
+      normalized_residuals: Map.new(fields.normalized_residuals),
+      rms_m: fields.rms_m,
+      dof: fields.dof,
+      testable: fields.testable
     }
   end
 
@@ -762,6 +878,33 @@ defmodule Sidereon.GNSS.QC do
 
   defp raise_weights_error!(weights) do
     raise ArgumentError, "raim :weights must all be positive numbers, got: #{inspect(weights)}"
+  end
+
+  defp raim_weight_args(:unit, _opts), do: {true, []}
+
+  defp raim_weight_args(weights, _opts) when is_map(weights) do
+    validate_weights!(weights)
+    {false, string_weight_pairs(weights)}
+  end
+
+  defp raim_weight_args(entries, opts) when is_list(entries) do
+    weights =
+      entries
+      |> weight_vector(raim_variance_opts(opts))
+      |> string_weight_pairs()
+
+    {false, weights}
+  end
+
+  defp raim_weight_args(weights, _opts) when not is_map(weights) and not is_list(weights) do
+    raise ArgumentError,
+          "raim :weights must be :unit, a %{sat => weight} map, or a weight-entry list, got: #{inspect(weights)}"
+  end
+
+  defp raim_variance_opts(opts) do
+    opts
+    |> Keyword.take([:a, :b, :model, :cn0, :cn0_scale])
+    |> Keyword.update(:model, :elevation, & &1)
   end
 
   defp raise_chi2_error!(p, k) do
