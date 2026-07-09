@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0]
+
+### Added
+
+- Typed public structs for the RTK arc surfaces: sequential arc, static arc,
+  wide-lane fixed, and ionosphere-free preparation results, plus typed arc
+  config structs (map input still accepted).
+- `Sidereon.GNSS.QC.raim_for_solution/2` as a first-class direct wrapper.
+- `Sidereon.GNSS.SPP.spp_inputs_from_rinex_obs/3` and
+  `solve_spp_from_rinex_obs/3`, mirroring the Rust facade conveniences.
+- `Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact` as a named public type
+  over the existing artifact bytes/open/checksum calls.
+- `Sidereon.GNSS.Ntrip.request_bytes/2` (and the `ntrip_request_bytes/2`
+  facade-name alias) exposing the sans-I/O NTRIP request builder.
+- Parity naming for estimation, terrain/geoid, SP3 precise-accessor, signal
+  analysis, and fusion typed-input helpers, matching the other interfaces.
+
 ## [0.24.0]
 
 ### Added
