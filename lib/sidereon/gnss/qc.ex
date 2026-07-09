@@ -492,6 +492,19 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Residual-based RAIM: a chi-square goodness-of-fit test on a positioning solution.
+
+  Pass inverse-variance weights derived from per-satellite residual variances,
+  either as a `%{sat => weight}` map or as weight entries consumed by
+  `weight_vector/2`. Unit weights with metre-scale residuals make
+  `fault_detected` saturate near 100%.
+
+      entries = [
+        %{satellite_id: "G01", elevation_deg: 72.0},
+        %{satellite_id: "G02", elevation_deg: 42.0}
+      ]
+
+      weights = Sidereon.GNSS.QC.weight_vector(entries, a_m: 0.8, b_m: 0.8)
+      Sidereon.GNSS.QC.raim(input, weights: weights)
   """
   @spec raim(Solution.t() | RaimInput.t(), keyword()) :: raim_result() | RaimResult.t()
   def raim(input, opts \\ [])

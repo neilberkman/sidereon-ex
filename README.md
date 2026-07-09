@@ -92,7 +92,22 @@ observations and a product in, a typed solution out.
 
 For post-solve integrity checks, use `Sidereon.GNSS.QC.RaimInput.new/2` with
 `Sidereon.GNSS.QC.raim/2` to run residual RAIM from satellite ids and
-post-fit residuals. Use `Sidereon.GNSS.ARAIM.Geometry.from_az_el_deg/3` with
+post-fit residuals. RAIM weights must come from per-satellite residual
+variances; unit weights on metre-scale residuals make `fault_detected`
+saturate near 100%:
+
+```elixir
+entries = [
+  %{satellite_id: "G01", elevation_deg: 72.0},
+  %{satellite_id: "G02", elevation_deg: 42.0},
+  %{satellite_id: "G03", elevation_deg: 35.0}
+]
+
+weights = Sidereon.GNSS.QC.weight_vector(entries, a_m: 0.8, b_m: 0.8)
+Sidereon.GNSS.QC.raim(input, weights: weights)
+```
+
+Use `Sidereon.GNSS.ARAIM.Geometry.from_az_el_deg/3` with
 `Sidereon.GNSS.ARAIM.araim/3` to compute HPL/VPL protection levels from
 azimuth/elevation rows, ISM records, and an integrity allocation.
 

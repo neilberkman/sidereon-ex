@@ -182,6 +182,7 @@ defmodule SidereonBuild012BindingsTest do
     allocation = ARAIM.IntegrityAllocation.lpv_200()
 
     assert {:ok, result} = ARAIM.araim(geometry, ism, allocation)
+    assert result.available
     assert result.availability
     assert_in_delta result.vpl_m, 19.2, 0.05
     assert_in_delta result.hpl_m, 14.5, 0.05
@@ -196,11 +197,50 @@ defmodule SidereonBuild012BindingsTest do
 
     assert {:ok, az_el_geometry} = ARAIM.Geometry.from_az_el_deg(az_el_rows, {0.0, 0.0, 0.0}, [:gps, :galileo])
     assert {:ok, az_el_result} = ARAIM.araim(az_el_geometry, ism, allocation)
+    assert az_el_result.available
     assert az_el_result.availability
     assert_in_delta az_el_result.hpl_m, 14.5, 0.05
     assert_in_delta az_el_result.vpl_m, 19.2, 0.05
     assert_in_delta az_el_result.sigma_acc_h_m, result.sigma_acc_h_m, 0.02
     assert_in_delta az_el_result.sigma_acc_v_m, result.sigma_acc_v_m, 0.02
+  end
+
+  test "ARAIM sparse GPS geometry returns unavailable and LOS lists are accepted" do
+    s = 0.577_350_269_189_625_8
+
+    geometry =
+      ARAIM.Geometry.new(
+        [
+          ARAIM.Row.new("G01", [s, s, s], :math.pi() / 2.0),
+          ARAIM.Row.new("G02", [s, -s, -s], :math.pi() / 2.0),
+          ARAIM.Row.new("G03", [-s, s, -s], :math.pi() / 2.0),
+          ARAIM.Row.new("G04", [-s, -s, s], :math.pi() / 2.0)
+        ],
+        {0.0, 0.0, 0.0},
+        [:gps]
+      )
+
+    model = ARAIM.SatelliteIsmModel.new(0.75, 0.5, 0.75, 1.0e-5)
+    ism = ARAIM.Ism.new([ARAIM.ConstellationIsm.new(:gps, 0.0, model)], [])
+
+    assert {:ok, result} = ARAIM.araim(geometry, ism, ARAIM.IntegrityAllocation.lpv_200())
+    refute result.available
+    refute result.availability
+  end
+
+  test "ARAIM bad LOS list returns a typed error" do
+    geometry =
+      ARAIM.Geometry.new(
+        [ARAIM.Row.new("G01", [1.0, 0.0], :math.pi() / 2.0)],
+        {0.0, 0.0, 0.0},
+        [:gps]
+      )
+
+    model = ARAIM.SatelliteIsmModel.new(0.75, 0.5, 0.75, 1.0e-5)
+    ism = ARAIM.Ism.new([ARAIM.ConstellationIsm.new(:gps, 0.0, model)], [])
+
+    assert {:error, {:bad_line_of_sight, :expected_ecef_triplet}} =
+             ARAIM.araim(geometry, ism, ARAIM.IntegrityAllocation.lpv_200())
   end
 
   test "angular separation and position angle match core reference cases" do
