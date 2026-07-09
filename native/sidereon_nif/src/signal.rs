@@ -268,6 +268,37 @@ fn signal_snr_post_db(cn0_dbhz: f64, integration_time_s: f64) -> NifResult<f64> 
     signal::snr_post_db(cn0_dbhz, integration_time_s).map_err(crate::errors::invalid_input)
 }
 
+#[rustler::nif]
+fn signal_analysis_reference_chip_rate_hz() -> f64 {
+    analysis::REFERENCE_CHIP_RATE_HZ
+}
+
+#[rustler::nif]
+fn signal_analysis_betz_l1_receiver_bandwidth_hz() -> f64 {
+    analysis::BETZ_L1_RECEIVER_BANDWIDTH_HZ
+}
+
+#[rustler::nif]
+fn signal_analysis_modulation_label<'a>(env: Env<'a>, modulation: ModulationTerm) -> Term<'a> {
+    let modulation = match decode_modulation(modulation) {
+        Ok(modulation) => modulation,
+        Err(err) => return encode_analysis_error(env, err),
+    };
+    (atoms::ok(), modulation.label()).encode(env)
+}
+
+#[rustler::nif]
+fn signal_analysis_modulation_code_rate_hz<'a>(
+    env: Env<'a>,
+    modulation: ModulationTerm,
+) -> Term<'a> {
+    let modulation = match decode_modulation(modulation) {
+        Ok(modulation) => modulation,
+        Err(err) => return encode_analysis_error(env, err),
+    };
+    encode_analysis_result(env, || modulation.code_rate_hz())
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn signal_analysis_psd_hz<'a>(
     env: Env<'a>,
@@ -283,6 +314,21 @@ fn signal_analysis_psd_hz<'a>(
             .into_iter()
             .map(|offset_hz| modulation.psd_hz(offset_hz))
             .collect::<Result<Vec<_>, _>>()
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn signal_analysis_power_in_band<'a>(
+    env: Env<'a>,
+    modulation: ModulationTerm,
+    receiver_bandwidth_hz: f64,
+) -> Term<'a> {
+    let modulation = match decode_modulation(modulation) {
+        Ok(modulation) => modulation,
+        Err(err) => return encode_analysis_error(env, err),
+    };
+    encode_analysis_result(env, || {
+        analysis::power_in_band(&modulation, receiver_bandwidth_hz)
     })
 }
 
@@ -357,6 +403,21 @@ fn signal_analysis_ssc_db_hz<'a>(
             &interference,
             receiver_bandwidth_hz,
         )
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn signal_analysis_white_noise_ssc_hz<'a>(
+    env: Env<'a>,
+    desired: ModulationTerm,
+    receiver_bandwidth_hz: f64,
+) -> Term<'a> {
+    let desired = match decode_modulation(desired) {
+        Ok(modulation) => modulation,
+        Err(err) => return encode_analysis_error(env, err),
+    };
+    encode_analysis_result(env, || {
+        analysis::white_noise_spectral_separation_hz(&desired, receiver_bandwidth_hz)
     })
 }
 

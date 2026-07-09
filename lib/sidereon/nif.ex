@@ -1074,7 +1074,17 @@ defmodule Sidereon.NIF do
 
   def signal_snr_post_db(_cn0_dbhz, _integration_time_s), do: :erlang.nif_error(:nif_not_loaded)
 
+  def signal_analysis_reference_chip_rate_hz, do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_betz_l1_receiver_bandwidth_hz, do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_modulation_label(_modulation), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_modulation_code_rate_hz(_modulation), do: :erlang.nif_error(:nif_not_loaded)
+
   def signal_analysis_psd_hz(_modulation, _offsets_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_power_in_band(_modulation, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
 
   def signal_analysis_fraction_power(_modulation, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1083,6 +1093,8 @@ defmodule Sidereon.NIF do
   def signal_analysis_ssc_hz(_desired, _interference, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
 
   def signal_analysis_ssc_db_hz(_desired, _interference, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_analysis_white_noise_ssc_hz(_desired, _receiver_bandwidth_hz), do: :erlang.nif_error(:nif_not_loaded)
 
   def signal_analysis_effective_cn0_degradation(_desired, _cn0_db_hz, _receiver_bandwidth_hz, _interferences),
     do: :erlang.nif_error(:nif_not_loaded)

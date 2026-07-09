@@ -161,9 +161,51 @@ No fusion/inertial surface was widened in this gated subset.
 
 ### #92 Signal Analysis
 
-Still remaining.
+Partially closed in this run.
 
-No signal-analysis surface was widened in this gated subset.
+Added tested signal-analysis parity names and typed option structs over core/NIF paths:
+
+- `Sidereon.GNSS.Signal.Analysis.InterferenceTerm`
+- `Sidereon.GNSS.Signal.Analysis.DllTrackingOptions`
+- `Sidereon.GNSS.Signal.Analysis.MultipathOptions`
+- `Sidereon.GNSS.Signal.Analysis.bpsk1/0`
+- `Sidereon.GNSS.Signal.Analysis.boc_cosine/2`
+- `Sidereon.GNSS.Signal.Analysis.mboc_6_1_1_over_11/0`
+- `Sidereon.GNSS.Signal.Analysis.tmboc_6_1_4_over_33/0`
+- `Sidereon.GNSS.Signal.Analysis.label/1`
+- `Sidereon.GNSS.Signal.Analysis.code_rate_hz/1`
+- `Sidereon.GNSS.Signal.Analysis.signal_reference_chip_rate_hz/0`
+- `Sidereon.GNSS.Signal.Analysis.signal_betz_l1_receiver_bandwidth_hz/0`
+- `Sidereon.GNSS.Signal.Analysis.power_in_band/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_psd_hz/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_psd/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_power_in_band/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_fraction_power_in_band/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_rms_bandwidth_hz/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_spectral_separation_coefficient_hz/3`
+- `Sidereon.GNSS.Signal.Analysis.signal_spectral_separation_coefficient_db_hz/3`
+- `Sidereon.GNSS.Signal.Analysis.white_noise_spectral_separation_hz/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_white_noise_spectral_separation_hz/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_effective_cn0_degradation/4`
+- `Sidereon.GNSS.Signal.Analysis.signal_dll_thermal_noise_jitter/3`
+- `Sidereon.GNSS.Signal.Analysis.signal_dll_lower_bound/2`
+- `Sidereon.GNSS.Signal.Analysis.signal_multipath_error_envelope/3`
+
+Existing acquisition/correlation parity names remain covered by `Sidereon.GNSS.Signal.Correlator.replica/2`, `correlate/3`, `correlate_against/4`, `acquire/3`, `coherent_loss/2`, `coherent_loss_db/2`, and `snr_post_db/2`.
+
+Intentionally-not:
+
+- WASM exposes CBOC plus/minus constructors. This worktree's Elixir modulation decoder does not accept CBOC terms yet; adding the public constructors without the NIF marshal path would be untested surface.
+- Python exposes object classes for C/N0 degradation, DLL jitter, and multipath envelopes. Elixir already returns typed maps for those results and now accepts typed input structs; replacing result maps would be a compatibility change, so it was not done in this additive subset.
+
+Proof tests:
+
+- `test/gnss_signal_analysis_test.exs`: `exposes modulation constructors and module-level helper names over core paths`
+- `test/gnss_signal_analysis_test.exs`: `typed signal-analysis option structs marshal through NIF-backed metrics`
+- `test/gnss_signal_analysis_test.exs`: `pins BPSK and BOC spectrum metrics to core values`
+- `test/gnss_signal_analysis_test.exs`: `pins C/N0, DLL jitter, lower bound, and multipath envelopes`
+- `test/gnss_signal_correlator_test.exs`
+- `test/gnss_signal_ca_test.exs`
 
 ### #93 Terrain/Geoid Store Drift
 
