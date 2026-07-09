@@ -150,3 +150,66 @@ Proof tests:
 - `test/geoid_egm96_test.exs`
 - `test/build_012_bindings_test.exs`: `terrain height_batch matches scalar DTED lookups in longitude-first order`
 - `test/build_012_bindings_test.exs`: `mmap terrain store matches DTED reader and missing EGM96 DAC is typed`
+
+## Run 2
+
+### #90 Fusion/Inertial
+
+Still remaining.
+
+No fusion/inertial surface was widened in this gated subset.
+
+### #92 Signal Analysis
+
+Still remaining.
+
+No signal-analysis surface was widened in this gated subset.
+
+### #93 Terrain/Geoid Store Drift
+
+Still remaining.
+
+No terrain/geoid store surface was widened in this gated subset.
+
+### #88 Estimation Public Wrapper Set
+
+Still remaining.
+
+No estimation wrapper sweep was completed in this gated subset.
+
+### #77/#78 Tides and Almanac Module-Level Parity
+
+Still remaining.
+
+No tides/almanac module-level sweep was completed in this gated subset.
+
+### #62/#32/#33/#34 Staleness and SP3 Precise Accessors
+
+Still remaining.
+
+No SP3 merge-reconciliation or precise-interpolant accessor sweep was completed in this gated subset.
+
+### #8/#9/#13 RTK Arc Input Config Structs
+
+Closed in this run.
+
+Added typed public RTK arc input config structs while keeping map input accepted:
+
+- `Sidereon.GNSS.RTK.MeasurementModel`
+- `Sidereon.GNSS.RTK.FloatOptions`
+- `Sidereon.GNSS.RTK.FixedOptions`
+- `Sidereon.GNSS.RTK.ResidualValidationOptions`
+- `Sidereon.GNSS.RTK.ArcUpdateOptions`
+- `Sidereon.GNSS.RTK.ArcPreprocessing`
+- `Sidereon.GNSS.RTK.ArcConfig`
+- `Sidereon.GNSS.RTK.StaticArcConfig`
+- `Sidereon.GNSS.RTK.WideLaneOptions`
+- `Sidereon.GNSS.RTK.DualCycleSlipConfig`
+- `Sidereon.GNSS.RTK.WideLaneArcConfig`
+- `Sidereon.GNSS.RTK.IonosphereFreeArcConfig`
+
+Proof tests:
+
+- `test/gnss_rtk_test.exs`: `accepts typed arc config structs on the real sequential solver path`
+- `test/gnss_rtk_test.exs`: `accepts typed static arc config structs on the real static solver path`
+- `test/gnss_rtk_test.exs`: `accepts typed wide-lane and ionosphere-free arc config structs`
