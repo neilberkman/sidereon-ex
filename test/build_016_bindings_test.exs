@@ -62,6 +62,21 @@ defmodule Sidereon.Build016BindingsTest do
     assert float_bits(Geoid.grid_undulation_deg(grid, 37.0, -123.0)) == 0xC0423FEB60000000
   end
 
+  test "EGM2008 spacing and raster-window aliases use the real raster parser" do
+    bytes = File.read!(@egm2008_crop)
+
+    assert Geoid.Egm2008GridSpacing.arc_minutes(:two_point_five_minute) == 2.5
+    assert Geoid.Egm2008GridSpacing.degrees(:two_point_five_minute) == 2.5 / 60.0
+    assert Geoid.Egm2008GridSpacing.global_dimensions(:two_point_five_minute) == {4_321, 8_640}
+
+    window = Geoid.Egm2008RasterWindow.new(:two_point_five_minute, 37.0, -123.0, 25, 25)
+    assert {:ok, grid} = Geoid.from_egm2008_raster_window(bytes, window)
+    assert_in_delta Geoid.grid_undulation_deg(grid, 37.7749, -122.4194), -32.163558372373, 0.005
+
+    global = Geoid.Egm2008RasterWindow.global_window(:two_point_five_minute)
+    assert {global.lat_min_deg, global.lon_min_deg, global.n_lat, global.n_lon} == {-90.0, 0.0, 4_321, 8_640}
+  end
+
   test "TDM Annex E KVN round-trips through canonical structs" do
     text = File.read!(@tdm_annex)
 

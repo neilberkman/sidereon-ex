@@ -23,7 +23,9 @@ defmodule Sidereon.GeoidTest do
     """
 
     assert {:ok, grid} = Geoid.load_grid(text)
+    assert {:ok, alias_grid} = Geoid.from_text(text)
     assert_in_delta Geoid.grid_undulation_deg(grid, 10.0, 20.0), 1.0, 1.0e-12
+    assert_in_delta Geoid.grid_undulation_deg(alias_grid, 10.0, 20.0), 1.0, 1.0e-12
     assert_in_delta Geoid.grid_undulation_deg(grid, 15.0, 30.0), 6.0, 1.0e-12
     # Cell center of the lower-left cell -> mean of its four corners.
     center = Geoid.grid_undulation_deg(grid, 12.5, 22.5)

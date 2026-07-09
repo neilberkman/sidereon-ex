@@ -167,9 +167,32 @@ No signal-analysis surface was widened in this gated subset.
 
 ### #93 Terrain/Geoid Store Drift
 
-Still remaining.
+Partially closed in this run.
 
-No terrain/geoid store surface was widened in this gated subset.
+Added tested, additive parity names over the existing terrain/geoid NIF-backed paths:
+
+- `Sidereon.Terrain.DtedLookupOptions`
+- `Sidereon.Terrain.height_m/4`
+- `Sidereon.Terrain.height_m_with_options/4`
+- `Sidereon.Terrain.DtedTile.from_path/1`
+- `Sidereon.Geoid.Egm2008GridSpacing`
+- `Sidereon.Geoid.Egm2008RasterWindow`
+- `Sidereon.Geoid.from_text/1`
+- `Sidereon.Geoid.from_egm96_dac/1`
+- `Sidereon.Geoid.from_egm2008_raster/2`
+- `Sidereon.Geoid.load_egm2008_raster_window/2`
+- `Sidereon.Geoid.from_egm2008_raster_window/2`
+
+Intentionally-not:
+
+- Python exposes a `GeoidGrid` class with methods; Elixir already exposes the same grid handle through `Sidereon.Geoid.grid/7`, `load_grid/1`, and `grid_*` module functions. Adding a second class-like wrapper would duplicate the same handle contract without a new core path.
+- Python `MmapTerrain.height_m` returns a scalar while Elixir's existing `Sidereon.Terrain.MmapTerrain.height_m/4` returns the typed `%OrthometricHeightM{}` wrapper. The existing return type is preserved for compatibility; callers can use `Sidereon.Terrain.MmapTerrain.OrthometricHeightM.metres/1` for the scalar value.
+
+Proof tests:
+
+- `test/build_012_bindings_test.exs`: `DTED parity aliases accept typed lookup options`
+- `test/build_016_bindings_test.exs`: `EGM2008 spacing and raster-window aliases use the real raster parser`
+- `test/geoid_test.exs`: `load_grid parses a text grid and interpolates`
 
 ### #88 Estimation Public Wrapper Set
 
@@ -195,9 +218,21 @@ Proof tests:
 
 ### #77/#78 Tides and Almanac Module-Level Parity
 
-Still remaining.
+Closed by existing surface and documented intentional naming differences.
 
-No tides/almanac module-level sweep was completed in this gated subset.
+Cross-checked Python/wasm tide and almanac helper names:
+
+- Tide helpers are already exposed at the Elixir root over the existing NIFs: `Sidereon.solid_earth_tide/7`, `Sidereon.solid_earth_pole_tide/7`, and `Sidereon.ocean_tide_loading/7`.
+- Almanac helpers are already exposed in `Sidereon.Astro.Almanac`: `seasons/2`, `seasons/3`, `moon_phases/2`, `moon_phases/3`, `meridian_transits/4`, `meridian_transits/5`, `lunar_solar_eclipses/2`, `lunar_solar_eclipses/3`, and `planetary_events/5`.
+
+Intentionally-not:
+
+- WASM exposes separate `*Spk` function names. Elixir uses first-argument dispatch with `%Sidereon.Ephemeris{}` on the same module-level function names instead, for example `Sidereon.Astro.Almanac.seasons(ephemeris, window, opts)`. I did not add untested `*_spk` aliases because this worktree only has an Eros SPK fixture, not an Earth/Moon/Sun DE ephemeris that can exercise seasons, phases, transits, or eclipses through the real SPK almanac path.
+
+Proof tests:
+
+- `test/public_tides_bodies_test.exs`: `public station tide helpers delegate to core kernels`
+- `test/phase_b_api_test.exs`: `observe and almanac analytic wrappers return structured events`
 
 ### #62/#32/#33/#34 Staleness and SP3 Precise Accessors
 
