@@ -236,9 +236,37 @@ Proof tests:
 
 ### #62/#32/#33/#34 Staleness and SP3 Precise Accessors
 
-Still remaining.
+Partially closed in this run.
 
-No SP3 merge-reconciliation or precise-interpolant accessor sweep was completed in this gated subset.
+Added tested accessor aliases over existing SP3, sample-source, and precise-interpolant paths:
+
+- `Sidereon.GNSS.SP3.satellites/1`
+- `Sidereon.GNSS.SP3.to_sp3_string/2`
+- `Sidereon.GNSS.SP3.interpolate/3`
+- `Sidereon.GNSS.SP3.precise_interpolant_artifact_bytes/1`
+- `Sidereon.GNSS.PreciseEphemeris.satellites/1`
+- `Sidereon.GNSS.PreciseEphemeris.observable_states_at_j2000_s/3`
+- `Sidereon.GNSS.PreciseEphemeris.observable_states_at_shared_j2000_s/3`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.from_bytes/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.from_path/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.checksum64/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.byte_len/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.as_bytes/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.satellites/1`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.position_at_j2000_seconds/3`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.observable_states_at_j2000_s/3`
+- `Sidereon.GNSS.PreciseEphemeris.Interpolant.observable_states_at_shared_j2000_s/3`
+
+Intentionally-not:
+
+- Python exposes SP3 merge report accessors as classes with properties. Elixir currently returns report maps with the same decoded fields, including frame reconciliations, agreement cells, and per-epoch agreement. I did not duplicate those maps as structs in this subset.
+- Python's `PreciseInterpolantArtifact.as_bytes` can recover bytes from the artifact object. Elixir `as_bytes/1` returns the original bytes for artifacts opened through `from_bytes/1`/`open/1` and serializes fitted interpolants through core. It cannot recover bytes for an opened artifact unless the original BEAM binary was retained; no new NIF was added.
+
+Proof tests:
+
+- `test/sp3_test.exs`: `Python-style SP3 aliases serialize and interpolate through core paths`
+- `test/precise_interpolant_artifact_test.exs`: `builds, opens, checksums, and evaluates artifact bytes`
+- `test/precise_ephemeris_samples_test.exs`: `sample-source accessor aliases expose real observable states`
 
 ### #8/#9/#13 RTK Arc Input Config Structs
 

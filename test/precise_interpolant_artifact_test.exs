@@ -21,11 +21,17 @@ defmodule Sidereon.GNSS.PreciseInterpolantArtifactTest do
     {:ok, bytes} = Interpolant.artifact_bytes(sp3)
     assert byte_size(bytes) == 926_752
     assert {:ok, @checksum} = Interpolant.checksum(bytes)
+    assert {:ok, sp3_artifact_bytes} = SP3.precise_interpolant_artifact_bytes(sp3)
+    assert {:ok, @checksum} = Interpolant.checksum64(sp3_artifact_bytes)
 
-    assert {:ok, interpolant} = Interpolant.open(bytes)
+    assert {:ok, interpolant} = Interpolant.from_bytes(bytes)
     assert Interpolant.time_scale(interpolant) == "GPST"
     assert Enum.take(Interpolant.satellite_ids(interpolant), 3) == ["G01", "G02", "G03"]
+    assert Enum.take(Interpolant.satellites(interpolant), 3) == ["G01", "G02", "G03"]
     assert {:ok, @checksum} = Interpolant.checksum(interpolant)
+    assert {:ok, @checksum} = Interpolant.checksum64(interpolant)
+    assert {:ok, 926_752} = Interpolant.byte_len(interpolant)
+    assert {:ok, ^bytes} = Interpolant.as_bytes(interpolant)
 
     {:ok, t_rx_j2000_s} = Time.epoch_to_j2000_seconds_fractional(@epoch)
     requests = [{"G01", @receiver, t_rx_j2000_s}]
@@ -42,6 +48,18 @@ defmodule Sidereon.GNSS.PreciseInterpolantArtifactTest do
     assert_in_delta x, 10_628_162.79544269, 1.0e-9
     assert_in_delta y, -19_620_911.704227246, 1.0e-9
     assert_in_delta z, -14_368_350.007790234, 1.0e-9
+
+    assert {:ok, state} = Interpolant.position_at_j2000_seconds(interpolant, "G01", t_rx_j2000_s)
+    assert_in_delta state.x_m, 10_628_447.114, 1.0e-9
+    assert_in_delta state.y_m, -19_620_924.339999996, 1.0e-9
+    assert_in_delta state.z_m, -14_368_115.665000001, 1.0e-9
+    assert_in_delta state.clock_s, 1.5631564e-5, 1.0e-18
+
+    path = Path.join(System.tmp_dir!(), "sidereon-precise-artifact-#{System.unique_integer([:positive])}.bin")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    assert {:ok, from_path} = Interpolant.from_path(path)
+    assert {:ok, @checksum} = Interpolant.checksum64(from_path)
   end
 
   test "returns typed corrupt and truncated artifact errors", %{sp3: sp3} do

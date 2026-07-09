@@ -26,6 +26,8 @@ defmodule Sidereon.GNSS.PreciseEphemeris do
   interpolate at that precision.
   """
 
+  alias Sidereon.GNSS.PreciseEphemeris.Interpolant
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.NIF
 
@@ -72,6 +74,34 @@ defmodule Sidereon.GNSS.PreciseEphemeris do
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Return the satellite ids available in this sample-backed precise source.
+  """
+  @spec satellites(t()) :: [String.t()] | {:error, term()}
+  def satellites(%__MODULE__{} = source) do
+    with {:ok, interpolant} <- Interpolant.from_precise_ephemeris_samples(source) do
+      Interpolant.satellites(interpolant)
+    end
+  end
+
+  @doc """
+  Evaluate states for parallel satellite and J2000-second arrays.
+  """
+  @spec observable_states_at_j2000_s(t(), [String.t()], [number()]) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def observable_states_at_j2000_s(%__MODULE__{} = source, satellites, epochs_j2000_s) do
+    Interpolant.states_at_j2000_s(source, satellites, epochs_j2000_s)
+  end
+
+  @doc """
+  Evaluate states for many satellites at one shared J2000-second epoch.
+  """
+  @spec observable_states_at_shared_j2000_s(t(), [String.t()], number()) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def observable_states_at_shared_j2000_s(%__MODULE__{} = source, satellites, epoch_j2000_s) do
+    Interpolant.states_at_shared_j2000_s(source, satellites, epoch_j2000_s)
   end
 
   defp to_nif_tuples(samples) do

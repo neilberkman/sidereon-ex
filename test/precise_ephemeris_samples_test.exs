@@ -7,6 +7,8 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
   # real product the km -> meters map is not injective, so a meters-carrying
   # sample reconstructs to the correctly-rounded km, within <= 1 ULP of the fit
   # node. The resulting round-trip divergence is bounded well below a micron.
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
+
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
   # Documented round-trip tolerance: sub-micron position/range, from the
@@ -152,6 +154,25 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
         end)
 
       assert batch == per_request
+    end
+
+    test "sample-source accessor aliases expose real observable states", %{source: source, sat: sat, queries: queries} do
+      epoch_j2000_s = hd(queries)
+
+      assert sat in PreciseEphemeris.satellites(source)
+      assert {:ok, batch} = PreciseEphemeris.observable_states_at_j2000_s(source, [sat], [epoch_j2000_s])
+      assert {:ok, shared} = PreciseEphemeris.observable_states_at_shared_j2000_s(source, [sat], epoch_j2000_s)
+
+      assert {:ok, %{position_ecef_m: {x_m, y_m, z_m}, clock_s: clock_s}} =
+               StateBatch.element(batch, 0)
+
+      assert {:ok, %{position_ecef_m: {^x_m, ^y_m, ^z_m}, clock_s: ^clock_s}} =
+               StateBatch.element(shared, 0)
+
+      assert_in_delta x_m, -14_987_773.483280258, @position_tol_m
+      assert_in_delta y_m, -12_820_440.18136208, @position_tol_m
+      assert_in_delta z_m, -22_069_554.122031067, @position_tol_m
+      assert_in_delta clock_s, -8.84054147158553e-4, @clock_tol_s
     end
 
     test "unknown satellite aborts the batch with an error", %{source: source, queries: queries} do
