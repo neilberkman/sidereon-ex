@@ -1,8 +1,8 @@
-defmodule Sidereon.GNSS.NTRIPTest do
+defmodule Sidereon.GNSS.NtripTest do
   use ExUnit.Case, async: true
 
-  alias Sidereon.GNSS.NTRIP
-  alias Sidereon.GNSS.NTRIP.GgaPosition
+  alias Sidereon.GNSS.Ntrip
+  alias Sidereon.GNSS.Ntrip.GgaPosition
   alias Sidereon.GNSS.SSR
 
   @core_fixtures Path.join(__DIR__, "fixtures")
@@ -11,19 +11,19 @@ defmodule Sidereon.GNSS.NTRIPTest do
   """
 
   test "sourcetable parser returns typed records and serializes through core" do
-    assert {:ok, table} = NTRIP.parse_sourcetable(@table)
-    assert [%NTRIP.StrRecord{} = stream] = table.records
+    assert {:ok, table} = Ntrip.parse_sourcetable(@table)
+    assert [%Ntrip.StrRecord{} = stream] = table.records
     assert stream.mountpoint == "MOUNT"
     assert stream.nmea_required == true
     assert stream.authentication == :basic
 
-    assert {:ok, text} = NTRIP.sourcetable_to_text(table)
+    assert {:ok, text} = Ntrip.sourcetable_to_text(table)
     assert text =~ "STR;MOUNT;ID"
   end
 
   test "format_gga delegates sentence generation to core" do
     assert {:ok, sentence} =
-             NTRIP.format_gga(%GgaPosition{lat_deg: 40.0, lon_deg: -105.0, height_m: 1600.0}, 12_345.67)
+             Ntrip.format_gga(%GgaPosition{lat_deg: 40.0, lon_deg: -105.0, height_m: 1600.0}, 12_345.67)
 
     assert sentence |> String.starts_with?("$GPGGA,032545.67")
     assert String.ends_with?(sentence, "\r\n")
@@ -31,7 +31,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
 
   test "request_bytes exposes the core NTRIP request builder" do
     assert {:ok, request} =
-             NTRIP.request_bytes("caster.invalid",
+             Ntrip.request_bytes("caster.invalid",
                mountpoint: "MOUNT",
                version: :rev1,
                credentials: {"user", "pass"},
@@ -44,7 +44,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
     assert String.ends_with?(request, "\r\n\r\n")
 
     assert {:ok, ^request} =
-             NTRIP.ntrip_request_bytes("caster.invalid",
+             Ntrip.ntrip_request_bytes("caster.invalid",
                mountpoint: "MOUNT",
                version: :rev1,
                credentials: {"user", "pass"},
@@ -58,8 +58,8 @@ defmodule Sidereon.GNSS.NTRIPTest do
       {:ok, ["SOURCETABLE 200 OK\r\n", @table]}
     end
 
-    assert {:ok, table} = NTRIP.sourcetable("caster.invalid", version: :rev1, transport_fun: transport)
-    assert [%NTRIP.StrRecord{mountpoint: "MOUNT"}] = table.records
+    assert {:ok, table} = Ntrip.sourcetable("caster.invalid", version: :rev1, transport_fun: transport)
+    assert [%Ntrip.StrRecord{mountpoint: "MOUNT"}] = table.records
   end
 
   test "stream process delivers payload from an injected transport" do
@@ -71,7 +71,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
     end
 
     assert {:ok, _pid} =
-             NTRIP.Stream.start_link(
+             Ntrip.Stream.start_link(
                host: "caster.invalid",
                mountpoint: "MOUNT",
                version: :rev1,
@@ -79,8 +79,8 @@ defmodule Sidereon.GNSS.NTRIPTest do
                transport_fun: transport
              )
 
-    assert_receive {:ntrip, _ref, {:payload, "abc"}}
-    assert_receive {:ntrip, _ref, {:down, :normal}}
+    assert_receive {:ntrip, _ref, {:payload, "abc"}}, 2_000
+    assert_receive {:ntrip, _ref, {:down, :normal}}, 2_000
   end
 
   test "fake caster reconnects with backoff after a stream disconnect" do
@@ -91,7 +91,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
       ])
 
     assert {:ok, pid} =
-             NTRIP.Stream.start_link(
+             Ntrip.Stream.start_link(
                host: "127.0.0.1",
                port: caster.port,
                mountpoint: "MOUNT",
@@ -119,7 +119,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
     caster = start_fake_caster([accept_gga_probe()])
 
     assert {:ok, pid} =
-             NTRIP.Stream.start_link(
+             Ntrip.Stream.start_link(
                host: "127.0.0.1",
                port: caster.port,
                mountpoint: "VRS",
@@ -157,7 +157,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
     store = SSR.new()
 
     assert {:ok, pid} =
-             NTRIP.Stream.start_link(
+             Ntrip.Stream.start_link(
                host: "127.0.0.1",
                port: caster.port,
                mountpoint: "SSR",
@@ -189,7 +189,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
       ])
 
     assert {:ok, pid} =
-             NTRIP.Stream.start_link(
+             Ntrip.Stream.start_link(
                host: "127.0.0.1",
                port: caster.port,
                mountpoint: "MISSING",
@@ -200,8 +200,8 @@ defmodule Sidereon.GNSS.NTRIPTest do
              )
 
     assert_receive {:fake_caster, :accepted, 1}, 1_000
-    assert_receive {:ntrip, _ref, {:down, {:mountpoint_not_found, %NTRIP.Sourcetable{} = table}}}, 1_000
-    assert [%NTRIP.StrRecord{mountpoint: "MOUNT"}] = table.records
+    assert_receive {:ntrip, _ref, {:down, {:mountpoint_not_found, %Ntrip.Sourcetable{} = table}}}, 1_000
+    assert [%Ntrip.StrRecord{mountpoint: "MOUNT"}] = table.records
 
     refute_receive {:fake_caster, :accepted, 2}, 150
     refute_receive {:fake_caster, :unexpected_reconnect, 2}, 0
@@ -216,7 +216,7 @@ defmodule Sidereon.GNSS.NTRIPTest do
       ])
 
     chunks =
-      NTRIP.stream(
+      Ntrip.stream(
         host: "127.0.0.1",
         port: caster.port,
         mountpoint: "MOUNT",

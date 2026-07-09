@@ -6,7 +6,7 @@ defmodule Sidereon.Application do
   def start(_type, _args) do
     children = [
       {Elixir.Finch, name: :"Elixir.Sidereon.GNSS.Data.Finch"},
-      {Elixir.Finch, name: :"Elixir.Sidereon.GNSS.NTRIP.Finch", pools: %{default: [size: 1]}}
+      {Elixir.Finch, name: :"Elixir.Sidereon.GNSS.Ntrip.Finch", pools: %{default: [size: 1]}}
     ]
 
     opts = [strategy: :one_for_one, name: Sidereon.Supervisor]
