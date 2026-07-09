@@ -173,9 +173,25 @@ No terrain/geoid store surface was widened in this gated subset.
 
 ### #88 Estimation Public Wrapper Set
 
-Still remaining.
+Closed in this run.
 
-No estimation wrapper sweep was completed in this gated subset.
+Cross-checked the Python/wasm estimation helper names against the Elixir public surface. Added the missing canonical helper-name wrappers over the existing NIF-backed paths:
+
+- `Sidereon.Estimation.nis_statistic/2`
+- `Sidereon.Estimation.nis_gate_test/4`
+- `Sidereon.Estimation.mad_spread/2`
+- `Sidereon.Estimation.ewma_update/3`
+- `Sidereon.Estimation.ewma_update_power_of_two/3`
+- `Sidereon.Estimation.TrackInnovation.gate/2`
+
+Intentionally-not:
+
+- Python/wasm expose `TrackCoordinateFrame` enum/class names; Elixir already uses the idiomatic atom values `:ecef`, `:enu`, and `:caller_defined_cartesian` in `Sidereon.Estimation.TrackFilterConfig` and `Sidereon.Estimation.TrackState`.
+
+Proof tests:
+
+- `test/estimation_primitives_test.exs`: `alpha-beta step, NIS, MAD, EWMA, and CA-CFAR match analytic references`
+- `test/estimation_primitives_test.exs`: `track innovation gate uses the NIF-backed chi-square threshold`
 
 ### #77/#78 Tides and Almanac Module-Level Parity
 
