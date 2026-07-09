@@ -4,6 +4,17 @@ defmodule Sidereon.GNSS.RTKTest do
   alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
   alias Sidereon.GNSS.RTK
+
+  alias Sidereon.GNSS.RTK.{
+    ArcCycleSlipSplit,
+    ArcEpochSolution,
+    ArcSolution,
+    ArcState,
+    StaticArcSolution,
+    WideLaneArcSolution,
+    WideLaneFixedMetadata
+  }
+
   alias Sidereon.GNSS.SP3
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
@@ -152,6 +163,8 @@ defmodule Sidereon.GNSS.RTKTest do
     test "delegates raw arc epochs to the core sequential arc solver" do
       assert {:ok, solution} = RTK.solve_arc(arc_epochs(), arc_config())
 
+      assert %ArcSolution{final_state: %ArcState{}, epochs: [%ArcEpochSolution{} | _]} = solution
+      assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert Map.has_key?(solution.references, "G")
       assert length(solution.epochs) == 3
       assert List.last(solution.epochs).integer_fixed
@@ -173,6 +186,8 @@ defmodule Sidereon.GNSS.RTKTest do
                  |> Map.put(:offsets_m, {"none", 0.0, []})
                )
 
+      assert %StaticArcSolution{} = solution
+      assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert solution.references == %{"G" => "G01"}
       assert solution.ambiguity_ids == @ambiguity_ids
       assert solution.dropped_sats == []
@@ -190,6 +205,8 @@ defmodule Sidereon.GNSS.RTKTest do
       assert {:ok, solution} =
                RTK.fix_wide_lane_rtk_arc(dual_frequency_epochs(), wide_lane_config())
 
+      assert %WideLaneArcSolution{} = solution
+      assert Enum.all?(solution.split_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert map_size(solution.wide_lane_cycles) == 3
 
       assert %GeometryQuality{
@@ -253,6 +270,7 @@ defmodule Sidereon.GNSS.RTKTest do
 
       assert solution.epoch_count == 120
       assert solution.skipped_epoch_count == 0
+      assert %WideLaneFixedMetadata{} = solution.wide_lane
       assert solution.wide_lane.fixed?
       assert solution.wide_lane.ambiguity_count == 7
 
@@ -579,11 +597,6 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   defp ecef_tuple(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
-
-  defp bits(value) do
-    <<bits::64>> = <<value::float-64>>
-    bits
-  end
 
   defp from_bits(bits) do
     <<value::float-64>> = <<bits::64>>

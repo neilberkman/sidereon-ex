@@ -131,9 +131,11 @@ defmodule Sidereon.GNSS.QCTest do
       assert position_error(sol) < 1.0e-2
 
       result = QC.raim(sol)
+      direct = QC.raim_for_solution(sol)
 
       assert result.fault_detected? == false
       assert result.testable? == true
+      assert direct == result
       # GPS-only: n_systems = 1, n_states = 4.
       assert result.dof == length(sol.used_sats) - 4
       assert result.test_statistic < result.threshold

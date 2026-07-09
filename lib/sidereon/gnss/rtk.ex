@@ -38,6 +38,7 @@ defmodule Sidereon.GNSS.RTK do
   alias Sidereon.GNSS.Core.Observations
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
+  alias Sidereon.GNSS.RTK
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
@@ -412,6 +413,291 @@ defmodule Sidereon.GNSS.RTK do
     @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
   end
 
+  defmodule ArcCycleSlipSplit do
+    @moduledoc """
+    Cycle-slip split interval reported while preparing or solving an RTK arc.
+    """
+
+    @enforce_keys [:receiver, :satellite_id, :ambiguity_id, :n_epochs]
+    defstruct [
+      :receiver,
+      :satellite_id,
+      :ambiguity_id,
+      :start_epoch_index,
+      :end_epoch_index,
+      :start_epoch,
+      :end_epoch,
+      :n_epochs
+    ]
+
+    @type receiver :: :base | :rover
+    @type t :: %__MODULE__{
+            receiver: receiver(),
+            satellite_id: String.t(),
+            ambiguity_id: String.t(),
+            start_epoch_index: non_neg_integer() | nil,
+            end_epoch_index: non_neg_integer() | nil,
+            start_epoch: term() | nil,
+            end_epoch: term() | nil,
+            n_epochs: non_neg_integer()
+          }
+  end
+
+  defmodule ArcEpochSolution do
+    @moduledoc """
+    One epoch of a sequential RTK arc solution.
+    """
+
+    alias Sidereon.GeometryQuality
+
+    @enforce_keys [
+      :reported_baseline_m,
+      :float_baseline_m,
+      :integer_fixed,
+      :integer_ratio,
+      :newly_fixed,
+      :fixed_ids,
+      :sd_ambiguities_m,
+      :fixed_double_difference_ids,
+      :used_satellite_ids,
+      :search,
+      :residuals,
+      :geometry_quality,
+      :innovation_screen
+    ]
+    defstruct [
+      :reported_baseline_m,
+      :float_baseline_m,
+      :integer_fixed,
+      :integer_ratio,
+      :newly_fixed,
+      :fixed_ids,
+      :sd_ambiguities_m,
+      :fixed_double_difference_ids,
+      :used_satellite_ids,
+      :search,
+      :residuals,
+      :geometry_quality,
+      :innovation_screen
+    ]
+
+    @type vec3 :: {float(), float(), float()}
+    @type t :: %__MODULE__{
+            reported_baseline_m: vec3(),
+            float_baseline_m: vec3(),
+            integer_fixed: boolean(),
+            integer_ratio: float() | nil,
+            newly_fixed: [String.t()],
+            fixed_ids: [String.t()],
+            sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
+            fixed_double_difference_ids: [String.t()],
+            used_satellite_ids: [String.t()],
+            search: map() | nil,
+            residuals: [map()],
+            geometry_quality: GeometryQuality.t(),
+            innovation_screen: map() | nil
+          }
+  end
+
+  defmodule ArcState do
+    @moduledoc """
+    Final carried sequential RTK arc state.
+    """
+
+    @enforce_keys [
+      :version,
+      :references,
+      :sd_ambiguity_ids,
+      :ambiguity_prior_sigma_m,
+      :epoch_count,
+      :baseline_m,
+      :sd_ambiguities_m,
+      :information,
+      :fixed_cycles,
+      :fixed_m
+    ]
+    defstruct [
+      :version,
+      :references,
+      :sd_ambiguity_ids,
+      :ambiguity_prior_sigma_m,
+      :epoch_count,
+      :baseline_m,
+      :sd_ambiguities_m,
+      :information,
+      :fixed_cycles,
+      :fixed_m
+    ]
+
+    @type vec3 :: {float(), float(), float()}
+    @type t :: %__MODULE__{
+            version: non_neg_integer(),
+            references: %{String.t() => String.t()},
+            sd_ambiguity_ids: [String.t()],
+            ambiguity_prior_sigma_m: float(),
+            epoch_count: non_neg_integer(),
+            baseline_m: vec3(),
+            sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
+            information: [[float()]],
+            fixed_cycles: %{String.t() => integer()},
+            fixed_m: %{String.t() => float()}
+          }
+  end
+
+  defmodule ArcSolution do
+    @moduledoc """
+    Solved sequential RTK arc.
+    """
+
+    alias RTK.{ArcCycleSlipSplit, ArcEpochSolution, ArcState}
+
+    @enforce_keys [
+      :references,
+      :epochs,
+      :final_state,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :measurement_covariance
+    ]
+    defstruct [
+      :references,
+      :epochs,
+      :final_state,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :measurement_covariance
+    ]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            epochs: [ArcEpochSolution.t()],
+            final_state: ArcState.t(),
+            dropped_sats: [String.t()],
+            split_cycle_slip_arcs: [ArcCycleSlipSplit.t()],
+            elevation_masked_sats: [String.t()],
+            measurement_covariance: map()
+          }
+  end
+
+  defmodule StaticArcSolution do
+    @moduledoc """
+    Solved static RTK arc.
+
+    `:float_term` and `:fixed_term` are the decoded native static float/fixed
+    terms retained for the RINEX baseline convenience wrappers.
+    """
+
+    alias Sidereon.GeometryQuality
+    alias Sidereon.GNSS.RTK.ArcCycleSlipSplit
+
+    @enforce_keys [
+      :references,
+      :ambiguity_ids,
+      :ambiguity_satellites,
+      :float_term,
+      :fixed_term,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :geometry_quality
+    ]
+    defstruct [
+      :references,
+      :ambiguity_ids,
+      :ambiguity_satellites,
+      :float_term,
+      :fixed_term,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :geometry_quality
+    ]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            ambiguity_ids: [String.t()],
+            ambiguity_satellites: %{String.t() => String.t()},
+            float_term: term(),
+            fixed_term: term(),
+            dropped_sats: [String.t()],
+            split_cycle_slip_arcs: [ArcCycleSlipSplit.t()],
+            elevation_masked_sats: [String.t()],
+            geometry_quality: GeometryQuality.t()
+          }
+  end
+
+  defmodule WideLaneArcSolution do
+    @moduledoc """
+    Fixed wide-lane ambiguity solution for a dual-frequency RTK arc.
+    """
+
+    alias Sidereon.GeometryQuality
+    alias Sidereon.GNSS.RTK.ArcCycleSlipSplit
+
+    @enforce_keys [:references, :wide_lane_cycles, :epochs, :dropped_sats, :split_arcs, :geometry_quality]
+    defstruct [:references, :wide_lane_cycles, :epochs, :dropped_sats, :split_arcs, :geometry_quality]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            wide_lane_cycles: %{String.t() => integer()},
+            epochs: [map()],
+            dropped_sats: [String.t()],
+            split_arcs: [ArcCycleSlipSplit.t()],
+            geometry_quality: GeometryQuality.t()
+          }
+  end
+
+  defmodule IonosphereFreeArcSolution do
+    @moduledoc """
+    Ionosphere-free single-frequency-equivalent RTK arc prepared from fixed
+    wide-lane ambiguities.
+    """
+
+    @enforce_keys [:references, :epochs, :wavelengths_m, :offsets_m]
+    defstruct [:references, :epochs, :wavelengths_m, :offsets_m]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            epochs: [map()],
+            wavelengths_m: %{String.t() => float()},
+            offsets_m: %{String.t() => float()}
+          }
+  end
+
+  defmodule WideLaneFixedMetadata do
+    @moduledoc """
+    Wide-lane integer metadata attached to a static RINEX RTK solve.
+    """
+
+    @enforce_keys [
+      :integer_method,
+      :fixed?,
+      :cycles,
+      :ambiguity_count,
+      :dropped_cycle_slip_sats,
+      :split_cycle_slip_arcs
+    ]
+    defstruct [
+      :integer_method,
+      :fixed?,
+      :cycles,
+      :ambiguity_count,
+      :dropped_cycle_slip_sats,
+      :split_cycle_slip_arcs
+    ]
+
+    @type t :: %__MODULE__{
+            integer_method: :wide_lane_narrow_lane_lambda | :wide_lane_narrow_lane_sequential | atom(),
+            fixed?: boolean(),
+            cycles: %{String.t() => integer()},
+            ambiguity_count: non_neg_integer(),
+            dropped_cycle_slip_sats: [String.t()],
+            split_cycle_slip_arcs: [map()]
+          }
+  end
+
   @typedoc """
   Code and carrier-phase observation in metres.
 
@@ -661,10 +947,10 @@ defmodule Sidereon.GNSS.RTK do
     * `:update_opts` - the per-epoch update controls (see `arc_update_opts`)
 
   Returns `{:ok, solution}` with `:references`, per-epoch `:epochs`, and the
-  carried `:final_state`, or `{:error, reason}`. Each epoch map includes
+  carried `:final_state`, or `{:error, reason}`. Each epoch struct includes
   `:geometry_quality`.
   """
-  @spec solve_arc([map()], map()) :: {:ok, map()} | {:error, term()}
+  @spec solve_arc([map()], map()) :: {:ok, ArcSolution.t()} | {:error, term()}
   def solve_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_arc(Enum.map(epochs, &arc_epoch_term/1), arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_arc_solution(solution)}
@@ -677,9 +963,9 @@ defmodule Sidereon.GNSS.RTK do
   @doc """
   Solve a static RTK arc with a typed core-style configuration map.
 
-  The returned map includes `:geometry_quality` for the static batch design.
+  The returned struct includes `:geometry_quality` for the static batch design.
   """
-  @spec solve_static_arc([map()], map()) :: {:ok, map()} | {:error, term()}
+  @spec solve_static_arc([map()], map()) :: {:ok, StaticArcSolution.t()} | {:error, term()}
   def solve_static_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_static_arc(Enum.map(epochs, &arc_epoch_term/1), static_arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_static_arc_solution(solution)}
@@ -692,10 +978,11 @@ defmodule Sidereon.GNSS.RTK do
   @doc """
   Fix wide-lane RTK arc ambiguities by delegating to the core arc helper.
 
-  The returned map includes `:geometry_quality` for the wide-lane ambiguity
+  The returned struct includes `:geometry_quality` for the wide-lane ambiguity
   design.
   """
-  @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], map()) :: {:ok, map()} | {:error, term()}
+  @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], map()) ::
+          {:ok, WideLaneArcSolution.t()} | {:error, term()}
   def fix_wide_lane_rtk_arc(epochs, config) when is_list(epochs) and is_map(config) do
     with :ok <- ensure_nonempty_epochs(epochs),
          {:ok, normalized_epochs} <- normalize_dual_baseline_epochs(epochs) do
@@ -717,7 +1004,7 @@ defmodule Sidereon.GNSS.RTK do
   Build ionosphere-free RTK arc epochs from dual-frequency epochs and fixed wide-lane integers.
   """
   @spec prepare_ionosphere_free_rtk_arc([dual_frequency_baseline_epoch()], %{String.t() => integer()}, map()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, IonosphereFreeArcSolution.t()} | {:error, term()}
   def prepare_ionosphere_free_rtk_arc(epochs, wide_lane_cycles, config)
       when is_list(epochs) and is_map(wide_lane_cycles) and is_map(config) do
     with :ok <- ensure_nonempty_epochs(epochs),
@@ -735,7 +1022,7 @@ defmodule Sidereon.GNSS.RTK do
             decode_ionosphere_free_arc_solution(solution, normalized_epochs)
 
           {:ok,
-           %{
+           %IonosphereFreeArcSolution{
              references: references,
              epochs: if_epochs,
              wavelengths_m: wavelengths,
@@ -906,7 +1193,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, ambiguity_ids, ambiguity_satellite_terms, float_term, fixed_term, dropped_sats, split_terms,
           elevation_masked_sats, geometry_quality}
        ) do
-    %{
+    %StaticArcSolution{
       references: Map.new(references),
       ambiguity_ids: ambiguity_ids,
       ambiguity_satellites: Map.new(ambiguity_satellite_terms),
@@ -1393,7 +1680,7 @@ defmodule Sidereon.GNSS.RTK do
        ) do
     cycles = Map.new(wide_lane_cycles)
 
-    %{
+    %WideLaneFixedMetadata{
       integer_method: decode_wide_lane_fixed_integer_method(method),
       fixed?: fixed?,
       cycles: cycles,
@@ -1722,7 +2009,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, epochs, final_state, dropped_sats, split_cycle_slip_arcs, elevation_masked_sats,
           measurement_covariance}
        ) do
-    %{
+    %ArcSolution{
       references: Map.new(references),
       epochs: Enum.map(epochs, &decode_arc_epoch_solution/1),
       final_state: decode_arc_state(final_state),
@@ -1736,7 +2023,7 @@ defmodule Sidereon.GNSS.RTK do
   defp decode_arc_split_cycle_slip_arc(
          {receiver, satellite_id, ambiguity_id, start_epoch_index, end_epoch_index, n_epochs}
        ) do
-    %{
+    %ArcCycleSlipSplit{
       receiver: decode_rtk_cycle_slip_receiver(receiver),
       satellite_id: satellite_id,
       ambiguity_id: ambiguity_id,
@@ -1750,7 +2037,7 @@ defmodule Sidereon.GNSS.RTK do
          {reported_baseline_m, float_baseline_m, integer_fixed, integer_ratio, newly_fixed, fixed_ids, sd_ambiguities_m,
           fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality, innovation_screen}
        ) do
-    %{
+    %ArcEpochSolution{
       reported_baseline_m: reported_baseline_m,
       float_baseline_m: float_baseline_m,
       integer_fixed: integer_fixed,
@@ -1771,7 +2058,7 @@ defmodule Sidereon.GNSS.RTK do
          {{version, references, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count}, baseline_m, sd_ambiguities_m,
           information, fixed_cycles, fixed_m}
        ) do
-    %{
+    %ArcState{
       version: version,
       references: Map.new(references),
       sd_ambiguity_ids: sd_ambiguity_ids,
@@ -2095,7 +2382,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, wide_lane_cycles, epoch_terms, dropped_sats, split_arc_terms, geometry_quality},
          input_epochs
        ) do
-    %{
+    %WideLaneArcSolution{
       references: Map.new(references),
       wide_lane_cycles: Map.new(wide_lane_cycles),
       epochs: decode_dual_frequency_arc_epochs(input_epochs, epoch_terms),
@@ -2239,7 +2526,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_rtk_cycle_slip_split_arcs(epochs, split_arc_terms) do
     Enum.map(split_arc_terms, fn {receiver, sat, ambiguity_id, start_idx, end_idx, n_epochs} ->
-      %{
+      %ArcCycleSlipSplit{
         receiver: decode_rtk_cycle_slip_receiver(receiver),
         satellite_id: sat,
         ambiguity_id: ambiguity_id,
