@@ -90,6 +90,12 @@ end
 `Sidereon.GNSS.RTK` and the PPP and DGNSS solvers follow the same shape:
 observations and a product in, a typed solution out.
 
+For post-solve integrity checks, use `Sidereon.GNSS.QC.RaimInput.new/2` with
+`Sidereon.GNSS.QC.raim/2` to run residual RAIM from satellite ids and
+post-fit residuals. Use `Sidereon.GNSS.ARAIM.Geometry.from_az_el_deg/3` with
+`Sidereon.GNSS.ARAIM.araim/3` to compute HPL/VPL protection levels from
+azimuth/elevation rows, ISM records, and an integrity allocation.
+
 A runnable [`sidereon.livemd`](sidereon.livemd) walks through propagation,
 positioning, and conjunction screening; more notebooks live under
 [the examples directory](https://github.com/neilberkman/sidereon-ex/tree/main/examples).
@@ -115,8 +121,8 @@ positioning, and conjunction screening; more notebooks live under
   every solution (rank, redundancy, conditioning), and covariance-derived
   error metrics (CEP, R95, SEP, error ellipse) that report wide or flagged
   bounds for weak geometry rather than fabricated confidence. See
-  `Sidereon.ARAIM`, `Sidereon.Reliability`, `Sidereon.ErrorMetrics`,
-  `Sidereon.GNSS.SBAS`.
+  `Sidereon.GNSS.ARAIM`, `Sidereon.Reliability`, `Sidereon.ErrorMetrics`,
+  `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`.
 - **Timing, estimation, and geodesy** Allan-family clock stability with
   power-law noise identification (IEEE 1139), scalar Kalman and alpha-beta
   trackers with innovation gating and CFAR thresholds, source localization

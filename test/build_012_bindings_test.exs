@@ -187,6 +187,20 @@ defmodule SidereonBuild012BindingsTest do
     assert_in_delta result.hpl_m, 14.5, 0.05
     assert_in_delta result.emt_m, 7.8, 0.05
     assert_in_delta result.sigma_acc_v_m, 1.47, 0.02
+
+    az_el_rows =
+      Enum.map(@wg_c_add_v3_rows, fn {system, id, design_enu, _c_int_m2, _c_acc_m2} ->
+        {azimuth_deg, elevation_deg} = wg_c_design_to_az_el_deg(design_enu)
+        %{id: id, azimuth_deg: azimuth_deg, elevation_deg: elevation_deg, system: system}
+      end)
+
+    assert {:ok, az_el_geometry} = ARAIM.Geometry.from_az_el_deg(az_el_rows, {0.0, 0.0, 0.0}, [:gps, :galileo])
+    assert {:ok, az_el_result} = ARAIM.araim(az_el_geometry, ism, allocation)
+    assert az_el_result.availability
+    assert_in_delta az_el_result.hpl_m, 14.5, 0.05
+    assert_in_delta az_el_result.vpl_m, 19.2, 0.05
+    assert_in_delta az_el_result.sigma_acc_h_m, result.sigma_acc_h_m, 0.02
+    assert_in_delta az_el_result.sigma_acc_v_m, result.sigma_acc_v_m, 0.02
   end
 
   test "angular separation and position angle match core reference cases" do
@@ -201,6 +215,14 @@ defmodule SidereonBuild012BindingsTest do
 
   defp wg_c_design_to_los({east_design, north_design, up_design}) do
     {-up_design, -east_design, -north_design}
+  end
+
+  defp wg_c_design_to_az_el_deg(design_enu) do
+    {e_x, e_y, e_z} = wg_c_design_to_los(design_enu)
+    {east, north, up} = {e_y, e_z, e_x}
+    elevation_deg = :math.asin(up) * 180.0 / :math.pi()
+    azimuth_deg = :math.atan2(east, north) * 180.0 / :math.pi()
+    {if(azimuth_deg < 0.0, do: azimuth_deg + 360.0, else: azimuth_deg), elevation_deg}
   end
 
   defp orthometric_result_to_scalar({:ok, %OrthometricHeightM{value_m: value_m}}), do: {:ok, value_m}

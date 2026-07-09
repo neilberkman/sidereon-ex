@@ -289,6 +289,9 @@ defmodule Sidereon.NIF do
 
   def araim_lpv_200_allocation, do: :erlang.nif_error(:nif_not_loaded)
 
+  def araim_line_of_sight_from_az_el_deg(_azimuth_deg, _elevation_deg, _receiver),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def araim_solve(_rows, _receiver, _clock_systems, _constellations, _satellites, _allocation),
     do: :erlang.nif_error(:nif_not_loaded)
 

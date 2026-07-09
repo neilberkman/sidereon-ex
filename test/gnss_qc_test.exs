@@ -140,6 +140,37 @@ defmodule Sidereon.GNSS.QCTest do
     end
   end
 
+  describe "raim/2 direct post-solve input" do
+    test "builds input from lists and returns the core diagnostic fields" do
+      used_sats = ["G01", "G02", "G03", "G04", "G05"]
+      residuals_m = [0.15, -0.20, 0.05, 0.10, -0.12]
+      weight_entries = [{"G01", 70.0}, {"G02", 55.0}, {"G03", 40.0}, {"G04", 35.0}, {"G05", 25.0}]
+
+      input = QC.RaimInput.new(used_sats, residuals_m)
+      result = QC.raim(input, weights: weight_entries, n_systems: 1)
+      weights = QC.weight_vector(weight_entries)
+
+      expected_statistic =
+        Enum.zip(used_sats, residuals_m)
+        |> Enum.reduce(0.0, fn {sat, residual}, acc ->
+          acc + residual * residual * weights[sat]
+        end)
+
+      expected_rms = :math.sqrt(Enum.reduce(residuals_m, 0.0, fn residual, acc -> acc + residual * residual end) / 5.0)
+
+      assert %QC.RaimResult{} = result
+      assert result.fault_detected == false
+      assert result.testable
+      assert result.dof == 1
+      assert_in_delta result.test_statistic, expected_statistic, 1.0e-12
+      assert_in_delta result.threshold, QC.chi2_inv(0.999, 1), 1.0e-12
+      assert_in_delta result.reduced_chi_square, expected_statistic, 1.0e-12
+      assert_in_delta result.rms_m, expected_rms, 1.0e-12
+      assert Map.keys(result.normalized_residuals) == used_sats
+      assert result.worst_sat in used_sats
+    end
+  end
+
   describe "raim/2 fault detection" do
     setup ctx do
       # Inject the fault on a known-localizing satellite. Detection

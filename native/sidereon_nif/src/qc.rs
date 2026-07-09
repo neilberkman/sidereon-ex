@@ -99,6 +99,19 @@ impl From<RangeFdeResult> for RangeFdeResultFields {
     }
 }
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RaimResultFields {
+    fault_detected: bool,
+    test_statistic: f64,
+    threshold: Option<f64>,
+    worst_sat: Option<String>,
+    reduced_chi_square: Option<f64>,
+    normalized_residuals: Vec<(String, f64)>,
+    rms_m: f64,
+    dof: i64,
+    testable: bool,
+}
+
 mod atoms {
     rustler::atoms! {
         ok,
@@ -211,26 +224,23 @@ fn qc_raim<'a>(
     };
     Ok(match quality::raim(&input, &options) {
         Ok(result) => {
-            let threshold = match result.threshold {
-                Some(value) => value.encode(env),
-                None => atoms::nil().encode(env),
-            };
-            let worst = match result.worst_sat {
-                Some(sat) => sat.encode(env),
-                None => atoms::nil().encode(env),
-            };
+            let reduced_chi_square =
+                (result.dof > 0).then_some(result.test_statistic / result.dof as f64);
+            let rms_m = residual_rms_m(&input.residuals_m);
             let normalized: Vec<(String, f64)> = result.normalized_residuals.into_iter().collect();
             (
                 atoms::ok(),
-                (
-                    result.fault_detected,
-                    result.test_statistic,
-                    threshold,
-                    result.dof as i64,
-                    result.testable,
-                    normalized,
-                    worst,
-                ),
+                RaimResultFields {
+                    fault_detected: result.fault_detected,
+                    test_statistic: result.test_statistic,
+                    threshold: result.threshold,
+                    worst_sat: result.worst_sat,
+                    reduced_chi_square,
+                    normalized_residuals: normalized,
+                    rms_m,
+                    dof: result.dof as i64,
+                    testable: result.testable,
+                },
             )
                 .encode(env)
         }
@@ -661,6 +671,17 @@ fn raim_weights(unit_weights: bool, weights: Vec<(String, f64)>) -> RaimWeights 
     } else {
         RaimWeights::BySatellite(weights.into_iter().collect::<BTreeMap<_, _>>())
     }
+}
+
+fn residual_rms_m(residuals_m: &[f64]) -> f64 {
+    if residuals_m.is_empty() {
+        return 0.0;
+    }
+    let sum_squares = residuals_m
+        .iter()
+        .map(|residual| residual * residual)
+        .sum::<f64>();
+    (sum_squares / residuals_m.len() as f64).sqrt()
 }
 
 fn encode_quality_float<'a>(env: Env<'a>, result: Result<f64, QualityError>) -> Term<'a> {

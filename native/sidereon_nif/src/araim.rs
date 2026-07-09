@@ -9,6 +9,7 @@ use sidereon_core::araim::{
     araim, AraimError, AraimGeometry, AraimRow, ConstellationIsm, IntegrityAllocation, Ism,
     SatelliteIsm, SatelliteIsmModel,
 };
+use sidereon_core::geometry::line_of_sight_from_az_el_deg;
 use sidereon_core::positioning::LineOfSight;
 use sidereon_core::{GnssSatelliteId, GnssSystem, Wgs84Geodetic};
 
@@ -246,6 +247,18 @@ fn result_term(result: sidereon_core::araim::AraimResult) -> AraimResultTerm {
 #[rustler::nif]
 fn araim_lpv_200_allocation() -> AllocationTerm {
     allocation_term(IntegrityAllocation::lpv_200())
+}
+
+/// Convert receiver-relative azimuth and elevation to an ECEF LOS vector.
+#[rustler::nif]
+fn araim_line_of_sight_from_az_el_deg(
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    receiver: ReceiverTerm,
+) -> NifResult<Vec3> {
+    let los = line_of_sight_from_az_el_deg(azimuth_deg, elevation_deg, decode_receiver(receiver)?)
+        .map_err(crate::errors::invalid_input)?;
+    Ok((los.e_x, los.e_y, los.e_z))
 }
 
 /// Run ARAIM for a caller-supplied snapshot geometry and ISM.
