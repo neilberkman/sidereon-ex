@@ -155,9 +155,37 @@ Proof tests:
 
 ### #90 Fusion/Inertial
 
-Still remaining.
+Partially closed in this run.
 
-No fusion/inertial surface was widened in this gated subset.
+Added tested, additive typed input structs and Python-name aliases over the existing GNSS/INS fusion NIF paths:
+
+- `Sidereon.GNSS.Fusion.ImuSample`
+- `Sidereon.GNSS.Fusion.GnssFixMeasurement`
+- `Sidereon.GNSS.Fusion.TightRangeRateObservation`
+- `Sidereon.GNSS.Fusion.TightCarrierPhaseObservation`
+- `Sidereon.GNSS.Fusion.TightGnssObservation`
+- `Sidereon.GNSS.Fusion.TightGnssEpoch`
+- `Sidereon.GNSS.Fusion.TimeSyncHistoryConfig`
+- `Sidereon.GNSS.Fusion.VelocityMatchState`
+- `Sidereon.GNSS.Fusion.VelocityMatchingConfig`
+- `Sidereon.GNSS.Fusion.with_config/2`
+- `Sidereon.GNSS.Fusion.from_encoded_state/2`
+- `Sidereon.GNSS.Fusion.restore_encoded_state/2`
+- `Sidereon.GNSS.Fusion.configure_time_sync_history/2`
+- `Sidereon.GNSS.Fusion.time_sync_history_status/1`
+
+Existing RTS smoothing remains covered by `FusionRtsHistoryBuilder`, `FusionRtsHistory`, `SmoothedFusionTrajectory`, and `smooth_fusion_rts/1`.
+
+Intentionally-not in this subset:
+
+- Python exposes `InertialFilter.snapshot/0`, `restore_snapshot/1`, `config`, and `last_body_rate_wrt_ecef_rps` object accessors. The current Elixir NIF does not expose snapshot/config/last-body-rate entry points separately from `state/1` and encoded-state bytes, so I did not add Elixir wrappers without a core marshal path.
+- WASM exposes `propagateBatch`. I did not add an Elixir loop wrapper in this subset because there is no batch NIF path in this worktree and the standing rule prefers thin bindings over recreating engine behavior in Elixir.
+
+Proof tests:
+
+- `test/gnss_fusion_test.exs`: `typed loose measurements and encoded-state aliases use the real filter path`
+- `test/gnss_fusion_test.exs`: `applies tight pseudorange and range-rate rows from an SP3 source`
+- `test/gnss_fusion_test.exs`: `records robust loose history and smooths fusion RTS output`
 
 ### #92 Signal Analysis
 

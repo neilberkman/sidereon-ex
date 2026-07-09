@@ -4,7 +4,12 @@ defmodule Sidereon.GNSSFusionTest do
   alias Sidereon.GNSS.Fusion
   alias Sidereon.GNSS.Fusion.FusionRtsHistory
   alias Sidereon.GNSS.Fusion.FusionRtsHistoryBuilder
+  alias Sidereon.GNSS.Fusion.GnssFixMeasurement
   alias Sidereon.GNSS.Fusion.SmoothedFusionTrajectory
+  alias Sidereon.GNSS.Fusion.TightGnssEpoch
+  alias Sidereon.GNSS.Fusion.TightGnssObservation
+  alias Sidereon.GNSS.Fusion.TightRangeRateObservation
+  alias Sidereon.GNSS.Fusion.TimeSyncHistoryConfig
   alias Sidereon.GNSS.SP3
 
   @wgs84_a_m 6_378_137.0
@@ -34,6 +39,43 @@ defmodule Sidereon.GNSSFusionTest do
       assert {:ok, updated_state} = Fusion.state(updated_restored)
 
       assert_close_list(updated_state.nominal.position_ecef_m, [6_378_137.05, -0.1, 0.15], 1.0e-12)
+    end
+
+    test "typed loose measurements and encoded-state aliases use the real filter path" do
+      typed_measurement =
+        GnssFixMeasurement.position_velocity(
+          0.0,
+          {@wgs84_a_m + 0.25, -0.5, 0.75},
+          {0.1, -0.2, 0.3},
+          diagonal(6, 4.0),
+          8,
+          fix_status: :fixed
+        )
+
+      {:ok, filter} = Fusion.with_config(initial_state(), config(:ekf))
+      assert {:ok, report} = Fusion.update_loose(filter, typed_measurement)
+
+      assert report.rows == 6
+      assert report.applied
+      assert_close(report.nis, 0.20299999999999999, 0.0)
+      assert_close_list(Enum.take(report.ekf.dx, 6), [-0.05, 0.1, -0.15, -0.02, 0.04, -0.06], 1.0e-16)
+
+      assert {:ok, bytes} = Fusion.encode_state(filter)
+      assert {:ok, restored} = Fusion.from_encoded_state(bytes, config(:ekf))
+      assert {:ok, restored_state} = Fusion.state(restored)
+      assert_close_list(restored_state.nominal.velocity_ecef_mps, [0.02, -0.04, 0.06], 1.0e-16)
+
+      assert {:ok, status} = Fusion.configure_time_sync_history(restored, TimeSyncHistoryConfig.new(4, 4))
+      assert status.imu_capacity == 4
+      assert status.checkpoint_capacity == 4
+      assert status.checkpoint_len == 1
+
+      assert {:ok, same_status} = Fusion.time_sync_history_status(restored)
+      assert same_status.checkpoint_len == status.checkpoint_len
+
+      {:ok, blank} = Fusion.with_config(initial_state(), config(:ekf))
+      assert {:ok, restored_state_again} = Fusion.restore_encoded_state(blank, bytes)
+      assert_close_list(restored_state_again.nominal.position_ecef_m, [6_378_137.05, -0.1, 0.15], 1.0e-12)
     end
 
     test "pins loose EKF and UKF updates" do
@@ -351,21 +393,12 @@ defmodule Sidereon.GNSSFusionTest do
 
       {:ok, filter} = Fusion.new(%{initial_state(100.0) | t_j2000_s: epoch}, tight_config)
 
-      epoch_observation = %{
-        t_j2000_s: epoch,
-        observations: [
-          %{
-            satellite_id: "G01",
-            pseudorange_m: rho + 2.0,
-            pseudorange_sigma_m: 10.0,
-            range_rate: %{
-              measured_range_rate_m_s: 0.5,
-              sigma_m_s: 2.0,
-              satellite_clock_drift_m_s: 0.0
-            }
-          }
-        ]
-      }
+      epoch_observation =
+        TightGnssEpoch.new(epoch, [
+          TightGnssObservation.new("G01", rho + 2.0, 10.0, range_rate: TightRangeRateObservation.new(0.5, 2.0, 0.0))
+        ])
+
+      assert TightGnssEpoch.observation_count(epoch_observation) == 1
 
       assert {:ok, report} = Fusion.update_tight(filter, sp3, epoch_observation)
       assert report.rows == 2
