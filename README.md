@@ -126,12 +126,14 @@ positioning, and conjunction screening; more notebooks live under
   `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`, `Sidereon.Drag`.
 - **GNSS positioning** single-point positioning (SPP), public multi-epoch
   static positioning with covariance, leave-one-out redundancy diagnostics,
-  and robust weighting, RTK (float, integer-fixed, fix-and-hold), PPP with
-  temporal-correlation covariance using calibrated day-length bounds, optional
-  elevation cutoff, optional tropospheric-gradient estimation, DGNSS,
-  Huber-reweighted solves, RAIM with fault detection and exclusion, SBAS and
-  RTCM SSR / Galileo HAS corrections, dilution of precision, and receiver
-  velocity from Doppler. See `Sidereon.GNSS.Positioning`,
+  and robust weighting, RINEX observation to SPP assembly and solve helpers,
+  RTK (float, integer-fixed, fix-and-hold) with typed arc/static/wide-lane
+  configs, PPP with temporal-correlation covariance using calibrated day-length
+  bounds, optional elevation cutoff, optional tropospheric-gradient estimation,
+  DGNSS, Huber-reweighted solves, RAIM with fault detection and exclusion,
+  RAIM over existing SPP solutions, SBAS and RTCM SSR / Galileo HAS corrections,
+  dilution of precision, and receiver velocity from Doppler. See
+  `Sidereon.GNSS.Positioning`,
   `Sidereon.GNSS.StaticPositioning`, `Sidereon.GNSS.RTK`,
   `Sidereon.GNSS.PrecisePositioning`, `Sidereon.GNSS.DGNSS`,
   `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`, `Sidereon.GNSS.SSR`.
@@ -145,8 +147,8 @@ positioning, and conjunction screening; more notebooks live under
   `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`.
 - **Timing, estimation, and geodesy** Allan-family clock stability with
   power-law noise identification (IEEE 1139), scalar Kalman and alpha-beta
-  trackers with innovation gating and CFAR thresholds, source localization
-  (ToA/TDOA), station velocity (MIDAS) with trajectory fitting, step
+  trackers with innovation gating, NIS/MAD/EWMA helpers, and CFAR thresholds,
+  source localization (ToA/TDOA), station velocity (MIDAS) with trajectory fitting, step
   detection, and network motion fields, repeating-geometry (sidereal)
   filtering, geodesic direct and inverse problems (Karney), an epoch-aware
   terrestrial frame catalog (ITRF/ETRF Helmert sets), EGM2008 geoid grids, and
@@ -162,7 +164,8 @@ positioning, and conjunction screening; more notebooks live under
   (1045/1046), BeiDou (1042), and QZSS (1044), each real-data validated,
   RINEX 3 observations with Hatanaka / CRINEX decoding, carrier-phase
   combinations, cycle-slip detection, Hatch smoothing, ionosphere-free
-  combination, and GPS L1 C/A signal generation, acquisition, and LNAV decode.
+  combination, precise interpolant artifacts, NTRIP request-byte construction,
+  and GPS L1 C/A signal generation, acquisition, and LNAV decode.
   See `Sidereon.GNSS.SP3`, `Sidereon.GNSS.Broadcast`,
   `Sidereon.GNSS.Ephemeris`, `Sidereon.GNSS.Bias`,
   `Sidereon.GNSS.CarrierPhase`, `Sidereon.GNSS.RTCM`.
@@ -193,23 +196,25 @@ positioning, and conjunction screening; more notebooks live under
   `Sidereon.GNSS.Ionosphere`, `Sidereon.GNSS.Troposphere`, `Sidereon.Atmosphere`.
 - **RF link budget** free-space path loss, EIRP, C/N0, dish gain, and link
   margin. See `Sidereon.RF`.
-- **Terrain and data acquisition** DTED terrain elevation lookup, and
-  cache-first download of GNSS products (SP3, CLK, NAV, IONEX) and DTED tiles
-  from public archives, with canonical filenames and archive URLs for callers
-  who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
+- **Terrain and data acquisition** DTED terrain elevation lookup with typed
+  lookup options, memory-mappable terrain stores, EGM2008 raster-window geoid
+  loading, and cache-first download of GNSS products (SP3, CLK, NAV, IONEX) and
+  DTED tiles from public archives, with canonical filenames and archive URLs for
+  callers who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
 - **GNSS/INS fusion** strapdown mechanization with an error-state EKF (UKF
-  option), loose and tight coupling, IGG-III loose updates, an RTS smoother,
-  a serializable filter state, and field mode: zero-velocity and
-  zero-angular-rate updates, non-holonomic constraints, per-fix-status
-  weighting, and the IMU-to-body mounting matrix, all off by default. See
-  `Sidereon.GNSS.Fusion`.
+  option), loose and tight coupling with typed measurement inputs, IGG-III loose
+  updates, an RTS smoother, encoded-state restore helpers, a serializable filter
+  state, and field mode: zero-velocity and zero-angular-rate updates,
+  non-holonomic constraints, per-fix-status weighting, and the IMU-to-body
+  mounting matrix, all off by default. See `Sidereon.GNSS.Fusion`.
 - **Reference-station static solve** rover and reference observations in, one
   station coordinate with covariance and typed per-mode errors out. See
   `Sidereon.GNSS.RTK`.
 - **Scenario simulation** deterministic synthetic observables plus a
   ground-truth error ledger from a versioned scenario. See `Sidereon.GNSS.Scenario`.
 - **Signal analysis** closed-form BPSK/BOC spectra, spectral separation
-  coefficients, DLL jitter, and multipath envelopes. See `Sidereon.GNSS.Signal.Analysis`.
+  coefficients, DLL jitter, multipath envelopes, and typed option structs. See
+  `Sidereon.GNSS.Signal.Analysis`.
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
   CCSDS OPM / OEM / CDM / TDM, and the GNSS products above. See `Sidereon.Format.TLE`,
   `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`, `Sidereon.CCSDS.TDM`.
