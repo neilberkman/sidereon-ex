@@ -14,6 +14,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
 
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.PreciseEphemeris
+  alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.SP3
@@ -23,7 +24,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   defstruct [:handle, :time_scale, artifact?: false, byte_len: nil, bytes: nil]
 
   @typedoc "Precise source accepted by interpolant batch evaluators."
-  @type source :: SP3.t() | PreciseEphemeris.t() | t()
+  @type source :: SP3.t() | PreciseEphemeris.t() | t() | InterpolantArtifact.t()
 
   @typedoc "Cached precise-ephemeris interpolant or opened artifact handle."
   @type t :: %__MODULE__{
@@ -329,6 +330,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
   defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
   defp source_handle(%__MODULE__{handle: handle}), do: {:ok, handle}
+  defp source_handle(%InterpolantArtifact{interpolant: %__MODULE__{handle: handle}}), do: {:ok, handle}
   defp source_handle(_source), do: {:error, :invalid_source}
 
   defp satellite_terms(satellites) do

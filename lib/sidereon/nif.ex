@@ -1387,6 +1387,37 @@ defmodule Sidereon.NIF do
   def spp_solve_batch_parallel(_handle, _epochs, _with_geodetic, _robust, _max_pdop, _coarse_search_seeds),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def spp_inputs_from_rinex_obs(
+        _source,
+        _obs,
+        _codes,
+        _apply_iono,
+        _apply_tropo,
+        _initial_guess,
+        _satellites,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _robust
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def solve_spp_from_rinex_obs(
+        _source,
+        _obs,
+        _codes,
+        _apply_iono,
+        _apply_tropo,
+        _initial_guess,
+        _satellites,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _robust,
+        _with_geodetic,
+        _max_pdop,
+        _coarse_search_seeds
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def static_positioning_solve_sp3(_handle, _epochs, _initial_position_m, _with_geodetic, _robust),
     do: :erlang.nif_error(:nif_not_loaded)
 

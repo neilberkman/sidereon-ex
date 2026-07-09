@@ -69,6 +69,7 @@ defmodule Sidereon.GNSS.Observables do
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
+  alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
   alias Sidereon.NIF
 
   @type vec3 :: {float(), float(), float()}
@@ -274,7 +275,11 @@ defmodule Sidereon.GNSS.Observables do
       `true`. When `false`, the satellite is evaluated at the receive epoch.
     * `:sagnac` - apply the Sagnac / Earth-rotation correction, default `true`.
   """
-  @spec predict_ranges(SP3.t() | PreciseEphemeris.t() | Interpolant.t(), [range_request()], keyword()) ::
+  @spec predict_ranges(
+          SP3.t() | PreciseEphemeris.t() | Interpolant.t() | InterpolantArtifact.t(),
+          [range_request()],
+          keyword()
+        ) ::
           {:ok, [range_result()]} | {:error, term()}
   def predict_ranges(source, requests, opts \\ []) when is_list(requests) do
     light_time? = Keyword.get(opts, :light_time, true)
@@ -295,6 +300,7 @@ defmodule Sidereon.GNSS.Observables do
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
   defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
   defp source_handle(%Interpolant{handle: handle}), do: {:ok, handle}
+  defp source_handle(%InterpolantArtifact{interpolant: %Interpolant{handle: handle}}), do: {:ok, handle}
   defp source_handle(_source), do: {:error, :invalid_source}
 
   defp prepare_range_requests(requests) do
@@ -359,7 +365,7 @@ defmodule Sidereon.GNSS.Observables do
       the cutoff keep state and clock outputs but have nil media delays.
   """
   @spec emission_media_batch(
-          SP3.t() | PreciseEphemeris.t() | Interpolant.t(),
+          SP3.t() | PreciseEphemeris.t() | Interpolant.t() | InterpolantArtifact.t(),
           [emission_media_request()],
           vec3() | map(),
           keyword()

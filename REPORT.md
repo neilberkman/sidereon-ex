@@ -362,3 +362,57 @@ Proof tests:
 - `test/gnss_rtk_test.exs`: `accepts typed arc config structs on the real sequential solver path`
 - `test/gnss_rtk_test.exs`: `accepts typed static arc config structs on the real static solver path`
 - `test/gnss_rtk_test.exs`: `accepts typed wide-lane and ionosphere-free arc config structs`
+
+## Run 3
+
+### rinex_obs_spp_convenience
+
+Closed.
+
+Added `Sidereon.GNSS.SPP.spp_inputs_from_rinex_obs/3` and
+`Sidereon.GNSS.SPP.solve_spp_from_rinex_obs/3` over the native core
+`spp_inputs_from_rinex_obs` and `solve_spp_from_rinex_obs` paths. The public
+surface accepts parsed RINEX OBS plus broadcast NAV handles and returns
+per-epoch assembled inputs or per-epoch SPP results.
+
+Proof tests:
+
+- `test/gnss_spp_rinex_test.exs`: `assembles and solves RINEX OBS epochs from broadcast NAV`
+
+### precise_interpolant_artifact_mmap
+
+Closed.
+
+Added named public artifact wrappers:
+
+- `Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact`
+- `Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact`
+
+Both delegate to the existing artifact bytes/open/checksum NIF-backed paths and
+opened artifacts are accepted by observable-state and range batch helpers.
+
+Proof tests:
+
+- `test/precise_interpolant_artifact_test.exs`: `opened artifact is a named public source over the core store bytes`
+
+### ntrip_core
+
+Closed.
+
+Renamed the public NTRIP module to `Sidereon.GNSS.NTRIP` and exposed
+`request_bytes/2` plus the canonical `ntrip_request_bytes/2` alias over the
+existing core request-byte builder. Sourcetable parsing and stream/client-machine
+flows remain on the same module.
+
+Proof tests:
+
+- `test/ntrip_test.exs`: `request_bytes exposes the core NTRIP request builder`
+- Existing `test/ntrip_test.exs` sourcetable and stream-machine tests continue
+  to exercise the full NTRIP flow.
+
+### Verification
+
+- `mix test` exited 0: 1053 passed, 2 skipped, 6 excluded.
+- `cargo clippy --manifest-path native/sidereon_nif/Cargo.toml --all-targets -- -D warnings` exited 0.
+- `cargo fmt --manifest-path native/sidereon_nif/Cargo.toml --check` exited 0.
+- Parity checker exited 0 with `Forward gap rows: 0` and `GAPS: none`.
