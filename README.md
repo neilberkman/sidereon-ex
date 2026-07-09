@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 0.10"}]
+  [{:sidereon, "~> 0.23"}]
 end
 ```
 
@@ -87,7 +87,7 @@ with {:ok, sp3} <- Sidereon.GNSS.SP3.parse(sp3_data),
 end
 ```
 
-`Sidereon.GNSS.RTK` and the PPP and DGNSS solvers follow the same shape:
+`Sidereon.GNSS.RTK` and the PPP and DGNSS solvers follow the same pattern:
 observations and a product in, a typed solution out.
 
 A runnable [`sidereon.livemd`](sidereon.livemd) walks through propagation,
@@ -103,12 +103,17 @@ positioning, and conjunction screening; more notebooks live under
   validity latch, two-body Kepler propagation, ground track,
   sub-satellite point, eclipse, Sun and Moon angles, and Doppler. See
   `Sidereon`, `Sidereon.Propagator`, `Sidereon.SGP4`, `Sidereon.Drag`.
-- **GNSS positioning** single-point positioning (SPP), RTK (float,
-  integer-fixed, fix-and-hold), PPP, DGNSS, robust Huber-reweighted solves,
-  RAIM with fault detection and exclusion, SBAS and RTCM SSR / Galileo HAS
-  corrections, dilution of precision, and receiver velocity from Doppler. See
-  `Sidereon.GNSS.Positioning`, `Sidereon.GNSS.RTK`, `Sidereon.GNSS.PrecisePositioning`,
-  `Sidereon.GNSS.DGNSS`, `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`, `Sidereon.GNSS.SSR`.
+- **GNSS positioning** single-point positioning (SPP), public multi-epoch
+  static positioning with covariance, leave-one-out redundancy diagnostics,
+  and robust weighting, RTK (float, integer-fixed, fix-and-hold), PPP with
+  temporal-correlation covariance using calibrated day-length bounds, optional
+  elevation cutoff, optional tropospheric-gradient estimation, DGNSS,
+  Huber-reweighted solves, RAIM with fault detection and exclusion, SBAS and
+  RTCM SSR / Galileo HAS corrections, dilution of precision, and receiver
+  velocity from Doppler. See `Sidereon.GNSS.Positioning`,
+  `Sidereon.GNSS.StaticPositioning`, `Sidereon.GNSS.RTK`,
+  `Sidereon.GNSS.PrecisePositioning`, `Sidereon.GNSS.DGNSS`,
+  `Sidereon.GNSS.QC`, `Sidereon.GNSS.SBAS`, `Sidereon.GNSS.SSR`.
 - **Integrity and error bounds** multi-constellation ARAIM protection levels,
   SBAS protection levels (DO-229), per-observation reliability (minimal
   detectable bias, internal and external), observability classification of
@@ -120,7 +125,7 @@ positioning, and conjunction screening; more notebooks live under
 - **Timing, estimation, and geodesy** Allan-family clock stability with
   power-law noise identification (IEEE 1139), scalar Kalman and alpha-beta
   trackers with innovation gating and CFAR thresholds, source localization
-  (ToA/TDOA), robust station velocity (MIDAS) with trajectory fitting, step
+  (ToA/TDOA), station velocity (MIDAS) with trajectory fitting, step
   detection, and network motion fields, repeating-geometry (sidereal)
   filtering, geodesic direct and inverse problems (Karney), an epoch-aware
   terrestrial frame catalog (ITRF/ETRF Helmert sets), EGM2008 geoid grids, and
@@ -131,11 +136,14 @@ positioning, and conjunction screening; more notebooks live under
 - **GNSS data and observations** SP3 (read, multi-center merge, write), broadcast
   navigation (RINEX 3.x / 4.x), IONEX, ANTEX, CLK, satellite code biases
   (Bias-SINEX and CODE DCB with OSB / DSB lookup), uniform satellite-state
-  sampling that treats precise and broadcast sources interchangeably, RINEX 3
-  observations with Hatanaka / CRINEX decoding, carrier-phase combinations,
-  cycle-slip detection, Hatch smoothing, ionosphere-free combination, and GPS
-  L1 C/A signal generation, acquisition, and LNAV decode. See `Sidereon.GNSS.SP3`,
-  `Sidereon.GNSS.Broadcast`, `Sidereon.GNSS.Ephemeris`, `Sidereon.GNSS.Bias`,
+  sampling that treats precise and broadcast sources interchangeably, RTCM 3
+  broadcast ephemeris decode for GPS (1019), GLONASS (1020), Galileo
+  (1045/1046), BeiDou (1042), and QZSS (1044), each real-data validated,
+  RINEX 3 observations with Hatanaka / CRINEX decoding, carrier-phase
+  combinations, cycle-slip detection, Hatch smoothing, ionosphere-free
+  combination, and GPS L1 C/A signal generation, acquisition, and LNAV decode.
+  See `Sidereon.GNSS.SP3`, `Sidereon.GNSS.Broadcast`,
+  `Sidereon.GNSS.Ephemeris`, `Sidereon.GNSS.Bias`,
   `Sidereon.GNSS.CarrierPhase`, `Sidereon.GNSS.RTCM`.
 - **Ephemeris and time** JPL SPK / `.bsp` kernels for Sun, Moon, and planets;
   TEME, GCRS, ITRS, geodetic, ECEF, and topocentric frames with IAU2000A
@@ -169,7 +177,7 @@ positioning, and conjunction screening; more notebooks live under
   from public archives, with canonical filenames and archive URLs for callers
   who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
 - **GNSS/INS fusion** strapdown mechanization with an error-state EKF (UKF
-  option), loose and tight coupling, robust loose updates, an RTS smoother,
+  option), loose and tight coupling, IGG-III loose updates, an RTS smoother,
   a serializable filter state, and field mode: zero-velocity and
   zero-angular-rate updates, non-holonomic constraints, per-fix-status
   weighting, and the IMU-to-body mounting matrix, all off by default. See
