@@ -38,10 +38,13 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.IonosphereFree
   alias Sidereon.GNSS.Navigation.LNAV
   alias Sidereon.GNSS.Navigation.LNAV.Ephemeris
+  alias Sidereon.GNSS.NTRIP
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.PreciseEphemeris
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
+  alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
+  alias Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PrecisePositioning
   alias Sidereon.GNSS.QC
@@ -53,6 +56,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Signal.CA
   alias Sidereon.GNSS.Signal.Correlator
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.SPP
   alias Sidereon.GNSS.StaticPositioning
   alias Sidereon.GNSS.Troposphere
   alias Sidereon.GNSS.Velocity
@@ -173,9 +177,12 @@ defmodule Sidereon.MixProject do
           Positioning,
           PreciseEphemeris,
           Interpolant,
+          InterpolantArtifact,
+          PreciseInterpolantArtifact,
           StateBatch,
           PrecisePositioning,
           SP3,
+          SPP,
           Broadcast,
           Observations,
           ReducedOrbit,
@@ -200,7 +207,8 @@ defmodule Sidereon.MixProject do
           Analysis,
           Correlator,
           LNAV,
-          Ephemeris
+          Ephemeris,
+          NTRIP
         ],
         "Data Sources": [Data, Sidereon.Constellation, Sidereon.Terrain, MmapTerrain],
         Estimation: [

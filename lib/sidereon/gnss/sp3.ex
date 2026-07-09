@@ -29,6 +29,8 @@ defmodule Sidereon.GNSS.SP3 do
   """
 
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.PreciseEphemeris.Interpolant
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
@@ -187,6 +189,12 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Alias for `satellite_ids/1`, matching the Python/WASM `satellites` accessor.
+  """
+  @spec satellites(t()) :: [String.t()]
+  def satellites(%__MODULE__{} = sp3), do: satellite_ids(sp3)
+
+  @doc """
   Number of parsed epochs held by the SP3 product.
 
   This is the count of actual `*` epoch nodes parsed from the file, not just the
@@ -307,6 +315,14 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Build canonical precise-interpolant artifact bytes from this SP3 product.
+  """
+  @spec precise_interpolant_artifact_bytes(t()) :: {:ok, binary()} | {:error, term()}
+  def precise_interpolant_artifact_bytes(%__MODULE__{} = sp3) do
+    Interpolant.artifact_bytes(sp3)
+  end
+
+  @doc """
   Serialize the product to standard SP3-c / SP3-d text as iodata. Pure, no I/O.
 
   This is the inverse of `load/1` / `parse/1`: a read → (`merge/2`) → write
@@ -331,6 +347,29 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError ->
       reraise ArgumentError, [message: "could not serialize SP3 product: #{inspect(e.original)}"], __STACKTRACE__
+  end
+
+  @doc """
+  Serialize the product to an SP3 text binary.
+  """
+  @spec to_sp3_string(t(), keyword()) :: binary()
+  def to_sp3_string(%__MODULE__{} = sp3, opts \\ []) do
+    sp3
+    |> to_iodata(opts)
+    |> IO.iodata_to_binary()
+  end
+
+  @doc """
+  Interpolate one satellite at J2000-second epochs in the product time scale.
+
+  This returns the same `Sidereon.GNSS.PreciseEphemeris.StateBatch` used by the
+  precise-interpolant accessors.
+  """
+  @spec interpolate(t(), String.t(), [number()]) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def interpolate(%__MODULE__{} = sp3, sat_id, epochs_j2000_s) when is_binary(sat_id) and is_list(epochs_j2000_s) do
+    satellites = List.duplicate(sat_id, length(epochs_j2000_s))
+    Interpolant.states_at_j2000_s(sp3, satellites, epochs_j2000_s)
   end
 
   @doc """

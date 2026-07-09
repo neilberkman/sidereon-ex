@@ -4,6 +4,28 @@ defmodule Sidereon.GNSS.RTKTest do
   alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
   alias Sidereon.GNSS.RTK
+
+  alias Sidereon.GNSS.RTK.{
+    ArcConfig,
+    ArcCycleSlipSplit,
+    ArcEpochSolution,
+    ArcPreprocessing,
+    ArcSolution,
+    ArcState,
+    ArcUpdateOptions,
+    FixedOptions,
+    FloatOptions,
+    IonosphereFreeArcConfig,
+    MeasurementModel,
+    ResidualValidationOptions,
+    StaticArcConfig,
+    StaticArcSolution,
+    WideLaneArcConfig,
+    WideLaneArcSolution,
+    WideLaneFixedMetadata,
+    WideLaneOptions
+  }
+
   alias Sidereon.GNSS.SP3
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
@@ -152,10 +174,22 @@ defmodule Sidereon.GNSS.RTKTest do
     test "delegates raw arc epochs to the core sequential arc solver" do
       assert {:ok, solution} = RTK.solve_arc(arc_epochs(), arc_config())
 
+      assert %ArcSolution{final_state: %ArcState{}, epochs: [%ArcEpochSolution{} | _]} = solution
+      assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert Map.has_key?(solution.references, "G")
       assert length(solution.epochs) == 3
       assert List.last(solution.epochs).integer_fixed
       assert norm(sub3(List.last(solution.epochs).reported_baseline_m, @truth_baseline)) < 1.0e-3
+    end
+
+    test "accepts typed arc config structs on the real sequential solver path" do
+      assert {:ok, solution} = RTK.solve_arc(arc_epochs(), typed_arc_config())
+
+      assert %ArcSolution{final_state: %ArcState{}, epochs: [%ArcEpochSolution{} | _]} = solution
+      assert List.last(solution.epochs).integer_fixed
+      assert norm(sub3(List.last(solution.epochs).reported_baseline_m, @truth_baseline)) < 1.0e-3
+      assert is_list(solution.measurement_covariance)
+      refute Enum.empty?(solution.measurement_covariance)
     end
   end
 
@@ -173,9 +207,25 @@ defmodule Sidereon.GNSS.RTKTest do
                  |> Map.put(:offsets_m, {"none", 0.0, []})
                )
 
+      assert %StaticArcSolution{} = solution
+      assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert solution.references == %{"G" => "G01"}
       assert solution.ambiguity_ids == @ambiguity_ids
       assert solution.dropped_sats == []
+
+      assert %GeometryQuality{
+               tier: :nominal,
+               raim_checkable: true,
+               covariance_validated: true
+             } = solution.geometry_quality
+    end
+
+    test "accepts typed static arc config structs on the real static solver path" do
+      assert {:ok, solution} = RTK.solve_static_arc(arc_epochs(), typed_static_arc_config())
+
+      assert %StaticArcSolution{} = solution
+      assert solution.references == %{"G" => "G01"}
+      assert solution.ambiguity_ids == @ambiguity_ids
 
       assert %GeometryQuality{
                tier: :nominal,
@@ -190,6 +240,8 @@ defmodule Sidereon.GNSS.RTKTest do
       assert {:ok, solution} =
                RTK.fix_wide_lane_rtk_arc(dual_frequency_epochs(), wide_lane_config())
 
+      assert %WideLaneArcSolution{} = solution
+      assert Enum.all?(solution.split_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert map_size(solution.wide_lane_cycles) == 3
 
       assert %GeometryQuality{
@@ -197,6 +249,31 @@ defmodule Sidereon.GNSS.RTKTest do
                raim_checkable: true,
                covariance_validated: true
              } = solution.geometry_quality
+    end
+
+    test "accepts typed wide-lane and ionosphere-free arc config structs" do
+      assert {:ok, wide_lane} =
+               RTK.fix_wide_lane_rtk_arc(dual_frequency_epochs(), typed_wide_lane_config())
+
+      assert %WideLaneArcSolution{} = wide_lane
+      assert map_size(wide_lane.wide_lane_cycles) == 3
+
+      assert {:ok, if_solution} =
+               RTK.prepare_ionosphere_free_rtk_arc(
+                 dual_frequency_epochs(),
+                 wide_lane.wide_lane_cycles,
+                 %IonosphereFreeArcConfig{
+                   base_m: @base,
+                   initial_baseline_m: {0.0, 0.0, 0.0},
+                   reference: :auto,
+                   apply_troposphere: false
+                 }
+               )
+
+      assert Map.has_key?(if_solution.references, "G")
+      assert length(if_solution.epochs) == 3
+      assert map_size(if_solution.wavelengths_m) == 3
+      assert map_size(if_solution.offsets_m) == 3
     end
   end
 
@@ -253,6 +330,7 @@ defmodule Sidereon.GNSS.RTKTest do
 
       assert solution.epoch_count == 120
       assert solution.skipped_epoch_count == 0
+      assert %WideLaneFixedMetadata{} = solution.wide_lane
       assert solution.wide_lane.fixed?
       assert solution.wide_lane.ambiguity_count == 7
 
@@ -461,6 +539,40 @@ defmodule Sidereon.GNSS.RTKTest do
     }
   end
 
+  defp typed_arc_config do
+    raw = arc_config()
+
+    %ArcConfig{
+      base_m: raw.base_m,
+      reference: raw.reference,
+      model: struct!(MeasurementModel, raw.model),
+      baseline_prior_sigma_m: raw.baseline_prior_sigma_m,
+      ambiguity_prior_sigma_m: raw.ambiguity_prior_sigma_m,
+      initial_baseline_m: raw.initial_baseline_m,
+      wavelengths_m: raw.wavelengths_m,
+      offsets_m: raw.offsets_m,
+      update_opts: struct!(ArcUpdateOptions, raw.update_opts),
+      preprocessing: %ArcPreprocessing{}
+    }
+  end
+
+  defp typed_static_arc_config do
+    %StaticArcConfig{
+      arc: typed_arc_config(),
+      float_options: struct!(FloatOptions, float_opts()),
+      fixed_options:
+        struct!(
+          FixedOptions,
+          fixed_opts()
+          |> Map.put(:position_tolerance_m, 1.0e-4)
+          |> Map.put(:ambiguity_tolerance_m, 1.0e-4)
+          |> Map.put(:max_iterations, 20)
+        ),
+      residual_options: struct!(ResidualValidationOptions, residual_opts()),
+      float_only_systems: []
+    }
+  end
+
   defp dual_frequency_epochs do
     positions =
       @sat_positions
@@ -514,6 +626,19 @@ defmodule Sidereon.GNSS.RTKTest do
       min_epochs: 2,
       tolerance_cycles: 0.5,
       skip_short_fragments: false,
+      cycle_slip: nil
+    }
+  end
+
+  defp typed_wide_lane_config do
+    %WideLaneArcConfig{
+      base_m: @base,
+      reference: :auto,
+      options: %WideLaneOptions{
+        min_epochs: 2,
+        tolerance_cycles: 0.5,
+        skip_short_fragments: false
+      },
       cycle_slip: nil
     }
   end
@@ -579,11 +704,6 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   defp ecef_tuple(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
-
-  defp bits(value) do
-    <<bits::64>> = <<value::float-64>>
-    bits
-  end
 
   defp from_bits(bits) do
     <<value::float-64>> = <<bits::64>>

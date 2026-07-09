@@ -7,6 +7,7 @@ defmodule Sidereon.GNSS.Fusion do
   """
 
   alias Sidereon.GNSS.Broadcast
+  alias Sidereon.GNSS.Fusion
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
@@ -20,6 +21,311 @@ defmodule Sidereon.GNSS.Fusion do
 
     @typedoc "Stateful fusion filter resource."
     @type t :: %__MODULE__{handle: reference()}
+  end
+
+  defmodule ImuSample do
+    @moduledoc """
+    IMU rate or increment sample accepted by the fusion propagator.
+    """
+
+    @enforce_keys [:t_j2000_s, :kind]
+    defstruct [
+      :t_j2000_s,
+      :kind,
+      :specific_force_mps2,
+      :angular_rate_rps,
+      :delta_velocity_mps,
+      :delta_theta_rad,
+      :dt_s
+    ]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            kind: :rate | :increment,
+            specific_force_mps2: Fusion.vec3() | nil,
+            angular_rate_rps: Fusion.vec3() | nil,
+            delta_velocity_mps: Fusion.vec3() | nil,
+            delta_theta_rad: Fusion.vec3() | nil,
+            dt_s: number() | nil
+          }
+
+    @doc """
+    Build an IMU rate sample.
+    """
+    @spec rate(number(), Fusion.vec3(), Fusion.vec3()) :: t()
+    def rate(t_j2000_s, specific_force_mps2, angular_rate_rps) do
+      %__MODULE__{
+        t_j2000_s: t_j2000_s,
+        kind: :rate,
+        specific_force_mps2: specific_force_mps2,
+        angular_rate_rps: angular_rate_rps
+      }
+    end
+
+    @doc """
+    Build an IMU increment sample.
+    """
+    @spec increment(number(), Fusion.vec3(), Fusion.vec3(), number()) :: t()
+    def increment(t_j2000_s, delta_velocity_mps, delta_theta_rad, dt_s) do
+      %__MODULE__{
+        t_j2000_s: t_j2000_s,
+        kind: :increment,
+        delta_velocity_mps: delta_velocity_mps,
+        delta_theta_rad: delta_theta_rad,
+        dt_s: dt_s
+      }
+    end
+  end
+
+  defmodule GnssFixMeasurement do
+    @moduledoc """
+    GNSS PVT measurement used by loose-coupled fusion updates.
+    """
+
+    @enforce_keys [:t_j2000_s, :position_ecef_m, :covariance]
+    defstruct [
+      :t_j2000_s,
+      :position_ecef_m,
+      :velocity_ecef_mps,
+      :covariance,
+      satellites_used: 4,
+      solution_valid: true,
+      fix_status: :single
+    ]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            position_ecef_m: Fusion.vec3(),
+            velocity_ecef_mps: Fusion.vec3() | nil,
+            covariance: [[number()]],
+            satellites_used: non_neg_integer(),
+            solution_valid: boolean(),
+            fix_status: :single | :float | :fixed | String.t()
+          }
+
+    @doc """
+    Build a position-only GNSS fix measurement.
+    """
+    @spec position(number(), Fusion.vec3(), [[number()]], non_neg_integer(), keyword()) :: t()
+    def position(t_j2000_s, position_ecef_m, position_covariance_m2, satellites_used, opts \\ []) do
+      %__MODULE__{
+        t_j2000_s: t_j2000_s,
+        position_ecef_m: position_ecef_m,
+        covariance: position_covariance_m2,
+        satellites_used: satellites_used,
+        solution_valid: Keyword.get(opts, :solution_valid, true),
+        fix_status: Keyword.get(opts, :fix_status, :single)
+      }
+    end
+
+    @doc """
+    Build a position-velocity GNSS fix measurement.
+    """
+    @spec position_velocity(
+            number(),
+            Fusion.vec3(),
+            Fusion.vec3(),
+            [[number()]],
+            non_neg_integer(),
+            keyword()
+          ) :: t()
+    def position_velocity(t_j2000_s, position_ecef_m, velocity_ecef_mps, covariance, satellites_used, opts \\ []) do
+      %__MODULE__{
+        t_j2000_s: t_j2000_s,
+        position_ecef_m: position_ecef_m,
+        velocity_ecef_mps: velocity_ecef_mps,
+        covariance: covariance,
+        satellites_used: satellites_used,
+        solution_valid: Keyword.get(opts, :solution_valid, true),
+        fix_status: Keyword.get(opts, :fix_status, :single)
+      }
+    end
+
+    @doc """
+    Return the measurement with a different GNSS fix status.
+    """
+    @spec with_fix_status(t(), :single | :float | :fixed | String.t()) :: t()
+    def with_fix_status(%__MODULE__{} = measurement, fix_status), do: %{measurement | fix_status: fix_status}
+  end
+
+  defmodule TightRangeRateObservation do
+    @moduledoc """
+    Doppler-derived range-rate row for one satellite in a tight update.
+    """
+
+    @enforce_keys [:measured_range_rate_m_s, :sigma_m_s]
+    defstruct [:measured_range_rate_m_s, :sigma_m_s, satellite_clock_drift_m_s: 0.0]
+
+    @type t :: %__MODULE__{
+            measured_range_rate_m_s: number(),
+            sigma_m_s: number(),
+            satellite_clock_drift_m_s: number()
+          }
+
+    @doc """
+    Build a tight range-rate observation row.
+    """
+    @spec new(number(), number(), number()) :: t()
+    def new(measured_range_rate_m_s, sigma_m_s, satellite_clock_drift_m_s \\ 0.0) do
+      %__MODULE__{
+        measured_range_rate_m_s: measured_range_rate_m_s,
+        sigma_m_s: sigma_m_s,
+        satellite_clock_drift_m_s: satellite_clock_drift_m_s
+      }
+    end
+  end
+
+  defmodule TightCarrierPhaseObservation do
+    @moduledoc """
+    Carrier-phase range row with a caller-supplied float ambiguity.
+    """
+
+    @enforce_keys [:phase_range_m, :sigma_m, :float_ambiguity_m]
+    defstruct [:phase_range_m, :sigma_m, :float_ambiguity_m]
+
+    @type t :: %__MODULE__{
+            phase_range_m: number(),
+            sigma_m: number(),
+            float_ambiguity_m: number()
+          }
+
+    @doc """
+    Build a tight carrier-phase observation row.
+    """
+    @spec new(number(), number(), number()) :: t()
+    def new(phase_range_m, sigma_m, float_ambiguity_m) do
+      %__MODULE__{phase_range_m: phase_range_m, sigma_m: sigma_m, float_ambiguity_m: float_ambiguity_m}
+    end
+  end
+
+  defmodule TightGnssObservation do
+    @moduledoc """
+    Raw GNSS observation for one satellite in a tight update.
+    """
+
+    @enforce_keys [:satellite_id, :pseudorange_m, :pseudorange_sigma_m]
+    defstruct [
+      :satellite_id,
+      :pseudorange_m,
+      :pseudorange_sigma_m,
+      :range_rate,
+      :carrier_phase,
+      ionosphere_delay_m: 0.0,
+      troposphere_delay_m: 0.0
+    ]
+
+    @type t :: %__MODULE__{
+            satellite_id: String.t(),
+            pseudorange_m: number(),
+            pseudorange_sigma_m: number(),
+            range_rate: TightRangeRateObservation.t() | map() | nil,
+            carrier_phase: TightCarrierPhaseObservation.t() | map() | nil,
+            ionosphere_delay_m: number(),
+            troposphere_delay_m: number()
+          }
+
+    @doc """
+    Build a tight GNSS observation.
+    """
+    @spec new(String.t(), number(), number(), keyword()) :: t()
+    def new(satellite_id, pseudorange_m, pseudorange_sigma_m, opts \\ []) do
+      %__MODULE__{
+        satellite_id: satellite_id,
+        pseudorange_m: pseudorange_m,
+        pseudorange_sigma_m: pseudorange_sigma_m,
+        range_rate: Keyword.get(opts, :range_rate),
+        carrier_phase: Keyword.get(opts, :carrier_phase),
+        ionosphere_delay_m: Keyword.get(opts, :ionosphere_delay_m, 0.0),
+        troposphere_delay_m: Keyword.get(opts, :troposphere_delay_m, 0.0)
+      }
+    end
+  end
+
+  defmodule TightGnssEpoch do
+    @moduledoc """
+    One receiver epoch of raw GNSS observations for a tight update.
+    """
+
+    @enforce_keys [:t_j2000_s, :observations]
+    defstruct [:t_j2000_s, :observations]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            observations: [TightGnssObservation.t() | map()]
+          }
+
+    @doc """
+    Build a tight GNSS observation epoch.
+    """
+    @spec new(number(), [TightGnssObservation.t() | map()]) :: t()
+    def new(t_j2000_s, observations), do: %__MODULE__{t_j2000_s: t_j2000_s, observations: observations}
+
+    @doc """
+    Return the number of observations in the epoch.
+    """
+    @spec observation_count(t()) :: non_neg_integer()
+    def observation_count(%__MODULE__{observations: observations}), do: length(observations)
+  end
+
+  defmodule TimeSyncHistoryConfig do
+    @moduledoc """
+    Retained-history limits for bounded-latency time synchronization.
+    """
+
+    defstruct imu_capacity: 256, checkpoint_capacity: 64
+
+    @type t :: %__MODULE__{
+            imu_capacity: pos_integer(),
+            checkpoint_capacity: pos_integer()
+          }
+
+    @doc """
+    Build time-sync retained-history limits.
+    """
+    @spec new(pos_integer(), pos_integer()) :: t()
+    def new(imu_capacity \\ 256, checkpoint_capacity \\ 64) do
+      %__MODULE__{imu_capacity: imu_capacity, checkpoint_capacity: checkpoint_capacity}
+    end
+  end
+
+  defmodule VelocityMatchState do
+    @moduledoc """
+    One position and velocity sample used by outage velocity matching.
+    """
+
+    @enforce_keys [:t_j2000_s, :position_ecef_m, :velocity_ecef_mps]
+    defstruct [:t_j2000_s, :position_ecef_m, :velocity_ecef_mps]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            position_ecef_m: Fusion.vec3(),
+            velocity_ecef_mps: Fusion.vec3()
+          }
+
+    @doc """
+    Build a velocity-match outage state.
+    """
+    @spec new(number(), Fusion.vec3(), Fusion.vec3()) :: t()
+    def new(t_j2000_s, position_ecef_m, velocity_ecef_mps) do
+      %__MODULE__{t_j2000_s: t_j2000_s, position_ecef_m: position_ecef_m, velocity_ecef_mps: velocity_ecef_mps}
+    end
+  end
+
+  defmodule VelocityMatchingConfig do
+    @moduledoc """
+    Endpoint velocity matching settings for one GNSS outage.
+    """
+
+    @enforce_keys [:max_outage_duration_s]
+    defstruct [:max_outage_duration_s]
+
+    @type t :: %__MODULE__{max_outage_duration_s: number()}
+
+    @doc """
+    Build velocity-matching settings.
+    """
+    @spec new(number()) :: t()
+    def new(max_outage_duration_s), do: %__MODULE__{max_outage_duration_s: max_outage_duration_s}
   end
 
   defmodule FusionRtsEpoch do
@@ -173,17 +479,17 @@ defmodule Sidereon.GNSS.Fusion do
   @typedoc "Fusion filter configuration map."
   @type filter_config :: map()
 
-  @typedoc "IMU sample map accepted by `propagate/2`."
-  @type imu_sample :: map()
+  @typedoc "IMU sample accepted by `propagate/2`."
+  @type imu_sample :: ImuSample.t() | map()
 
   @typedoc "Loose GNSS position or position-velocity fix."
-  @type loose_measurement :: map()
+  @type loose_measurement :: GnssFixMeasurement.t() | map()
 
   @typedoc "Tight GNSS raw-observation epoch."
-  @type tight_epoch :: map()
+  @type tight_epoch :: TightGnssEpoch.t() | map()
 
   @typedoc "One position and velocity sample used by outage velocity matching."
-  @type velocity_match_state :: map()
+  @type velocity_match_state :: VelocityMatchState.t() | map()
 
   @doc """
   Return a strapdown mechanization config.
@@ -333,6 +639,12 @@ defmodule Sidereon.GNSS.Fusion do
   end
 
   @doc """
+  Alias for `new/2` matching the Python `InertialFilter.with_config` constructor.
+  """
+  @spec with_config(filter_state(), filter_config()) :: {:ok, Filter.t()} | {:error, term()}
+  def with_config(state, config), do: new(state, config)
+
+  @doc """
   Restore a new stateful filter from versioned fusion state bytes.
   """
   @spec from_state_bytes(binary(), filter_config()) :: {:ok, Filter.t()} | {:error, term()}
@@ -342,6 +654,12 @@ defmodule Sidereon.GNSS.Fusion do
       {:error, _reason} = err -> err
     end
   end
+
+  @doc """
+  Alias for `from_state_bytes/2` matching Python's encoded-state constructor.
+  """
+  @spec from_encoded_state(binary(), filter_config()) :: {:ok, Filter.t()} | {:error, term()}
+  def from_encoded_state(bytes, config), do: from_state_bytes(bytes, config)
 
   @doc """
   Return the current closed-loop filter state.
@@ -476,10 +794,23 @@ defmodule Sidereon.GNSS.Fusion do
   end
 
   @doc """
+  Alias for `configure_time_sync/2` matching Python's retained-history name.
+  """
+  @spec configure_time_sync_history(Filter.t(), TimeSyncHistoryConfig.t() | keyword() | map()) ::
+          {:ok, map()} | {:error, term()}
+  def configure_time_sync_history(filter, config), do: configure_time_sync(filter, config)
+
+  @doc """
   Return retained-history occupancy for time synchronization.
   """
   @spec time_sync_status(Filter.t()) :: {:ok, map()} | {:error, term()}
   def time_sync_status(%Filter{handle: handle}), do: NIF.fusion_time_sync_status(handle)
+
+  @doc """
+  Alias for `time_sync_status/1` matching Python's retained-history name.
+  """
+  @spec time_sync_history_status(Filter.t()) :: {:ok, map()} | {:error, term()}
+  def time_sync_history_status(filter), do: time_sync_status(filter)
 
   @doc """
   Return the tight receiver-clock state.
@@ -500,6 +831,12 @@ defmodule Sidereon.GNSS.Fusion do
   def restore_state(%Filter{handle: handle}, bytes) when is_binary(bytes) do
     NIF.fusion_restore_state(handle, bytes)
   end
+
+  @doc """
+  Alias for `restore_state/2` matching Python's encoded-state restore method.
+  """
+  @spec restore_encoded_state(Filter.t(), binary()) :: {:ok, map()} | {:error, term()}
+  def restore_encoded_state(filter, bytes), do: restore_state(filter, bytes)
 
   @doc """
   Apply fixed-interval RTS smoothing to recorded GNSS/INS fusion history.

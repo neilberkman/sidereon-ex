@@ -1,4 +1,4 @@
-defmodule Sidereon.GNSS.Ntrip do
+defmodule Sidereon.GNSS.NTRIP do
   @moduledoc """
   NTRIP client helpers and stream process.
 
@@ -12,7 +12,7 @@ defmodule Sidereon.GNSS.Ntrip do
   the caster supports it.
   """
 
-  alias Sidereon.GNSS.Ntrip
+  alias Sidereon.GNSS.NTRIP
   alias Sidereon.GNSS.SSR
   alias Sidereon.NIF
 
@@ -106,6 +106,29 @@ defmodule Sidereon.GNSS.Ntrip do
           | {:protocol, term()}
           | {:network, term()}
           | {:stream_stalled, number()}
+
+  @doc """
+  Build the raw NTRIP request bytes for a host and option set.
+
+  The options match `sourcetable/2` and `Stream.start_link/1`: `:mountpoint`,
+  `:port`, `:version`, `:credentials`, `:user_agent_product`, and `:gga`.
+  This is the public sans-I/O request builder used by the stream and raw
+  sourcetable flows.
+  """
+  @spec request_bytes(String.t(), keyword()) :: {:ok, binary()} | {:error, error_reason()}
+  def request_bytes(host, opts \\ []) when is_binary(host) and is_list(opts) do
+    with {:ok, config} <- config(host, opts) do
+      NIF.ntrip_request_bytes(config)
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Alias for `request_bytes/2`, matching the canonical facade function name.
+  """
+  @spec ntrip_request_bytes(String.t(), keyword()) :: {:ok, binary()} | {:error, error_reason()}
+  def ntrip_request_bytes(host, opts \\ []), do: request_bytes(host, opts)
 
   @doc """
   Fetch and parse a caster sourcetable.
@@ -241,7 +264,7 @@ defmodule Sidereon.GNSS.Ntrip do
            redirect: false,
            retry: false,
            receive_timeout: timeout_ms,
-           finch: :"Elixir.Sidereon.GNSS.Ntrip.Finch",
+           finch: :"Elixir.Sidereon.GNSS.NTRIP.Finch",
            decode_body: false
          ) do
       {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
@@ -469,9 +492,9 @@ defmodule Sidereon.GNSS.Ntrip do
     defp connect_stream(state) do
       opts = state.opts
       host = Keyword.fetch!(opts, :host)
-      version = opts |> Keyword.get(:version, :auto) |> Ntrip.raw_version()
+      version = opts |> Keyword.get(:version, :auto) |> NTRIP.raw_version()
 
-      with {:ok, config} <- Ntrip.config(host, Keyword.put(opts, :version, version)),
+      with {:ok, config} <- NTRIP.config(host, Keyword.put(opts, :version, version)),
            {:ok, request} <- NIF.ntrip_request_bytes(config) do
         machine = NIF.ntrip_machine_new(config)
 
@@ -512,12 +535,12 @@ defmodule Sidereon.GNSS.Ntrip do
     defp open_socket(request, state) do
       opts = state.opts
       transport = if Keyword.get(opts, :tls, false), do: :ssl, else: :gen_tcp
-      timeout = Ntrip.seconds_to_ms(Keyword.get(opts, :connect_timeout_s, 10.0))
+      timeout = NTRIP.seconds_to_ms(Keyword.get(opts, :connect_timeout_s, 10.0))
       host = Keyword.fetch!(opts, :host)
       port = Keyword.get(opts, :port, @default_port)
 
-      with {:ok, socket} <- Ntrip.connect(transport, host, port, timeout),
-           :ok <- Ntrip.send_bytes(transport, socket, request),
+      with {:ok, socket} <- NTRIP.connect(transport, host, port, timeout),
+           :ok <- NTRIP.send_bytes(transport, socket, request),
            :ok <- set_active_once(transport, socket) do
         schedule_stall(opts)
         {:noreply, %{state | socket: socket, transport: transport}}
@@ -580,7 +603,7 @@ defmodule Sidereon.GNSS.Ntrip do
     end
 
     defp handle_event({:sourcetable, table}, state) do
-      table = Ntrip.to_table(table)
+      table = NTRIP.to_table(table)
 
       if Keyword.get(state.opts, :mountpoint, "") == "" do
         deliver(state, {:sourcetable, table})
@@ -591,7 +614,7 @@ defmodule Sidereon.GNSS.Ntrip do
     end
 
     defp handle_event({:rejected, rejection}, state) do
-      {:stop, state, Ntrip.map_rejection(rejection, nil)}
+      {:stop, state, NTRIP.map_rejection(rejection, nil)}
     end
 
     defp handle_event({:stream_corrupted, detail}, state) do
@@ -645,7 +668,7 @@ defmodule Sidereon.GNSS.Ntrip do
     defp stall_check(%{socket: nil} = state), do: {:noreply, state}
 
     defp stall_check(state) do
-      timeout = Ntrip.seconds_to_ms(Keyword.get(state.opts, :stall_timeout_s, @default_stall_timeout_s))
+      timeout = NTRIP.seconds_to_ms(Keyword.get(state.opts, :stall_timeout_s, @default_stall_timeout_s))
       elapsed = System.monotonic_time(:millisecond) - state.last_rx
 
       if elapsed >= timeout do
@@ -657,7 +680,7 @@ defmodule Sidereon.GNSS.Ntrip do
     end
 
     defp schedule_stall(opts) do
-      timeout = Ntrip.seconds_to_ms(Keyword.get(opts, :stall_timeout_s, @default_stall_timeout_s))
+      timeout = NTRIP.seconds_to_ms(Keyword.get(opts, :stall_timeout_s, @default_stall_timeout_s))
       Process.send_after(self(), :stall_check, min(1_000, timeout))
       :ok
     end
@@ -667,7 +690,7 @@ defmodule Sidereon.GNSS.Ntrip do
       initial = Map.get(policy, :initial_s, 1.0)
       factor = Map.get(policy, :factor, 2.0)
       cap = Map.get(policy, :cap_s, 60.0)
-      min(cap, initial * :math.pow(factor, attempt - 1)) |> Ntrip.seconds_to_ms()
+      min(cap, initial * :math.pow(factor, attempt - 1)) |> NTRIP.seconds_to_ms()
     end
 
     defp send_gga(%{machine: nil} = state), do: {:ok, state}
@@ -687,7 +710,7 @@ defmodule Sidereon.GNSS.Ntrip do
             {:ok, state}
 
           bytes ->
-            case Ntrip.send_bytes(state.transport, state.socket, bytes) do
+            case NTRIP.send_bytes(state.transport, state.socket, bytes) do
               :ok -> {:ok, state}
               {:error, reason} -> {:reconnect, state, {:network, reason}}
             end
@@ -705,7 +728,7 @@ defmodule Sidereon.GNSS.Ntrip do
 
         interval ->
           ref = make_ref()
-          Process.send_after(self(), {:gga_tick, ref}, Ntrip.seconds_to_ms(interval))
+          Process.send_after(self(), {:gga_tick, ref}, NTRIP.seconds_to_ms(interval))
           %{state | gga_timer_ref: ref}
       end
     end
@@ -721,8 +744,8 @@ defmodule Sidereon.GNSS.Ntrip do
     defp gga_position(opts) do
       case Keyword.get(opts, :gga) do
         %{position: fun} when is_function(fun, 0) -> normalize_gga_position(fun.())
-        %{position: %Ntrip.GgaPosition{} = position} -> {:ok, position}
-        %{position: position} when is_map(position) -> {:ok, struct!(Ntrip.GgaPosition, position)}
+        %{position: %NTRIP.GgaPosition{} = position} -> {:ok, position}
+        %{position: position} when is_map(position) -> {:ok, struct!(NTRIP.GgaPosition, position)}
         %{} -> {:error, :missing_gga_position}
         _ -> :none
       end
@@ -730,8 +753,8 @@ defmodule Sidereon.GNSS.Ntrip do
       e in ArgumentError -> {:error, Exception.message(e)}
     end
 
-    defp normalize_gga_position(%Ntrip.GgaPosition{} = position), do: {:ok, position}
-    defp normalize_gga_position(position) when is_map(position), do: {:ok, struct!(Ntrip.GgaPosition, position)}
+    defp normalize_gga_position(%NTRIP.GgaPosition{} = position), do: {:ok, position}
+    defp normalize_gga_position(position) when is_map(position), do: {:ok, struct!(NTRIP.GgaPosition, position)}
     defp normalize_gga_position(position), do: {:error, {:bad_gga_position, position}}
 
     defp monotonic_seconds, do: System.monotonic_time(:microsecond) / 1_000_000.0

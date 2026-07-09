@@ -38,6 +38,8 @@ defmodule Sidereon.GNSS.RTK do
   alias Sidereon.GNSS.Core.Observations
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
+  alias Sidereon.GNSS.RTK
+  alias Sidereon.GNSS.RTK.ArcConfig
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
@@ -57,6 +59,257 @@ defmodule Sidereon.GNSS.RTK do
   @gap_reference ~N[2000-01-01 00:00:00]
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
+
+  defmodule MeasurementModel do
+    @moduledoc """
+    RTK measurement weighting and correction model.
+    """
+
+    defstruct code_sigma_m: nil,
+              phase_sigma_m: nil,
+              stochastic_model: :simple,
+              elevation_weighting?: false,
+              sagnac?: true
+
+    @type stochastic_model :: :simple | :rtklib
+    @type t :: %__MODULE__{
+            code_sigma_m: number(),
+            phase_sigma_m: number(),
+            stochastic_model: stochastic_model(),
+            elevation_weighting?: boolean(),
+            sagnac?: boolean()
+          }
+  end
+
+  defmodule FloatOptions do
+    @moduledoc """
+    Iteration controls for an RTK float solve.
+    """
+
+    defstruct position_tolerance_m: 1.0e-4,
+              ambiguity_tolerance_m: 1.0e-4,
+              max_iterations: 10
+
+    @type t :: %__MODULE__{
+            position_tolerance_m: number(),
+            ambiguity_tolerance_m: number(),
+            max_iterations: pos_integer()
+          }
+  end
+
+  defmodule FixedOptions do
+    @moduledoc """
+    Iteration and integer-search controls for RTK fixed solving.
+    """
+
+    defstruct position_tolerance_m: 1.0e-4,
+              ambiguity_tolerance_m: 1.0e-4,
+              max_iterations: 10,
+              ratio_threshold: 3.0,
+              partial_ambiguity_resolution?: false,
+              partial_min_ambiguities: 4
+
+    @type t :: %__MODULE__{
+            position_tolerance_m: number(),
+            ambiguity_tolerance_m: number(),
+            max_iterations: pos_integer(),
+            ratio_threshold: number(),
+            partial_ambiguity_resolution?: boolean(),
+            partial_min_ambiguities: pos_integer()
+          }
+  end
+
+  defmodule ResidualValidationOptions do
+    @moduledoc """
+    Residual validation controls for RTK fixed solving.
+    """
+
+    defstruct threshold_sigma: nil, max_exclusions: 1
+
+    @type t :: %__MODULE__{
+            threshold_sigma: number() | nil,
+            max_exclusions: non_neg_integer()
+          }
+  end
+
+  defmodule ArcUpdateOptions do
+    @moduledoc """
+    Per-epoch sequential-update controls for the RTK arc driver.
+    """
+
+    defstruct hold_sigma_m: 1.0e-4,
+              position_tol_m: 1.0e-4,
+              ambiguity_tol_m: 1.0e-4,
+              max_iterations: 10,
+              process_noise_baseline_sigma_m: 0.0,
+              ratio_threshold: 3.0,
+              dynamics_model: :constant_position,
+              float_only_systems: [],
+              innovation_screen_sigma: 0.0,
+              innovation_screen_min_rows: 0,
+              ar_arming_sigma_m: nil,
+              report_residuals?: false
+
+    @type dynamics_model :: :constant_position | :velocity_propagated
+    @type t :: %__MODULE__{
+            hold_sigma_m: number(),
+            position_tol_m: number(),
+            ambiguity_tol_m: number(),
+            max_iterations: pos_integer(),
+            process_noise_baseline_sigma_m: number(),
+            ratio_threshold: number(),
+            dynamics_model: dynamics_model(),
+            float_only_systems: [String.t()],
+            innovation_screen_sigma: number(),
+            innovation_screen_min_rows: non_neg_integer(),
+            ar_arming_sigma_m: number() | nil,
+            report_residuals?: boolean()
+          }
+  end
+
+  defmodule ArcPreprocessing do
+    @moduledoc """
+    Optional preprocessing chained ahead of the sequential RTK arc solve.
+    """
+
+    defstruct cycle_slip: nil, hatch_window_cap: nil, elevation_mask_deg: nil
+
+    @type cycle_slip_policy :: :error | :drop_satellite | :split_arc
+    @type t :: %__MODULE__{
+            cycle_slip: cycle_slip_policy() | nil,
+            hatch_window_cap: pos_integer() | nil,
+            elevation_mask_deg: number() | nil
+          }
+  end
+
+  defmodule ArcConfig do
+    @moduledoc """
+    Complete typed configuration for a sequential RTK arc solve.
+    """
+
+    alias RTK.{ArcPreprocessing, ArcUpdateOptions, MeasurementModel}
+
+    defstruct base_m: nil,
+              reference: :auto,
+              model: nil,
+              baseline_prior_sigma_m: nil,
+              ambiguity_prior_sigma_m: nil,
+              initial_baseline_m: {0.0, 0.0, 0.0},
+              wavelengths_m: %{},
+              offsets_m: %{},
+              update_opts: %ArcUpdateOptions{},
+              preprocessing: %ArcPreprocessing{},
+              receiver_antenna_corrections: nil
+
+    @type reference_selection :: :auto | {:satellite, String.t()} | {:per_system, %{String.t() => String.t()}}
+    @type t :: %__MODULE__{
+            base_m: RTK.ecef_input(),
+            reference: reference_selection(),
+            model: MeasurementModel.t() | map(),
+            baseline_prior_sigma_m: number(),
+            ambiguity_prior_sigma_m: number(),
+            initial_baseline_m: RTK.ecef_input(),
+            wavelengths_m: %{String.t() => number()},
+            offsets_m: %{String.t() => number()},
+            update_opts: ArcUpdateOptions.t() | map(),
+            preprocessing: ArcPreprocessing.t() | map(),
+            receiver_antenna_corrections: map() | nil
+          }
+  end
+
+  defmodule StaticArcConfig do
+    @moduledoc """
+    Complete typed configuration for a static RTK arc solve.
+    """
+
+    alias RTK.{ArcConfig, FixedOptions, FloatOptions, ResidualValidationOptions}
+
+    defstruct arc: nil,
+              float_options: %FloatOptions{},
+              fixed_options: %FixedOptions{},
+              residual_options: %ResidualValidationOptions{},
+              float_only_systems: []
+
+    @type t :: %__MODULE__{
+            arc: ArcConfig.t(),
+            float_options: FloatOptions.t() | map(),
+            fixed_options: FixedOptions.t() | map(),
+            residual_options: ResidualValidationOptions.t() | map(),
+            float_only_systems: [String.t()]
+          }
+  end
+
+  defmodule WideLaneOptions do
+    @moduledoc """
+    Wide-lane integer estimation controls.
+    """
+
+    defstruct min_epochs: nil, tolerance_cycles: nil, skip_short_fragments: false
+
+    @type t :: %__MODULE__{
+            min_epochs: pos_integer(),
+            tolerance_cycles: number(),
+            skip_short_fragments: boolean()
+          }
+  end
+
+  defmodule DualCycleSlipConfig do
+    @moduledoc """
+    Optional dual-frequency cycle-slip preprocessing controls.
+    """
+
+    defstruct policy: nil,
+              gf_threshold_m: 0.05,
+              mw_threshold_cycles: 4.0,
+              min_arc_gap_s: 300.0
+
+    @type policy :: :error | :drop_satellite | :split_arc
+    @type t :: %__MODULE__{
+            policy: policy(),
+            gf_threshold_m: number(),
+            mw_threshold_cycles: number(),
+            min_arc_gap_s: number()
+          }
+  end
+
+  defmodule WideLaneArcConfig do
+    @moduledoc """
+    Complete typed configuration for wide-lane RTK arc fixing.
+    """
+
+    alias RTK.{ArcConfig, DualCycleSlipConfig, WideLaneOptions}
+
+    defstruct base_m: nil,
+              reference: :auto,
+              options: nil,
+              cycle_slip: nil
+
+    @type t :: %__MODULE__{
+            base_m: RTK.ecef_input(),
+            reference: ArcConfig.reference_selection(),
+            options: WideLaneOptions.t() | map(),
+            cycle_slip: DualCycleSlipConfig.t() | map() | nil
+          }
+  end
+
+  defmodule IonosphereFreeArcConfig do
+    @moduledoc """
+    Complete typed configuration for ionosphere-free RTK arc setup.
+    """
+
+    defstruct base_m: nil,
+              initial_baseline_m: {0.0, 0.0, 0.0},
+              reference: :auto,
+              apply_troposphere: false
+
+    @type t :: %__MODULE__{
+            base_m: RTK.ecef_input(),
+            initial_baseline_m: RTK.ecef_input(),
+            reference: ArcConfig.reference_selection(),
+            apply_troposphere: boolean()
+          }
+  end
+
   defmodule FloatBaselineSolution do
     @moduledoc """
     Float RTK baseline solution from code/carrier double differences.
@@ -412,6 +665,291 @@ defmodule Sidereon.GNSS.RTK do
     @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
   end
 
+  defmodule ArcCycleSlipSplit do
+    @moduledoc """
+    Cycle-slip split interval reported while preparing or solving an RTK arc.
+    """
+
+    @enforce_keys [:receiver, :satellite_id, :ambiguity_id, :n_epochs]
+    defstruct [
+      :receiver,
+      :satellite_id,
+      :ambiguity_id,
+      :start_epoch_index,
+      :end_epoch_index,
+      :start_epoch,
+      :end_epoch,
+      :n_epochs
+    ]
+
+    @type receiver :: :base | :rover
+    @type t :: %__MODULE__{
+            receiver: receiver(),
+            satellite_id: String.t(),
+            ambiguity_id: String.t(),
+            start_epoch_index: non_neg_integer() | nil,
+            end_epoch_index: non_neg_integer() | nil,
+            start_epoch: term() | nil,
+            end_epoch: term() | nil,
+            n_epochs: non_neg_integer()
+          }
+  end
+
+  defmodule ArcEpochSolution do
+    @moduledoc """
+    One epoch of a sequential RTK arc solution.
+    """
+
+    alias Sidereon.GeometryQuality
+
+    @enforce_keys [
+      :reported_baseline_m,
+      :float_baseline_m,
+      :integer_fixed,
+      :integer_ratio,
+      :newly_fixed,
+      :fixed_ids,
+      :sd_ambiguities_m,
+      :fixed_double_difference_ids,
+      :used_satellite_ids,
+      :search,
+      :residuals,
+      :geometry_quality,
+      :innovation_screen
+    ]
+    defstruct [
+      :reported_baseline_m,
+      :float_baseline_m,
+      :integer_fixed,
+      :integer_ratio,
+      :newly_fixed,
+      :fixed_ids,
+      :sd_ambiguities_m,
+      :fixed_double_difference_ids,
+      :used_satellite_ids,
+      :search,
+      :residuals,
+      :geometry_quality,
+      :innovation_screen
+    ]
+
+    @type vec3 :: {float(), float(), float()}
+    @type t :: %__MODULE__{
+            reported_baseline_m: vec3(),
+            float_baseline_m: vec3(),
+            integer_fixed: boolean(),
+            integer_ratio: float() | nil,
+            newly_fixed: [String.t()],
+            fixed_ids: [String.t()],
+            sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
+            fixed_double_difference_ids: [String.t()],
+            used_satellite_ids: [String.t()],
+            search: map() | nil,
+            residuals: [map()],
+            geometry_quality: GeometryQuality.t(),
+            innovation_screen: map() | nil
+          }
+  end
+
+  defmodule ArcState do
+    @moduledoc """
+    Final carried sequential RTK arc state.
+    """
+
+    @enforce_keys [
+      :version,
+      :references,
+      :sd_ambiguity_ids,
+      :ambiguity_prior_sigma_m,
+      :epoch_count,
+      :baseline_m,
+      :sd_ambiguities_m,
+      :information,
+      :fixed_cycles,
+      :fixed_m
+    ]
+    defstruct [
+      :version,
+      :references,
+      :sd_ambiguity_ids,
+      :ambiguity_prior_sigma_m,
+      :epoch_count,
+      :baseline_m,
+      :sd_ambiguities_m,
+      :information,
+      :fixed_cycles,
+      :fixed_m
+    ]
+
+    @type vec3 :: {float(), float(), float()}
+    @type t :: %__MODULE__{
+            version: non_neg_integer(),
+            references: %{String.t() => String.t()},
+            sd_ambiguity_ids: [String.t()],
+            ambiguity_prior_sigma_m: float(),
+            epoch_count: non_neg_integer(),
+            baseline_m: vec3(),
+            sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
+            information: [[float()]],
+            fixed_cycles: %{String.t() => integer()},
+            fixed_m: %{String.t() => float()}
+          }
+  end
+
+  defmodule ArcSolution do
+    @moduledoc """
+    Solved sequential RTK arc.
+    """
+
+    alias RTK.{ArcCycleSlipSplit, ArcEpochSolution, ArcState}
+
+    @enforce_keys [
+      :references,
+      :epochs,
+      :final_state,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :measurement_covariance
+    ]
+    defstruct [
+      :references,
+      :epochs,
+      :final_state,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :measurement_covariance
+    ]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            epochs: [ArcEpochSolution.t()],
+            final_state: ArcState.t(),
+            dropped_sats: [String.t()],
+            split_cycle_slip_arcs: [ArcCycleSlipSplit.t()],
+            elevation_masked_sats: [String.t()],
+            measurement_covariance: map()
+          }
+  end
+
+  defmodule StaticArcSolution do
+    @moduledoc """
+    Solved static RTK arc.
+
+    `:float_term` and `:fixed_term` are the decoded native static float/fixed
+    terms retained for the RINEX baseline convenience wrappers.
+    """
+
+    alias Sidereon.GeometryQuality
+    alias Sidereon.GNSS.RTK.ArcCycleSlipSplit
+
+    @enforce_keys [
+      :references,
+      :ambiguity_ids,
+      :ambiguity_satellites,
+      :float_term,
+      :fixed_term,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :geometry_quality
+    ]
+    defstruct [
+      :references,
+      :ambiguity_ids,
+      :ambiguity_satellites,
+      :float_term,
+      :fixed_term,
+      :dropped_sats,
+      :split_cycle_slip_arcs,
+      :elevation_masked_sats,
+      :geometry_quality
+    ]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            ambiguity_ids: [String.t()],
+            ambiguity_satellites: %{String.t() => String.t()},
+            float_term: term(),
+            fixed_term: term(),
+            dropped_sats: [String.t()],
+            split_cycle_slip_arcs: [ArcCycleSlipSplit.t()],
+            elevation_masked_sats: [String.t()],
+            geometry_quality: GeometryQuality.t()
+          }
+  end
+
+  defmodule WideLaneArcSolution do
+    @moduledoc """
+    Fixed wide-lane ambiguity solution for a dual-frequency RTK arc.
+    """
+
+    alias Sidereon.GeometryQuality
+    alias Sidereon.GNSS.RTK.ArcCycleSlipSplit
+
+    @enforce_keys [:references, :wide_lane_cycles, :epochs, :dropped_sats, :split_arcs, :geometry_quality]
+    defstruct [:references, :wide_lane_cycles, :epochs, :dropped_sats, :split_arcs, :geometry_quality]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            wide_lane_cycles: %{String.t() => integer()},
+            epochs: [map()],
+            dropped_sats: [String.t()],
+            split_arcs: [ArcCycleSlipSplit.t()],
+            geometry_quality: GeometryQuality.t()
+          }
+  end
+
+  defmodule IonosphereFreeArcSolution do
+    @moduledoc """
+    Ionosphere-free single-frequency-equivalent RTK arc prepared from fixed
+    wide-lane ambiguities.
+    """
+
+    @enforce_keys [:references, :epochs, :wavelengths_m, :offsets_m]
+    defstruct [:references, :epochs, :wavelengths_m, :offsets_m]
+
+    @type t :: %__MODULE__{
+            references: %{String.t() => String.t()},
+            epochs: [map()],
+            wavelengths_m: %{String.t() => float()},
+            offsets_m: %{String.t() => float()}
+          }
+  end
+
+  defmodule WideLaneFixedMetadata do
+    @moduledoc """
+    Wide-lane integer metadata attached to a static RINEX RTK solve.
+    """
+
+    @enforce_keys [
+      :integer_method,
+      :fixed?,
+      :cycles,
+      :ambiguity_count,
+      :dropped_cycle_slip_sats,
+      :split_cycle_slip_arcs
+    ]
+    defstruct [
+      :integer_method,
+      :fixed?,
+      :cycles,
+      :ambiguity_count,
+      :dropped_cycle_slip_sats,
+      :split_cycle_slip_arcs
+    ]
+
+    @type t :: %__MODULE__{
+            integer_method: :wide_lane_narrow_lane_lambda | :wide_lane_narrow_lane_sequential | atom(),
+            fixed?: boolean(),
+            cycles: %{String.t() => integer()},
+            ambiguity_count: non_neg_integer(),
+            dropped_cycle_slip_sats: [String.t()],
+            split_cycle_slip_arcs: [map()]
+          }
+  end
+
   @typedoc """
   Code and carrier-phase observation in metres.
 
@@ -661,10 +1199,10 @@ defmodule Sidereon.GNSS.RTK do
     * `:update_opts` - the per-epoch update controls (see `arc_update_opts`)
 
   Returns `{:ok, solution}` with `:references`, per-epoch `:epochs`, and the
-  carried `:final_state`, or `{:error, reason}`. Each epoch map includes
+  carried `:final_state`, or `{:error, reason}`. Each epoch struct includes
   `:geometry_quality`.
   """
-  @spec solve_arc([map()], map()) :: {:ok, map()} | {:error, term()}
+  @spec solve_arc([map()], ArcConfig.t() | map()) :: {:ok, ArcSolution.t()} | {:error, term()}
   def solve_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_arc(Enum.map(epochs, &arc_epoch_term/1), arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_arc_solution(solution)}
@@ -677,9 +1215,9 @@ defmodule Sidereon.GNSS.RTK do
   @doc """
   Solve a static RTK arc with a typed core-style configuration map.
 
-  The returned map includes `:geometry_quality` for the static batch design.
+  The returned struct includes `:geometry_quality` for the static batch design.
   """
-  @spec solve_static_arc([map()], map()) :: {:ok, map()} | {:error, term()}
+  @spec solve_static_arc([map()], StaticArcConfig.t() | map()) :: {:ok, StaticArcSolution.t()} | {:error, term()}
   def solve_static_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_static_arc(Enum.map(epochs, &arc_epoch_term/1), static_arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_static_arc_solution(solution)}
@@ -692,10 +1230,11 @@ defmodule Sidereon.GNSS.RTK do
   @doc """
   Fix wide-lane RTK arc ambiguities by delegating to the core arc helper.
 
-  The returned map includes `:geometry_quality` for the wide-lane ambiguity
+  The returned struct includes `:geometry_quality` for the wide-lane ambiguity
   design.
   """
-  @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], map()) :: {:ok, map()} | {:error, term()}
+  @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], WideLaneArcConfig.t() | map()) ::
+          {:ok, WideLaneArcSolution.t()} | {:error, term()}
   def fix_wide_lane_rtk_arc(epochs, config) when is_list(epochs) and is_map(config) do
     with :ok <- ensure_nonempty_epochs(epochs),
          {:ok, normalized_epochs} <- normalize_dual_baseline_epochs(epochs) do
@@ -716,8 +1255,12 @@ defmodule Sidereon.GNSS.RTK do
   @doc """
   Build ionosphere-free RTK arc epochs from dual-frequency epochs and fixed wide-lane integers.
   """
-  @spec prepare_ionosphere_free_rtk_arc([dual_frequency_baseline_epoch()], %{String.t() => integer()}, map()) ::
-          {:ok, map()} | {:error, term()}
+  @spec prepare_ionosphere_free_rtk_arc(
+          [dual_frequency_baseline_epoch()],
+          %{String.t() => integer()},
+          IonosphereFreeArcConfig.t() | map()
+        ) ::
+          {:ok, IonosphereFreeArcSolution.t()} | {:error, term()}
   def prepare_ionosphere_free_rtk_arc(epochs, wide_lane_cycles, config)
       when is_list(epochs) and is_map(wide_lane_cycles) and is_map(config) do
     with :ok <- ensure_nonempty_epochs(epochs),
@@ -735,7 +1278,7 @@ defmodule Sidereon.GNSS.RTK do
             decode_ionosphere_free_arc_solution(solution, normalized_epochs)
 
           {:ok,
-           %{
+           %IonosphereFreeArcSolution{
              references: references,
              epochs: if_epochs,
              wavelengths_m: wavelengths,
@@ -876,7 +1419,18 @@ defmodule Sidereon.GNSS.RTK do
   def solve_wide_lane_fixed_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts),
     do: {:error, :invalid_input}
 
+  defp static_arc_config_term(%StaticArcConfig{} = config) do
+    arc = config.arc |> config_map() |> Map.put(:float_only_systems, config.float_only_systems)
+
+    arc
+    |> Map.put(:float_opts, config.float_options)
+    |> Map.put(:fixed_opts, config.fixed_options)
+    |> Map.put(:residual_opts, config.residual_options)
+    |> static_arc_config_term()
+  end
+
   defp static_arc_config_term(config) do
+    config = config_map(config)
     solve_opts = Map.fetch!(config, :float_opts)
     fixed_opts = Map.fetch!(config, :fixed_opts)
     residual_opts = Map.fetch!(config, :residual_opts)
@@ -886,16 +1440,17 @@ defmodule Sidereon.GNSS.RTK do
       reference: arc_reference_term(Map.get(config, :reference, :auto)),
       model: arc_model_term(Map.fetch!(config, :model)),
       initial_baseline_m: arc_vec3(Map.get(config, :initial_baseline_m, {0.0, 0.0, 0.0})),
-      wavelengths_m: Map.fetch!(config, :wavelengths_m),
-      offsets_m: Map.fetch!(config, :offsets_m),
+      wavelengths_m: static_arc_scale_term(Map.fetch!(config, :wavelengths_m), :wavelengths_m),
+      offsets_m: static_arc_scale_term(Map.fetch!(config, :offsets_m), :offsets_m),
       float_opts:
-        {arc_vec3(Map.get(config, :initial_baseline_m, {0.0, 0.0, 0.0})), solve_opts.position_tolerance_m,
-         solve_opts.ambiguity_tolerance_m, solve_opts.max_iterations},
+        {arc_vec3(Map.get(config, :initial_baseline_m, {0.0, 0.0, 0.0})), float_position_tolerance(solve_opts),
+         float_ambiguity_tolerance(solve_opts), option_value(solve_opts, :max_iterations)},
       fixed_opts:
-        {solve_opts.position_tolerance_m, solve_opts.ambiguity_tolerance_m, solve_opts.max_iterations,
-         fixed_opts.ratio_threshold, fixed_opts.partial_ambiguity_resolution?, fixed_opts.partial_min_ambiguities,
+        {float_position_tolerance(solve_opts), float_ambiguity_tolerance(solve_opts),
+         option_value(solve_opts, :max_iterations), option_value(fixed_opts, :ratio_threshold),
+         fixed_partial_ambiguity_resolution?(fixed_opts), option_value(fixed_opts, :partial_min_ambiguities),
          Map.fetch!(config, :float_only_systems)},
-      residual_opts: {residual_opts.threshold_sigma, residual_opts.max_exclusions},
+      residual_opts: {option_value(residual_opts, :threshold_sigma), option_value(residual_opts, :max_exclusions)},
       preprocessing: arc_preprocessing_term(Map.get(config, :preprocessing, %{})),
       receiver_antenna_corrections:
         rust_receiver_antenna_corrections_term(Map.get(config, :receiver_antenna_corrections))
@@ -906,7 +1461,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, ambiguity_ids, ambiguity_satellite_terms, float_term, fixed_term, dropped_sats, split_terms,
           elevation_masked_sats, geometry_quality}
        ) do
-    %{
+    %StaticArcSolution{
       references: Map.new(references),
       ambiguity_ids: ambiguity_ids,
       ambiguity_satellites: Map.new(ambiguity_satellite_terms),
@@ -917,6 +1472,14 @@ defmodule Sidereon.GNSS.RTK do
       elevation_masked_sats: elevation_masked_sats,
       geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
+  end
+
+  defp static_arc_scale_term({mode, scalar, pairs}, _field) when is_binary(mode) and is_list(pairs) do
+    {mode, scalar / 1.0, pairs}
+  end
+
+  defp static_arc_scale_term(values, _field) when is_map(values) do
+    {"map", 0.0, arc_float_pairs(values)}
   end
 
   defp rinex_opts_map(opts) when is_map(opts), do: {:ok, opts}
@@ -1393,7 +1956,7 @@ defmodule Sidereon.GNSS.RTK do
        ) do
     cycles = Map.new(wide_lane_cycles)
 
-    %{
+    %WideLaneFixedMetadata{
       integer_method: decode_wide_lane_fixed_integer_method(method),
       fixed?: fixed?,
       cycles: cycles,
@@ -1634,6 +2197,8 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp arc_config_term(config) do
+    config = config_map(config)
+
     %{
       base_m: arc_vec3(Map.fetch!(config, :base_m)),
       reference: arc_reference_term(Map.get(config, :reference, :auto)),
@@ -1651,6 +2216,8 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp arc_preprocessing_term(preprocessing) do
+    preprocessing = config_map(preprocessing || %{})
+
     %{
       cycle_slip: arc_cycle_slip_policy_term(Map.get(preprocessing, :cycle_slip)),
       hatch_window_cap: Map.get(preprocessing, :hatch_window_cap),
@@ -1674,16 +2241,20 @@ defmodule Sidereon.GNSS.RTK do
     do: %{mode: "per_system", satellite: nil, per_system: Map.to_list(per_system)}
 
   defp arc_model_term(model) do
+    model = config_map(model)
+
     {
       Map.fetch!(model, :code_sigma_m) / 1.0,
       Map.fetch!(model, :phase_sigma_m) / 1.0,
-      Atom.to_string(Map.get(model, :stochastic_model, :simple)),
-      Map.get(model, :elevation_weighting?, false),
-      Map.get(model, :sagnac?, true)
+      model |> Map.get(:stochastic_model, Map.get(model, :stochastic, :simple)) |> option_label(),
+      Map.get(model, :elevation_weighting?, Map.get(model, :elevation_weighting, false)),
+      Map.get(model, :sagnac?, Map.get(model, :sagnac, true))
     }
   end
 
   defp arc_update_opts_term(opts) do
+    opts = config_map(opts)
+
     {
       Map.fetch!(opts, :hold_sigma_m) / 1.0,
       Map.fetch!(opts, :position_tol_m) / 1.0,
@@ -1692,14 +2263,45 @@ defmodule Sidereon.GNSS.RTK do
       Map.get(opts, :process_noise_baseline_sigma_m, 0.0) / 1.0,
       Map.fetch!(opts, :ratio_threshold) / 1.0,
       {
-        Atom.to_string(Map.get(opts, :dynamics_model, :constant_position)),
+        opts |> Map.get(:dynamics_model, Map.get(opts, :dynamics, :constant_position)) |> option_label(),
         Map.get(opts, :float_only_systems, []),
-        Map.get(opts, :innovation_screen_sigma, 0.0) / 1.0,
-        Map.get(opts, :innovation_screen_min_rows, 0),
+        Map.get(opts, :innovation_screen_sigma, Map.get(opts, :innovation_threshold_sigma, 0.0)) / 1.0,
+        Map.get(opts, :innovation_screen_min_rows, Map.get(opts, :innovation_min_rows, 0)),
         arc_float_or_nil(Map.get(opts, :ar_arming_sigma_m)),
-        Map.get(opts, :report_residuals?, false)
+        Map.get(opts, :report_residuals?, Map.get(opts, :report_residuals, false))
       }
     }
+  end
+
+  defp config_map(%{__struct__: _} = config), do: Map.from_struct(config)
+  defp config_map(config), do: config
+
+  defp option_value(options, key), do: Map.fetch!(config_map(options), key)
+
+  defp option_label(value) when is_atom(value), do: Atom.to_string(value)
+  defp option_label(value) when is_binary(value), do: value
+
+  defp float_position_tolerance(options) do
+    options = config_map(options)
+
+    case Map.fetch(options, :position_tolerance_m) do
+      {:ok, value} -> value / 1.0
+      :error -> Map.fetch!(options, :position_tol_m) / 1.0
+    end
+  end
+
+  defp float_ambiguity_tolerance(options) do
+    options = config_map(options)
+
+    case Map.fetch(options, :ambiguity_tolerance_m) do
+      {:ok, value} -> value / 1.0
+      :error -> Map.fetch!(options, :ambiguity_tol_m) / 1.0
+    end
+  end
+
+  defp fixed_partial_ambiguity_resolution?(options) do
+    options = config_map(options)
+    Map.get(options, :partial_ambiguity_resolution?, Map.get(options, :partial_ambiguity_resolution, false))
   end
 
   defp arc_position_pairs(positions) do
@@ -1722,7 +2324,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, epochs, final_state, dropped_sats, split_cycle_slip_arcs, elevation_masked_sats,
           measurement_covariance}
        ) do
-    %{
+    %ArcSolution{
       references: Map.new(references),
       epochs: Enum.map(epochs, &decode_arc_epoch_solution/1),
       final_state: decode_arc_state(final_state),
@@ -1736,7 +2338,7 @@ defmodule Sidereon.GNSS.RTK do
   defp decode_arc_split_cycle_slip_arc(
          {receiver, satellite_id, ambiguity_id, start_epoch_index, end_epoch_index, n_epochs}
        ) do
-    %{
+    %ArcCycleSlipSplit{
       receiver: decode_rtk_cycle_slip_receiver(receiver),
       satellite_id: satellite_id,
       ambiguity_id: ambiguity_id,
@@ -1750,7 +2352,7 @@ defmodule Sidereon.GNSS.RTK do
          {reported_baseline_m, float_baseline_m, integer_fixed, integer_ratio, newly_fixed, fixed_ids, sd_ambiguities_m,
           fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality, innovation_screen}
        ) do
-    %{
+    %ArcEpochSolution{
       reported_baseline_m: reported_baseline_m,
       float_baseline_m: float_baseline_m,
       integer_fixed: integer_fixed,
@@ -1771,7 +2373,7 @@ defmodule Sidereon.GNSS.RTK do
          {{version, references, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count}, baseline_m, sd_ambiguities_m,
           information, fixed_cycles, fixed_m}
        ) do
-    %{
+    %ArcState{
       version: version,
       references: Map.new(references),
       sd_ambiguity_ids: sd_ambiguity_ids,
@@ -2021,17 +2623,22 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp wide_lane_arc_config_term(config) do
+    config = config_map(config)
+    options = wide_lane_options(config)
+
     %{
       base_m: arc_vec3(Map.fetch!(config, :base_m)),
       reference: arc_reference_term(Map.fetch!(config, :reference)),
-      min_epochs: Map.fetch!(config, :min_epochs),
-      tolerance_cycles: Map.fetch!(config, :tolerance_cycles) / 1.0,
-      skip_short_fragments: Map.fetch!(config, :skip_short_fragments),
-      cycle_slip: Map.fetch!(config, :cycle_slip)
+      min_epochs: Map.fetch!(options, :min_epochs),
+      tolerance_cycles: Map.fetch!(options, :tolerance_cycles) / 1.0,
+      skip_short_fragments: Map.fetch!(options, :skip_short_fragments),
+      cycle_slip: dual_cycle_slip_config_term(Map.fetch!(config, :cycle_slip))
     }
   end
 
   defp ionosphere_free_arc_config_term(config) do
+    config = config_map(config)
+
     %{
       base_m: arc_vec3(Map.fetch!(config, :base_m)),
       initial_baseline_m: arc_vec3(Map.fetch!(config, :initial_baseline_m)),
@@ -2039,6 +2646,24 @@ defmodule Sidereon.GNSS.RTK do
       apply_troposphere: Map.fetch!(config, :apply_troposphere)
     }
   end
+
+  defp wide_lane_options(%{options: options}) when not is_nil(options), do: config_map(options)
+  defp wide_lane_options(config), do: config
+
+  defp dual_cycle_slip_config_term(nil), do: nil
+
+  defp dual_cycle_slip_config_term(config) when is_map(config) do
+    config = config_map(config)
+
+    %{
+      policy: arc_cycle_slip_policy_term(Map.fetch!(config, :policy)),
+      gf_threshold_m: Map.get(config, :gf_threshold_m, 0.05) / 1.0,
+      mw_threshold_cycles: Map.get(config, :mw_threshold_cycles, 4.0) / 1.0,
+      min_arc_gap_s: Map.get(config, :min_arc_gap_s, 300.0) / 1.0
+    }
+  end
+
+  defp dual_cycle_slip_config_term(config), do: config
 
   defp dual_frequency_arc_epoch_terms(epochs, apply_troposphere?) do
     epochs
@@ -2095,7 +2720,7 @@ defmodule Sidereon.GNSS.RTK do
          {references, wide_lane_cycles, epoch_terms, dropped_sats, split_arc_terms, geometry_quality},
          input_epochs
        ) do
-    %{
+    %WideLaneArcSolution{
       references: Map.new(references),
       wide_lane_cycles: Map.new(wide_lane_cycles),
       epochs: decode_dual_frequency_arc_epochs(input_epochs, epoch_terms),
@@ -2239,7 +2864,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_rtk_cycle_slip_split_arcs(epochs, split_arc_terms) do
     Enum.map(split_arc_terms, fn {receiver, sat, ambiguity_id, start_idx, end_idx, n_epochs} ->
-      %{
+      %ArcCycleSlipSplit{
         receiver: decode_rtk_cycle_slip_receiver(receiver),
         satellite_id: sat,
         ambiguity_id: ambiguity_id,

@@ -3,32 +3,132 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   Closed-form GNSS signal spectrum and tracking metrics.
 
   This module is a thin Elixir boundary over the core signal-analysis formulas.
-  Modulations are plain maps built by `bpsk/1` and `boc_sine/2`; metric calls
+  Modulations are plain maps built by the constructor functions; metric calls
   return `{:ok, value}` or `{:error, reason}`.
   """
 
+  alias Sidereon.GNSS.Signal.Analysis
   alias Sidereon.NIF
+
+  defmodule InterferenceTerm do
+    @moduledoc """
+    Interfering signal and received power for C/N0 degradation metrics.
+    """
+
+    @enforce_keys [:modulation, :power_ratio_to_carrier]
+    defstruct [:modulation, :power_ratio_to_carrier]
+
+    @type t :: %__MODULE__{
+            modulation: Analysis.modulation(),
+            power_ratio_to_carrier: number()
+          }
+
+    @doc """
+    Build an interference term.
+    """
+    @spec new(Analysis.modulation(), number()) :: t()
+    def new(modulation, power_ratio_to_carrier) do
+      %__MODULE__{modulation: modulation, power_ratio_to_carrier: power_ratio_to_carrier}
+    end
+  end
+
+  defmodule DllTrackingOptions do
+    @moduledoc """
+    Inputs for code-tracking thermal-noise metrics.
+    """
+
+    @enforce_keys [
+      :cn0_db_hz,
+      :loop_bandwidth_hz,
+      :integration_time_s,
+      :correlator_spacing_chips,
+      :receiver_bandwidth_hz
+    ]
+    defstruct [
+      :cn0_db_hz,
+      :loop_bandwidth_hz,
+      :integration_time_s,
+      :correlator_spacing_chips,
+      :receiver_bandwidth_hz
+    ]
+
+    @type t :: %__MODULE__{
+            cn0_db_hz: number(),
+            loop_bandwidth_hz: number(),
+            integration_time_s: number(),
+            correlator_spacing_chips: number(),
+            receiver_bandwidth_hz: number()
+          }
+
+    @doc """
+    Build DLL tracking options.
+    """
+    @spec new(number(), number(), number(), number(), number()) :: t()
+    def new(cn0_db_hz, loop_bandwidth_hz, integration_time_s, correlator_spacing_chips, receiver_bandwidth_hz) do
+      %__MODULE__{
+        cn0_db_hz: cn0_db_hz,
+        loop_bandwidth_hz: loop_bandwidth_hz,
+        integration_time_s: integration_time_s,
+        correlator_spacing_chips: correlator_spacing_chips,
+        receiver_bandwidth_hz: receiver_bandwidth_hz
+      }
+    end
+  end
+
+  defmodule MultipathOptions do
+    @moduledoc """
+    Inputs for one-path specular multipath envelope metrics.
+    """
+
+    @enforce_keys [:multipath_to_direct_ratio, :correlator_spacing_chips, :receiver_bandwidth_hz]
+    defstruct [:multipath_to_direct_ratio, :correlator_spacing_chips, :receiver_bandwidth_hz]
+
+    @type t :: %__MODULE__{
+            multipath_to_direct_ratio: number(),
+            correlator_spacing_chips: number(),
+            receiver_bandwidth_hz: number()
+          }
+
+    @doc """
+    Build multipath-envelope options.
+    """
+    @spec new(number(), number(), number()) :: t()
+    def new(multipath_to_direct_ratio, correlator_spacing_chips, receiver_bandwidth_hz) do
+      %__MODULE__{
+        multipath_to_direct_ratio: multipath_to_direct_ratio,
+        correlator_spacing_chips: correlator_spacing_chips,
+        receiver_bandwidth_hz: receiver_bandwidth_hz
+      }
+    end
+  end
 
   @typedoc "Navigation-signal modulation descriptor."
   @type modulation ::
           %{kind: :bpsk, order: number()}
           | %{kind: :boc_sine, m: number(), n: number()}
+          | %{kind: :boc_cosine, m: number(), n: number()}
+          | %{kind: :mboc_6_1_1_over_11}
+          | %{kind: :tmboc_6_1_4_over_33}
 
   @typedoc "DLL thermal-noise options."
-  @type dll_options :: %{
-          cn0_db_hz: number(),
-          loop_bandwidth_hz: number(),
-          integration_time_s: number(),
-          correlator_spacing_chips: number(),
-          receiver_bandwidth_hz: number()
-        }
+  @type dll_options ::
+          DllTrackingOptions.t()
+          | %{
+              cn0_db_hz: number(),
+              loop_bandwidth_hz: number(),
+              integration_time_s: number(),
+              correlator_spacing_chips: number(),
+              receiver_bandwidth_hz: number()
+            }
 
   @typedoc "Multipath-envelope options."
-  @type multipath_options :: %{
-          multipath_to_direct_ratio: number(),
-          correlator_spacing_chips: number(),
-          receiver_bandwidth_hz: number()
-        }
+  @type multipath_options ::
+          MultipathOptions.t()
+          | %{
+              multipath_to_direct_ratio: number(),
+              correlator_spacing_chips: number(),
+              receiver_bandwidth_hz: number()
+            }
 
   @typedoc "DLL jitter result."
   @type jitter :: %{
@@ -60,10 +160,58 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   def bpsk(order), do: %{kind: :bpsk, order: order / 1.0}
 
   @doc """
+  Build the BPSK(1) modulation descriptor.
+  """
+  @spec bpsk1() :: modulation()
+  def bpsk1, do: %{kind: :bpsk, order: 1.0}
+
+  @doc """
   Build a sine-phased BOC(m,n) modulation descriptor.
   """
   @spec boc_sine(number(), number()) :: modulation()
   def boc_sine(m, n), do: %{kind: :boc_sine, m: m / 1.0, n: n / 1.0}
+
+  @doc """
+  Build a cosine-phased BOC(m,n) modulation descriptor.
+  """
+  @spec boc_cosine(number(), number()) :: modulation()
+  def boc_cosine(m, n), do: %{kind: :boc_cosine, m: m / 1.0, n: n / 1.0}
+
+  @doc """
+  Build the normalized MBOC(6,1,1/11) modulation descriptor.
+  """
+  @spec mboc_6_1_1_over_11() :: modulation()
+  def mboc_6_1_1_over_11, do: %{kind: :mboc_6_1_1_over_11}
+
+  @doc """
+  Build the GPS L1C pilot TMBOC(6,1,4/33) modulation descriptor.
+  """
+  @spec tmboc_6_1_4_over_33() :: modulation()
+  def tmboc_6_1_4_over_33, do: %{kind: :tmboc_6_1_4_over_33}
+
+  @doc """
+  Return the reference chipping-rate unit used by BPSK and BOC, in hertz.
+  """
+  @spec signal_reference_chip_rate_hz() :: float()
+  def signal_reference_chip_rate_hz, do: NIF.signal_analysis_reference_chip_rate_hz()
+
+  @doc """
+  Return the receiver bandwidth used by the Betz L1 SSC fixture, in hertz.
+  """
+  @spec signal_betz_l1_receiver_bandwidth_hz() :: float()
+  def signal_betz_l1_receiver_bandwidth_hz, do: NIF.signal_analysis_betz_l1_receiver_bandwidth_hz()
+
+  @doc """
+  Return the stable core label for a modulation descriptor.
+  """
+  @spec label(modulation()) :: {:ok, String.t()} | {:error, term()}
+  def label(modulation), do: NIF.signal_analysis_modulation_label(modulation_term(modulation))
+
+  @doc """
+  Return the code rate in hertz when the modulation has one unambiguous rate.
+  """
+  @spec code_rate_hz(modulation()) :: {:ok, float()} | {:error, term()}
+  def code_rate_hz(modulation), do: NIF.signal_analysis_modulation_code_rate_hz(modulation_term(modulation))
 
   @doc """
   Return normalized PSD values in `1/Hz` at one offset or a list of offsets.
@@ -81,6 +229,32 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   end
 
   @doc """
+  Alias for `psd_hz/2` matching the Python module-level helper name.
+  """
+  @spec signal_psd_hz(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def signal_psd_hz(modulation, offset_hz) when is_number(offset_hz), do: psd_hz(modulation, offset_hz)
+
+  @doc """
+  Alias for vector PSD evaluation matching the Python module-level helper name.
+  """
+  @spec signal_psd(modulation(), [number()]) :: {:ok, [float()]} | {:error, term()}
+  def signal_psd(modulation, offsets_hz) when is_list(offsets_hz), do: psd_hz(modulation, offsets_hz)
+
+  @doc """
+  Return signal power inside a two-sided receiver bandwidth.
+  """
+  @spec power_in_band(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def power_in_band(modulation, receiver_bandwidth_hz) do
+    NIF.signal_analysis_power_in_band(modulation_term(modulation), receiver_bandwidth_hz / 1.0)
+  end
+
+  @doc """
+  Alias for `power_in_band/2` matching the Python module-level helper name.
+  """
+  @spec signal_power_in_band(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def signal_power_in_band(modulation, receiver_bandwidth_hz), do: power_in_band(modulation, receiver_bandwidth_hz)
+
+  @doc """
   Return the fraction of total signal power inside a two-sided receiver bandwidth.
   """
   @spec fraction_power(modulation(), number()) :: {:ok, float()} | {:error, term()}
@@ -89,12 +263,26 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   end
 
   @doc """
+  Alias for `fraction_power/2` matching the Python module-level helper name.
+  """
+  @spec signal_fraction_power_in_band(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def signal_fraction_power_in_band(modulation, receiver_bandwidth_hz),
+    do: fraction_power(modulation, receiver_bandwidth_hz)
+
+  @doc """
   Return RMS bandwidth over a two-sided receiver bandwidth, in hertz.
   """
   @spec rms_bandwidth_hz(modulation(), number()) :: {:ok, float()} | {:error, term()}
   def rms_bandwidth_hz(modulation, receiver_bandwidth_hz) do
     NIF.signal_analysis_rms_bandwidth_hz(modulation_term(modulation), receiver_bandwidth_hz / 1.0)
   end
+
+  @doc """
+  Alias for `rms_bandwidth_hz/2` matching the Python module-level helper name.
+  """
+  @spec signal_rms_bandwidth_hz(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def signal_rms_bandwidth_hz(modulation, receiver_bandwidth_hz),
+    do: rms_bandwidth_hz(modulation, receiver_bandwidth_hz)
 
   @doc """
   Return spectral separation coefficient in hertz.
@@ -109,6 +297,15 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   end
 
   @doc """
+  Alias for `ssc_hz/3` matching the Python module-level helper name.
+  """
+  @spec signal_spectral_separation_coefficient_hz(modulation(), modulation(), number()) ::
+          {:ok, float()} | {:error, term()}
+  def signal_spectral_separation_coefficient_hz(desired, interference, receiver_bandwidth_hz) do
+    ssc_hz(desired, interference, receiver_bandwidth_hz)
+  end
+
+  @doc """
   Return spectral separation coefficient in decibel-hertz.
   """
   @spec ssc_db_hz(modulation(), modulation(), number()) :: {:ok, float()} | {:error, term()}
@@ -118,6 +315,31 @@ defmodule Sidereon.GNSS.Signal.Analysis do
       modulation_term(interference),
       receiver_bandwidth_hz / 1.0
     )
+  end
+
+  @doc """
+  Alias for `ssc_db_hz/3` matching the Python module-level helper name.
+  """
+  @spec signal_spectral_separation_coefficient_db_hz(modulation(), modulation(), number()) ::
+          {:ok, float()} | {:error, term()}
+  def signal_spectral_separation_coefficient_db_hz(desired, interference, receiver_bandwidth_hz) do
+    ssc_db_hz(desired, interference, receiver_bandwidth_hz)
+  end
+
+  @doc """
+  Return the spectral separation coefficient against white interference.
+  """
+  @spec white_noise_spectral_separation_hz(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def white_noise_spectral_separation_hz(desired, receiver_bandwidth_hz) do
+    NIF.signal_analysis_white_noise_ssc_hz(modulation_term(desired), receiver_bandwidth_hz / 1.0)
+  end
+
+  @doc """
+  Alias for `white_noise_spectral_separation_hz/2` matching the Python module-level helper name.
+  """
+  @spec signal_white_noise_spectral_separation_hz(modulation(), number()) :: {:ok, float()} | {:error, term()}
+  def signal_white_noise_spectral_separation_hz(desired, receiver_bandwidth_hz) do
+    white_noise_spectral_separation_hz(desired, receiver_bandwidth_hz)
   end
 
   @doc """
@@ -150,6 +372,16 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   end
 
   @doc """
+  Alias for `effective_cn0_degradation/4` matching the Python module-level helper name.
+  """
+  @spec signal_effective_cn0_degradation(modulation(), number(), number(), [map() | InterferenceTerm.t()]) ::
+          {:ok, %{effective_cn0_hz: float(), effective_cn0_db_hz: float(), degradation_db: float()}}
+          | {:error, term()}
+  def signal_effective_cn0_degradation(desired, cn0_db_hz, receiver_bandwidth_hz, interferences) do
+    effective_cn0_degradation(desired, cn0_db_hz, receiver_bandwidth_hz, interferences)
+  end
+
+  @doc """
   Return early-late DLL thermal-noise jitter.
 
   `processing` is `:coherent` or `:non_coherent`.
@@ -167,6 +399,15 @@ defmodule Sidereon.GNSS.Signal.Analysis do
   end
 
   @doc """
+  Alias for `dll_jitter/3` matching the Python module-level helper name.
+  """
+  @spec signal_dll_thermal_noise_jitter(modulation(), dll_options(), :coherent | :non_coherent) ::
+          {:ok, jitter()} | {:error, term()}
+  def signal_dll_thermal_noise_jitter(modulation, options, processing) do
+    dll_jitter(modulation, options, processing)
+  end
+
+  @doc """
   Return the DLL lower bound for code-delay tracking jitter.
   """
   @spec dll_lower_bound(modulation(), dll_options()) :: {:ok, jitter()} | {:error, term()}
@@ -176,6 +417,12 @@ defmodule Sidereon.GNSS.Signal.Analysis do
       {:error, _reason} = err -> err
     end
   end
+
+  @doc """
+  Alias for `dll_lower_bound/2` matching the Python module-level helper name.
+  """
+  @spec signal_dll_lower_bound(modulation(), dll_options()) :: {:ok, jitter()} | {:error, term()}
+  def signal_dll_lower_bound(modulation, options), do: dll_lower_bound(modulation, options)
 
   @doc """
   Return a one-path early-late multipath envelope on the supplied delay grid.
@@ -193,6 +440,15 @@ defmodule Sidereon.GNSS.Signal.Analysis do
     end
   end
 
+  @doc """
+  Alias for `multipath_envelope/3` matching the Python module-level helper name.
+  """
+  @spec signal_multipath_error_envelope(modulation(), multipath_options(), [number()]) ::
+          {:ok, [multipath_point()]} | {:error, term()}
+  def signal_multipath_error_envelope(modulation, options, delay_chips) do
+    multipath_envelope(modulation, options, delay_chips)
+  end
+
   defp modulation_term(%{kind: :bpsk, order: order}) do
     %{kind: "bpsk", order: order / 1.0, m: nil, n: nil}
   end
@@ -201,8 +457,23 @@ defmodule Sidereon.GNSS.Signal.Analysis do
     %{kind: "boc_sine", order: nil, m: m / 1.0, n: n / 1.0}
   end
 
+  defp modulation_term(%{kind: :boc_cosine, m: m, n: n}) do
+    %{kind: "boc_cosine", order: nil, m: m / 1.0, n: n / 1.0}
+  end
+
+  defp modulation_term(%{kind: :mboc_6_1_1_over_11}) do
+    %{kind: "mboc_6_1_1_over_11", order: nil, m: nil, n: nil}
+  end
+
+  defp modulation_term(%{kind: :tmboc_6_1_4_over_33}) do
+    %{kind: "tmboc_6_1_4_over_33", order: nil, m: nil, n: nil}
+  end
+
   defp modulation_term({:bpsk, order}), do: modulation_term(bpsk(order))
   defp modulation_term({:boc_sine, m, n}), do: modulation_term(boc_sine(m, n))
+  defp modulation_term({:boc_cosine, m, n}), do: modulation_term(boc_cosine(m, n))
+  defp modulation_term(:mboc_6_1_1_over_11), do: modulation_term(mboc_6_1_1_over_11())
+  defp modulation_term(:tmboc_6_1_4_over_33), do: modulation_term(tmboc_6_1_4_over_33())
 
   defp interference_term(%{modulation: modulation, power_ratio_to_carrier: ratio}) do
     %{modulation: modulation_term(modulation), power_ratio_to_carrier: ratio / 1.0}

@@ -522,6 +522,20 @@ defmodule Sidereon.GNSS.QC do
   end
 
   @doc """
+  Residual-based RAIM for an existing SPP solution.
+
+  This is the direct post-solve variant matching the Rust and C
+  `raim_for_solution` surface. It uses the solution's used satellites and
+  post-fit residuals, with the same options accepted by `raim/2`.
+  """
+  @spec raim_for_solution(Solution.t(), keyword()) :: raim_result()
+  def raim_for_solution(%Solution{} = solution, opts \\ []) do
+    solution.used_sats
+    |> run_raim(solution.residuals_m, opts)
+    |> decode_raim_result(:map)
+  end
+
+  @doc """
   Standalone range RAIM/FDE over a caller-supplied linearized measurement set,
   independent of any full positioning solve.
 

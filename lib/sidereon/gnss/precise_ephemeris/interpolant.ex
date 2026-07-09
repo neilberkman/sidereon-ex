@@ -14,22 +14,25 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
 
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.PreciseEphemeris
+  alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
   @enforce_keys [:handle, :time_scale]
-  defstruct [:handle, :time_scale, artifact?: false]
+  defstruct [:handle, :time_scale, artifact?: false, byte_len: nil, bytes: nil]
 
   @typedoc "Precise source accepted by interpolant batch evaluators."
-  @type source :: SP3.t() | PreciseEphemeris.t() | t()
+  @type source :: SP3.t() | PreciseEphemeris.t() | t() | InterpolantArtifact.t()
 
   @typedoc "Cached precise-ephemeris interpolant or opened artifact handle."
   @type t :: %__MODULE__{
           handle: reference(),
           time_scale: String.t(),
-          artifact?: boolean()
+          artifact?: boolean(),
+          byte_len: non_neg_integer() | nil,
+          bytes: binary() | nil
         }
 
   @doc """
@@ -148,7 +151,9 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
          %__MODULE__{
            handle: resource,
            time_scale: NIF.precise_interpolant_time_scale(resource),
-           artifact?: true
+           artifact?: true,
+           byte_len: byte_size(bytes),
+           bytes: bytes
          }}
 
       {:error, _} = err ->
@@ -159,6 +164,22 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc """
+  Alias for `open/1`, matching the Python artifact `from_bytes` constructor.
+  """
+  @spec from_bytes(binary()) :: {:ok, t()} | {:error, term()}
+  def from_bytes(bytes), do: open(bytes)
+
+  @doc """
+  Read precise-interpolant artifact bytes from disk and open them.
+  """
+  @spec from_path(String.t()) :: {:ok, t()} | {:error, term()}
+  def from_path(path) when is_binary(path) do
+    with {:ok, bytes} <- File.read(path) do
+      open(bytes)
+    end
   end
 
   @doc """
@@ -180,6 +201,34 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   def checksum(%__MODULE__{} = interpolant) do
     with {:ok, bytes} <- artifact_bytes(interpolant) do
       checksum(bytes)
+    end
+  end
+
+  @doc """
+  Alias for `checksum/1`, matching the Python artifact `checksum64` accessor.
+  """
+  @spec checksum64(binary() | t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def checksum64(source), do: checksum(source)
+
+  @doc """
+  Return canonical artifact bytes for this handle.
+
+  Opened artifacts return the same bytes supplied to `open/1` or `from_bytes/1`;
+  fitted interpolants serialize through the core artifact builder.
+  """
+  @spec as_bytes(t()) :: {:ok, binary()} | {:error, term()}
+  def as_bytes(%__MODULE__{bytes: bytes}) when is_binary(bytes), do: {:ok, bytes}
+  def as_bytes(%__MODULE__{} = interpolant), do: artifact_bytes(interpolant)
+
+  @doc """
+  Return the artifact byte length.
+  """
+  @spec byte_len(t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def byte_len(%__MODULE__{byte_len: byte_len}) when is_integer(byte_len), do: {:ok, byte_len}
+
+  def byte_len(%__MODULE__{} = interpolant) do
+    with {:ok, bytes} <- as_bytes(interpolant) do
+      {:ok, byte_size(bytes)}
     end
   end
 
@@ -206,6 +255,23 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   @doc """
+  Alias for `satellite_ids/1`, matching the Python/WASM `satellites` accessor.
+  """
+  @spec satellites(t()) :: [String.t()]
+  def satellites(%__MODULE__{} = interpolant), do: satellite_ids(interpolant)
+
+  @doc """
+  Evaluate one satellite position and clock at a J2000-second epoch.
+  """
+  @spec position_at_j2000_seconds(source(), String.t(), number()) :: {:ok, SP3.State.t()} | {:error, term()}
+  def position_at_j2000_seconds(source, sat_id, epoch_j2000_s) when is_binary(sat_id) do
+    with {:ok, batch} <- states_at_shared_j2000_s(source, [sat_id], epoch_j2000_s),
+         {:ok, %{position_ecef_m: {x_m, y_m, z_m}, clock_s: clock_s}} <- StateBatch.element(batch, 0) do
+      {:ok, %SP3.State{x_m: x_m, y_m: y_m, z_m: z_m, clock_s: clock_s}}
+    end
+  end
+
+  @doc """
   Evaluate states for parallel satellite and epoch arrays.
 
   `satellites[i]` is evaluated at `epochs_j2000_s[i]`. The lists must have the
@@ -227,6 +293,13 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   @doc """
+  Alias for `states_at_j2000_s/3`.
+  """
+  @spec observable_states_at_j2000_s(source(), [String.t()], [number()]) :: {:ok, StateBatch.t()} | {:error, term()}
+  def observable_states_at_j2000_s(source, satellites, epochs_j2000_s),
+    do: states_at_j2000_s(source, satellites, epochs_j2000_s)
+
+  @doc """
   Evaluate states for many satellites at one shared J2000-second epoch.
 
   The returned `StateBatch` is index-aligned with `satellites`. Missing data is
@@ -246,9 +319,18 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
   end
 
+  @doc """
+  Alias for `states_at_shared_j2000_s/3`.
+  """
+  @spec observable_states_at_shared_j2000_s(source(), [String.t()], number()) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def observable_states_at_shared_j2000_s(source, satellites, epoch_j2000_s),
+    do: states_at_shared_j2000_s(source, satellites, epoch_j2000_s)
+
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
   defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
   defp source_handle(%__MODULE__{handle: handle}), do: {:ok, handle}
+  defp source_handle(%InterpolantArtifact{interpolant: %__MODULE__{handle: handle}}), do: {:ok, handle}
   defp source_handle(_source), do: {:error, :invalid_source}
 
   defp satellite_terms(satellites) do

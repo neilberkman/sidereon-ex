@@ -22,6 +22,102 @@ defmodule Sidereon.Geoid do
 
   alias Sidereon.NIF
 
+  defmodule Egm2008GridSpacing do
+    @moduledoc """
+    Supported NGA EGM2008 interpolation-raster spacings.
+    """
+
+    @typedoc """
+    EGM2008 raster spacing token.
+    """
+    @type t :: :one_minute | :one_minute_grid | :two_point_five_minute | :two_point_five_minute_grid | String.t()
+
+    @doc """
+    Return the spacing in arcminutes.
+    """
+    @spec arc_minutes(t()) :: float()
+    def arc_minutes(spacing) when spacing in [:one_minute, :one_minute_grid, "one-minute", "1-minute", "1m", "1"],
+      do: 1.0
+
+    def arc_minutes(spacing)
+        when spacing in [
+               :two_point_five_minute,
+               :two_point_five_minute_grid,
+               "two-point-five-minute",
+               "2.5-minute",
+               "2.5m",
+               "2.5"
+             ], do: 2.5
+
+    @doc """
+    Return the spacing in degrees.
+    """
+    @spec degrees(t()) :: float()
+    def degrees(spacing), do: arc_minutes(spacing) / 60.0
+
+    @doc """
+    Return official `{n_lat, n_lon}` global raster dimensions.
+    """
+    @spec global_dimensions(t()) :: {pos_integer(), pos_integer()}
+    def global_dimensions(spacing) when spacing in [:one_minute, :one_minute_grid, "one-minute", "1-minute", "1m", "1"],
+      do: {10_801, 21_600}
+
+    def global_dimensions(spacing)
+        when spacing in [
+               :two_point_five_minute,
+               :two_point_five_minute_grid,
+               "two-point-five-minute",
+               "2.5-minute",
+               "2.5m",
+               "2.5"
+             ], do: {4_321, 8_640}
+  end
+
+  defmodule Egm2008RasterWindow do
+    @moduledoc """
+    Descriptor for a full or cropped EGM2008 raster window.
+    """
+
+    alias Sidereon.Geoid.Egm2008GridSpacing
+
+    @enforce_keys [:spacing, :lat_min_deg, :lon_min_deg, :n_lat, :n_lon]
+    defstruct [:spacing, :lat_min_deg, :lon_min_deg, :n_lat, :n_lon]
+
+    @typedoc """
+    EGM2008 raster window descriptor.
+    """
+    @type t :: %__MODULE__{
+            spacing: Egm2008GridSpacing.t(),
+            lat_min_deg: float(),
+            lon_min_deg: float(),
+            n_lat: pos_integer(),
+            n_lon: pos_integer()
+          }
+
+    @doc """
+    Build an EGM2008 raster-window descriptor.
+    """
+    @spec new(Egm2008GridSpacing.t(), number(), number(), pos_integer(), pos_integer()) :: t()
+    def new(spacing, lat_min_deg, lon_min_deg, n_lat, n_lon) do
+      %__MODULE__{
+        spacing: spacing,
+        lat_min_deg: lat_min_deg / 1.0,
+        lon_min_deg: lon_min_deg / 1.0,
+        n_lat: n_lat,
+        n_lon: n_lon
+      }
+    end
+
+    @doc """
+    Build the official full-global EGM2008 window for a spacing.
+    """
+    @spec global_window(Egm2008GridSpacing.t()) :: t()
+    def global_window(spacing) do
+      {n_lat, n_lon} = Egm2008GridSpacing.global_dimensions(spacing)
+      new(spacing, -90.0, 0.0, n_lat, n_lon)
+    end
+  end
+
   @type grid :: reference()
   @type egm2008_spacing :: :one_minute | :two_point_five_minute | String.t()
 
@@ -134,6 +230,12 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Alias for `load_grid/1`, matching the Python `GeoidGrid.from_text` name.
+  """
+  @spec from_text(binary()) :: {:ok, grid()} | {:error, term()}
+  def from_text(text), do: load_grid(text)
+
+  @doc """
   Parse a full EGM96 WW15MGH.DAC byte buffer into a grid handle.
   """
   @spec load_egm96_dac(binary()) :: {:ok, grid()} | {:error, term()}
@@ -145,6 +247,12 @@ defmodule Sidereon.Geoid do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Alias for `load_egm96_dac/1`.
+  """
+  @spec from_egm96_dac(binary()) :: {:ok, grid()} | {:error, term()}
+  def from_egm96_dac(bytes), do: load_egm96_dac(bytes)
 
   @doc """
   Parse a full NGA EGM2008 interpolation raster into a grid handle.
@@ -162,6 +270,12 @@ defmodule Sidereon.Geoid do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Alias for `load_egm2008_raster/2`.
+  """
+  @spec from_egm2008_raster(binary(), egm2008_spacing()) :: {:ok, grid()} | {:error, term()}
+  def from_egm2008_raster(bytes, spacing), do: load_egm2008_raster(bytes, spacing)
 
   @doc """
   Parse a cropped NGA EGM2008 interpolation-raster window into a grid handle.
@@ -192,6 +306,27 @@ defmodule Sidereon.Geoid do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Parse a cropped EGM2008 interpolation-raster window descriptor into a grid handle.
+  """
+  @spec load_egm2008_raster_window(binary(), Egm2008RasterWindow.t()) :: {:ok, grid()} | {:error, term()}
+  def load_egm2008_raster_window(bytes, %Egm2008RasterWindow{} = window) when is_binary(bytes) do
+    load_egm2008_raster_window(
+      bytes,
+      window.spacing,
+      window.lat_min_deg,
+      window.lon_min_deg,
+      window.n_lat,
+      window.n_lon
+    )
+  end
+
+  @doc """
+  Alias for `load_egm2008_raster_window/2`.
+  """
+  @spec from_egm2008_raster_window(binary(), Egm2008RasterWindow.t()) :: {:ok, grid()} | {:error, term()}
+  def from_egm2008_raster_window(bytes, %Egm2008RasterWindow{} = window), do: load_egm2008_raster_window(bytes, window)
 
   @doc """
   Build a geoid grid handle from its origin, spacing, dimensions, and row-major

@@ -6,6 +6,7 @@ defmodule SidereonBuild012BindingsTest do
   alias Sidereon.GNSS.Ionosphere.{TecGridSamples, TecSample}
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.Terrain
+  alias Sidereon.Terrain.{DtedLookupOptions, DtedTile}
   alias Sidereon.Terrain.MmapTerrain
   alias Sidereon.Terrain.MmapTerrain.{Egm96FifteenMinuteGeoid, OrthometricHeightM, TerrainDatumError}
 
@@ -67,6 +68,22 @@ defmodule SidereonBuild012BindingsTest do
       end)
 
     assert Terrain.height_batch(terrain, points, interpolation: :bilinear) == scalar
+  end
+
+  test "DTED parity aliases accept typed lookup options" do
+    {:ok, terrain} = Terrain.dted(@dted_root)
+    opts = DtedLookupOptions.new(:nearest_posting)
+
+    assert {:ok, height_m} = Terrain.height_m(terrain, -106.875, 36.125, opts)
+    assert {:ok, same_height_m} = Terrain.height_m_with_options(terrain, -106.875, 36.125, opts)
+    assert height_m == same_height_m
+
+    assert [{:ok, ^height_m}] = Terrain.height_batch(terrain, [{-106.875, 36.125}], opts)
+
+    tile_path = Path.join(@dted_root, "n36_w107_1arc_v3.dt2")
+    assert {:ok, tile} = DtedTile.from_path(tile_path)
+    assert {:ok, tile_height_m} = Terrain.tile_elevation(tile, -107.0 + 200 / 3600, 36.0 + 100 / 3600)
+    assert tile_height_m == -20
   end
 
   test "mmap terrain store matches DTED reader and missing EGM96 DAC is typed" do

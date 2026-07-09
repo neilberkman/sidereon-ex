@@ -22,11 +22,14 @@ use sidereon_core::{
         estimate, EstimateError, EstimateInput, EstimateOptions, EstimateOutput, StrategyId,
     },
     positioning::{
-        solve_spp_batch_parallel, solve_spp_batch_serial, solve_with_doppler_velocity,
-        solve_with_fallback, BroadcastReason, Corrections, DopplerObservation, EphemerisSource,
-        FallbackError, FixSource, KlobucharCoeffs, Observation, ReceiverSolution, RejectionReason,
-        RobustConfig, SolveInputs, SolvePolicy, SolvePolicyError, SourcedSolution,
-        SppDopplerSolution, SppError, SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
+        solve_spp_batch_parallel, solve_spp_batch_serial,
+        solve_spp_from_rinex_obs as core_solve_spp_from_rinex_obs, solve_with_doppler_velocity,
+        solve_with_fallback, spp_inputs_from_rinex_obs as core_spp_inputs_from_rinex_obs,
+        BroadcastReason, Corrections, DopplerObservation, EphemerisSource, FallbackError,
+        FixSource, KlobucharCoeffs, Observation, ReceiverSolution, RejectionReason,
+        RinexSppEpochInputs, RinexSppEpochSolution, RinexSppError, RinexSppOptions, RobustConfig,
+        SolveInputs, SolvePolicy, SolvePolicyError, SourcedSolution, SppDopplerSolution, SppError,
+        SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
     },
     quality::{SolutionValidationError, SolutionValidationOptions},
     staleness::StalenessPolicy,
@@ -41,8 +44,11 @@ use rustler::types::atom;
 use rustler::types::tuple::make_tuple;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
+use crate::rinex_obs::RinexObsResource;
 use crate::sp3::Sp3Resource;
-use std::collections::BTreeMap;
+use sidereon_core::rinex::observations::{ObsEpochTime, SignalPolicy};
+use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
 type DopplerObservationTerm = (String, f64, f64, f64);
 
@@ -562,6 +568,176 @@ fn decode_policy(max_pdop: Term<'_>, coarse_search_seeds: Term<'_>) -> NifResult
     })
 }
 
+fn decode_optional_tuple4(term: Term<'_>, name: &'static str) -> NifResult<Option<[f64; 4]>> {
+    if is_nil(term) {
+        return Ok(None);
+    }
+    let tuple: (f64, f64, f64, f64) = term.decode().map_err(|_| {
+        Error::Term(Box::new(format!(
+            "{name} must be nil or a four-element float tuple"
+        )))
+    })?;
+    Ok(Some([tuple.0, tuple.1, tuple.2, tuple.3]))
+}
+
+fn decode_signal_policy(
+    obs: &sidereon_core::rinex::observations::ObservationFile,
+    codes: Term<'_>,
+) -> NifResult<SignalPolicy> {
+    if is_nil(codes) {
+        return SignalPolicy::default_for(obs.header().version)
+            .map_err(crate::errors::invalid_input);
+    }
+
+    let pairs: Vec<(String, Vec<String>)> = codes.decode().map_err(|_| {
+        Error::Term(Box::new(
+            "codes must be nil or a list of {system_letter, [code]} pairs",
+        ))
+    })?;
+    let mut policy = SignalPolicy {
+        codes: BTreeMap::new(),
+    };
+    for (letter, selected_codes) in pairs {
+        let system = system_from_letter(&letter)?;
+        policy.codes.insert(system, selected_codes);
+    }
+    Ok(policy)
+}
+
+fn decode_satellite_set(satellites: Vec<String>) -> NifResult<Option<BTreeSet<GnssSatelliteId>>> {
+    if satellites.is_empty() {
+        return Ok(None);
+    }
+    satellites
+        .iter()
+        .map(|sat| {
+            GnssSatelliteId::from_str(sat)
+                .map_err(|_| Error::Term(Box::new(format!("bad satellite token {sat:?}"))))
+        })
+        .collect::<NifResult<BTreeSet<_>>>()
+        .map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_rinex_spp_options(
+    obs: &sidereon_core::rinex::observations::ObservationFile,
+    codes: Term<'_>,
+    apply_iono: bool,
+    apply_tropo: bool,
+    initial_guess: Term<'_>,
+    satellites: Vec<String>,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    robust: Term<'_>,
+) -> NifResult<RinexSppOptions> {
+    let mut options = RinexSppOptions::new(decode_signal_policy(obs, codes)?)
+        .with_corrections(Corrections {
+            ionosphere: apply_iono,
+            troposphere: apply_tropo,
+        })
+        .with_surface_met(SurfaceMet {
+            pressure_hpa,
+            temperature_k,
+            relative_humidity,
+        })
+        .with_robust(decode_robust(robust)?);
+
+    if let Some(initial_guess) = decode_optional_tuple4(initial_guess, "initial_guess")? {
+        options = options.with_initial_guess(initial_guess);
+    }
+    if let Some(satellites) = decode_satellite_set(satellites)? {
+        options = options.with_satellites(satellites);
+    }
+
+    Ok(options)
+}
+
+fn obs_epoch_time_term<'a>(env: Env<'a>, epoch: ObsEpochTime) -> Term<'a> {
+    (
+        (epoch.year, i32::from(epoch.month), i32::from(epoch.day)),
+        (i32::from(epoch.hour), i32::from(epoch.minute), epoch.second),
+    )
+        .encode(env)
+}
+
+fn rinex_spp_epoch_inputs_term<'a>(env: Env<'a>, epoch: &RinexSppEpochInputs) -> Term<'a> {
+    let observations: Vec<(String, f64)> = epoch
+        .inputs
+        .observations
+        .iter()
+        .map(|obs| (obs.satellite_id.to_string(), obs.pseudorange_m))
+        .collect();
+    let corrections = (
+        epoch.inputs.corrections.ionosphere,
+        epoch.inputs.corrections.troposphere,
+    );
+    let glonass_channels: Vec<(u8, i8)> = epoch
+        .inputs
+        .glonass_channels
+        .iter()
+        .map(|(slot, channel)| (*slot, *channel))
+        .collect();
+
+    make_tuple(
+        env,
+        &[
+            epoch.epoch_index.encode(env),
+            obs_epoch_time_term(env, epoch.epoch),
+            observations.encode(env),
+            epoch.inputs.t_rx_j2000_s.encode(env),
+            epoch.inputs.t_rx_second_of_day_s.encode(env),
+            epoch.inputs.day_of_year.encode(env),
+            (
+                epoch.inputs.initial_guess[0],
+                epoch.inputs.initial_guess[1],
+                epoch.inputs.initial_guess[2],
+                epoch.inputs.initial_guess[3],
+            )
+                .encode(env),
+            corrections.encode(env),
+            glonass_channels.encode(env),
+        ],
+    )
+}
+
+fn rinex_spp_inputs_terms<'a>(env: Env<'a>, epochs: &[RinexSppEpochInputs]) -> Vec<Term<'a>> {
+    epochs
+        .iter()
+        .map(|epoch| rinex_spp_epoch_inputs_term(env, epoch))
+        .collect()
+}
+
+fn rinex_spp_error_reason<'a>(env: Env<'a>, error: RinexSppError) -> Term<'a> {
+    match error {
+        RinexSppError::MissingApproxPosition => atom_from(env, "missing_approx_position"),
+        RinexSppError::Observation(error) => {
+            (atom_from(env, "observation"), error.to_string()).encode(env)
+        }
+        _ => (atom_from(env, "rinex_spp"), error.to_string()).encode(env),
+    }
+}
+
+fn rinex_spp_epoch_solution_term<'a>(env: Env<'a>, epoch: &RinexSppEpochSolution) -> Term<'a> {
+    let solution = match &epoch.solution {
+        Ok(solution) => encode_solution(env, solution),
+        Err(error) => solve_policy_error_term(env, error),
+    };
+    (
+        epoch.epoch_index,
+        obs_epoch_time_term(env, epoch.epoch),
+        solution,
+    )
+        .encode(env)
+}
+
+fn rinex_spp_solution_terms<'a>(env: Env<'a>, epochs: &[RinexSppEpochSolution]) -> Vec<Term<'a>> {
+    epochs
+        .iter()
+        .map(|epoch| rinex_spp_epoch_solution_term(env, epoch))
+        .collect()
+}
+
 /// Decode the common SPP term arguments into a [`SolveInputs`]. Shared by the
 /// SP3-backed and broadcast-backed entry points, which differ only in the
 /// ephemeris source they pass to the solver.
@@ -1021,6 +1197,99 @@ fn spp_solve_batch_parallel<'a>(
     let (inputs, policy) = decode_batch(epochs, robust, max_pdop, coarse_search_seeds)?;
     let results = solve_spp_batch_parallel(&handle.sp3, &inputs, with_geodetic, policy);
     Ok(encode_batch_results(env, results))
+}
+
+/// Assemble usable RINEX OBS epochs into SPP solve inputs using a broadcast NAV
+/// product for ephemerides, ionosphere metadata, and GLONASS channel context.
+///
+/// Dirty-CPU: RINEX assembly can walk large observation products. Pure glue over
+/// `sidereon::spp_inputs_from_rinex_obs`; no observation selection or solve
+/// logic lives here.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_inputs_from_rinex_obs<'a>(
+    env: Env<'a>,
+    source: ResourceArc<BroadcastResource>,
+    obs: ResourceArc<RinexObsResource>,
+    codes: Term<'a>,
+    apply_iono: bool,
+    apply_tropo: bool,
+    initial_guess: Term<'a>,
+    satellites: Vec<String>,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    robust: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let options = decode_rinex_spp_options(
+        &obs.obs,
+        codes,
+        apply_iono,
+        apply_tropo,
+        initial_guess,
+        satellites,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    Ok(
+        match core_spp_inputs_from_rinex_obs(&obs.obs, &source.store, &options) {
+            Ok(epochs) => (atom::ok(), rinex_spp_inputs_terms(env, &epochs)).encode(env),
+            Err(error) => (atom::error(), rinex_spp_error_reason(env, error)).encode(env),
+        },
+    )
+}
+
+/// Assemble RINEX OBS epochs and solve each one serially against a broadcast NAV
+/// product. Per-epoch solve failures are returned in the result list.
+///
+/// Dirty-CPU: this is many independent SPP solves. Pure glue over
+/// `sidereon::solve_spp_from_rinex_obs`.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn solve_spp_from_rinex_obs<'a>(
+    env: Env<'a>,
+    source: ResourceArc<BroadcastResource>,
+    obs: ResourceArc<RinexObsResource>,
+    codes: Term<'a>,
+    apply_iono: bool,
+    apply_tropo: bool,
+    initial_guess: Term<'a>,
+    satellites: Vec<String>,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    robust: Term<'a>,
+    with_geodetic: bool,
+    max_pdop: Term<'a>,
+    coarse_search_seeds: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let options = decode_rinex_spp_options(
+        &obs.obs,
+        codes,
+        apply_iono,
+        apply_tropo,
+        initial_guess,
+        satellites,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    let policy = decode_policy(max_pdop, coarse_search_seeds)?;
+    Ok(
+        match core_solve_spp_from_rinex_obs(
+            &source.store,
+            &obs.obs,
+            &options,
+            with_geodetic,
+            policy,
+        ) {
+            Ok(epochs) => (atom::ok(), rinex_spp_solution_terms(env, &epochs)).encode(env),
+            Err(error) => (atom::error(), rinex_spp_error_reason(env, error)).encode(env),
+        },
+    )
 }
 
 /// Encode a [`FixSource`] as the Elixir provenance term carried alongside a

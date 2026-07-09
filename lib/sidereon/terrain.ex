@@ -17,6 +17,26 @@ defmodule Sidereon.Terrain do
     @type t :: %__MODULE__{handle: reference()}
   end
 
+  defmodule DtedLookupOptions do
+    @moduledoc """
+    Options for DTED height lookup.
+    """
+
+    @enforce_keys [:interpolation]
+    defstruct interpolation: :bilinear
+
+    @typedoc """
+    DTED lookup options.
+    """
+    @type t :: %__MODULE__{interpolation: Sidereon.Terrain.interpolation()}
+
+    @doc """
+    Build DTED lookup options.
+    """
+    @spec new(Sidereon.Terrain.interpolation()) :: t()
+    def new(interpolation \\ :bilinear), do: %__MODULE__{interpolation: interpolation}
+  end
+
   defmodule DtedTile do
     @moduledoc """
     Handle for one loaded DTED tile.
@@ -24,9 +44,16 @@ defmodule Sidereon.Terrain do
     @enforce_keys [:handle]
     defstruct [:handle]
     @type t :: %__MODULE__{handle: reference()}
+
+    @doc """
+    Load one DTED tile from disk.
+    """
+    @spec from_path(String.t()) :: {:ok, t()} | {:error, term()}
+    def from_path(path), do: Sidereon.Terrain.load_tile(path)
   end
 
   @type interpolation :: :bilinear | :nearest_posting
+  @type lookup_options :: keyword() | DtedLookupOptions.t()
 
   @doc """
   Open a DTED terrain directory.
@@ -43,13 +70,28 @@ defmodule Sidereon.Terrain do
   or `{:error, reason}`. Points outside cached DTED coverage return `0.0` from
   the core terrain model. Longitude is first by design.
   """
-  @spec height(Dted.t(), number(), number(), keyword()) :: {:ok, float()} | {:error, atom()}
+  @spec height(Dted.t(), number(), number(), lookup_options()) :: {:ok, float()} | {:error, atom()}
   def height(%Dted{handle: handle}, longitude_deg, latitude_deg, opts \\ []) do
-    interpolation = Keyword.get(opts, :interpolation, :bilinear)
-    NIF.terrain_dted_height(handle, longitude_deg / 1.0, latitude_deg / 1.0, Atom.to_string(interpolation))
+    with {:ok, interpolation} <- interpolation(opts) do
+      NIF.terrain_dted_height(handle, longitude_deg / 1.0, latitude_deg / 1.0, Atom.to_string(interpolation))
+    end
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Alias for `height/4`, matching the Rust/Python/WASM `height_m` name.
+  """
+  @spec height_m(Dted.t(), number(), number(), lookup_options()) :: {:ok, float()} | {:error, atom()}
+  def height_m(%Dted{} = terrain, longitude_deg, latitude_deg, opts \\ []),
+    do: height(terrain, longitude_deg, latitude_deg, opts)
+
+  @doc """
+  Look up terrain height with explicit lookup options.
+  """
+  @spec height_m_with_options(Dted.t(), number(), number(), lookup_options()) :: {:ok, float()} | {:error, atom()}
+  def height_m_with_options(%Dted{} = terrain, longitude_deg, latitude_deg, opts),
+    do: height(terrain, longitude_deg, latitude_deg, opts)
 
   @doc """
   Look up a batch of terrain heights.
@@ -58,17 +100,17 @@ defmodule Sidereon.Terrain do
   has one `{:ok, height_m}` or `{:error, reason}` entry per input, preserving
   order. Heights are meters above the DTED ORTHOMETRIC vertical datum.
   """
-  @spec height_batch(Dted.t(), [{number(), number()}], keyword()) ::
+  @spec height_batch(Dted.t(), [{number(), number()}], lookup_options()) ::
           [{:ok, float()} | {:error, atom()}] | {:error, term()}
   def height_batch(%Dted{handle: handle}, points, opts \\ []) when is_list(points) do
-    interpolation = Keyword.get(opts, :interpolation, :bilinear)
+    with {:ok, interpolation} <- interpolation(opts) do
+      normalized =
+        Enum.map(points, fn {longitude_deg, latitude_deg} ->
+          {longitude_deg / 1.0, latitude_deg / 1.0}
+        end)
 
-    normalized =
-      Enum.map(points, fn {longitude_deg, latitude_deg} ->
-        {longitude_deg / 1.0, latitude_deg / 1.0}
-      end)
-
-    NIF.terrain_dted_height_batch(handle, normalized, Atom.to_string(interpolation))
+      NIF.terrain_dted_height_batch(handle, normalized, Atom.to_string(interpolation))
+    end
   rescue
     e in ErlangError -> {:error, e.original}
   end
@@ -132,5 +174,14 @@ defmodule Sidereon.Terrain do
       {:ok, value} -> value
       {:error, reason} -> raise ArgumentError, "terrain lookup failed: #{inspect(reason)}"
     end)
+  end
+
+  defp interpolation(%DtedLookupOptions{interpolation: interpolation}), do: interpolation(interpolation: interpolation)
+
+  defp interpolation(opts) when is_list(opts) do
+    case Keyword.get(opts, :interpolation, :bilinear) do
+      mode when mode in [:bilinear, :nearest_posting] -> {:ok, mode}
+      other -> {:error, {:bad_interpolation, other}}
+    end
   end
 end

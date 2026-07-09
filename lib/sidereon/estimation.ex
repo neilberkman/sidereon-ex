@@ -146,6 +146,8 @@ defmodule Sidereon.Estimation.TrackInnovation do
   Measurement residual, residual covariance, and NIS for a track update.
   """
 
+  alias Sidereon.Estimation.NisGate
+
   @enforce_keys [:innovation, :innovation_covariance, :nis]
   defstruct [:innovation, :innovation_covariance, :nis]
 
@@ -154,6 +156,18 @@ defmodule Sidereon.Estimation.TrackInnovation do
           innovation_covariance: [[float()]],
           nis: float()
         }
+
+  @doc """
+  Test this innovation against a chi-square NIS gate.
+  """
+  @spec gate(t(), number()) :: {:ok, NisGate.t()} | {:error, term()}
+  def gate(%__MODULE__{innovation: innovation, nis: nis}, confidence) do
+    dof = length(innovation)
+
+    with {:ok, threshold} <- Sidereon.Estimation.nis_gate_threshold(dof, confidence) do
+      {:ok, %NisGate{nis: nis, threshold: threshold, in_gate: nis <= threshold, dof: dof}}
+    end
+  end
 end
 
 defmodule Sidereon.Estimation.TrackUpdate do
@@ -987,6 +1001,15 @@ defmodule Sidereon.Estimation do
   end
 
   @doc """
+  Normalized innovation squared statistic.
+
+  This is the canonical `sidereon-core` helper name; `nis/2` is retained as the
+  shorter Elixir alias.
+  """
+  @spec nis_statistic(number(), number()) :: {:ok, float()} | {:error, primitive_error()}
+  def nis_statistic(innovation, innovation_variance), do: nis(innovation, innovation_variance)
+
+  @doc """
   Expected NIS value for a positive number of degrees of freedom.
   """
   @spec nis_expected_value(pos_integer()) :: {:ok, float()} | {:error, primitive_error()}
@@ -1013,6 +1036,16 @@ defmodule Sidereon.Estimation do
   end
 
   @doc """
+  Test a scalar innovation against a chi-square NIS gate.
+
+  This mirrors the canonical `sidereon-core` helper name; `nis_gate/4` remains
+  available as the shorter Elixir alias.
+  """
+  @spec nis_gate_test(number(), number(), pos_integer(), number()) :: {:ok, NisGate.t()} | {:error, primitive_error()}
+  def nis_gate_test(innovation, innovation_variance, dof, confidence),
+    do: nis_gate(innovation, innovation_variance, dof, confidence)
+
+  @doc """
   Median absolute deviation spread estimate with Gaussian consistency scaling.
 
   `scale_floor` is a non-negative lower bound on the returned spread.
@@ -1021,6 +1054,15 @@ defmodule Sidereon.Estimation do
   def mad(values, scale_floor \\ 0.0) when is_list(values) do
     NIF.estimation_mad(Enum.map(values, &(&1 / 1.0)), scale_floor / 1.0)
   end
+
+  @doc """
+  Median absolute deviation spread estimate with Gaussian consistency scaling.
+
+  This mirrors the canonical `sidereon-core` helper name; `mad/2` remains
+  available as the shorter Elixir alias.
+  """
+  @spec mad_spread([number()], number()) :: {:ok, float()} | {:error, primitive_error()}
+  def mad_spread(values, scale_floor \\ 0.0), do: mad(values, scale_floor)
 
   @doc """
   Exponentially weighted moving average update.
@@ -1033,12 +1075,30 @@ defmodule Sidereon.Estimation do
   end
 
   @doc """
+  Exponentially weighted moving average update.
+
+  This mirrors the canonical `sidereon-core` helper name; `ewma/3` remains
+  available as the shorter Elixir alias.
+  """
+  @spec ewma_update(number(), number(), number()) :: {:ok, float()} | {:error, primitive_error()}
+  def ewma_update(previous, sample, alpha), do: ewma(previous, sample, alpha)
+
+  @doc """
   EWMA update with `alpha = 1 / 2^shift`.
   """
   @spec ewma_power_of_two(number(), number(), non_neg_integer()) :: {:ok, float()} | {:error, primitive_error()}
   def ewma_power_of_two(previous, sample, shift) do
     NIF.estimation_ewma_power_of_two(previous / 1.0, sample / 1.0, shift)
   end
+
+  @doc """
+  EWMA update with `alpha = 1 / 2^shift`.
+
+  This mirrors the canonical `sidereon-core` helper name;
+  `ewma_power_of_two/3` remains available as the shorter Elixir alias.
+  """
+  @spec ewma_update_power_of_two(number(), number(), non_neg_integer()) :: {:ok, float()} | {:error, primitive_error()}
+  def ewma_update_power_of_two(previous, sample, shift), do: ewma_power_of_two(previous, sample, shift)
 
   @doc """
   CA-CFAR threshold multiplier from searched-cell count and target false-alarm probability.

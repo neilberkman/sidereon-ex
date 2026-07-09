@@ -1,6 +1,7 @@
 defmodule Sidereon.GNSS.SP3Test do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.{SP3, Time}
 
   # Minimal but standards-shaped SP3-c position+clock file with two GPS sats and
@@ -157,6 +158,24 @@ defmodule Sidereon.GNSS.SP3Test do
 
       assert SP3.epoch_count(sp3) == 2
       assert SP3.epochs_j2000_seconds(sp3) == [start_s / 1.0, start_s / 1.0 + 900.0]
+      assert SP3.satellites(sp3) == SP3.satellite_ids(sp3)
+    end
+
+    test "Python-style SP3 aliases serialize and interpolate through core paths", %{sp3: sp3} do
+      {:ok, start_s} = Time.epoch_to_j2000_seconds(~N[2020-06-24 00:00:00])
+
+      assert {:ok, reparsed} = SP3.parse(SP3.to_sp3_string(sp3))
+      assert SP3.satellite_ids(reparsed) == SP3.satellite_ids(sp3)
+
+      assert {:ok, batch} = SP3.interpolate(sp3, "G01", [start_s / 1.0])
+
+      assert {:ok, %{position_ecef_m: {x_m, y_m, z_m}, clock_s: clock_s}} =
+               StateBatch.element(batch, 0)
+
+      assert_in_delta x_m, 15_000_000.0, 1.0e-3
+      assert_in_delta y_m, -20_000_000.0, 1.0e-3
+      assert_in_delta z_m, 5_000_000.0, 1.0e-3
+      assert_in_delta clock_s, 123.456789e-6, 1.0e-15
     end
 
     test "returns an exact parsed state without interpolation", %{sp3: sp3} do
