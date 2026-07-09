@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0]
+
+### Added
+
+- Direct post-solve RAIM (`Sidereon.GNSS.QC.raim/2`): residuals and geometry
+  in, fault flag and test statistic out, including the for-solution overload.
+  Docs state the weighting contract: pass per-satellite inverse-variance
+  weights; unit weights on metre-scale residuals saturate the fault test.
+- ARAIM results expose `available` (with `availability` kept as an alias), and
+  geometry that cannot support the integrity budget now returns an unavailable
+  result instead of an error, matching core 0.24.0 semantics.
+- `Sidereon.Reliability` ARAIM parity with the other interfaces.
+
+## [0.23.0]
+
+### Added
+
+- RTCM broadcast ephemeris decode for Galileo (1045/1046), BeiDou (1042), and
+  QZSS (1044), with solver conversion, at parity with core's real-data
+  validated decoders.
+- Public multi-epoch static positioning (`solve_static`) with covariance,
+  leave-one-out redundancy diagnostics, and robust weighting.
+- Static PPP options: optional elevation cutoff and optional
+  tropospheric-gradient estimation (off by default).
+- Temporal-correlation covariance fields on static PPP solutions
+  (`temporal_position_covariance`, scale factor, and correlation diagnostics).
+
 ## [0.22.0]
 
 ### Added
