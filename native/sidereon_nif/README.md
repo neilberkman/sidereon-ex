@@ -6,7 +6,19 @@ the supported targets, and those archives are verified against the checksum file
 If the checksum file is absent, Sidereon builds from source instead of attempting a
 download. That keeps development and half-prepared releases source-buildable.
 
-Set `SIDEREON_BUILD=1` to force a local source build with Rustler instead:
+To force a local source build, the consuming application must activate
+Sidereon's optional Rustler dependency:
+
+```elixir
+def deps do
+  [
+    {:sidereon, "~> 0.25"},
+    {:rustler, ">= 0.0.0", optional: true}
+  ]
+end
+```
+
+Then compile with a Rust toolchain installed:
 
 ```bash
 SIDEREON_BUILD=1 mix compile

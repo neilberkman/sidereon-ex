@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Release validation now builds the actual Hex tarball, verifies that its NIF
+  crate pins `sidereon-core` only by a registry version, and forces
+  a source build from the unpacked package through a throwaway consumer in a
+  clean Rust-enabled container. The gate runs in pull-request CI and before
+  tagged precompiled artifacts are published. The documented source-build
+  instructions now include the consumer-side optional Rustler dependency.
+- Audited every published Hex package from 0.8.0 through 0.25.0. Version 0.8.0
+  is the only affected release: its source-build path pins a nonexistent
+  `sidereon-core` git tag. Its precompiled path still works; consumers should
+  upgrade to 0.25.0 or newer. Versions 0.9.0 through 0.25.0 already use
+  registry pins and are not affected.
+
 ## [0.25.0]
 
 ### Added
