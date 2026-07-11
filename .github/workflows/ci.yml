@@ -7,6 +7,10 @@ on:
     branches: [main]
 
 jobs:
+  packaged-source-build:
+    name: Packaged source-build release gate
+    uses: ./.github/workflows/packaged-source-build.yml
+
   test:
     name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

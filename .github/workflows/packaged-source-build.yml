@@ -1,0 +1,26 @@
+name: Packaged source build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-source-build:
+    name: Hex tarball / forced Rust source build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+
+      - name: Install Hex
+        run: mix local.hex --force
+
+      - name: Build package and force its source-build path
+        run: bash .github/scripts/check-packaged-source-build.sh

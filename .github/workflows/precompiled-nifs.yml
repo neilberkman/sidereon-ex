@@ -16,6 +16,10 @@ permissions:
   contents: write
 
 jobs:
+  packaged-source-build:
+    name: Packaged source-build release gate
+    uses: ./.github/workflows/packaged-source-build.yml
+
   asset-check:
     name: Check release assets
     runs-on: ubuntu-22.04
@@ -47,7 +51,7 @@ jobs:
 
   precompile:
     name: ${{ matrix.nif }} / ${{ matrix.job.target }}
-    needs: asset-check
+    needs: [asset-check, packaged-source-build]
     if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -149,7 +153,7 @@ jobs:
 
   publish-release-assets:
     name: Publish release assets
-    needs: [asset-check, precompile]
+    needs: [asset-check, packaged-source-build, precompile]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/') && needs.asset-check.outputs.should-build == 'true'
 

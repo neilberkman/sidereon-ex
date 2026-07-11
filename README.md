@@ -30,8 +30,18 @@ end
 ```
 
 Releases ship precompiled NIFs for common Linux, macOS, and Windows targets and
-download automatically, so no Rust build is needed. (Set `SIDEREON_BUILD=1` to
-compile from source instead.)
+download automatically, so no Rust build is needed. To force a source build,
+install a Rust toolchain, set `SIDEREON_BUILD=1`, and activate Sidereon's
+optional Rustler dependency in the consuming application:
+
+```elixir
+def deps do
+  [
+    {:sidereon, "~> 0.25"},
+    {:rustler, ">= 0.0.0", optional: true}
+  ]
+end
+```
 
 ## Example: track a satellite
 
