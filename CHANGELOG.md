@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.1]
+
+### Security
+
+- Updated `sidereon` and `sidereon-core` to 0.26.1, which rejects RINEX 2
+  observation epoch headers that declare an oversized satellite count before
+  processing continuation records. Malicious input could otherwise request an
+  enormous allocation and terminate the BEAM VM. Core releases and binary
+  artifacts 0.11.1 through 0.26.0 are affected. Published Sidereon Hex versions
+  0.11.1 through 0.25.0 are affected; upgrade to 0.26.1.
+
 ## [0.26.0]
 
 ### Breaking
