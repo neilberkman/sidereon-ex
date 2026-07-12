@@ -145,8 +145,6 @@ defmodule Sidereon.GNSS.RTK do
               ratio_threshold: 3.0,
               dynamics_model: :constant_position,
               float_only_systems: [],
-              innovation_screen_sigma: 0.0,
-              innovation_screen_min_rows: 0,
               ar_arming_sigma_m: nil,
               report_residuals?: false
 
@@ -160,8 +158,6 @@ defmodule Sidereon.GNSS.RTK do
             ratio_threshold: number(),
             dynamics_model: dynamics_model(),
             float_only_systems: [String.t()],
-            innovation_screen_sigma: number(),
-            innovation_screen_min_rows: non_neg_integer(),
             ar_arming_sigma_m: number() | nil,
             report_residuals?: boolean()
           }
@@ -714,8 +710,7 @@ defmodule Sidereon.GNSS.RTK do
       :used_satellite_ids,
       :search,
       :residuals,
-      :geometry_quality,
-      :innovation_screen
+      :geometry_quality
     ]
     defstruct [
       :reported_baseline_m,
@@ -729,8 +724,7 @@ defmodule Sidereon.GNSS.RTK do
       :used_satellite_ids,
       :search,
       :residuals,
-      :geometry_quality,
-      :innovation_screen
+      :geometry_quality
     ]
 
     @type vec3 :: {float(), float(), float()}
@@ -746,8 +740,7 @@ defmodule Sidereon.GNSS.RTK do
             used_satellite_ids: [String.t()],
             search: map() | nil,
             residuals: [map()],
-            geometry_quality: GeometryQuality.t(),
-            innovation_screen: map() | nil
+            geometry_quality: GeometryQuality.t()
           }
   end
 
@@ -1754,8 +1747,6 @@ defmodule Sidereon.GNSS.RTK do
           ratio_threshold: Map.get(fixed_options, :ratio_threshold, @default_integer_ratio_threshold),
           dynamics_model: :constant_position,
           float_only_systems: float_only_systems,
-          innovation_screen_sigma: 0.0,
-          innovation_screen_min_rows: 0,
           report_residuals?: false
         }
         |> Map.merge(update_options)
@@ -2265,8 +2256,6 @@ defmodule Sidereon.GNSS.RTK do
       {
         opts |> Map.get(:dynamics_model, Map.get(opts, :dynamics, :constant_position)) |> option_label(),
         Map.get(opts, :float_only_systems, []),
-        Map.get(opts, :innovation_screen_sigma, Map.get(opts, :innovation_threshold_sigma, 0.0)) / 1.0,
-        Map.get(opts, :innovation_screen_min_rows, Map.get(opts, :innovation_min_rows, 0)),
         arc_float_or_nil(Map.get(opts, :ar_arming_sigma_m)),
         Map.get(opts, :report_residuals?, Map.get(opts, :report_residuals, false))
       }
@@ -2350,7 +2339,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_arc_epoch_solution(
          {reported_baseline_m, float_baseline_m, integer_fixed, integer_ratio, newly_fixed, fixed_ids, sd_ambiguities_m,
-          fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality, innovation_screen}
+          fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality}
        ) do
     %ArcEpochSolution{
       reported_baseline_m: reported_baseline_m,
@@ -2364,8 +2353,7 @@ defmodule Sidereon.GNSS.RTK do
       used_satellite_ids: used_satellite_ids,
       search: search,
       residuals: residuals,
-      geometry_quality: GeometryQuality.from_nif(geometry_quality),
-      innovation_screen: rust_innovation_screen_meta(innovation_screen)
+      geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
 
@@ -3150,26 +3138,6 @@ defmodule Sidereon.GNSS.RTK do
 
   defp rust_receiver_antenna_correction_term(%{antenna: antenna, frequency: frequency}) do
     AntennaTerms.receiver_correction_term(antenna, frequency)
-  end
-
-  defp rust_innovation_screen_meta(nil), do: nil
-
-  defp rust_innovation_screen_meta(
-         {threshold, min_rows, input_rows, accepted_rows, rejected_rows, rejected_code_rows,
-          {rejected_phase_rows, max_normalized, max_rejected_normalized, coasted?}}
-       ) do
-    %{
-      threshold_sigma: threshold,
-      min_rows: min_rows,
-      input_rows: input_rows,
-      accepted_rows: accepted_rows,
-      rejected_rows: rejected_rows,
-      rejected_code_rows: rejected_code_rows,
-      rejected_phase_rows: rejected_phase_rows,
-      max_abs_normalized_innovation: max_normalized,
-      max_rejected_abs_normalized_innovation: max_rejected_normalized,
-      coasted?: coasted?
-    }
   end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}

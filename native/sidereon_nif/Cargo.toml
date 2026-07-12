@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 rustler = "0.37.3"
 chrono = "0.4"
 serde_json = "1"
-sidereon-core = "0.25.0"
-sidereon = "0.25.0"
+sidereon-core = "0.26.0"
+sidereon = "0.26.0"
 trust-region-least-squares = "0.9.1"
 # Same major.minor as sidereon-core so the shared `DMatrix`/`DVector` types
 # unify across crates for the covariance/least-squares marshalling.

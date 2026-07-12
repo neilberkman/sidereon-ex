@@ -30,7 +30,7 @@ defmodule Sidereon.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], 0.0, 8, nil, true}}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], nil, true}}
 
     bad_reference_state =
       {{3, [{"G", "G99"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [], prior_information(10_000.0), [], []}
@@ -52,7 +52,7 @@ defmodule Sidereon.RTKFilterKernelNIFTest do
 
     assert {:ok,
             {next_state, reported_baseline, _reported_ambiguities, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids,
-             search_meta, nil, residuals}} =
+             search_meta, residuals}} =
              NIF.rtk_filter_update_epoch(
                state,
                epoch,
@@ -86,7 +86,7 @@ defmodule Sidereon.RTKFilterKernelNIFTest do
            end)
 
     assert {:ok,
-            {second_state, _second_reported, _second_reported_ambiguities, second_ratio, true, [], ^fixed_ids, nil, nil,
+            {second_state, _second_reported, _second_reported_ambiguities, second_ratio, true, [], ^fixed_ids, nil,
              second_residuals}} =
              NIF.rtk_filter_update_epoch(
                next_state,
@@ -133,14 +133,14 @@ defmodule Sidereon.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], 0.0, 8, nil, true}}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], nil, true}}
 
     assert {:ok,
             [
               {first_state, first_reported, _first_reported_ambiguities, first_ratio, true,
-               ["G02", "G03", "G04", "G05"], first_fixed_ids, first_search_meta, nil, first_residuals},
+               ["G02", "G03", "G04", "G05"], first_fixed_ids, first_search_meta, first_residuals},
               {second_state, _second_reported, _second_reported_ambiguities, second_ratio, true, [], second_fixed_ids,
-               nil, nil, second_residuals}
+               nil, second_residuals}
             ]} =
              NIF.rtk_filter_update_epochs(
                state,

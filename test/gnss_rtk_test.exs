@@ -530,8 +530,6 @@ defmodule Sidereon.GNSS.RTKTest do
         ratio_threshold: 3.0,
         dynamics_model: :constant_position,
         float_only_systems: [],
-        innovation_screen_sigma: 0.0,
-        innovation_screen_min_rows: 8,
         ar_arming_sigma_m: nil,
         report_residuals?: true
       },

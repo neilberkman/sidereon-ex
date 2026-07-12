@@ -33,8 +33,8 @@ use sidereon_core::rtk_filter::{
     update_epoch, AmbiguityScale, AmbiguitySet, CycleSlipOptions, CycleSlipPolicy,
     CycleSlipSplitArc, DynamicsModel, Epoch, FilterState, FixedBaselineSolution, FixedSolveError,
     FixedSolveOpts, FloatBaselineSolution, FloatResidual, FloatSolveError, FloatSolveOpts,
-    FloatSolveStatus, FullSetIntegerSummary, InnovationScreen, InnovationScreenOpts,
-    IntegerSearchMeta, IntegerStatus, IonosphereFreeBaselineError, MeasModel, MovingBaselineEpoch,
+    FloatSolveStatus, FullSetIntegerSummary, IntegerSearchMeta, IntegerStatus,
+    IonosphereFreeBaselineError, MeasModel, MovingBaselineEpoch,
     MovingBaselineEpochSolution, MovingBaselineError, MovingBaselineOpts, MovingBaselineStatus,
     ReceiverAntennaCalibration, ReceiverAntennaCorrections, ResidualComponentKind,
     ResidualValidationMeta, ResidualValidationOpts, ResidualValidationOutlier, RtkArcConfig,
@@ -71,10 +71,8 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
-type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
-type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsExtraTerm = (String, Vec<String>, f64, usize, Option<f64>, bool);
+type UpdateOptsExtraTerm = (String, Vec<String>, Option<f64>, bool);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
 type FloatSolveOptsTerm = (Vec3, f64, f64, usize);
 type FixedSolveOptsTerm = (f64, f64, usize, f64, bool, usize, Vec<String>);
@@ -840,29 +838,8 @@ fn encode_update<'a>(env: Env<'a>, update: sidereon_core::rtk_filter::EpochUpdat
                 .search
                 .map(|meta| encode_integer_search_meta(env, meta))
                 .encode(env),
-            update
-                .innovation_screen
-                .map(encode_innovation_screen)
-                .encode(env),
             encode_residuals(env, update.residuals).encode(env),
         ],
-    )
-}
-
-fn encode_innovation_screen(screen: InnovationScreen) -> ScreenTerm {
-    (
-        screen.threshold_sigma,
-        screen.min_rows,
-        screen.input_rows,
-        screen.accepted_rows,
-        screen.rejected_rows,
-        screen.rejected_code_rows,
-        (
-            screen.rejected_phase_rows,
-            screen.max_abs_normalized_innovation,
-            screen.max_rejected_abs_normalized_innovation,
-            screen.coasted,
-        ),
     )
 }
 
@@ -1012,8 +989,6 @@ fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
         (
             dynamics_model,
             float_only_systems,
-            innovation_screen_sigma,
-            innovation_screen_min_rows,
             ar_arming_sigma_m,
             report_residuals,
         ),
@@ -1032,14 +1007,6 @@ fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
         process_noise_baseline_sigma_m,
         dynamics_model,
         float_only_systems,
-        innovation_screen: if innovation_screen_sigma > 0.0 {
-            Some(InnovationScreenOpts {
-                threshold_sigma: innovation_screen_sigma,
-                min_rows: innovation_screen_min_rows,
-            })
-        } else {
-            None
-        },
         report_residuals,
         receiver_antenna_corrections: None,
         ar_arming_sigma_m,
@@ -1623,7 +1590,6 @@ fn decode_static_arc_config(
             process_noise_baseline_sigma_m: 0.0,
             dynamics_model: DynamicsModel::ConstantPosition,
             float_only_systems,
-            innovation_screen: None,
             report_residuals: false,
             receiver_antenna_corrections,
             ar_arming_sigma_m: None,
@@ -3178,10 +3144,6 @@ fn encode_arc_epoch_solution<'a>(env: Env<'a>, epoch: RtkArcEpochSolution) -> Te
                 .encode(env),
             encode_residuals(env, epoch.residuals).encode(env),
             geometry_quality_to_term(env, epoch.geometry_quality),
-            epoch
-                .innovation_screen
-                .map(encode_innovation_screen)
-                .encode(env),
         ],
     )
 }

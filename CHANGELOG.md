@@ -6,8 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Breaking
+
+- Removed the unsound generic sequential-RTK innovation screen together with
+  `ArcUpdateOptions.innovation_screen_sigma`,
+  `ArcUpdateOptions.innovation_screen_min_rows`, the corresponding map-option
+  aliases, and `ArcEpochSolution.innovation_screen`. The removed classifier
+  divided residuals by measurement variance, omitted predicted-state
+  covariance and shared-reference correlation, and treated carrier-phase
+  events as ordinary row outliers. Sequential RTK now always assimilates the
+  complete correlated double-difference block of all admitted rows; carrier
+  anomalies remain under the causal slip/arc lifecycle.
+
 ### Fixed
 
+- Updated the native backend to `sidereon-core` and the Rust facade 0.26.0.
+  Near-polar ionospheric pierce-point evaluation now remains finite when
+  rounding puts a valid latitude sine just outside `[-1, 1]`, and the locked
+  Rust graph includes the `crossbeam-epoch` security fix.
 - Release validation now builds the actual Hex tarball, verifies that its NIF
   crate pins `sidereon-core` only by a registry version, and forces
   a source build from the unpacked package through a throwaway consumer in a
@@ -19,6 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sidereon-core` git tag. Its precompiled path still works; consumers should
   upgrade to 0.25.0 or newer. Versions 0.9.0 through 0.25.0 already use
   registry pins and are not affected.
+
+### Evaluation-bit stability
+
+- The near-polar TEC correction intentionally changes affected pierce-point
+  results from non-finite latitude/longitude values to finite values. Existing
+  in-range TEC evaluations require no golden re-pin, and the ordinary
+  sequential-RTK path remains bit-identical to its former no-screen execution.
 
 ## [0.25.0]
 
