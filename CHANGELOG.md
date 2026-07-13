@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0]
+
+### Added
+
+- Added per-cell SP3 precedence, optional deterministic outlier rejection,
+  clock-outlier provenance, and observed/predicted epoch summaries.
+- Added ultra-rapid product-pattern fallback with contributor provenance and
+  complete merge-option forwarding through `fetch_merged_sp3/3`.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.28.0.
+
+### Fixed
+
+- Hex source packages now include the Cargo workspace lockfile, use exact Rust
+  registry pins, and clear verifier scratch directories before clean builds.
+
 ## [0.27.1]
 
 ### Fixed
