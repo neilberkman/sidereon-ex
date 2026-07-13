@@ -110,7 +110,7 @@ defmodule Sidereon.GNSS.Ntrip do
   @doc """
   Build the raw NTRIP request bytes for a host and option set.
 
-  The options match `sourcetable/2` and `Stream.start_link/1`: `:mountpoint`,
+  The options match `sourcetable/2` and `Ntrip.Stream.start_link/1`: `:mountpoint`,
   `:port`, `:version`, `:credentials`, `:user_agent_product`, and `:gga`.
   This is the public sans-I/O request builder used by the stream and raw
   sourcetable flows.

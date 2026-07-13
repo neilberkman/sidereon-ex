@@ -14,13 +14,17 @@ use sidereon_core::geoid::{
     egm96_undulations_rad as core_egm96_undulations_rad, ellipsoidal_height_m, geoid_undulation,
     geoid_undulations_deg as core_geoid_undulations_deg,
     geoid_undulations_rad as core_geoid_undulations_rad, orthometric_height_m, Egm2008GridSpacing,
-    Egm2008RasterWindow, GeoidGrid,
+    Egm2008RasterWindow, GeoidGrid, ProjVgridshiftArithmetic, ProjVgridshiftError,
 };
 
 mod atoms {
     rustler::atoms! {
         ok,
-        error
+        error,
+        non_finite_coordinate,
+        coordinate_outside_grid,
+        latitude,
+        longitude
     }
 }
 
@@ -122,6 +126,40 @@ fn geoid_grid_from_egm96_dac<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
     }
 }
 
+/// Parse PROJ's public EGM96 15-arcminute GTX grid into a loaded-grid handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn geoid_grid_from_proj_egm96_gtx<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
+    match GeoidGrid::from_proj_egm96_gtx(bytes.as_slice()) {
+        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+        Err(error) => (atoms::error(), error.to_string()).encode(env),
+    }
+}
+
+fn proj_vgridshift_arithmetic(value: &str) -> Result<ProjVgridshiftArithmetic, String> {
+    match value {
+        "separate-multiply-add" => Ok(ProjVgridshiftArithmetic::SeparateMultiplyAdd),
+        "fused-multiply-add" => Ok(ProjVgridshiftArithmetic::FusedMultiplyAdd),
+        other => Err(format!("unsupported PROJ vertical-grid arithmetic {other}")),
+    }
+}
+
+fn proj_vgridshift_error<'a>(env: Env<'a>, error: ProjVgridshiftError) -> Term<'a> {
+    let (kind, field) = match error {
+        ProjVgridshiftError::NonFiniteCoordinate { field } => {
+            (atoms::non_finite_coordinate(), field)
+        }
+        ProjVgridshiftError::CoordinateOutsideGrid { field } => {
+            (atoms::coordinate_outside_grid(), field)
+        }
+    };
+    let field = match field {
+        "latitude" => atoms::latitude(),
+        "longitude" => atoms::longitude(),
+        _ => unreachable!("core PROJ vertical-grid coordinate field is closed"),
+    };
+    (kind, field).encode(env)
+}
+
 fn egm2008_spacing(value: String) -> Result<Egm2008GridSpacing, String> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "1" | "1m" | "1-min" | "1-minute" | "one-minute" => Ok(Egm2008GridSpacing::OneMinute),
@@ -221,6 +259,27 @@ fn geoid_grid_undulation_rad(
     lon_rad: f64,
 ) -> f64 {
     handle.grid.undulation_rad(lat_rad, lon_rad)
+}
+
+/// PROJ 9.3.0 vertical-grid interpolation for a loaded EGM96 GTX grid.
+#[rustler::nif]
+fn geoid_grid_undulation_proj_rad<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<GeoidGridResource>,
+    lat_rad: f64,
+    lon_rad: f64,
+    arithmetic: String,
+) -> Term<'a> {
+    match proj_vgridshift_arithmetic(&arithmetic) {
+        Ok(arithmetic) => match handle
+            .grid
+            .undulation_proj_rad(lat_rad, lon_rad, arithmetic)
+        {
+            Ok(value) => (atoms::ok(), value).encode(env),
+            Err(error) => (atoms::error(), proj_vgridshift_error(env, error)).encode(env),
+        },
+        Err(error) => (atoms::error(), error).encode(env),
+    }
 }
 
 /// Batch undulation lookup from a loaded grid, with positions in degrees.

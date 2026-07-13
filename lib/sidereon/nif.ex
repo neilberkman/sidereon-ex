@@ -2004,6 +2004,8 @@ defmodule Sidereon.NIF do
 
   def geoid_grid_from_egm96_dac(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
+  def geoid_grid_from_proj_egm96_gtx(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
   def geoid_grid_from_egm2008_raster(_bytes, _spacing), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_grid_from_egm2008_raster_window(_bytes, _spacing, _lat_min_deg, _lon_min_deg, _n_lat, _n_lon),
@@ -2015,6 +2017,8 @@ defmodule Sidereon.NIF do
   def geoid_grid_undulation_deg(_handle, _lat_deg, _lon_deg), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_grid_undulation_rad(_handle, _lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
+
+  def geoid_grid_undulation_proj_rad(_handle, _lat_rad, _lon_rad, _arithmetic), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_grid_undulations_deg(_handle, _points_deg), do: :erlang.nif_error(:nif_not_loaded)
 

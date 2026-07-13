@@ -11,7 +11,9 @@ defmodule Sidereon.Geoid do
     * zero-setup lookups against the crate's COARSE 30-degree built-in global grid
       (`undulation/2`, `orthometric_height_m/3`, `ellipsoidal_height_m/3`), and
     * a loaded grid handle (`load_grid/1`, `grid/7`) for a real vendor model,
-      queried with `grid_undulation_deg/3` / `grid_undulation_rad/3`.
+      queried with `grid_undulation_deg/3` / `grid_undulation_rad/3`, and
+    * PROJ 9.3.0-compatible EGM96 GTX loading and vertical-grid interpolation
+      with an explicit fused or separately rounded arithmetic mode.
 
   The built-in grid is suitable for sanity checks and metre-scale fallback, not
   survey work; load a real model for accuracy.
@@ -118,8 +120,33 @@ defmodule Sidereon.Geoid do
     end
   end
 
+  defmodule ProjVgridshiftError do
+    @moduledoc """
+    Invalid coordinate reported by PROJ-compatible vertical-grid interpolation.
+    """
+
+    @enforce_keys [:kind, :field]
+    defstruct [:kind, :field]
+
+    @typedoc """
+    Typed PROJ vertical-grid coordinate error.
+    """
+    @type t :: %__MODULE__{
+            kind: :non_finite_coordinate | :coordinate_outside_grid,
+            field: :latitude | :longitude
+          }
+
+    @doc false
+    @spec from_nif({atom(), atom()}) :: t()
+    def from_nif({kind, field})
+        when kind in [:non_finite_coordinate, :coordinate_outside_grid] and field in [:latitude, :longitude] do
+      %__MODULE__{kind: kind, field: field}
+    end
+  end
+
   @type grid :: reference()
   @type egm2008_spacing :: :one_minute | :two_point_five_minute | String.t()
+  @type proj_vgridshift_arithmetic :: :separate_multiply_add | :fused_multiply_add
 
   @doc """
   Built-in coarse-grid geoid undulation `N` (metres) at a geodetic position in
@@ -255,6 +282,28 @@ defmodule Sidereon.Geoid do
   def from_egm96_dac(bytes), do: load_egm96_dac(bytes)
 
   @doc """
+  Parse PROJ's public EGM96 15-arcminute `egm96_15.gtx` into a grid handle.
+
+  Query the returned handle with `grid_undulation_proj_rad/4`. The ordinary
+  loaded-grid functions retain Sidereon's general interpolation contract.
+  """
+  @spec load_proj_egm96_gtx(binary()) :: {:ok, grid()} | {:error, term()}
+  def load_proj_egm96_gtx(bytes) when is_binary(bytes) do
+    case NIF.geoid_grid_from_proj_egm96_gtx(bytes) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, _} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Alias for `load_proj_egm96_gtx/1`, matching the core `GeoidGrid` constructor.
+  """
+  @spec from_proj_egm96_gtx(binary()) :: {:ok, grid()} | {:error, term()}
+  def from_proj_egm96_gtx(bytes), do: load_proj_egm96_gtx(bytes)
+
+  @doc """
   Parse a full NGA EGM2008 interpolation raster into a grid handle.
 
   `spacing` is `:one_minute` or `:two_point_five_minute`. The returned handle
@@ -373,6 +422,33 @@ defmodule Sidereon.Geoid do
   end
 
   @doc """
+  Interpolate a loaded EGM96 GTX grid using PROJ 9.3.0's radian indexing and
+  blend order.
+
+  `arithmetic` must be `:separate_multiply_add` or `:fused_multiply_add`. PROJ's
+  source does not prescribe floating-point contraction, so the mode is required
+  rather than inferred from the current CPU. Invalid coordinates return a
+  typed `ProjVgridshiftError` and are never clamped or extrapolated.
+  """
+  @spec grid_undulation_proj_rad(grid(), number(), number(), proj_vgridshift_arithmetic()) ::
+          {:ok, float()} | {:error, ProjVgridshiftError.t()}
+  def grid_undulation_proj_rad(handle, lat_rad, lon_rad, arithmetic)
+      when is_reference(handle) and arithmetic in [:separate_multiply_add, :fused_multiply_add] do
+    case NIF.geoid_grid_undulation_proj_rad(
+           handle,
+           lat_rad / 1.0,
+           lon_rad / 1.0,
+           proj_vgridshift_arithmetic(arithmetic)
+         ) do
+      {:ok, value} -> {:ok, value}
+      {:error, {kind, field}} -> {:error, ProjVgridshiftError.from_nif({kind, field})}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Bilinearly interpolated undulations `N` (metres) from a loaded grid, with
   positions in degrees.
   """
@@ -449,4 +525,7 @@ defmodule Sidereon.Geoid do
   defp egm2008_spacing(:two_point_five_minute), do: "two-point-five-minute"
   defp egm2008_spacing(:two_point_five_minute_grid), do: "two-point-five-minute"
   defp egm2008_spacing(value) when is_binary(value), do: value
+
+  defp proj_vgridshift_arithmetic(:separate_multiply_add), do: "separate-multiply-add"
+  defp proj_vgridshift_arithmetic(:fused_multiply_add), do: "fused-multiply-add"
 end

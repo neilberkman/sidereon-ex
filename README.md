@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 0.26"}]
+  [{:sidereon, "~> 0.27"}]
 end
 ```
 
@@ -37,7 +37,7 @@ optional Rustler dependency in the consuming application:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 0.26"},
+    {:sidereon, "~> 0.27"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
@@ -161,7 +161,8 @@ positioning, and conjunction screening; more notebooks live under
   source localization (ToA/TDOA), station velocity (MIDAS) with trajectory fitting, step
   detection, and network motion fields, repeating-geometry (sidereal)
   filtering, geodesic direct and inverse problems (Karney), an epoch-aware
-  terrestrial frame catalog (ITRF/ETRF Helmert sets), EGM2008 geoid grids, and
+  terrestrial frame catalog (ITRF/ETRF Helmert sets), PROJ-compatible EGM96
+  GTX vertical-grid interpolation, EGM2008 geoid grids, and
   batch least-squares orbit fitting against precise ephemerides (including
   terrestrial-frame SP3) with a per-satellite residual ledger. See
   `Sidereon.ClockStability`, `Sidereon.Estimation`, `Sidereon.SourceLocalization`,

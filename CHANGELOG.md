@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0]
+
+### Added
+
+- PROJ-compatible EGM96 15-arcminute GTX loading and vertical-grid
+  interpolation through `Sidereon.Geoid`. Callers explicitly select fused or
+  separately rounded multiply-add evaluation to match their reference PROJ
+  build, and invalid coordinates return `ProjVgridshiftError` rather than
+  panicking, clamping, or extrapolating.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.27.0.
+
 ## [0.26.1]
 
 ### Security
