@@ -19,8 +19,9 @@ use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
 use sidereon_core::ephemeris::{
     align_clock_reference, clock_reference_offset, merge as crate_merge, AgreementMetric,
-    EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergeReport, Sp3, Sp3FrameLabelSet,
-    Sp3FrameReconciliation, Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3State,
+    EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergePrecedenceScope, MergeReport,
+    OutlierRejectOptions, Sp3, Sp3FrameLabelSet, Sp3FrameReconciliation,
+    Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3State,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -136,6 +137,38 @@ fn sp3_epoch_count(handle: ResourceArc<Sp3Resource>) -> usize {
 #[rustler::nif]
 fn sp3_epochs_j2000_seconds(handle: ResourceArc<Sp3Resource>) -> Vec<f64> {
     handle.sp3.epochs_j2000_seconds()
+}
+
+type PredictionEpochTuple = ((f64, f64), bool, Vec<String>, Vec<String>);
+
+/// Per-epoch observed/predicted status and the contiguous observed-through
+/// boundary, derived from the parsed SP3 record flags.
+#[rustler::nif]
+fn sp3_prediction_summary(
+    handle: ResourceArc<Sp3Resource>,
+) -> (Vec<PredictionEpochTuple>, Option<(f64, f64)>) {
+    let summary = handle.sp3.prediction_summary();
+    let epochs = summary
+        .epochs
+        .iter()
+        .map(|epoch| {
+            (
+                instant_split(&epoch.epoch),
+                epoch.is_observed(),
+                epoch
+                    .orbit_predicted_satellites
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                epoch
+                    .clock_predicted_satellites
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            )
+        })
+        .collect();
+    (epochs, summary.observed_through.as_ref().map(instant_split))
 }
 
 fn state_tuple(state: Sp3State) -> StateTuple {
@@ -456,7 +489,8 @@ fn sp3_align_clock_reference(
 ///
 /// `handles` are the source products in **precedence order**. `combine` is one
 /// of `"mean"`, `"median"`, `"precedence"`. Returns
-/// `{merged_handle, {quarantined, single_source, position_outliers}}` where each
+/// `{merged_handle, {quarantined, single_source, position_outliers,
+/// clock_outliers, details}}` where each
 /// report list is a list of `flag_to_tuple` 4-tuples. Dirty-CPU: combines full
 /// products.
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -469,6 +503,8 @@ fn sp3_merge<'a>(
     min_agree: usize,
     clock_min_common: usize,
     combine: String,
+    precedence_scope: String,
+    outlier_reject: Option<(f64, f64)>,
     target_epoch_interval_s: Option<f64>,
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
@@ -481,6 +517,15 @@ fn sp3_merge<'a>(
         other => {
             return Err(Error::Term(Box::new(format!(
                 "unknown combine strategy {other:?}"
+            ))))
+        }
+    };
+    let precedence_scope = match precedence_scope.as_str() {
+        "cell" => MergePrecedenceScope::Cell,
+        "satellite_arc" => MergePrecedenceScope::SatelliteArc,
+        other => {
+            return Err(Error::Term(Box::new(format!(
+                "unknown precedence scope {other:?}"
             ))))
         }
     };
@@ -512,6 +557,13 @@ fn sp3_merge<'a>(
         min_agree,
         clock_min_common,
         combine,
+        precedence_scope,
+        outlier_reject: outlier_reject.map(|(position_tolerance_m, clock_tolerance_s)| {
+            OutlierRejectOptions {
+                position_tolerance_m,
+                clock_tolerance_s,
+            }
+        }),
         target_epoch_interval_s,
         systems: if system_letters.is_empty() {
             None
@@ -534,6 +586,7 @@ fn sp3_merge<'a>(
     let quarantined: Vec<_> = report.quarantined.iter().map(flag_to_tuple).collect();
     let single_source: Vec<_> = report.single_source.iter().map(flag_to_tuple).collect();
     let position_outliers: Vec<_> = report.position_outliers.iter().map(flag_to_tuple).collect();
+    let clock_outliers: Vec<_> = report.clock_outliers.iter().map(flag_to_tuple).collect();
     let frame_reconciliations: Vec<_> = report
         .frame_reconciliations
         .iter()
@@ -557,6 +610,7 @@ fn sp3_merge<'a>(
             quarantined,
             single_source,
             position_outliers,
+            clock_outliers,
             (
                 frame_reconciliations,
                 (aggregate, agreement, per_epoch_agreement),

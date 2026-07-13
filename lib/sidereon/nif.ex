@@ -596,6 +596,8 @@ defmodule Sidereon.NIF do
 
   def sp3_epochs_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_prediction_summary(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_state(_handle, _system_letter, _prn, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_states_at(_handle, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
@@ -949,6 +951,8 @@ defmodule Sidereon.NIF do
         _min_agree,
         _clock_min_common,
         _combine,
+        _precedence_scope,
+        _outlier_reject,
         _target_epoch_interval_s,
         _system_letters,
         _asserted_frame_label_sets,
@@ -1959,6 +1963,7 @@ defmodule Sidereon.NIF do
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
+  def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
   def data_archive_compression(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_gps_week(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
   def data_day_of_year(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)

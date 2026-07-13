@@ -67,14 +67,32 @@ defmodule Sidereon.GNSS.Data do
     Pure identity for one GNSS archive product.
     """
     @enforce_keys [:center, :product_type, :date, :sample]
-    defstruct [:center, :product_type, :date, :sample, :issue]
+    defstruct [
+      :center,
+      :product_type,
+      :date,
+      :sample,
+      :issue,
+      :span,
+      :pattern,
+      :filename,
+      :cache_filename,
+      :url,
+      :compression
+    ]
 
     @type t :: %__MODULE__{
             center: String.t(),
             product_type: String.t(),
             date: Date.t(),
             sample: String.t(),
-            issue: String.t() | nil
+            issue: String.t() | nil,
+            span: String.t() | nil,
+            pattern: String.t() | nil,
+            filename: String.t() | nil,
+            cache_filename: String.t() | nil,
+            url: String.t() | nil,
+            compression: String.t() | nil
           }
   end
 
@@ -97,7 +115,7 @@ defmodule Sidereon.GNSS.Data do
     SP3 center that did not contribute to a merge.
     """
     @enforce_keys [:center, :reason]
-    defstruct [:center, :filename, :reason]
+    defstruct [:center, :filename, :pattern, :reason]
   end
 
   defmodule Contributor do
@@ -105,7 +123,7 @@ defmodule Sidereon.GNSS.Data do
     SP3 center that contributed a product to a merge.
     """
     @enforce_keys [:center, :filename, :date]
-    defstruct [:center, :filename, :date, :issue]
+    defstruct [:center, :filename, :date, :issue, :pattern]
   end
 
   defmodule MergeReport do
@@ -244,6 +262,8 @@ defmodule Sidereon.GNSS.Data do
   Canonical archive filename for a product.
   """
   @spec canonical_filename(Product.t()) :: {:ok, String.t()} | {:error, error_reason()}
+  def canonical_filename(%Product{filename: filename}) when is_binary(filename), do: {:ok, filename}
+
   def canonical_filename(%Product{} = product) do
     date = product.date
 
@@ -270,6 +290,8 @@ defmodule Sidereon.GNSS.Data do
   Full archive URL for a product.
   """
   @spec archive_url(Product.t()) :: {:ok, String.t()} | {:error, error_reason()}
+  def archive_url(%Product{url: url}) when is_binary(url), do: {:ok, url}
+
   def archive_url(%Product{} = product) do
     date = product.date
 
@@ -371,10 +393,11 @@ defmodule Sidereon.GNSS.Data do
   @spec fetch(Product.t(), keyword()) :: {:ok, String.t()} | {:error, error_reason()}
   def fetch(%Product{} = product, opts \\ []) do
     with {:ok, filename} <- canonical_filename(product),
-         {:ok, path} <- safe_cache_path(resolve_cache_dir(opts, :gnss), [filename]),
+         cache_filename = product.cache_filename || filename,
+         {:ok, path} <- safe_cache_path(resolve_cache_dir(opts, :gnss), [cache_filename]),
          {:ok, url} <- archive_url(product),
          {:ok, protocol} <- product_protocol(product.center),
-         {:ok, compression} <- core(NIF.data_archive_compression(product.center, product.product_type)) do
+         {:ok, compression} <- product_archive_compression(product) do
       case classify_data_file(path, Keyword.get(opts, :sha256)) do
         {:hit, _path} ->
           {:ok, path}
@@ -445,6 +468,16 @@ defmodule Sidereon.GNSS.Data do
 
   @doc """
   Fetch SP3 products from several centers and merge the contributors.
+
+  Ultra-rapid centers try the current primary duration/sampling pattern, known
+  alternates, and documented latest-product aliases on archive 404s. Each
+  successful contributor records the satisfying `:pattern` in the report.
+
+  All `Sidereon.GNSS.SP3.merge/2` options are forwarded, including `:combine`,
+  `:min_agree`, `:precedence_scope`, and `:outlier_reject`. A single successful
+  contributor also passes through `SP3.merge/2`, so filters, target cadence, and
+  validation behave consistently; its report has `single_product: true` and
+  `merged: true`.
   """
   def fetch_merged_sp3(target, centers, opts \\ [])
 
@@ -458,25 +491,9 @@ defmodule Sidereon.GNSS.Data do
       contributors = Enum.filter(results, &match?({:ok, _info, _sp3}, &1))
       absent = Enum.filter(results, &match?({:absent, _info}, &1)) |> Enum.map(fn {:absent, info} -> info end)
 
-      cond do
-        contributors == [] ->
-          {:error, {:no_products, absent}}
-
-        length(contributors) == 1 ->
-          [{:ok, info, sp3}] = contributors
-
-          {:ok, sp3,
-           %MergeReport{
-             contributors: [info],
-             absent: absent,
-             source_count: 1,
-             single_product: true,
-             merged: false
-           }}
-
-        true ->
-          merge_sp3_contributors(contributors, absent, opts)
-      end
+      if contributors == [],
+        do: {:error, {:no_products, absent}},
+        else: merge_sp3_contributors(contributors, absent, opts)
     end
   end
 
@@ -661,8 +678,8 @@ defmodule Sidereon.GNSS.Data do
   defp fetch_first_center_sp3(center, [], _opts, nil),
     do: {:absent, %AbsentCenter{center: center, reason: "no_candidate"}}
 
-  defp fetch_first_center_sp3(center, [], _opts, {filename, reason}),
-    do: {:absent, %AbsentCenter{center: center, filename: filename, reason: reason_string(reason)}}
+  defp fetch_first_center_sp3(center, [], _opts, {filename, pattern, reason}),
+    do: {:absent, %AbsentCenter{center: center, filename: filename, pattern: pattern, reason: reason_string(reason)}}
 
   defp fetch_first_center_sp3(center, [product | rest], opts, _last) do
     {:ok, filename} = canonical_filename(product)
@@ -676,7 +693,8 @@ defmodule Sidereon.GNSS.Data do
                center: center,
                filename: filename,
                date: product.date,
-               issue: product.issue
+               issue: product.issue,
+               pattern: product.pattern || "canonical"
              }, sp3}
 
           {:error, reason} ->
@@ -684,10 +702,15 @@ defmodule Sidereon.GNSS.Data do
         end
 
       {:error, :offline_cache_miss} ->
-        fetch_first_center_sp3(center, rest, opts, {filename, :offline_cache_miss})
+        fetch_first_center_sp3(
+          center,
+          rest,
+          opts,
+          {filename, product.pattern || "canonical", :offline_cache_miss}
+        )
 
       {:error, {:not_found_on_archive, _} = reason} ->
-        fetch_first_center_sp3(center, rest, opts, {filename, reason})
+        fetch_first_center_sp3(center, rest, opts, {filename, product.pattern || "canonical", reason})
 
       {:error, reason} ->
         {:absent, %AbsentCenter{center: center, filename: filename, reason: reason_string(reason)}}
@@ -699,9 +722,19 @@ defmodule Sidereon.GNSS.Data do
     infos = Enum.map(contributors, fn {:ok, info, _sp3} -> info end)
 
     merge_opts =
-      []
-      |> maybe_put(:systems, Keyword.get(opts, :systems))
-      |> maybe_put(:epoch_interval_s, Keyword.get(opts, :epoch_interval_s))
+      Keyword.take(opts, [
+        :systems,
+        :epoch_interval_s,
+        :position_tolerance_m,
+        :clock_tolerance_s,
+        :min_agree,
+        :clock_min_common,
+        :combine,
+        :precedence_scope,
+        :outlier_reject,
+        :asserted_frame_label_sets,
+        :helmert
+      ])
 
     case SP3.merge(sources, merge_opts) do
       {:ok, merged, merge_report} ->
@@ -710,7 +743,7 @@ defmodule Sidereon.GNSS.Data do
            contributors: infos,
            absent: absent,
            source_count: length(infos),
-           single_product: false,
+           single_product: length(infos) == 1,
            merged: true,
            merge_report: merge_report
          }}
@@ -727,13 +760,19 @@ defmodule Sidereon.GNSS.Data do
       cond do
         entry.issues != [] and match?(%NaiveDateTime{}, target) and is_nil(Keyword.get(opts, :issue)) ->
           with {:ok, rows} <- ultra_issue_rows(center, target) do
-            build_sp3_candidates(center, rows, sample)
+            build_sp3_candidates(center, rows, sample, not Keyword.has_key?(opts, :sample))
           end
 
         entry.issues != [] ->
           with {:ok, date} <- normalize_date(target) do
             issue = Keyword.get(opts, :issue, "0000") |> to_string()
-            build_sp3_candidates(center, [{date.year, date.month, date.day, issue}], sample)
+
+            build_sp3_candidates(
+              center,
+              [{date.year, date.month, date.day, issue}],
+              sample,
+              not Keyword.has_key?(opts, :sample)
+            )
           end
 
         true ->
@@ -745,19 +784,66 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp build_sp3_candidates(center, rows, sample) do
+  defp build_sp3_candidates(center, rows, sample, use_catalog_variants) do
     rows
     |> Enum.reduce_while({:ok, []}, fn {year, month, day, issue}, {:ok, acc} ->
       with {:ok, date} <- Date.new(year, month, day),
-           {:ok, product} <- product(center, :sp3, date, sample: sample, issue: issue) do
-        {:cont, {:ok, [product | acc]}}
+           {:ok, products} <-
+             sp3_products_for_issue(center, date, issue, sample, use_catalog_variants) do
+        {:cont, {:ok, [products | acc]}}
       else
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> case do
-      {:ok, products} -> {:ok, Enum.reverse(products)}
-      {:error, reason} -> {:error, reason}
+      {:ok, groups} ->
+        products =
+          groups
+          |> Enum.reverse()
+          |> List.flatten()
+          |> Enum.uniq_by(fn product ->
+            product.url || {product.date, product.issue, product.sample}
+          end)
+
+        {:ok, products}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp sp3_products_for_issue(center, date, issue, _sample, true) do
+    center
+    |> NIF.data_ultra_sp3_locations(date.year, date.month, date.day, issue)
+    |> core()
+    |> case do
+      {:ok, locations} ->
+        {:ok,
+         Enum.map(locations, fn {pattern, span, candidate_sample, filename, url, compression} ->
+           %Product{
+             center: center,
+             product_type: "sp3",
+             date: date,
+             sample: candidate_sample,
+             issue: issue,
+             span: span,
+             pattern: pattern,
+             filename: filename,
+             cache_filename: candidate_cache_filename(pattern, center, date, issue, filename),
+             url: url,
+             compression: compression
+           }
+         end)}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp sp3_products_for_issue(center, date, issue, sample, false) do
+    case product(center, :sp3, date, sample: sample, issue: issue) do
+      {:ok, product} -> {:ok, [%{product | pattern: "requested_sample"}]}
+      {:error, _} = error -> error
     end
   end
 
@@ -1362,8 +1448,18 @@ defmodule Sidereon.GNSS.Data do
   defp core({:error, reason}), do: {:error, reason}
   defp core(value), do: {:ok, value}
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+  defp product_archive_compression(%Product{compression: compression}) when is_binary(compression),
+    do: {:ok, compression}
+
+  defp product_archive_compression(%Product{} = product),
+    do: core(NIF.data_archive_compression(product.center, product.product_type))
+
+  defp candidate_cache_filename("alias_" <> _, center, date, issue, filename) do
+    compact_date = date |> Date.to_iso8601() |> String.replace("-", "")
+    "#{center}_#{compact_date}_#{issue}_#{filename}"
+  end
+
+  defp candidate_cache_filename(_pattern, _center, _date, _issue, _filename), do: nil
 
   defp reason_string(:offline_cache_miss), do: "offline_miss"
   defp reason_string({:not_found_on_archive, _}), do: "not_published"

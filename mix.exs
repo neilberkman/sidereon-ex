@@ -135,6 +135,8 @@ defmodule Sidereon.MixProject do
       "lib",
       "native/sidereon_nif/src",
       "native/sidereon_nif/Cargo*",
+      "Cargo.toml",
+      "Cargo.lock",
       "mix.exs",
       "README.md",
       "sidereon.livemd",

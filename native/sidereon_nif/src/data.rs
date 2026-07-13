@@ -223,6 +223,39 @@ fn data_default_sample<'a>(env: Env<'a>, center_code: String, product_code: Stri
     encode_result(env, result, |env, sample| sample.encode(env))
 }
 
+/// Current primary ultra-rapid SP3 archive location followed by known filename
+/// alternates and documented aliases.
+#[rustler::nif]
+fn data_ultra_sp3_locations<'a>(
+    env: Env<'a>,
+    center_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    issue: String,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_date(year, month, day)
+            .and_then(|date| data::ultra_sp3_locations(center, date, &issue))
+    });
+    encode_result(env, result, |env, locations| {
+        locations
+            .into_iter()
+            .map(|location| {
+                (
+                    location.pattern,
+                    location.span,
+                    location.sample,
+                    location.filename,
+                    location.url,
+                    location.compression.as_str(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .encode(env)
+    })
+}
+
 #[rustler::nif]
 fn data_archive_compression<'a>(
     env: Env<'a>,

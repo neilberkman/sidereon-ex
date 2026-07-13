@@ -221,5 +221,36 @@ defmodule Sidereon.GNSS.SP3Test do
       assert state.maneuver
       assert state.orbit_predicted
     end
+
+    test "reports the observed-through boundary from per-record prediction flags" do
+      observed_record =
+        "PG01  15100.000000 -20100.000000   5100.000000   -987.654321"
+
+      predicted_record = observed_record <> String.duplicate(" ", 19) <> "P"
+      {:ok, sp3} = SP3.parse(String.replace(@sp3c, observed_record, predicted_record))
+
+      summary = SP3.prediction_summary(sp3)
+      assert [first, second] = summary.epochs
+      assert first.observed
+      refute second.observed
+      assert second.orbit_predicted_satellites == ["G01"]
+      assert second.clock_predicted_satellites == []
+
+      assert summary.observed_through == %{
+               jd_whole: first.jd_whole,
+               jd_fraction: first.jd_fraction
+             }
+    end
+
+    test "reports a fully observed final product through its last epoch", %{sp3: sp3} do
+      summary = SP3.prediction_summary(sp3)
+      assert Enum.all?(summary.epochs, & &1.observed)
+      last = List.last(summary.epochs)
+
+      assert summary.observed_through == %{
+               jd_whole: last.jd_whole,
+               jd_fraction: last.jd_fraction
+             }
+    end
   end
 end

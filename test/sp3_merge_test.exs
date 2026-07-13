@@ -68,6 +68,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert Enum.sort(ids) == ["G01", "G02", "G03"]
 
       assert report.quarantined == []
+      assert report.clock_outliers == []
       # G03 had a single source (index 0) -> carried through, recorded.
       assert [%{satellite: "G03", sources: [0]}] = report.single_source
     end
@@ -145,6 +146,23 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert report.quarantined == []
     end
 
+    test "guarded precedence replaces a corrupt preferred center" do
+      preferred = sp3_records([{"G01", [16_000.0, -20_000.0, 5000.0], nil}])
+      agreeing_a = sp3_records([{"G01", [15_000.0, -20_000.0, 5000.0], nil}])
+      agreeing_b = sp3_records([{"G01", [15_000.0002, -20_000.0, 5000.0], nil}])
+
+      assert {:ok, merged, report} =
+               SP3.merge([preferred, agreeing_a, agreeing_b],
+                 combine: :precedence,
+                 min_agree: 1,
+                 outlier_reject: [position_m: 0.5, clock_ns: 5.0]
+               )
+
+      assert {:ok, state} = SP3.state(merged, "G01", 0)
+      assert state.x_m == 15_000_000.0
+      assert [%{satellite: "G01", sources: [0]}] = report.position_outliers
+    end
+
     test "rejects differently labeled frames unless reconciliation is explicitly enabled" do
       {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS20"))
       {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGc20"))
@@ -213,19 +231,18 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert reconciliation.rates.translation_mm_per_year == [0.0, -0.1, 0.2]
     end
 
-    test "decimates mixed epoch intervals onto a common grid, rejecting non-divisible ones" do
+    test "accepts commensurate mixed epoch intervals and rejects non-divisible ones" do
       {:ok, a} =
         SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS14", 900.0))
 
       {:ok, b} =
         SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS14", 300.0))
 
-      # 15-min + 5-min is now decimated onto the 900 s common grid, not rejected.
+      # 15-min + 5-min uses the finest union cadence, not interpolation.
       assert {:ok, _merged, _report} = SP3.merge([a, b], min_agree: 1)
 
-      # A target finer than an input is unsatisfiable (no upsampling/interpolation).
-      assert {:error, reason} = SP3.merge([a], epoch_interval_s: 300.0)
-      assert to_string(reason) =~ "mismatched epoch intervals"
+      # A finer target is valid: a coarse input contributes only its real cells.
+      assert {:ok, _merged, _report} = SP3.merge([a], epoch_interval_s: 300.0)
 
       # A non-divisible cadence (900 vs 400) is still rejected.
       {:ok, d} =

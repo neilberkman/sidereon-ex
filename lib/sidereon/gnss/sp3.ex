@@ -225,6 +225,44 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Return observed/predicted status derived from the SP3 record flags.
+
+  `:epochs` contains one entry per parsed epoch with `:observed`,
+  `:orbit_predicted_satellites`, and `:clock_predicted_satellites`. The
+  `:observed_through` split-Julian-date map is the last epoch before the first
+  predicted record, or the final epoch for a fully observed product. It is
+  `nil` when the first epoch is already predicted or the product is empty.
+
+  This metadata uses the file's actual per-record `P` flags and never assumes a
+  fixed ultra-rapid observed duration. Per-cell flags are also available from
+  `state/3` and `states_at/2`.
+  """
+  @spec prediction_summary(t()) :: %{
+          epochs: [map()],
+          observed_through: map() | nil
+        }
+  def prediction_summary(%__MODULE__{handle: handle}) do
+    {epochs, observed_through} = NIF.sp3_prediction_summary(handle)
+
+    %{
+      epochs:
+        Enum.map(epochs, fn {{jd_whole, jd_fraction}, observed, orbit_satellites, clock_satellites} ->
+          %{
+            jd_whole: jd_whole,
+            jd_fraction: jd_fraction,
+            observed: observed,
+            orbit_predicted_satellites: orbit_satellites,
+            clock_predicted_satellites: clock_satellites
+          }
+        end),
+      observed_through: split_jd_map(observed_through)
+    }
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError, [message: "could not read SP3 prediction status: #{inspect(e.original)}"], __STACKTRACE__
+  end
+
+  @doc """
   Return the exact parsed state of `sat_id` at `epoch_index`.
 
   `epoch_index` is zero-based into `epochs_j2000_seconds/1`. This accessor does
@@ -415,24 +453,28 @@ defmodule Sidereon.GNSS.SP3 do
 
   `sources` is a list of loaded products **in precedence order** (earlier wins
   ties). This is orthogonal to time-stitching: it combines providers at the same
-  epochs on one shared time grid. Mixed-cadence products are rejected unless
-  callers resample before merging; they are never unioned onto a finer grid.
-  For every `(epoch, satellite)` cell on the shared grid:
+  epochs on one shared time grid. Mixed-cadence products are unioned onto the
+  finest input cadence by default, using only records actually present in an
+  input and never interpolating. For every `(epoch, satellite)` cell:
 
     * **Union satellite coverage**: a satellite present in any input may appear
-      in the merged product, but only on epochs that keep a coherent arc.
+      in the merged product wherever a source actually carries it.
     * **Consensus**: the largest subset of sources agreeing within tolerance is
       combined; sources outside it are recorded as outliers. A cell with no
       agreeing subset of `:min_agree` is *quarantined* (omitted), never averaged
       across disagreeing centers. A lone source is carried through.
-    * **Precedence arcs**: with `combine: :precedence`, source selection is
-      per satellite arc, not per cell. A satellite never alternates centers at
-      adjacent epochs; if the chosen source lacks a cell, that cell is omitted
-      rather than filled from a lower-precedence source.
+    * **Cell precedence**: with `combine: :precedence`, the earliest source
+      present in each cell wins, so a lower-precedence source fills a preferred
+      source's missing cell. Set `precedence_scope: :satellite_arc` to retain
+      one owner for a whole satellite arc.
+    * **Optional precedence guard**: `:outlier_reject` makes a contested
+      precedence cell require a mutually agreeing cluster of at least
+      `max(:min_agree, 2)` sources. A corrupt preferred value is replaced by the
+      earliest member of the deterministic largest cluster and recorded.
 
   Returns `{:ok, %Sidereon.GNSS.SP3{}, report}` or `{:error, reason}`, where
   `report` is a map with `:quarantined`, `:single_source`, and
-  `:position_outliers` lists. Each entry is a map
+  `:position_outliers`, and `:clock_outliers` lists. Each entry is a map
   `%{satellite: "G03", jd_whole: float, jd_fraction: float, sources: [0, 2]}`
   (`sources` are zero-based indices into `sources`).
 
@@ -451,6 +493,9 @@ defmodule Sidereon.GNSS.SP3 do
     * `:min_agree`: agreeing sources required to accept a contested cell (default `2`)
     * `:clock_min_common`: common clocked satellites for the clock-datum estimate (default `5`)
     * `:combine`: `:mean` (default), `:median`, or `:precedence`
+    * `:precedence_scope`: `:cell` (default) or `:satellite_arc`
+    * `:outlier_reject`: `nil` (default/current behavior), or a map/keyword list
+      with `:position_m` and `:clock_ns` tolerances
     * `:epoch_interval_s`: require this target epoch interval, seconds
     * `:systems`: restrict output to systems such as `[:gps]` or `["G", "E"]`
     * `:asserted_frame_label_sets`: coordinate-label sets the caller asserts
@@ -461,6 +506,9 @@ defmodule Sidereon.GNSS.SP3 do
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
     with {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])),
+         {:ok, precedence_scope} <-
+           normalize_precedence_scope(Keyword.get(opts, :precedence_scope, :cell)),
+         {:ok, outlier_reject} <- normalize_outlier_reject(Keyword.get(opts, :outlier_reject)),
          {:ok, asserted_frame_label_sets} <-
            normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])) do
       handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
@@ -479,18 +527,21 @@ defmodule Sidereon.GNSS.SP3 do
              min_agree,
              clock_min_common,
              combine,
+             precedence_scope,
+             outlier_reject,
              epoch_interval_s,
              system_letters,
              asserted_frame_label_sets,
              helmert
            ) do
-        {handle, {quarantined, single_source, position_outliers, {frame_reconciliations, agreement}}}
+        {handle, {quarantined, single_source, position_outliers, clock_outliers, {frame_reconciliations, agreement}}}
         when is_reference(handle) ->
           report = %{
             frame_reconciliations: Enum.map(frame_reconciliations, &to_frame_reconciliation/1),
             quarantined: Enum.map(quarantined, &to_flag/1),
             single_source: Enum.map(single_source, &to_flag/1),
             position_outliers: Enum.map(position_outliers, &to_flag/1),
+            clock_outliers: Enum.map(clock_outliers, &to_flag/1),
             agreement: to_agreement(agreement)
           }
 
@@ -609,6 +660,9 @@ defmodule Sidereon.GNSS.SP3 do
   defp to_flag({satellite, jd_whole, jd_fraction, sources}) do
     %{satellite: satellite, jd_whole: jd_whole, jd_fraction: jd_fraction, sources: sources}
   end
+
+  defp split_jd_map(nil), do: nil
+  defp split_jd_map({jd_whole, jd_fraction}), do: %{jd_whole: jd_whole, jd_fraction: jd_fraction}
 
   defp to_frame_reconciliation(
          {{source_index, source_label, target_label, method}, {asserted_label_set, {source_frame, target_frame}},
@@ -729,6 +783,33 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   defp normalize_asserted_frame_label_sets(value), do: {:error, {:invalid_frame_label_sets, value}}
+
+  defp normalize_precedence_scope(:cell), do: {:ok, "cell"}
+  defp normalize_precedence_scope(:satellite_arc), do: {:ok, "satellite_arc"}
+  defp normalize_precedence_scope(value), do: {:error, {:invalid_precedence_scope, value}}
+
+  defp normalize_outlier_reject(nil), do: {:ok, nil}
+
+  defp normalize_outlier_reject(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      value |> Map.new() |> normalize_outlier_reject()
+    else
+      {:error, {:invalid_outlier_reject, value}}
+    end
+  end
+
+  defp normalize_outlier_reject(%{} = value) do
+    position_m = Map.get(value, :position_m)
+    clock_ns = Map.get(value, :clock_ns)
+
+    if is_number(position_m) and position_m >= 0 and is_number(clock_ns) and clock_ns >= 0 do
+      {:ok, {position_m / 1.0, clock_ns * 1.0e-9}}
+    else
+      {:error, {:invalid_outlier_reject, value}}
+    end
+  end
+
+  defp normalize_outlier_reject(value), do: {:error, {:invalid_outlier_reject, value}}
 
   defp normalize_frame_labels(labels, index) do
     labels

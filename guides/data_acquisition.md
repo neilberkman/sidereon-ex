@@ -90,6 +90,32 @@ uses the existing SP3 merge implementation:
   Sidereon.GNSS.Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :gfz_ult])
 ```
 
+Ultra-rapid acquisition probes each center's current primary filename pattern,
+then known duration/sampling alternates and documented latest-product aliases
+when an archive returns 404. `report.contributors` records the pattern that
+succeeded. Merge policy options are forwarded unchanged, including guarded
+cell precedence:
+
+```elixir
+{:ok, merged_sp3, report} =
+  Sidereon.GNSS.Data.fetch_merged_sp3(
+    ~N[2026-07-12 18:30:00],
+    [:igs_ult, :cod_ult, :esa_ult, :gfz_ult],
+    combine: :precedence,
+    min_agree: 1,
+    precedence_scope: :cell,
+    outlier_reject: [position_m: 0.5, clock_ns: 5.0]
+  )
+
+prediction = Sidereon.GNSS.SP3.prediction_summary(merged_sp3)
+prediction.observed_through
+```
+
+The default merge timeline uses the finest commensurate input cadence, with
+lower-precedence centers filling missing cells. No interpolation is introduced.
+Even one successful contributor passes through the same merge path so system
+filters and cadence validation remain consistent.
+
 Every fetch returns either `{:ok, value}` or `{:error, reason}`. Offline misses,
 checksum failures, redirects, archive 404s, no-coverage terrain, cache failures,
 and catalog validation all use typed tagged reasons.

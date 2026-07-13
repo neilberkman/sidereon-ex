@@ -2,6 +2,7 @@ defmodule Sidereon.GNSS.DataTest do
   use ExUnit.Case, async: false
 
   alias Sidereon.GNSS.Data
+  alias Sidereon.GNSS.SP3
   alias Sidereon.Terrain
 
   @postings 3601
@@ -94,6 +95,97 @@ defmodule Sidereon.GNSS.DataTest do
     {:ok, nav} = Data.mgex_nav(:igs, ~D[2020-06-25])
     assert {:ok, nav_path} = Data.fetch(nav, cache_dir: root, http_client: http_client)
     assert File.read!(nav_path) == "product"
+  end
+
+  test "ultra-rapid fetch falls back to a documented alias and reports the pattern", %{root: root} do
+    parent = self()
+
+    http_client = fn url, _opts ->
+      send(parent, {:url, url})
+
+      if String.ends_with?(url, "/COD0OPSULT.SP3"),
+        do: {:ok, 200, sp3_body(15_000.0)},
+        else: {:ok, 404, ""}
+    end
+
+    assert {:ok, merged, report} =
+             Data.fetch_merged_sp3(~D[2026-06-03], [:cod_ult],
+               issue: "0000",
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert %SP3{} = merged
+    assert report.single_product
+    assert report.merged
+
+    assert [%Data.Contributor{pattern: "alias_latest", filename: "COD0OPSULT.SP3"}] =
+             report.contributors
+
+    assert_received {:url, url1}
+    assert url1 =~ "_01D_05M_ORB.SP3"
+    assert_received {:url, url2}
+    assert url2 =~ "_02D_05M_ORB.SP3"
+    assert_received {:url, "http://ftp.aiub.unibe.ch/CODE/COD0OPSULT.SP3"}
+  end
+
+  test "all variants absent does not prevent another center from contributing", %{root: root} do
+    body = :zlib.gzip(sp3_body(15_000.0))
+
+    http_client = fn url, _opts ->
+      if String.contains?(url, "navigation-office.esa.int") and
+           String.contains?(url, "_02D_05M_ORB.SP3.gz"),
+         do: {:ok, 200, body},
+         else: {:ok, 404, ""}
+    end
+
+    assert {:ok, _merged, report} =
+             Data.fetch_merged_sp3(~D[2026-07-12], [:cod_ult, :esa_ult],
+               issue: "0000",
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert [%Data.Contributor{center: "esa_ult", pattern: "primary_02D_05M"}] =
+             report.contributors
+
+    assert [%Data.AbsentCenter{center: "cod_ult", reason: "not_published"}] = report.absent
+  end
+
+  test "fetch_merged_sp3 forwards merge policy options", %{root: root} do
+    corrupt = sp3_body(16_000.0)
+    agreeing_a = sp3_body(15_000.0)
+    agreeing_b = sp3_body(15_000.0002)
+
+    http_client = fn url, _opts ->
+      cond do
+        String.contains?(url, "ftp.aiub.unibe.ch") -> {:ok, 200, corrupt}
+        String.contains?(url, "navigation-office.esa.int") -> {:ok, 200, :zlib.gzip(agreeing_a)}
+        String.contains?(url, "isdc-data.gfz.de") -> {:ok, 200, :zlib.gzip(agreeing_b)}
+      end
+    end
+
+    merge_opts = [
+      combine: :precedence,
+      min_agree: 1,
+      precedence_scope: :cell,
+      outlier_reject: [position_m: 0.5, clock_ns: 5.0]
+    ]
+
+    assert {:ok, fetched, fetch_report} =
+             Data.fetch_merged_sp3(
+               ~D[2026-07-12],
+               [:cod_ult, :esa_ult, :gfz_ult],
+               merge_opts ++ [issue: "0000", cache_dir: root, http_client: http_client]
+             )
+
+    sources = Enum.map([corrupt, agreeing_a, agreeing_b], fn bytes -> elem(SP3.parse(bytes), 1) end)
+    assert {:ok, direct, direct_report} = SP3.merge(sources, merge_opts)
+    assert {:ok, fetched_state} = SP3.state(fetched, "G01", 0)
+    assert {:ok, direct_state} = SP3.state(direct, "G01", 0)
+    assert fetched_state.x_m == direct_state.x_m
+    assert fetched_state.x_m == 15_000_000.0
+    assert fetch_report.merge_report.position_outliers == direct_report.position_outliers
   end
 
   test "redirect and compressed size cap are typed", %{root: root} do
@@ -208,6 +300,34 @@ defmodule Sidereon.GNSS.DataTest do
       )
 
     File.write!(path <> ".provenance.json", Jason.encode!(provenance))
+  end
+
+  defp sp3_body(x_km) do
+    record =
+      "PG01" <>
+        (:io_lib.format(~c"~14.6f", [x_km]) |> IO.iodata_to_binary()) <>
+        " -20000.000000   5000.000000 999999.999999"
+
+    Enum.join(
+      [
+        "#cP2026  7 12  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
+        "## 2427 000000.00000000   300.00000000 61233 0.0000000000000",
+        "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+        "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+        "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+        "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+        "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
+        "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
+        "%i    0    0    0    0      0      0      0      0         0",
+        "%i    0    0    0    0      0      0      0      0         0",
+        "/* TEST SP3-c FIXTURE",
+        "*  2026  7 12  0  0  0.00000000",
+        record,
+        "EOF",
+        ""
+      ],
+      "\n"
+    )
   end
 
   defp synthetic_hgt do
