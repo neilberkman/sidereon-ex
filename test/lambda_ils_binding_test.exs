@@ -42,4 +42,9 @@ defmodule Sidereon.TestSupport.LambdaIlsBindingTest do
     assert bounded.fixed == [0, 0, 1]
     assert bounded.candidates_evaluated >= lambda.candidates_evaluated
   end
+
+  test "LAMBDA rejects finite ambiguities outside the integer lattice" do
+    assert {:error, :invalid_input} =
+             PublicILS.lambda_ils_search([1.797_693_134_862_315_7e308], [[1.0]], 3.0)
+  end
 end

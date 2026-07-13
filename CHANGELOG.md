@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.1]
+
+### Fixed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.27.1. LAMBDA
+  integer least-squares now returns `{:error, :invalid_input}` when an ambiguity
+  or back-transformed candidate is outside the signed 64-bit integer lattice,
+  instead of saturating the integer result and returning non-finite scores.
+
 ## [0.27.0]
 
 ### Added

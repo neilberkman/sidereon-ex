@@ -57,8 +57,9 @@ fn ils_search<'a>(
 ///
 /// Same `{:ok, {...}}` / `{:error, ...}` shape as [`ils_search`], but solves any
 /// positive-definite covariance correctly (no search box, no `radius`/
-/// `candidate_limit`). The only failure is a degenerate (non-PD) covariance,
-/// reported as `{:error, :singular_geometry}`.
+/// `candidate_limit`). A degenerate (non-PD) covariance is reported as
+/// `{:error, :singular_geometry}`; an ambiguity or back-transformed candidate
+/// outside the signed 64-bit integer lattice is `{:error, :invalid_input}`.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn ils_lambda_search<'a>(
     env: Env<'a>,
