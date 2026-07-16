@@ -631,6 +631,14 @@ defmodule Sidereon.GNSS.Data do
   end
 
   def verify_merge_report(report) when is_map(report) do
+    do_verify_merge_report(report)
+  rescue
+    ArithmeticError -> {:error, :invalid_numeric_arithmetic}
+  end
+
+  def verify_merge_report(_report), do: {:error, :invalid_merge_report}
+
+  defp do_verify_merge_report(report) do
     fields = [
       :schema_version,
       :requested_centers,
@@ -658,15 +666,17 @@ defmodule Sidereon.GNSS.Data do
          :ok <- verify_report_counts(values, artifacts),
          {:ok, absent_centers} <- verify_absent(values.absent, contributor_centers),
          :ok <- verify_requested_partition(requested_centers, contributor_centers, absent_centers),
-         :ok <- verify_merge_result(values.merge_report, length(artifacts)) do
+         :ok <-
+           verify_merge_result(values.merge_report, %{
+             source_count: length(artifacts),
+             policy: normalized_policy
+           }) do
       :ok
     else
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_merge_report}
     end
   end
-
-  def verify_merge_report(_report), do: {:error, :invalid_merge_report}
 
   @doc """
   Write an SP3 product atomically.
@@ -1589,7 +1599,7 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp verify_merge_result(report, source_count) when is_map(report) do
+  defp verify_merge_result(report, %{source_count: source_count, policy: policy}) when is_map(report) do
     fields = [
       :frame_reconciliations,
       :quarantined,
@@ -1600,12 +1610,22 @@ defmodule Sidereon.GNSS.Data do
     ]
 
     with {:ok, values} <- exact_fields(report, fields, :merge_result),
-         :ok <- verify_frame_reconciliations(values.frame_reconciliations, source_count),
-         :ok <- verify_flags(values.quarantined, source_count, :quarantined),
-         :ok <- verify_flags(values.single_source, source_count, :single_source),
-         :ok <- verify_flags(values.position_outliers, source_count, :position_outliers),
-         :ok <- verify_flags(values.clock_outliers, source_count, :clock_outliers) do
-      verify_agreement(values.agreement, source_count)
+         {:ok, reconciliations} <- verify_frame_reconciliations(values.frame_reconciliations, source_count),
+         :ok <- verify_frame_reconciliation_consistency(reconciliations, policy),
+         {:ok, quarantined} <- verify_flags(values.quarantined, source_count, :quarantined),
+         {:ok, single_source} <- verify_flags(values.single_source, source_count, :single_source),
+         {:ok, position_outliers} <- verify_flags(values.position_outliers, source_count, :position_outliers),
+         {:ok, clock_outliers} <- verify_flags(values.clock_outliers, source_count, :clock_outliers),
+         {:ok, agreement} <- verify_agreement(values.agreement, source_count) do
+      verify_merge_result_consistency(
+        quarantined,
+        single_source,
+        position_outliers,
+        clock_outliers,
+        agreement,
+        source_count,
+        policy
+      )
     end
   end
 
@@ -1614,19 +1634,29 @@ defmodule Sidereon.GNSS.Data do
   defp verify_flags(flags, source_count, kind) when is_list(flags) do
     flags
     |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {flag, index}, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn {flag, index}, {:ok, verified} ->
       context = {kind, index}
 
       with {:ok, values} <- exact_fields(flag, [:satellite, :jd_whole, :jd_fraction, :sources], context),
            :ok <- satellite_id(values.satellite, {context, :satellite}),
-           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
-           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- canonical_epoch(values.jd_whole, values.jd_fraction, context),
            :ok <- source_indices(values.sources, source_count, {context, :sources}) do
-        {:cont, :ok}
+        {:cont, {:ok, [values | verified]}}
       else
         {:error, _} = error -> {:halt, error}
       end
     end)
+    |> case do
+      {:ok, verified} ->
+        verified = Enum.reverse(verified)
+
+        if ordered_unique_cells?(verified),
+          do: {:ok, verified},
+          else: {:error, {:invalid_field, kind}}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp verify_flags(_flags, _source_count, kind), do: {:error, {:invalid_field, kind}}
@@ -1639,8 +1669,10 @@ defmodule Sidereon.GNSS.Data do
          :ok <- optional_nonnegative_float(values.position_max_m, {:agreement, :position_max_m}),
          :ok <- optional_nonnegative_float(values.clock_rms_s, {:agreement, :clock_rms_s}),
          :ok <- optional_nonnegative_float(values.clock_max_s, {:agreement, :clock_max_s}),
-         :ok <- verify_agreement_cells(values.cells, source_count) do
-      verify_agreement_epochs(values.epochs)
+         {:ok, cells} <- verify_agreement_cells(values.cells, source_count),
+         {:ok, epochs} <- verify_agreement_epochs(values.epochs),
+         :ok <- verify_agreement_consistency(%{values | cells: cells, epochs: epochs}) do
+      {:ok, %{values | cells: cells, epochs: epochs}}
     end
   end
 
@@ -1649,7 +1681,7 @@ defmodule Sidereon.GNSS.Data do
   defp verify_agreement_cells(cells, source_count) when is_list(cells) do
     cells
     |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {cell, index}, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn {cell, index}, {:ok, verified} ->
       context = {:agreement_cell, index}
 
       fields = [
@@ -1666,20 +1698,31 @@ defmodule Sidereon.GNSS.Data do
 
       with {:ok, values} <- exact_fields(cell, fields, context),
            :ok <- satellite_id(values.satellite, {context, :satellite}),
-           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
-           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- canonical_epoch(values.jd_whole, values.jd_fraction, context),
            :ok <- bounded_count(values.position_members, source_count, {context, :position_members}, false),
            :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
            :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
            :ok <- bounded_count(values.clock_members, source_count, {context, :clock_members}, true),
            :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
            :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}),
-           :ok <- verify_clock_metric_presence(values, context) do
-        {:cont, :ok}
+           :ok <- verify_clock_metric_presence(values, context),
+           :ok <- verify_cell_dispersion(values, context) do
+        {:cont, {:ok, [values | verified]}}
       else
         {:error, _} = error -> {:halt, error}
       end
     end)
+    |> case do
+      {:ok, verified} ->
+        verified = Enum.reverse(verified)
+
+        if ordered_unique_cells?(verified),
+          do: {:ok, verified},
+          else: {:error, {:invalid_field, :agreement_cells}}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp verify_agreement_cells(_cells, _source_count), do: {:error, {:invalid_field, :agreement_cells}}
@@ -1694,36 +1737,583 @@ defmodule Sidereon.GNSS.Data do
   defp verify_agreement_epochs(epochs) when is_list(epochs) do
     epochs
     |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {epoch, index}, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn {epoch, index}, {:ok, verified} ->
       context = {:agreement_epoch, index}
       fields = [:jd_whole, :jd_fraction, :satellites, :position_rms_m, :position_max_m, :clock_rms_s, :clock_max_s]
 
       with {:ok, values} <- exact_fields(epoch, fields, context),
-           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
-           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- canonical_epoch(values.jd_whole, values.jd_fraction, context),
            :ok <- nonnegative_integer(values.satellites, {context, :satellites}),
            :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
            :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
            :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
-           :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}) do
-        {:cont, :ok}
+           :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}),
+           :ok <- verify_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
+           :ok <- verify_optional_metric_pair(values.clock_rms_s, values.clock_max_s, {context, :clock}) do
+        {:cont, {:ok, [values | verified]}}
       else
         {:error, _} = error -> {:halt, error}
       end
     end)
+    |> case do
+      {:ok, verified} ->
+        verified = Enum.reverse(verified)
+
+        if ordered_unique_epochs?(verified),
+          do: {:ok, verified},
+          else: {:error, {:invalid_field, :agreement_epochs}}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp verify_agreement_epochs(_epochs), do: {:error, {:invalid_field, :agreement_epochs}}
 
+  defp verify_cell_dispersion(values, context) do
+    with :ok <- verify_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
+         :ok <-
+           verify_member_metric_bound(
+             values.position_rms_m,
+             values.position_max_m,
+             values.position_members,
+             {context, :position_dispersion}
+           ),
+         true <-
+           (values.position_members != 1 or
+              (values.position_rms_m == 0.0 and values.position_max_m == 0.0)) ||
+             {:error, {:invalid_field, {context, :position_dispersion}}},
+         :ok <- verify_optional_metric_pair(values.clock_rms_s, values.clock_max_s, {context, :clock}),
+         :ok <-
+           verify_member_metric_bound(
+             values.clock_rms_s,
+             values.clock_max_s,
+             values.clock_members,
+             {context, :clock_dispersion}
+           ),
+         true <-
+           (values.clock_members != 1 or
+              (values.clock_rms_s == 0.0 and values.clock_max_s == 0.0)) ||
+             {:error, {:invalid_field, {context, :clock_dispersion}}} do
+      :ok
+    end
+  end
+
+  defp verify_member_metric_bound(nil, nil, 0, _context), do: :ok
+
+  defp verify_member_metric_bound(rms, max, members, context)
+       when is_float(rms) and is_float(max) and is_integer(members) and members > 0 do
+    verify_member_metric_bound(rms, max, members, members, context)
+  end
+
+  defp verify_member_metric_bound(_rms, _max, _members, context), do: {:error, {:invalid_field, context}}
+
+  defp verify_member_metric_bound(rms, max, members, upper_terms, context)
+       when is_float(rms) and is_float(max) and is_integer(members) and members > 0 and is_integer(upper_terms) and
+              upper_terms >= 0 and upper_terms <= members do
+    square = max * max
+    upper_sum = repeated_float_sum(square, upper_terms)
+    lower_rms = :math.sqrt(square / members)
+    upper_rms = :math.sqrt(upper_sum / members)
+
+    if finite_number?(lower_rms) and finite_number?(upper_rms) and rms >= lower_rms and rms <= upper_rms,
+      do: :ok,
+      else: {:error, {:invalid_field, context}}
+  rescue
+    ArithmeticError -> {:error, {:invalid_field, context}}
+  end
+
+  defp repeated_float_sum(_value, 0), do: 0.0
+  defp repeated_float_sum(value, terms), do: Enum.reduce(1..terms, 0.0, fn _term, sum -> sum + value end)
+
+  defp verify_metric_pair(rms, max, _context) when is_float(rms) and is_float(max), do: :ok
+  defp verify_metric_pair(_rms, _max, context), do: {:error, {:invalid_field, context}}
+
+  defp verify_optional_metric_pair(nil, nil, _context), do: :ok
+  defp verify_optional_metric_pair(rms, max, context), do: verify_metric_pair(rms, max, context)
+
+  defp verify_agreement_consistency(agreement) do
+    expected = agreement_aggregate(agreement.cells)
+    expected_epochs = agreement_epoch_aggregates(agreement.cells)
+
+    aggregate_matches =
+      Enum.all?([:position_rms_m, :position_max_m, :clock_rms_s, :clock_max_s], fn field ->
+        exact_number?(Map.fetch!(agreement, field), Map.fetch!(expected, field))
+      end)
+
+    if aggregate_matches and agreement.epochs == expected_epochs,
+      do: :ok,
+      else: {:error, :merge_agreement_mismatch}
+  end
+
+  defp agreement_aggregate(cells) do
+    %{
+      position_rms_m:
+        cells
+        |> Enum.filter(&(&1.position_members >= 2))
+        |> Enum.map(&{&1.position_rms_m, &1.position_members})
+        |> pooled_rms(),
+      position_max_m: optional_max(Enum.map(cells, & &1.position_max_m)),
+      clock_rms_s:
+        cells
+        |> Enum.filter(&(&1.clock_members >= 2))
+        |> Enum.map(&{&1.clock_rms_s, &1.clock_members})
+        |> pooled_rms(),
+      clock_max_s:
+        cells
+        |> Enum.filter(&(&1.clock_members > 0))
+        |> Enum.map(& &1.clock_max_s)
+        |> optional_max()
+    }
+  end
+
+  defp agreement_epoch_aggregates(cells) do
+    cells
+    |> Enum.chunk_by(&epoch_key/1)
+    |> Enum.map(fn epoch_cells ->
+      first = hd(epoch_cells)
+      multi_position = Enum.filter(epoch_cells, &(&1.position_members >= 2))
+      multi_clock = Enum.filter(epoch_cells, &(&1.clock_members >= 2))
+
+      %{
+        jd_whole: first.jd_whole,
+        jd_fraction: first.jd_fraction,
+        satellites: length(multi_position),
+        position_rms_m: pooled_rms(Enum.map(multi_position, &{&1.position_rms_m, &1.position_members})) || 0.0,
+        position_max_m: epoch_cells |> Enum.map(& &1.position_max_m) |> Enum.max(),
+        clock_rms_s: pooled_rms(Enum.map(multi_clock, &{&1.clock_rms_s, &1.clock_members})),
+        clock_max_s: optional_max(Enum.map(multi_clock, & &1.clock_max_s))
+      }
+    end)
+  end
+
+  defp pooled_rms([]), do: nil
+
+  defp pooled_rms(metrics) do
+    {sum_squares, members} =
+      Enum.reduce(metrics, {0.0, 0}, fn {rms, count}, {sum_squares, members} ->
+        {sum_squares + rms * rms * count, members + count}
+      end)
+
+    :math.sqrt(sum_squares / members)
+  end
+
+  defp optional_max([]), do: nil
+  defp optional_max(values), do: Enum.max(values)
+
+  defp exact_number?(nil, nil), do: true
+  defp exact_number?(left, right) when is_float(left) and is_float(right), do: left == right
+  defp exact_number?(_left, _right), do: false
+
+  defp verify_merge_result_consistency(
+         quarantined,
+         single_source,
+         position_outliers,
+         clock_outliers,
+         agreement,
+         source_count,
+         policy
+       ) do
+    cells = Map.new(agreement.cells, &{cell_key(&1), &1})
+    quarantined_by_key = Map.new(quarantined, &{cell_key(&1), &1})
+    single_by_key = Map.new(single_source, &{cell_key(&1), &1})
+    position_by_key = Map.new(position_outliers, &{cell_key(&1), &1})
+    clock_by_key = Map.new(clock_outliers, &{cell_key(&1), &1})
+
+    accepted_keys = cells |> Map.keys() |> MapSet.new()
+    quarantined_keys = quarantined_by_key |> Map.keys() |> MapSet.new()
+    single_keys = single_by_key |> Map.keys() |> MapSet.new()
+    position_keys = position_by_key |> Map.keys() |> MapSet.new()
+    clock_keys = clock_by_key |> Map.keys() |> MapSet.new()
+
+    with true <-
+           Enum.all?(quarantined, &(length(&1.sources) >= 2)) ||
+             {:error, :invalid_quarantined_flags},
+         true <-
+           (quarantined == [] or contested_minimum(policy) >= 2) ||
+             {:error, :invalid_quarantined_consensus},
+         true <-
+           Enum.all?(single_source, &(length(&1.sources) == 1)) ||
+             {:error, :invalid_single_source_flags},
+         true <-
+           (MapSet.disjoint?(quarantined_keys, accepted_keys) and
+              MapSet.disjoint?(quarantined_keys, single_keys) and
+              MapSet.disjoint?(quarantined_keys, position_keys) and
+              MapSet.disjoint?(quarantined_keys, clock_keys)) ||
+             {:error, :contradictory_quarantined_flags},
+         true <-
+           (MapSet.subset?(single_keys, accepted_keys) and
+              MapSet.subset?(position_keys, accepted_keys) and
+              MapSet.subset?(clock_keys, accepted_keys)) ||
+             {:error, :orphaned_merge_flags},
+         true <-
+           (MapSet.disjoint?(single_keys, position_keys) and MapSet.disjoint?(single_keys, clock_keys)) ||
+             {:error, :contradictory_single_source_flags},
+         :ok <- verify_agreement_policy(agreement.cells, policy),
+         :ok <-
+           verify_epoch_grid(
+             quarantined ++
+               single_source ++ position_outliers ++ clock_outliers ++ agreement.cells ++ agreement.epochs,
+             policy.epoch_interval_s
+           ),
+         :ok <-
+           verify_precedence_flags(
+             quarantined,
+             single_source,
+             position_outliers,
+             clock_outliers,
+             policy
+           ),
+         :ok <- verify_accepted_cell_flags(cells, single_by_key, position_by_key, clock_by_key, source_count, policy),
+         :ok <-
+           verify_single_source_report(
+             source_count,
+             cells,
+             single_by_key,
+             quarantined,
+             position_outliers,
+             clock_outliers
+           ) do
+      verify_report_systems(
+        quarantined ++ single_source ++ position_outliers ++ clock_outliers,
+        agreement.cells,
+        policy
+      )
+    end
+  end
+
+  defp verify_single_source_report(1, cells, single_source, quarantined, position_outliers, clock_outliers) do
+    if quarantined == [] and position_outliers == [] and clock_outliers == [] and
+         MapSet.new(Map.keys(cells)) == MapSet.new(Map.keys(single_source)) and
+         Enum.all?(cells, fn {_key, cell} -> cell.position_members == 1 and cell.clock_members <= 1 end),
+       do: :ok,
+       else: {:error, :invalid_single_product_merge_report}
+  end
+
+  defp verify_single_source_report(
+         _source_count,
+         _cells,
+         _single_source,
+         _quarantined,
+         _position_outliers,
+         _clock_outliers
+       ), do: :ok
+
+  defp verify_accepted_cell_flags(cells, single, position_outliers, clock_outliers, source_count, policy) do
+    Enum.reduce_while(cells, :ok, fn {key, cell}, :ok ->
+      single_flag = Map.get(single, key)
+      position_flag = Map.get(position_outliers, key)
+      clock_flag = Map.get(clock_outliers, key)
+
+      with :ok <- verify_cell_contributor_counts(cell, position_flag, clock_flag),
+           :ok <- verify_position_cell_flags(cell, single_flag, position_flag, source_count, policy),
+           :ok <- verify_clock_cell_flags(cell, clock_flag, source_count, policy) do
+        {:cont, :ok}
+      else
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_cell_contributor_counts(cell, position_outlier, clock_outlier) do
+    position_sources = cell.position_members + flag_source_count(position_outlier)
+    clock_sources = cell.clock_members + flag_source_count(clock_outlier)
+
+    if clock_sources <= position_sources,
+      do: :ok,
+      else: {:error, :clock_contributor_mismatch}
+  end
+
+  defp flag_source_count(nil), do: 0
+  defp flag_source_count(flag), do: length(flag.sources)
+
+  defp verify_position_cell_flags(cell, single, outlier, source_count, policy) do
+    required = contested_minimum(policy)
+
+    cond do
+      single != nil and (cell.position_members != 1 or outlier != nil) ->
+        {:error, :contradictory_single_source_flags}
+
+      outlier != nil and source_count < 2 ->
+        {:error, :invalid_position_outlier}
+
+      outlier != nil and cell.position_members + length(outlier.sources) > source_count ->
+        {:error, :invalid_position_outlier}
+
+      outlier != nil and cell.position_members < required ->
+        {:error, :invalid_position_outlier_consensus}
+
+      cell.position_members == 1 and is_nil(single) and is_nil(outlier) ->
+        {:error, :unexplained_single_member_cell}
+
+      cell.position_members > 1 and single != nil ->
+        {:error, :invalid_single_source_flags}
+
+      cell.position_members > 1 and cell.position_members < policy.min_agree ->
+        {:error, :invalid_position_consensus}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp verify_clock_cell_flags(cell, outlier, source_count, policy) do
+    required = contested_minimum(policy)
+
+    cond do
+      is_nil(outlier) ->
+        if cell.clock_members > 1 and cell.clock_members < policy.min_agree,
+          do: {:error, :invalid_clock_consensus},
+          else: :ok
+
+      source_count < 2 ->
+        {:error, :invalid_clock_outlier}
+
+      cell.clock_members > 0 and cell.clock_members + length(outlier.sources) > source_count ->
+        {:error, :invalid_clock_outlier}
+
+      cell.clock_members > 0 and cell.clock_members < required ->
+        {:error, :invalid_clock_outlier_consensus}
+
+      cell.clock_members == 0 and
+          not (policy.combine == "precedence" and not is_nil(policy.outlier_reject) and
+                   length(outlier.sources) >= 2) ->
+        {:error, :invalid_clock_outlier}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp contested_minimum(%{combine: "precedence", outlier_reject: outlier, min_agree: minimum})
+       when not is_nil(outlier), do: max(minimum, 2)
+
+  defp contested_minimum(%{min_agree: minimum}), do: minimum
+
+  # Mean combination uses a naive floating sum/divide in core. Its roundoff can
+  # scale with unpersisted absolute source coordinates, so a report alone cannot
+  # prove a safe tolerance bound for the resulting dispersion.
+  defp verify_agreement_policy(_cells, %{combine: "mean"}), do: :ok
+
+  defp verify_agreement_policy(cells, %{combine: "precedence"} = policy) do
+    {position_tolerance, clock_tolerance} = effective_agreement_tolerances(policy)
+
+    Enum.reduce_while(cells, :ok, fn cell, :ok ->
+      case verify_selected_member_dispersion(cell, true, true) do
+        :ok ->
+          cond do
+            cell.position_max_m > position_tolerance ->
+              {:halt, {:error, :position_agreement_exceeds_policy}}
+
+            not is_nil(cell.clock_max_s) and cell.clock_max_s > clock_tolerance ->
+              {:halt, {:error, :clock_agreement_exceeds_policy}}
+
+            true ->
+              {:cont, :ok}
+          end
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_agreement_policy(cells, %{combine: "median"} = policy) do
+    Enum.reduce_while(cells, :ok, fn cell, :ok ->
+      case verify_selected_member_dispersion(cell, false, rem(cell.clock_members, 2) == 1) do
+        :ok ->
+          cond do
+            not within_scaled_relative_policy_bound?(
+              cell.position_max_m,
+              policy.position_tolerance_m,
+              :math.sqrt(3.0)
+            ) ->
+              {:halt, {:error, :position_agreement_exceeds_policy}}
+
+            not is_nil(cell.clock_max_s) and
+                not within_scaled_relative_policy_bound?(cell.clock_max_s, policy.clock_tolerance_s, 1.0) ->
+              {:halt, {:error, :clock_agreement_exceeds_policy}}
+
+            true ->
+              {:cont, :ok}
+          end
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_selected_member_dispersion(cell, position_selects_member, clock_selects_member) do
+    with :ok <- verify_selected_position_dispersion(cell, position_selects_member) do
+      verify_selected_clock_dispersion(cell, clock_selects_member)
+    end
+  end
+
+  defp verify_selected_position_dispersion(_cell, false), do: :ok
+
+  defp verify_selected_position_dispersion(cell, true) do
+    verify_member_metric_bound(
+      cell.position_rms_m,
+      cell.position_max_m,
+      cell.position_members,
+      cell.position_members - 1,
+      :selected_position_dispersion
+    )
+  end
+
+  defp verify_selected_clock_dispersion(_cell, false), do: :ok
+  defp verify_selected_clock_dispersion(%{clock_members: 0}, true), do: :ok
+
+  defp verify_selected_clock_dispersion(cell, true) do
+    verify_member_metric_bound(
+      cell.clock_rms_s,
+      cell.clock_max_s,
+      cell.clock_members,
+      cell.clock_members - 1,
+      :selected_clock_dispersion
+    )
+  end
+
+  defp effective_agreement_tolerances(%{
+         combine: "precedence",
+         outlier_reject: %{position_tolerance_m: position, clock_tolerance_s: clock}
+       }), do: {position, clock}
+
+  defp effective_agreement_tolerances(policy), do: {policy.position_tolerance_m, policy.clock_tolerance_s}
+
+  defp within_scaled_relative_policy_bound?(value, bound, _scale) when bound == 0.0, do: value == 0.0
+
+  defp within_scaled_relative_policy_bound?(value, bound, scale) do
+    value / (scale * (1.0 + 1.0e-12)) <= bound
+  end
+
+  defp verify_epoch_grid([], _interval), do: :ok
+
+  defp verify_epoch_grid(records, interval) do
+    keyed_epochs = Enum.map(records, &{j2000_second_key(&1), epoch_key(&1)})
+
+    with :ok <- verify_epoch_aliases(keyed_epochs) do
+      verify_epoch_cadence(keyed_epochs, interval)
+    end
+  end
+
+  defp verify_epoch_aliases(keyed_epochs) do
+    aliased =
+      keyed_epochs
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.any?(fn {_key, epochs} -> MapSet.size(MapSet.new(epochs)) > 1 end)
+
+    if aliased, do: {:error, :merge_report_epoch_alias_mismatch}, else: :ok
+  end
+
+  defp verify_epoch_cadence(_keyed_epochs, nil), do: :ok
+
+  defp verify_epoch_cadence(keyed_epochs, interval) do
+    keys = Enum.map(keyed_epochs, &elem(&1, 0))
+    anchor = hd(keys)
+    step = round(interval)
+
+    if Enum.all?(keys, &(rem(&1 - anchor, step) == 0)),
+      do: :ok,
+      else: {:error, :merge_report_epoch_grid_mismatch}
+  end
+
+  defp j2000_second_key(value) do
+    day_seconds = (value.jd_whole - 2_451_545.0) * 86_400.0
+    within_day_seconds = value.jd_fraction * 86_400.0
+    nearest_within_day = Float.round(within_day_seconds)
+    canonical_integer_fraction = nearest_within_day / 86_400.0
+
+    if value.jd_fraction == canonical_integer_fraction do
+      trunc(day_seconds + nearest_within_day)
+    else
+      whole_second = Float.floor(within_day_seconds)
+      fractional_second = within_day_seconds - whole_second
+
+      trunc(Float.floor(day_seconds + whole_second + fractional_second))
+    end
+  end
+
+  defp verify_precedence_flags(_quarantined, _single_source, _position_outliers, _clock_outliers, %{combine: combine})
+       when combine != "precedence", do: :ok
+
+  defp verify_precedence_flags(quarantined, single_source, position_outliers, clock_outliers, policy) do
+    if not is_nil(policy.outlier_reject) or
+         Enum.all?(position_outliers ++ clock_outliers, &(0 not in &1.sources)) do
+      verify_satellite_arc_flags(
+        quarantined,
+        single_source,
+        position_outliers,
+        clock_outliers,
+        policy
+      )
+    else
+      {:error, :precedence_outlier_contains_preferred_source}
+    end
+  end
+
+  defp verify_satellite_arc_flags(_quarantined, _single_source, _position_outliers, _clock_outliers, %{
+         precedence_scope: scope
+       })
+       when scope != "satellite_arc", do: :ok
+
+  defp verify_satellite_arc_flags(quarantined, single_source, position_outliers, clock_outliers, policy) do
+    all_flags = quarantined ++ single_source ++ position_outliers ++ clock_outliers
+
+    single_source
+    |> Enum.group_by(& &1.satellite)
+    |> Enum.reduce_while(:ok, fn {satellite, flags}, :ok ->
+      owners = flags |> Enum.map(&hd(&1.sources)) |> Enum.uniq()
+
+      mentioned_sources =
+        all_flags
+        |> Enum.filter(&(&1.satellite == satellite))
+        |> Enum.flat_map(& &1.sources)
+
+      with [owner] <- owners,
+           true <- Enum.all?(mentioned_sources, &(&1 >= owner)),
+           true <-
+             not is_nil(policy.outlier_reject) or
+               Enum.all?(position_outliers ++ clock_outliers, fn flag ->
+                 flag.satellite != satellite or owner not in flag.sources
+               end) do
+        {:cont, :ok}
+      else
+        _other -> {:halt, {:error, :satellite_arc_precedence_mismatch}}
+      end
+    end)
+  end
+
+  defp verify_report_systems(flags, cells, %{systems: []}), do: verify_report_systems(flags, cells, nil)
+  defp verify_report_systems(_flags, _cells, nil), do: :ok
+
+  defp verify_report_systems(flags, cells, %{systems: systems}) do
+    if Enum.all?(flags ++ cells, &(String.first(&1.satellite) in systems)),
+      do: :ok,
+      else: {:error, :merge_report_system_mismatch}
+  end
+
   defp verify_frame_reconciliations(reconciliations, source_count) when is_list(reconciliations) do
     reconciliations
     |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {reconciliation, index}, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn {reconciliation, index}, {:ok, verified} ->
       case verify_frame_reconciliation(reconciliation, source_count, index) do
-        :ok -> {:cont, :ok}
+        {:ok, values} -> {:cont, {:ok, [values | verified]}}
         {:error, _} = error -> {:halt, error}
       end
     end)
+    |> case do
+      {:ok, verified} ->
+        verified = Enum.reverse(verified)
+
+        if strictly_ascending?(Enum.map(verified, & &1.source_index)),
+          do: {:ok, verified},
+          else: {:error, {:invalid_field, :frame_reconciliations}}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp verify_frame_reconciliations(_reconciliations, _source_count),
@@ -1753,36 +2343,167 @@ defmodule Sidereon.GNSS.Data do
     ]
 
     with {:ok, values} <- exact_fields(reconciliation, fields, context),
-         :ok <- source_index(values.source_index, source_count, {context, :source_index}),
-         :ok <- nonempty_binary(values.source_label, {context, :source_label}),
-         :ok <- nonempty_binary(values.target_label, {context, :target_label}),
-         :ok <- reconciliation_method(values.method, {context, :method}),
+         :ok <- nonreference_source_index(values.source_index, source_count, {context, :source_index}),
+         :ok <- trimmed_nonempty_binary(values.source_label, {context, :source_label}),
+         :ok <- trimmed_nonempty_binary(values.target_label, {context, :target_label}),
+         true <- values.source_label != values.target_label || {:error, {:invalid_field, {context, :labels}}},
+         {:ok, method} <- reconciliation_method(values.method, {context, :method}),
          :ok <- optional_label_set(values.asserted_label_set, {context, :asserted_label_set}),
-         :ok <- optional_binary(values.source_frame, {context, :source_frame}),
-         :ok <- optional_binary(values.target_frame, {context, :target_frame}),
-         :ok <- optional_binary(values.catalog_source_frame, {context, :catalog_source_frame}),
-         :ok <- optional_binary(values.catalog_target_frame, {context, :catalog_target_frame}),
+         :ok <- optional_terrestrial_frame(values.source_frame, {context, :source_frame}),
+         :ok <- optional_terrestrial_frame(values.target_frame, {context, :target_frame}),
+         :ok <- optional_terrestrial_frame(values.catalog_source_frame, {context, :catalog_source_frame}),
+         :ok <- optional_terrestrial_frame(values.catalog_target_frame, {context, :catalog_target_frame}),
          true <- is_boolean(values.catalog_inverse) || {:error, {:invalid_field, {context, :catalog_inverse}}},
          :ok <- optional_float(values.reference_epoch_year, {context, :reference_epoch_year}),
-         :ok <- optional_transform(values.parameters, :parameters, context),
-         :ok <- optional_transform(values.rates, :rates, context),
+         {:ok, parameters} <- persisted_transform(values.parameters, :parameters, context),
+         {:ok, rates} <- persisted_transform(values.rates, :rates, context),
          :ok <- optional_binary(values.provenance, {context, :provenance}),
          :ok <- optional_epoch_span(values.epoch_year_span, {context, :epoch_year_span}),
-         :ok <- positive_integer(values.records_affected, {context, :records_affected}),
+         :ok <- nonnegative_integer(values.records_affected, {context, :records_affected}),
          true <- is_boolean(values.identity) || {:error, {:invalid_field, {context, :identity}}} do
-      :ok
+      {:ok, %{values | method: method, parameters: parameters, rates: rates}}
     end
   end
 
-  defp reconciliation_method(value, _field)
-       when value in [:asserted_equivalence, "asserted_equivalence", :helmert, "helmert"], do: :ok
+  defp verify_frame_reconciliation_consistency(reconciliations, policy) do
+    target_labels = reconciliations |> Enum.map(& &1.target_label) |> Enum.uniq()
+
+    if length(target_labels) <= 1 do
+      Enum.reduce_while(reconciliations, :ok, fn reconciliation, :ok ->
+        case verify_frame_reconciliation_method(reconciliation, policy) do
+          :ok -> {:cont, :ok}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+    else
+      {:error, :frame_reconciliation_target_mismatch}
+    end
+  end
+
+  defp verify_frame_reconciliation_method(%{method: :asserted_equivalence} = value, policy) do
+    empty_helmert_fields = [
+      value.source_frame,
+      value.target_frame,
+      value.catalog_source_frame,
+      value.catalog_target_frame,
+      value.reference_epoch_year,
+      value.parameters,
+      value.rates,
+      value.provenance,
+      value.epoch_year_span
+    ]
+
+    expected_label_set =
+      Enum.find(policy.asserted_frame_label_sets, fn labels ->
+        value.source_label in labels and value.target_label in labels
+      end)
+
+    if is_list(value.asserted_label_set) and
+         value.source_label in value.asserted_label_set and
+         value.target_label in value.asserted_label_set and
+         value.asserted_label_set == expected_label_set and
+         Enum.all?(empty_helmert_fields, &is_nil/1) and
+         value.catalog_inverse == false and value.identity == true do
+      :ok
+    else
+      {:error, :invalid_asserted_frame_reconciliation}
+    end
+  end
+
+  defp verify_frame_reconciliation_method(%{method: :helmert} = value, policy) do
+    source_frame = sp3_frame_for_label(value.source_label)
+    target_frame = sp3_frame_for_label(value.target_label)
+
+    assertion_wins =
+      Enum.any?(policy.asserted_frame_label_sets, fn labels ->
+        value.source_label in labels and value.target_label in labels
+      end)
+
+    with true <- policy.helmert || {:error, :helmert_frame_reconciliation_not_enabled},
+         true <- not assertion_wins || {:error, :helmert_frame_reconciliation_preempted},
+         true <- (not is_nil(source_frame) and source_frame == value.source_frame) || {:error, :invalid_source_frame},
+         true <- (not is_nil(target_frame) and target_frame == value.target_frame) || {:error, :invalid_target_frame},
+         true <- is_nil(value.asserted_label_set) || {:error, :invalid_helmert_frame_reconciliation},
+         true <- value.identity == (source_frame == target_frame) || {:error, :invalid_helmert_identity},
+         true <-
+           (value.records_affected == 0 or not is_nil(value.epoch_year_span)) ||
+             {:error, :missing_helmert_epoch_span} do
+      verify_helmert_catalog(value)
+    else
+      {:error, _reason} = error -> error
+      _other -> {:error, :invalid_helmert_frame_reconciliation}
+    end
+  end
+
+  defp verify_helmert_catalog(%{identity: true} = value) do
+    fields = [
+      value.catalog_source_frame,
+      value.catalog_target_frame,
+      value.reference_epoch_year,
+      value.parameters,
+      value.rates,
+      value.provenance
+    ]
+
+    if value.catalog_inverse == false and Enum.all?(fields, &is_nil/1),
+      do: :ok,
+      else: {:error, :invalid_identity_helmert_catalog}
+  end
+
+  defp verify_helmert_catalog(%{identity: false} = value) do
+    {catalog_from, catalog_to} =
+      if value.catalog_inverse,
+        do: {value.target_frame, value.source_frame},
+        else: {value.source_frame, value.target_frame}
+
+    with true <-
+           (value.catalog_source_frame == catalog_from and value.catalog_target_frame == catalog_to) ||
+             {:error, :invalid_helmert_catalog_orientation},
+         {:ok, catalog} <- NIF.frame_catalog_entry(catalog_from, catalog_to),
+         true <- value.reference_epoch_year == catalog.reference_epoch_year || {:error, :invalid_helmert_catalog},
+         true <- value.parameters == catalog_parameters(catalog.parameters) || {:error, :invalid_helmert_catalog},
+         true <- value.rates == catalog_rates(catalog.rates) || {:error, :invalid_helmert_catalog},
+         true <- value.provenance == catalog.provenance || {:error, :invalid_helmert_catalog} do
+      :ok
+    else
+      {:error, _reason} = error -> error
+      _other -> {:error, :invalid_helmert_catalog}
+    end
+  end
+
+  defp catalog_parameters(parameters) do
+    %{
+      translation_mm: Tuple.to_list(parameters.translation_mm),
+      scale_ppb: parameters.scale_ppb,
+      rotation_mas: Tuple.to_list(parameters.rotation_mas)
+    }
+  end
+
+  defp catalog_rates(rates) do
+    %{
+      translation_mm_per_year: Tuple.to_list(rates.translation_mm_per_year),
+      scale_ppb_per_year: rates.scale_ppb_per_year,
+      rotation_mas_per_year: Tuple.to_list(rates.rotation_mas_per_year)
+    }
+  end
+
+  defp sp3_frame_for_label(label) when label in ["ITRF2020", "ITRF20", "IGS20", "IGc20"], do: "ITRF2020"
+  defp sp3_frame_for_label(label) when label in ["ITRF2014", "ITRF14", "IGS14", "IGb14"], do: "ITRF2014"
+  defp sp3_frame_for_label(label) when label in ["ITRF2008", "ITRF08", "IGS08", "IGb08"], do: "ITRF2008"
+  defp sp3_frame_for_label(_label), do: nil
+
+  defp reconciliation_method(value, _field) when value in [:asserted_equivalence, "asserted_equivalence"],
+    do: {:ok, :asserted_equivalence}
+
+  defp reconciliation_method(value, _field) when value in [:helmert, "helmert"], do: {:ok, :helmert}
 
   defp reconciliation_method(_value, field), do: {:error, {:invalid_field, field}}
 
   defp optional_label_set(nil, _field), do: :ok
 
   defp optional_label_set(labels, field) when is_list(labels) do
-    if length(labels) >= 2 and Enum.all?(labels, &(is_binary(&1) and &1 != "")) and
+    if length(labels) >= 2 and
+         Enum.all?(labels, &(is_binary(&1) and &1 != "" and String.trim(&1) == &1)) and
          labels == labels |> Enum.uniq() |> Enum.sort(),
        do: :ok,
        else: {:error, {:invalid_field, field}}
@@ -1790,9 +2511,9 @@ defmodule Sidereon.GNSS.Data do
 
   defp optional_label_set(_labels, field), do: {:error, {:invalid_field, field}}
 
-  defp optional_transform(nil, _kind, _context), do: :ok
+  defp persisted_transform(nil, _kind, _context), do: {:ok, nil}
 
-  defp optional_transform(transform, kind, context) when is_map(transform) do
+  defp persisted_transform(transform, kind, context) when is_map(transform) do
     {translation, scale, rotation} =
       case kind do
         :parameters -> {:translation_mm, :scale_ppb, :rotation_mas}
@@ -1801,19 +2522,22 @@ defmodule Sidereon.GNSS.Data do
 
     with {:ok, values} <- exact_fields(transform, [translation, scale, rotation], {context, kind}),
          :ok <- float_vector(Map.fetch!(values, translation), {context, kind, translation}),
-         :ok <- finite_float(Map.fetch!(values, scale), {context, kind, scale}) do
-      float_vector(Map.fetch!(values, rotation), {context, kind, rotation})
+         :ok <- finite_float(Map.fetch!(values, scale), {context, kind, scale}),
+         :ok <- float_vector(Map.fetch!(values, rotation), {context, kind, rotation}) do
+      {:ok, values}
     end
   end
 
-  defp optional_transform(_transform, kind, context), do: {:error, {:invalid_field, {context, kind}}}
+  defp persisted_transform(_transform, kind, context), do: {:error, {:invalid_field, {context, kind}}}
 
   defp optional_epoch_span(nil, _field), do: :ok
 
   defp optional_epoch_span([first, last], field) do
     with :ok <- finite_float(first, field),
          :ok <- finite_float(last, field),
-         true <- first <= last || {:error, {:invalid_field, field}} do
+         true <-
+           (first >= 0.0 and first < 10_000.0 and last >= 0.0 and last < 10_000.0 and first <= last) ||
+             {:error, {:invalid_field, field}} do
       :ok
     end
   end
@@ -1822,27 +2546,92 @@ defmodule Sidereon.GNSS.Data do
 
   defp source_indices(indices, source_count, field) when is_list(indices) and indices != [] do
     if Enum.all?(indices, &(is_integer(&1) and &1 >= 0 and &1 < source_count)) and
-         length(indices) == MapSet.size(MapSet.new(indices)),
+         strictly_ascending?(indices),
        do: :ok,
        else: {:error, {:invalid_field, field}}
   end
 
   defp source_indices(_indices, _source_count, field), do: {:error, {:invalid_field, field}}
 
-  defp source_index(value, source_count, _field) when is_integer(value) and value >= 0 and value < source_count, do: :ok
+  defp nonreference_source_index(value, source_count, _field)
+       when is_integer(value) and value > 0 and value < source_count, do: :ok
 
-  defp source_index(_value, _source_count, field), do: {:error, {:invalid_field, field}}
+  defp nonreference_source_index(_value, _source_count, field), do: {:error, {:invalid_field, field}}
 
   defp bounded_count(value, maximum, _field, allow_zero)
        when is_integer(value) and value <= maximum and ((allow_zero and value >= 0) or value > 0), do: :ok
 
   defp bounded_count(_value, _maximum, field, _allow_zero), do: {:error, {:invalid_field, field}}
 
+  defp canonical_epoch(jd_whole, jd_fraction, context) do
+    with :ok <- finite_float(jd_whole, {context, :jd_whole}),
+         true <-
+           (jd_whole >= 1_721_059.5 and jd_whole <= 5_373_483.5 and
+              jd_whole - Float.floor(jd_whole) == 0.5) ||
+             {:error, {:invalid_field, {context, :jd_whole}}},
+         :ok <- finite_float(jd_fraction, {context, :jd_fraction}),
+         true <-
+           (jd_fraction >= 0.0 and jd_fraction <= 1.0) ||
+             {:error, {:invalid_field, {context, :jd_fraction}}},
+         true <-
+           (jd_fraction != 1.0 or positive_leap_second_day?(jd_whole)) ||
+             {:error, {:invalid_field, {context, :jd_fraction}}} do
+      :ok
+    end
+  end
+
+  defp positive_leap_second_day?(jd_whole) do
+    with {:ok, before} <- NIF.timescale_offset_at("UTC", "TAI", jd_whole),
+         {:ok, after_offset} <- NIF.timescale_offset_at("UTC", "TAI", jd_whole + 1.0) do
+      after_offset - before == 1.0
+    else
+      _error -> false
+    end
+  end
+
+  defp ordered_unique_cells?(records), do: strictly_ascending?(Enum.map(records, &cell_key/1))
+  defp ordered_unique_epochs?(records), do: strictly_ascending?(Enum.map(records, &epoch_key/1))
+
+  defp cell_key(value) do
+    <<system::binary-size(1), prn::binary>> = value.satellite
+    {value.jd_whole, value.jd_fraction, gnss_system_order(system), String.to_integer(prn)}
+  end
+
+  defp epoch_key(value), do: {value.jd_whole, value.jd_fraction}
+
+  defp gnss_system_order("G"), do: 0
+  defp gnss_system_order("R"), do: 1
+  defp gnss_system_order("E"), do: 2
+  defp gnss_system_order("C"), do: 3
+  defp gnss_system_order("J"), do: 4
+  defp gnss_system_order("I"), do: 5
+  defp gnss_system_order("S"), do: 6
+
+  defp strictly_ascending?([]), do: true
+  defp strictly_ascending?([_value]), do: true
+  defp strictly_ascending?([first, second | rest]), do: first < second and strictly_ascending?([second | rest])
+
   defp satellite_id(value, _field) when is_binary(value) do
-    if String.match?(value, ~r/^[GRECJIS][0-9]{2,3}$/), do: :ok, else: {:error, :invalid_satellite_id}
+    case Regex.run(~r/^([GRECJIS])([0-9]{2})$/, value) do
+      [^value, system, prn] ->
+        if String.to_integer(prn) in satellite_prn_range(system),
+          do: :ok,
+          else: {:error, :invalid_satellite_id}
+
+      _other ->
+        {:error, :invalid_satellite_id}
+    end
   end
 
   defp satellite_id(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp satellite_prn_range("G"), do: 1..32
+  defp satellite_prn_range("R"), do: 1..27
+  defp satellite_prn_range("E"), do: 1..36
+  defp satellite_prn_range("C"), do: 1..63
+  defp satellite_prn_range("J"), do: 1..9
+  defp satellite_prn_range("I"), do: 1..14
+  defp satellite_prn_range("S"), do: 20..58
 
   defp float_vector(values, field) when is_list(values) and length(values) == 3 do
     if Enum.all?(values, &(finite_float(&1, field) == :ok)), do: :ok, else: {:error, {:invalid_field, field}}
@@ -1853,6 +2642,8 @@ defmodule Sidereon.GNSS.Data do
   defp finite_float(value, _field) when is_float(value) and value - value == 0.0, do: :ok
   defp finite_float(_value, field), do: {:error, {:invalid_field, field}}
 
+  defp finite_number?(value) when is_float(value), do: value - value == 0.0
+
   defp optional_float(nil, _field), do: :ok
   defp optional_float(value, field), do: finite_float(value, field)
 
@@ -1862,11 +2653,30 @@ defmodule Sidereon.GNSS.Data do
   defp optional_nonnegative_float(nil, _field), do: :ok
   defp optional_nonnegative_float(value, field), do: nonnegative_float(value, field)
 
+  defp trimmed_nonempty_binary(value, field) do
+    with :ok <- nonempty_binary(value, field),
+         true <- String.trim(value) == value || {:error, {:invalid_field, field}} do
+      :ok
+    end
+  end
+
+  defp optional_terrestrial_frame(nil, _field), do: :ok
+
+  defp optional_terrestrial_frame(value, _field) when value in ["ITRF2020", "ITRF2014", "ITRF2008"], do: :ok
+
+  defp optional_terrestrial_frame(_value, field), do: {:error, {:invalid_field, field}}
+
   defp exact_fields(map, fields, context) when is_map(map) do
     allowed = MapSet.new(Enum.flat_map(fields, &[&1, Atom.to_string(&1)]))
 
-    with nil <- Enum.find(Map.keys(map), &(not MapSet.member?(allowed, &1))),
-         nil <- Enum.find(fields, &(Map.has_key?(map, &1) and Map.has_key?(map, Atom.to_string(&1)))) do
+    unknown =
+      Enum.reduce_while(Map.keys(map), :none, fn key, :none ->
+        if MapSet.member?(allowed, key), do: {:cont, :none}, else: {:halt, {:some, key}}
+      end)
+
+    duplicate = Enum.find(fields, &(Map.has_key?(map, &1) and Map.has_key?(map, Atom.to_string(&1))))
+
+    if unknown == :none and is_nil(duplicate) do
       Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, values} ->
         case Map.fetch(map, field) do
           {:ok, value} ->
@@ -1880,7 +2690,8 @@ defmodule Sidereon.GNSS.Data do
         end
       end)
     else
-      unknown when not is_nil(unknown) -> {:error, {:unknown_or_duplicate_field, context, unknown}}
+      field = if match?({:some, _key}, unknown), do: elem(unknown, 1), else: duplicate
+      {:error, {:unknown_or_duplicate_field, context, field}}
     end
   end
 

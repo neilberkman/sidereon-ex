@@ -482,11 +482,13 @@ defmodule Sidereon.GNSS.SP3 do
 
   `report.agreement` quantifies how tightly the consensus sources clustered about
   the combined product. It is a map with the whole-product aggregates
-  `:position_rms_m`, `:position_max_m`, `:clock_rms_s`, `:clock_max_s` (each
-  `nil` when no multi-source consensus existed), plus `:cells` (per-(epoch,
-  satellite) statistics, one per accepted cell) and `:epochs` (per-epoch
-  aggregates over multi-source cells). The clock fields of a cell are `nil` when
-  the cell carries no clock.
+  `:position_rms_m`, `:position_max_m`, `:clock_rms_s`, and `:clock_max_s`, plus
+  `:cells` (per-(epoch, satellite) statistics, one per accepted cell) and
+  `:epochs` (per-epoch aggregates). The RMS fields are `nil` when no
+  multi-source consensus exists for that channel. Position maximum covers every
+  accepted cell; clock maximum covers every clock-bearing accepted cell, so
+  either maximum may be `0.0` for a single-source cell. The clock fields of a
+  cell are `nil` only when the cell carries no clock.
 
   ## Options
 

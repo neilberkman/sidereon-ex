@@ -452,7 +452,9 @@ fn agreement_to_tuple(metric: &AgreementMetric) -> AgreementCellTuple {
     )
 }
 
-/// Per-epoch aggregate agreement (multi-source cells only):
+/// Per-epoch aggregate agreement. RMS and the satellite count use multi-source
+/// cells; position maximum covers every accepted cell, while clock maximum uses
+/// multi-source clock cells to match the core epoch accessor:
 /// `{{jd_whole, jd_fraction}, satellites, {position_rms_m, position_max_m},
 ///   {clock_rms_s | nil, clock_max_s | nil}}`.
 fn epoch_agreement_to_tuple(agreement: &EpochAgreement) -> EpochAgreementTuple {
@@ -465,7 +467,8 @@ fn epoch_agreement_to_tuple(agreement: &EpochAgreement) -> EpochAgreementTuple {
     )
 }
 
-/// Whole-product aggregate agreement (multi-source cells only):
+/// Whole-product aggregate agreement. RMS values use multi-source cells;
+/// maxima cover every accepted position cell and every clock-bearing cell:
 /// `{position_rms_m | nil, position_max_m | nil, clock_rms_s | nil, clock_max_s | nil}`.
 fn agreement_aggregate(report: &MergeReport) -> AgreementAggregateTuple {
     (
