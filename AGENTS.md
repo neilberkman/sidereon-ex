@@ -64,7 +64,7 @@ Bit-exact Skyfield parity requires specific floating-point behavior:
 ```
 mix deps.get
 mix test                                                    # default tests
-mix test --include skyfield_parity --exclude spk_file       # parity tests
+mix test --only skyfield_parity --exclude spk_file          # parity tests
 ```
 
 ## Test Tags

@@ -1,6 +1,6 @@
 # Verification-fixture vocabulary convention:
 #   :skyfield_parity == bucket (a): hex-captured Skyfield/ERFA 0-ULP references,
-#     excluded by default (run with --include skyfield_parity).
+#     excluded by default (run with --only skyfield_parity).
 #   Generated reference-fixture (golden) tests are bucket (b): they load a
 #     committed parity/generator *_golden.json and run by default (hermetic, fast).
 #   Known-truth round-trip tests are bucket (c): self-synthesized truth, no tag.

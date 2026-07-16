@@ -60,6 +60,9 @@ jobs:
 
       - run: mix test
 
+      - name: Independent Skyfield parity
+        run: mix test --only skyfield_parity
+
       - name: Check formatting
         if: matrix.os == 'ubuntu-latest'
         run: mix format --check-formatted
