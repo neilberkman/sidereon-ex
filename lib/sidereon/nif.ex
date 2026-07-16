@@ -12,12 +12,16 @@ checksum_current? =
 force_build =
   System.get_env("SIDEREON_BUILD") in ["1", "true"] or source_checkout? or not checksum_current?
 
+rustler_features =
+  if Mix.env() == :test, do: ["exact-cache-test-failpoints"], else: []
+
 defmodule Sidereon.NIF do
   @moduledoc false
 
   use RustlerPrecompiled,
     otp_app: :sidereon,
     crate: "sidereon_nif",
+    features: rustler_features,
     base_url: "https://github.com/neilberkman/sidereon-ex/releases/download/v#{version}",
     force_build: force_build,
     nif_versions: ["2.15"],
@@ -1962,6 +1966,16 @@ defmodule Sidereon.NIF do
   def data_content_types, do: :erlang.nif_error(:nif_not_loaded)
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
   def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
+  def data_exact_cache_open(_path, _identity_fields, _source, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_read(_cache), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_read_unlocked(_path, _identity_fields, _source), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_publish(_cache, _product, _archive, _provenance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_cleanup(_cache), do: :erlang.nif_error(:nif_not_loaded)
+  def data_exact_cache_close(_cache), do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)

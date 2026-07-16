@@ -186,12 +186,34 @@ retrieval time, decompressed and archive lengths and SHA-256 hashes,
 compression, ETag/Last-Modified when present, cache-hit state, and earlier
 source failures.
 
-The cache key includes the source and every exact identity discriminator. The
-decompressed product, original archive bytes, and a JSON provenance sidecar are
-stored separately. Hits recheck both hashes and lengths, identity, caller
-checksum, and a fresh SP3/IONEX semantic parse. Writes use flushed temporary
-files and atomic promotion; concurrent first requests share one in-process
-lock. The legacy `Data.fetch/2` API and cache layout remain unchanged.
+The cache key includes the source and every exact identity discriminator. Each
+accepted entry is one immutable transaction containing the decompressed
+product, original archive bytes, and JSON provenance. A SHA-256-bound commit
+record names that transaction and is atomically replaced only after the files
+and directories are synchronized. Hits follow only that record, then recheck
+both hashes and lengths, full requested and resolved identities, source, caller
+checksum, and a fresh SP3/IONEX semantic parse.
+
+On Linux and macOS, acquisition delegates to the shared Rust transaction
+implementation. Threads, BEAM instances, and other cooperating processes use
+its per-entry advisory lock across cache validation, acquisition, and commit.
+Waiters therefore reuse the completed entry instead of downloading it again.
+`:cache_lock_timeout_ms` bounds the wait (30,000 milliseconds by default); a
+timeout or cache write failure is terminal and never authorizes trying another
+distributor. The operating system releases a dead owner's lock, so abandoned
+transactions are removed only after a new owner holds it. Low-level callers can
+use `Sidereon.GNSS.ExactCache` directly while retaining responsibility for
+transport and product-format validation.
+
+Publication relies on same-filesystem atomic rename, synchronized regular
+files, and synchronized entry, entries, and commit-record directories. A process
+death or power loss at a boundary leaves the prior complete commit or no
+acceptable commit. Fully valid cache triples from 0.29.0-0.29.2 are revalidated
+and migrated without another acquisition. `result.path` keeps the official
+filename inside the immutable transaction directory. These guarantees apply to
+local filesystems on Linux and macOS that honor POSIX advisory locks, atomic
+same-directory rename, and directory synchronization. The legacy `Data.fetch/2`
+API and cache layout remain unchanged.
 
 Failures remain typed tagged tuples, including authentication required/failed,
 authorization denied, product not published, retired endpoint, redirect policy,

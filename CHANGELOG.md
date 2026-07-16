@@ -4,7 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.30.0] - 2026-07-16
+
+### Fixed
+
+- Publishes exact-product cache entries as immutable payload/archive/provenance
+  transactions selected by one atomic digest-bound commit record. Cache hits
+  cannot observe a mixed update after independent BEAM instances race or a
+  process dies at a publication boundary.
+- Delegates exact acquisition to the shared Rust transaction implementation.
+  Its bounded advisory lock coordinates Linux and macOS processes; dead owners
+  release automatically, waiters avoid a second acquisition, and abandoned
+  transactions are removed only by a lock owner.
+- Revalidates and atomically migrates valid 0.29.0-0.29.2 cache triples without
+  reacquisition. Cache lock/write failures are terminal and never authorize a
+  distributor change.
+
+### Added
+
+- Added the optional `:cache_lock_timeout_ms` acquisition option, defaulting to
+  30,000 milliseconds.
+- Added the documented `Sidereon.GNSS.ExactCache` transaction module and public
+  full-identity cache-key derivation.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.30.0. Full
+  identity hashing now uses the same golden canonical key in all five
+  interfaces.
 
 ## [0.29.2]
 
