@@ -128,7 +128,47 @@ defmodule Sidereon.GNSS.Data do
     SP3 center that contributed a product to a merge.
     """
     @enforce_keys [:center, :filename, :date]
-    defstruct [:center, :filename, :date, :issue, :pattern]
+    defstruct [:center, :filename, :date, :issue, :pattern, :artifact_identity, :acquisition]
+
+    @type t :: %__MODULE__{}
+  end
+
+  defmodule ArtifactIdentity do
+    @moduledoc """
+    Reproducible, secret-free identity of one exact merge input artifact.
+    """
+    @enforce_keys [
+      :requested_identity,
+      :resolved_identity,
+      :distribution_source,
+      :official_filename,
+      :product_sha256,
+      :product_byte_length,
+      :archive_sha256,
+      :archive_byte_length,
+      :compression
+    ]
+    defstruct @enforce_keys
+
+    @type t :: %__MODULE__{}
+  end
+
+  defmodule AcquisitionFacts do
+    @moduledoc """
+    Observations from one acquisition. These fields never affect merge identity.
+    """
+    @enforce_keys [:retrieved_at, :cache_hit]
+    defstruct [
+      :retrieved_at,
+      :cache_hit,
+      :original_url,
+      :final_url,
+      :etag,
+      :last_modified,
+      attempts: []
+    ]
+
+    @type t :: %__MODULE__{}
   end
 
   defmodule MergeReport do
@@ -140,7 +180,12 @@ defmodule Sidereon.GNSS.Data do
               source_count: 0,
               single_product: false,
               merged: false,
-              merge_report: nil
+              merge_report: nil,
+              input_identity_schema_version: nil,
+              stable_input_identity: nil,
+              merge_policy: nil
+
+    @type t :: %__MODULE__{}
   end
 
   @doc """
@@ -523,10 +568,76 @@ defmodule Sidereon.GNSS.Data do
   Fetch merged SP3 and write it to a file.
   """
   def fetch_merged_sp3_file(target, centers, path, opts \\ []) do
-    with {:ok, sp3, _report} <- fetch_merged_sp3(target, centers, opts) do
-      write_sp3(sp3, path, opts)
+    with {:ok, written, _report} <-
+           fetch_merged_sp3_file_with_report(target, centers, path, opts) do
+      {:ok, written}
     end
   end
+
+  @doc """
+  Fetch and write merged SP3 while returning the complete acquisition report.
+  """
+  def fetch_merged_sp3_file_with_report(target, centers, path, opts \\ []) do
+    with {:ok, sp3, report} <- fetch_merged_sp3(target, centers, opts),
+         {:ok, written} <- write_sp3(sp3, path, opts) do
+      {:ok, written, report}
+    end
+  end
+
+  @doc """
+  Convert a merged-SP3 report to a secret-free persistence map.
+
+  The map never includes credentials, authorization headers, cache paths, or
+  temporary paths. Recomputing `stable_input_identity` requires only the
+  contributor artifact identities and `merge_policy` in this map.
+  """
+  def merge_report_to_map(%MergeReport{} = report) do
+    %{
+      schema_version: 1,
+      input_identity_schema_version: report.input_identity_schema_version,
+      stable_input_identity: report.stable_input_identity,
+      merge_policy: report.merge_policy,
+      source_count: report.source_count,
+      single_product: report.single_product,
+      merged: report.merged,
+      contributors: Enum.map(report.contributors, &contributor_to_map/1),
+      absent: Enum.map(report.absent, &Map.from_struct/1),
+      merge_report: report.merge_report
+    }
+  end
+
+  @doc """
+  Verify a merged-SP3 report or a decoded persistence map.
+
+  This reconstructs no filename and reads no cache directory. It validates the
+  complete persisted artifact records and merge policy through the shared Rust
+  canonicalizer, then compares both the schema version and stable identity.
+  Maps returned by `merge_report_to_map/1`, including a JSON encode/decode
+  round-trip with string keys, are accepted.
+  """
+  @spec verify_merge_report(MergeReport.t() | map()) :: :ok | {:error, term()}
+  def verify_merge_report(report) when is_map(report) do
+    with {:ok, contributors} <- public_field(report, :contributors),
+         true <- is_list(contributors),
+         {:ok, artifacts} <- persisted_artifacts(contributors),
+         {:ok, policy} <- public_field(report, :merge_policy),
+         {:ok, {opts, precedence}} <- persisted_merge_opts(policy),
+         :ok <- validate_persisted_precedence(artifacts, precedence, opts),
+         {:ok, expected_schema} <- public_field(report, :input_identity_schema_version),
+         {:ok, expected_id} <- public_field(report, :stable_input_identity),
+         {:ok, recomputed} <- SP3.merge_input_identity(artifacts, opts),
+         true <- recomputed.schema_version == expected_schema,
+         true <- recomputed.stable_id == expected_id do
+      :ok
+    else
+      false -> {:error, :merge_input_identity_mismatch}
+      :error -> {:error, :incomplete_merge_report}
+      {:error, _reason} = error -> error
+      _other -> {:error, :incomplete_merge_report}
+    end
+  end
+
+  def verify_merge_report(_report), do: {:error, :invalid_merge_report}
 
   @doc """
   Write an SP3 product atomically.
@@ -700,7 +811,7 @@ defmodule Sidereon.GNSS.Data do
   defp fetch_center_sp3(center, target, opts) do
     case sp3_candidates(center, target, opts) do
       {:ok, candidates} ->
-        fetch_first_center_sp3(center, candidates, opts, nil)
+        fetch_first_center_sp3(center, candidates, opts, {nil, []})
 
       {:error, {:unsupported_product, reason}} ->
         {:absent, %AbsentCenter{center: center, reason: reason_string({:unsupported_product, reason})}}
@@ -710,19 +821,19 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp fetch_first_center_sp3(center, [], _opts, nil),
+  defp fetch_first_center_sp3(center, [], _opts, {nil, []}),
     do: {:absent, %AbsentCenter{center: center, reason: "no_candidate"}}
 
-  defp fetch_first_center_sp3(center, [], _opts, {filename, pattern, candidate_url, reason}),
+  defp fetch_first_center_sp3(center, [], _opts, {{filename, pattern, candidate_url, reason}, _attempts}),
     do: {:absent, absent_center(center, filename, pattern, candidate_url, reason)}
 
-  defp fetch_first_center_sp3(center, [product | rest], opts, _last) do
+  defp fetch_first_center_sp3(center, [product | rest], opts, {_last, attempts}) do
     {:ok, filename} = canonical_filename(product)
     {:ok, candidate_url} = archive_url(product)
 
-    case fetch(product, opts) do
-      {:ok, path} ->
-        case SP3.load(path) do
+    case Distribution.acquire_catalog_product(product, exact_sp3_opts(opts)) do
+      {:ok, result} ->
+        case SP3.load(result.path) do
           {:ok, sp3} ->
             {:ok,
              %Contributor{
@@ -730,7 +841,9 @@ defmodule Sidereon.GNSS.Data do
                filename: filename,
                date: product.date,
                issue: product.issue,
-               pattern: product.pattern || "canonical"
+               pattern: product.pattern || "canonical",
+               artifact_identity: artifact_identity(result.provenance),
+               acquisition: acquisition_facts(result.provenance, Enum.reverse(attempts))
              }, sp3}
 
           {:error, reason} ->
@@ -742,20 +855,49 @@ defmodule Sidereon.GNSS.Data do
           center,
           rest,
           opts,
-          {filename, product.pattern || "canonical", candidate_url, :offline_cache_miss}
+          {
+            {filename, product.pattern || "canonical", candidate_url, :offline_cache_miss},
+            [candidate_attempt(:offline_cache_miss, candidate_url) | attempts]
+          }
         )
 
-      {:error, {:not_found_on_archive, _} = reason} ->
+      {:error, {:product_not_published, 404, _} = reason} ->
         fetch_first_center_sp3(
           center,
           rest,
           opts,
-          {filename, product.pattern || "canonical", candidate_url, reason}
+          {
+            {filename, product.pattern || "canonical", candidate_url, reason},
+            [candidate_attempt(reason, candidate_url) | attempts]
+          }
         )
 
       {:error, reason} ->
         {:absent, absent_center(center, filename, product.pattern || "canonical", candidate_url, reason)}
     end
+  end
+
+  defp exact_sp3_opts(opts) do
+    opts
+    |> Keyword.drop([
+      :systems,
+      :epoch_interval_s,
+      :position_tolerance_m,
+      :clock_tolerance_s,
+      :min_agree,
+      :clock_min_common,
+      :combine,
+      :precedence_scope,
+      :outlier_reject,
+      :asserted_frame_label_sets,
+      :helmert,
+      :sample,
+      :issue,
+      :catalog_variants,
+      :gzip
+    ])
+    |> rename_option(:max_compressed_bytes, :max_archive_bytes)
+    |> rename_option(:max_decompressed_bytes, :max_product_bytes)
   end
 
   defp merge_sp3_contributors(contributors, absent, opts) do
@@ -779,20 +921,297 @@ defmodule Sidereon.GNSS.Data do
 
     case SP3.merge(sources, merge_opts) do
       {:ok, merged, merge_report} ->
-        {:ok, merged,
-         %MergeReport{
-           contributors: infos,
-           absent: absent,
-           source_count: length(infos),
-           single_product: length(infos) == 1,
-           merged: true,
-           merge_report: merge_report
-         }}
+        artifacts = Enum.map(infos, &Map.from_struct(&1.artifact_identity))
+
+        with {:ok, input_identity} <- SP3.merge_input_identity(artifacts, merge_opts) do
+          {:ok, merged,
+           %MergeReport{
+             contributors: infos,
+             absent: absent,
+             source_count: length(infos),
+             single_product: length(infos) == 1,
+             merged: true,
+             merge_report: merge_report,
+             input_identity_schema_version: input_identity.schema_version,
+             stable_input_identity: input_identity.stable_id,
+             merge_policy: input_identity.merge_policy
+           }}
+        end
 
       {:error, reason} ->
         {:error, {:incompatible_sources, Enum.map(infos, & &1.center), reason}}
     end
   end
+
+  defp artifact_identity(provenance) do
+    %ArtifactIdentity{
+      requested_identity: provenance.requested_identity,
+      resolved_identity: provenance.resolved_identity,
+      distribution_source: provenance.distribution_source,
+      official_filename: provenance.official_filename,
+      product_sha256: provenance.sha256,
+      product_byte_length: provenance.byte_length,
+      archive_sha256: provenance.archive_sha256,
+      archive_byte_length: provenance.archive_byte_length,
+      compression: provenance.archive_compression
+    }
+  end
+
+  defp acquisition_facts(provenance, prior_attempts) do
+    %AcquisitionFacts{
+      retrieved_at: provenance.retrieved_at,
+      cache_hit: provenance.cache_hit,
+      original_url: provenance.original_url,
+      final_url: provenance.final_url,
+      etag: provenance.etag,
+      last_modified: provenance.last_modified,
+      attempts: prior_attempts ++ provenance.attempts
+    }
+  end
+
+  defp candidate_attempt(reason, url) do
+    {_response_url, status} = diagnostic_fields(reason)
+
+    %Distribution.SourceFailure{
+      source: :direct,
+      error_type: candidate_error_type(reason),
+      message: reason_string(reason),
+      url: url,
+      status: status
+    }
+  end
+
+  defp candidate_error_type(:offline_cache_miss), do: :offline_cache_miss
+  defp candidate_error_type({:product_not_published, _status, _url}), do: :product_not_published
+  defp candidate_error_type(_reason), do: :acquisition
+
+  defp contributor_to_map(%Contributor{} = contributor) do
+    %{
+      center: contributor.center,
+      filename: contributor.filename,
+      date: Date.to_iso8601(contributor.date),
+      issue: contributor.issue,
+      pattern: contributor.pattern,
+      artifact_identity: artifact_identity_to_map(contributor.artifact_identity),
+      acquisition: acquisition_to_map(contributor.acquisition)
+    }
+  end
+
+  defp artifact_identity_to_map(%ArtifactIdentity{} = artifact) do
+    artifact
+    |> Map.from_struct()
+    |> Map.update!(:requested_identity, &product_identity_to_map/1)
+    |> Map.update!(:resolved_identity, &product_identity_to_map/1)
+  end
+
+  defp product_identity_to_map(identity) do
+    identity
+    |> Map.from_struct()
+    |> Map.update!(:date, &Date.to_iso8601/1)
+  end
+
+  defp acquisition_to_map(%AcquisitionFacts{} = acquisition) do
+    acquisition
+    |> Map.from_struct()
+    |> Map.update!(:attempts, fn attempts ->
+      Enum.map(attempts, fn attempt -> Map.from_struct(attempt) end)
+    end)
+  end
+
+  defp persisted_artifacts(contributors) do
+    contributors
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {contributor, index}, {:ok, artifacts} ->
+      with {:ok, artifact} <- public_field(contributor, :artifact_identity),
+           {:ok, normalized} <- persisted_artifact(artifact) do
+        {:cont, {:ok, [normalized | artifacts]}}
+      else
+        _error -> {:halt, {:error, {:invalid_merge_contributor, index, :incomplete}}}
+      end
+    end)
+    |> case do
+      {:ok, artifacts} -> {:ok, Enum.reverse(artifacts)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp persisted_artifact(%ArtifactIdentity{} = artifact), do: {:ok, Map.from_struct(artifact)}
+
+  defp persisted_artifact(artifact) when is_map(artifact) do
+    with {:ok, requested} <- public_field(artifact, :requested_identity),
+         {:ok, requested} <- persisted_product_identity(requested),
+         {:ok, resolved} <- public_field(artifact, :resolved_identity),
+         {:ok, resolved} <- persisted_product_identity(resolved),
+         {:ok, source} <- public_field(artifact, :distribution_source),
+         {:ok, source} <- persisted_source(source),
+         {:ok, official_filename} <- public_field(artifact, :official_filename),
+         {:ok, product_sha256} <- public_field(artifact, :product_sha256),
+         {:ok, product_byte_length} <- public_field(artifact, :product_byte_length),
+         {:ok, archive_sha256} <- public_field(artifact, :archive_sha256),
+         {:ok, archive_byte_length} <- public_field(artifact, :archive_byte_length),
+         {:ok, compression} <- public_field(artifact, :compression),
+         {:ok, compression} <- persisted_compression(compression) do
+      {:ok,
+       %{
+         requested_identity: requested,
+         resolved_identity: resolved,
+         distribution_source: source,
+         official_filename: official_filename,
+         product_sha256: product_sha256,
+         product_byte_length: product_byte_length,
+         archive_sha256: archive_sha256,
+         archive_byte_length: archive_byte_length,
+         compression: compression
+       }}
+    end
+  end
+
+  defp persisted_artifact(_artifact), do: {:error, :incomplete}
+
+  defp persisted_product_identity(%Distribution.ProductIdentity{} = identity), do: {:ok, identity}
+
+  defp persisted_product_identity(identity) when is_map(identity) do
+    required = [
+      :family,
+      :analysis_center,
+      :publisher,
+      :solution_class,
+      :campaign,
+      :filename_version,
+      :date,
+      :issue,
+      :span,
+      :sample,
+      :official_filename,
+      :format,
+      :format_version,
+      :prediction_horizon_days
+    ]
+
+    with {:ok, values} <- public_fields(identity, required),
+         {:ok, date} <- persisted_date(values.date) do
+      {:ok, struct!(Distribution.ProductIdentity, Map.put(values, :date, date))}
+    end
+  rescue
+    _error -> {:error, :identity}
+  end
+
+  defp persisted_product_identity(_identity), do: {:error, :identity}
+
+  defp persisted_merge_opts(policy) when is_map(policy) do
+    required = [
+      :position_tolerance_m,
+      :clock_tolerance_s,
+      :min_agree,
+      :clock_min_common,
+      :combine,
+      :precedence_artifact_sha256,
+      :precedence_scope,
+      :outlier_reject,
+      :epoch_interval_s,
+      :systems,
+      :asserted_frame_label_sets,
+      :helmert
+    ]
+
+    with {:ok, values} <- public_fields(policy, required),
+         {:ok, combine} <- persisted_combine(values.combine),
+         {:ok, precedence_scope} <- persisted_precedence_scope(values.precedence_scope),
+         {:ok, outlier_reject} <- persisted_outlier_reject(values.outlier_reject) do
+      {:ok,
+       {
+         [
+           position_tolerance_m: values.position_tolerance_m,
+           clock_tolerance_s: values.clock_tolerance_s,
+           min_agree: values.min_agree,
+           clock_min_common: values.clock_min_common,
+           combine: combine,
+           precedence_scope: precedence_scope,
+           outlier_reject: outlier_reject,
+           epoch_interval_s: values.epoch_interval_s,
+           systems: values.systems,
+           asserted_frame_label_sets: values.asserted_frame_label_sets,
+           helmert: values.helmert
+         ],
+         values.precedence_artifact_sha256
+       }}
+    end
+  end
+
+  defp persisted_merge_opts(_policy), do: {:error, :invalid_merge_policy}
+
+  defp validate_persisted_precedence(artifacts, nil, opts),
+    do:
+      if(artifacts != [] and Keyword.fetch!(opts, :combine) != :precedence,
+        do: :ok,
+        else: {:error, :incomplete_merge_report}
+      )
+
+  defp validate_persisted_precedence(artifacts, precedence, opts) when is_list(precedence) do
+    if Keyword.fetch!(opts, :combine) == :precedence and
+         Enum.map(artifacts, & &1.product_sha256) == precedence,
+       do: :ok,
+       else: {:error, :merge_precedence_mismatch}
+  end
+
+  defp validate_persisted_precedence(_artifacts, _precedence, _opts), do: {:error, :invalid_merge_policy}
+
+  defp persisted_outlier_reject(nil), do: {:ok, nil}
+
+  defp persisted_outlier_reject(value) when is_map(value) do
+    with {:ok, position} <- public_field(value, :position_tolerance_m),
+         {:ok, clock} <- public_field(value, :clock_tolerance_s),
+         true <- is_number(position) and is_number(clock) do
+      {:ok, %{position_tolerance_m: position, clock_tolerance_s: clock}}
+    else
+      _other -> {:error, :invalid_outlier_reject}
+    end
+  end
+
+  defp persisted_outlier_reject(_value), do: {:error, :invalid_outlier_reject}
+
+  defp persisted_date(%Date{} = date), do: {:ok, date}
+  defp persisted_date(date) when is_binary(date), do: Date.from_iso8601(date)
+  defp persisted_date(_date), do: {:error, :invalid_date}
+
+  defp persisted_source(value) when value in [:direct, "direct"], do: {:ok, :direct}
+  defp persisted_source(value) when value in [:nasa_cddis, "nasa_cddis"], do: {:ok, :nasa_cddis}
+  defp persisted_source(value) when value in [:local_file, "local_file"], do: {:ok, :local_file}
+  defp persisted_source(value) when value in [:in_memory, "in_memory"], do: {:ok, :in_memory}
+  defp persisted_source(_value), do: {:error, :invalid_distribution_source}
+
+  defp persisted_compression(value) when value in [:gzip, "gzip"], do: {:ok, :gzip}
+  defp persisted_compression(value) when value in [:none, "none"], do: {:ok, :none}
+  defp persisted_compression(_value), do: {:error, :invalid_compression}
+
+  defp persisted_combine(value) when value in [:mean, "mean"], do: {:ok, :mean}
+  defp persisted_combine(value) when value in [:median, "median"], do: {:ok, :median}
+  defp persisted_combine(value) when value in [:precedence, "precedence"], do: {:ok, :precedence}
+  defp persisted_combine(_value), do: {:error, :invalid_merge_policy}
+
+  defp persisted_precedence_scope(value) when value in [:cell, "cell"], do: {:ok, :cell}
+
+  defp persisted_precedence_scope(value) when value in [:satellite_arc, "satellite_arc"], do: {:ok, :satellite_arc}
+
+  defp persisted_precedence_scope(_value), do: {:error, :invalid_merge_policy}
+
+  defp public_fields(map, fields) do
+    Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, values} ->
+      case public_field(map, field) do
+        {:ok, value} -> {:cont, {:ok, Map.put(values, field, value)}}
+        :error -> {:halt, {:error, :incomplete}}
+      end
+    end)
+  end
+
+  defp public_field(map, field) when is_map(map) do
+    case Map.fetch(map, field) do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(map, Atom.to_string(field))
+    end
+  end
+
+  defp public_field(_map, _field), do: :error
 
   defp sp3_candidates(center, target, opts) do
     with {:ok, entry} <- center_entry(center),
@@ -1583,11 +2002,14 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp diagnostic_fields({:not_found_on_archive, url}), do: {url, 404}
+  defp diagnostic_fields({:product_not_published, status, url}), do: {url, status}
   defp diagnostic_fields({:http_status, status, url}), do: {url, status}
   defp diagnostic_fields(_reason), do: {nil, nil}
 
   defp reason_string(:offline_cache_miss), do: "offline_miss"
   defp reason_string({:not_found_on_archive, _}), do: "candidate_not_found"
+  defp reason_string({:product_not_published, 404, _}), do: "candidate_not_found"
+  defp reason_string({:product_not_published, status, _}), do: "product_not_published:#{status}"
   defp reason_string({:checksum_mismatch, _, _}), do: "checksum"
   defp reason_string({:http_status, status, _}), do: "http_status:#{status}"
   defp reason_string(reason), do: inspect(reason)

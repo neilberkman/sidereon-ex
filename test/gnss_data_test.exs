@@ -104,7 +104,7 @@ defmodule Sidereon.GNSS.DataTest do
       send(parent, {:url, url})
 
       if String.ends_with?(url, "/COD0OPSULT.SP3"),
-        do: {:ok, 200, sp3_body(15_000.0)},
+        do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14])},
         else: {:ok, 404, ""}
     end
 
@@ -118,9 +118,47 @@ defmodule Sidereon.GNSS.DataTest do
     assert %SP3{} = merged
     assert report.single_product
     assert report.merged
+    assert report.input_identity_schema_version == 1
+    assert String.starts_with?(report.stable_input_identity, "sidereon-sp3-merge-input-v1:")
 
-    assert [%Data.Contributor{pattern: "alias_latest", filename: "COD0OPSULT.SP3"}] =
+    assert [
+             %Data.Contributor{
+               pattern: "alias_latest",
+               filename: "COD0OPSULT.SP3",
+               artifact_identity: %Data.ArtifactIdentity{} = artifact,
+               acquisition: %Data.AcquisitionFacts{cache_hit: false, attempts: attempts}
+             }
+           ] =
              report.contributors
+
+    assert artifact.requested_identity == Map.put(artifact.resolved_identity, :format_version, nil)
+    assert artifact.product_sha256 =~ ~r/^[0-9a-f]{64}$/
+    assert artifact.archive_sha256 =~ ~r/^[0-9a-f]{64}$/
+    assert Enum.map(attempts, & &1.error_type) == [:product_not_published, :product_not_published]
+
+    assert {:ok, _cached, cached_report} =
+             Data.fetch_merged_sp3(~D[2026-07-14], [:cod_ult],
+               issue: "0000",
+               cache_dir: root,
+               offline: true,
+               http_client: fn _url, _opts -> flunk("cache hit contacted the network") end
+             )
+
+    assert cached_report.stable_input_identity == report.stable_input_identity
+
+    assert [%Data.Contributor{acquisition: %Data.AcquisitionFacts{cache_hit: true}}] =
+             cached_report.contributors
+
+    output = Path.join(root, "merged.SP3")
+
+    assert {:ok, ^output, file_report} =
+             Data.fetch_merged_sp3_file_with_report(~D[2026-07-14], [:cod_ult], output,
+               issue: "0000",
+               cache_dir: root,
+               offline: true
+             )
+
+    assert file_report.stable_input_identity == report.stable_input_identity
 
     assert_received {:url,
                      "https://www.aiub.unibe.ch/download/CODE/" <>
@@ -190,6 +228,19 @@ defmodule Sidereon.GNSS.DataTest do
                [:cod_ult, :esa_ult, :gfz_ult],
                merge_opts ++ [issue: "0000", cache_dir: root, http_client: http_client]
              )
+
+    assert length(fetch_report.contributors) == 3
+
+    assert fetch_report.contributors
+           |> Enum.map(& &1.artifact_identity.requested_identity.analysis_center)
+           |> Enum.sort() == ["cod_ult", "esa_ult", "gfz_ult"]
+
+    assert fetch_report.contributors
+           |> Enum.map(& &1.artifact_identity.product_sha256)
+           |> Enum.uniq()
+           |> length() == 3
+
+    assert :ok = Data.verify_merge_report(fetch_report)
 
     sources = Enum.map([corrupt, agreeing_a, agreeing_b], fn bytes -> elem(SP3.parse(bytes), 1) end)
     assert {:ok, direct, direct_report} = SP3.merge(sources, merge_opts)
@@ -369,7 +420,7 @@ defmodule Sidereon.GNSS.DataTest do
     File.write!(path <> ".provenance.json", Jason.encode!(provenance))
   end
 
-  defp sp3_body(x_km) do
+  defp sp3_body(x_km, date \\ ~D[2026-07-12]) do
     record =
       "PG01" <>
         (:io_lib.format(~c"~14.6f", [x_km]) |> IO.iodata_to_binary()) <>
@@ -377,7 +428,7 @@ defmodule Sidereon.GNSS.DataTest do
 
     Enum.join(
       [
-        "#cP2026  7 12  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
+        "#cP#{date.year} #{date.month |> Integer.to_string() |> String.pad_leading(2)} #{date.day |> Integer.to_string() |> String.pad_leading(2)}  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
         "## 2427 000000.00000000   300.00000000 61233 0.0000000000000",
         "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
         "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
@@ -388,7 +439,7 @@ defmodule Sidereon.GNSS.DataTest do
         "%i    0    0    0    0      0      0      0      0         0",
         "%i    0    0    0    0      0      0      0      0         0",
         "/* TEST SP3-c FIXTURE",
-        "*  2026  7 12  0  0  0.00000000",
+        "*  #{date.year} #{date.month |> Integer.to_string() |> String.pad_leading(2)} #{date.day |> Integer.to_string() |> String.pad_leading(2)}  0  0  0.00000000",
         record,
         "EOF",
         ""

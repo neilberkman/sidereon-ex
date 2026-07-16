@@ -258,6 +258,42 @@ lower-precedence centers filling missing cells. No interpolation is introduced.
 Even one successful contributor passes through the same merge path so system
 filters and cadence validation remain consistent.
 
+Each successful contributor now has two deliberately separate records:
+`artifact_identity` contains the requested and content-resolved product
+identities, explicit distributor, official filename, product and archive
+SHA-256 digests and lengths, and compression; `acquisition` contains cache-hit
+status, retrieval time, sanitized public URLs, HTTP metadata, and earlier
+attempts. Only the first record enters `report.stable_input_identity`.
+
+That versioned identity canonically binds the complete contributor set and
+merge policy. It is unchanged by a warm-cache hit, process restart, map order,
+or non-semantic contributor enumeration order, and changes when an artifact,
+resolved identity, contributor set, or merge option changes. Precedence source
+order is bound explicitly because reversing it can change merged bytes. Persist
+a secret-free map without inspecting cache directories:
+
+```elixir
+persisted = Sidereon.GNSS.Data.merge_report_to_map(report)
+json = Jason.encode!(persisted)
+:ok = json |> Jason.decode!() |> Sidereon.GNSS.Data.verify_merge_report()
+```
+
+The compatibility file helper still returns only the written path. Call
+`fetch_merged_sp3_file_with_report/4` when the report must be retained:
+
+```elixir
+{:ok, path, report} =
+  Sidereon.GNSS.Data.fetch_merged_sp3_file_with_report(
+    ~D[2024-09-03],
+    [:igs_ult, :gfz_ult],
+    "merged.SP3"
+  )
+```
+
+Merged-SP3 acquisition accepts only complete, verified exact-acquisition
+records. It does not scan cache directories or infer a contributor identity
+from a filename, timestamp, or local path.
+
 Every fetch returns either `{:ok, value}` or `{:error, reason}`. Offline misses,
 checksum failures, redirects, archive 404s, no-coverage terrain, cache failures,
 and catalog validation all use typed tagged reasons.

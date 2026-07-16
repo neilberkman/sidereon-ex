@@ -17,11 +17,12 @@
 
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
+use sidereon_core::data::{ArchiveCompression, DistributionSource};
 use sidereon_core::ephemeris::{
     align_clock_reference, clock_reference_offset, merge as crate_merge, AgreementMetric,
     EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergePrecedenceScope, MergeReport,
-    OutlierRejectOptions, Sp3, Sp3FrameLabelSet, Sp3FrameReconciliation,
-    Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3State,
+    OutlierRejectOptions, Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet, Sp3FrameReconciliation,
+    Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -76,6 +77,87 @@ fn systems_from_letters(letters: Vec<String>) -> NifResult<BTreeSet<GnssSystem>>
         systems.insert(system_from_letter(&letter)?);
     }
     Ok(systems)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_options_from_terms(
+    position_tolerance_m: f64,
+    clock_tolerance_s: f64,
+    min_agree: usize,
+    clock_min_common: usize,
+    combine: String,
+    precedence_scope: String,
+    outlier_reject: Option<(f64, f64)>,
+    target_epoch_interval_s: Option<f64>,
+    system_letters: Vec<String>,
+    asserted_frame_label_sets: Vec<Vec<String>>,
+    helmert_frame_reconciliation: bool,
+) -> NifResult<MergeOptions> {
+    let combine = match combine.as_str() {
+        "mean" => MergeCombine::Mean,
+        "median" => MergeCombine::Median,
+        "precedence" => MergeCombine::Precedence,
+        other => {
+            return Err(Error::Term(Box::new(format!(
+                "unknown combine strategy {other:?}"
+            ))))
+        }
+    };
+    let precedence_scope = match precedence_scope.as_str() {
+        "cell" => MergePrecedenceScope::Cell,
+        "satellite_arc" => MergePrecedenceScope::SatelliteArc,
+        other => {
+            return Err(Error::Term(Box::new(format!(
+                "unknown precedence scope {other:?}"
+            ))))
+        }
+    };
+    let asserted_equivalent_label_sets = asserted_frame_label_sets
+        .into_iter()
+        .enumerate()
+        .map(|(idx, labels)| {
+            if labels.len() < 2 {
+                return Err(Error::Term(Box::new(format!(
+                    "asserted_frame_label_sets[{idx}] must contain at least two labels"
+                ))));
+            }
+            let labels = labels
+                .into_iter()
+                .map(|label| label.trim().to_string())
+                .collect::<Vec<_>>();
+            if labels.iter().any(String::is_empty) {
+                return Err(Error::Term(Box::new(format!(
+                    "asserted_frame_label_sets[{idx}] contains an empty label"
+                ))));
+            }
+            Ok(Sp3FrameLabelSet::new(labels))
+        })
+        .collect::<NifResult<Vec<_>>>()?;
+
+    Ok(MergeOptions {
+        position_tolerance_m,
+        clock_tolerance_s,
+        min_agree,
+        clock_min_common,
+        combine,
+        precedence_scope,
+        outlier_reject: outlier_reject.map(|(position_tolerance_m, clock_tolerance_s)| {
+            OutlierRejectOptions {
+                position_tolerance_m,
+                clock_tolerance_s,
+            }
+        }),
+        target_epoch_interval_s,
+        systems: if system_letters.is_empty() {
+            None
+        } else {
+            Some(systems_from_letters(system_letters)?)
+        },
+        frame_reconciliation: Sp3FrameReconciliationOptions {
+            asserted_equivalent_label_sets,
+            helmert: helmert_frame_reconciliation,
+        },
+    })
 }
 
 /// Map a time-scale abbreviation onto the core [`TimeScale`]. Pure translation;
@@ -510,71 +592,19 @@ fn sp3_merge<'a>(
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
 ) -> NifResult<Term<'a>> {
-    let combine = match combine.as_str() {
-        "mean" => MergeCombine::Mean,
-        "median" => MergeCombine::Median,
-        "precedence" => MergeCombine::Precedence,
-        other => {
-            return Err(Error::Term(Box::new(format!(
-                "unknown combine strategy {other:?}"
-            ))))
-        }
-    };
-    let precedence_scope = match precedence_scope.as_str() {
-        "cell" => MergePrecedenceScope::Cell,
-        "satellite_arc" => MergePrecedenceScope::SatelliteArc,
-        other => {
-            return Err(Error::Term(Box::new(format!(
-                "unknown precedence scope {other:?}"
-            ))))
-        }
-    };
-    let asserted_equivalent_label_sets = asserted_frame_label_sets
-        .into_iter()
-        .enumerate()
-        .map(|(idx, labels)| {
-            if labels.len() < 2 {
-                return Err(Error::Term(Box::new(format!(
-                    "asserted_frame_label_sets[{idx}] must contain at least two labels"
-                ))));
-            }
-            let labels = labels
-                .into_iter()
-                .map(|label| label.trim().to_string())
-                .collect::<Vec<_>>();
-            if labels.iter().any(String::is_empty) {
-                return Err(Error::Term(Box::new(format!(
-                    "asserted_frame_label_sets[{idx}] contains an empty label"
-                ))));
-            }
-            Ok(Sp3FrameLabelSet::new(labels))
-        })
-        .collect::<NifResult<Vec<_>>>()?;
-
-    let opts = MergeOptions {
+    let opts = merge_options_from_terms(
         position_tolerance_m,
         clock_tolerance_s,
         min_agree,
         clock_min_common,
         combine,
         precedence_scope,
-        outlier_reject: outlier_reject.map(|(position_tolerance_m, clock_tolerance_s)| {
-            OutlierRejectOptions {
-                position_tolerance_m,
-                clock_tolerance_s,
-            }
-        }),
+        outlier_reject,
         target_epoch_interval_s,
-        systems: if system_letters.is_empty() {
-            None
-        } else {
-            Some(systems_from_letters(system_letters)?)
-        },
-        frame_reconciliation: Sp3FrameReconciliationOptions {
-            asserted_equivalent_label_sets,
-            helmert: helmert_frame_reconciliation,
-        },
-    };
+        system_letters,
+        asserted_frame_label_sets,
+        helmert_frame_reconciliation,
+    )?;
 
     // The crate merge takes owned products; the handles are shared/immutable, so
     // clone each into the merge input.
@@ -618,6 +648,87 @@ fn sp3_merge<'a>(
         ),
     )
         .encode(env))
+}
+
+type ArtifactIdentityTuple = (
+    (Vec<String>, Vec<String>),
+    (String, String),
+    (String, u64),
+    (String, u64),
+    String,
+);
+
+/// Build the shared, versioned identity for exact SP3 artifacts and merge policy.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn sp3_merge_input_identity(
+    contributors: Vec<ArtifactIdentityTuple>,
+    position_tolerance_m: f64,
+    clock_tolerance_s: f64,
+    min_agree: usize,
+    clock_min_common: usize,
+    combine: String,
+    precedence_scope: String,
+    outlier_reject: Option<(f64, f64)>,
+    target_epoch_interval_s: Option<f64>,
+    system_letters: Vec<String>,
+    asserted_frame_label_sets: Vec<Vec<String>>,
+    helmert_frame_reconciliation: bool,
+) -> NifResult<(u8, String)> {
+    let contributors = contributors
+        .into_iter()
+        .map(
+            |(
+                (requested, resolved),
+                (source, official_filename),
+                (product_sha256, product_byte_length),
+                (archive_sha256, archive_byte_length),
+                compression,
+            )| {
+                let distribution_source = match source.as_str() {
+                    "direct" => DistributionSource::Direct,
+                    "nasa_cddis" => DistributionSource::NasaCddis,
+                    "local_file" => DistributionSource::LocalFile,
+                    "in_memory" => DistributionSource::InMemory,
+                    _ => return Err(Error::Term(Box::new("unknown distribution source"))),
+                };
+                let compression = match compression.as_str() {
+                    "gzip" => ArchiveCompression::Gzip,
+                    "none" => ArchiveCompression::None,
+                    _ => return Err(Error::Term(Box::new("unknown archive compression"))),
+                };
+                Ok(Sp3ArtifactIdentity {
+                    requested_identity: crate::data::product_identity(requested)
+                        .map_err(|error| Error::Term(Box::new(error.to_string())))?,
+                    resolved_identity: crate::data::product_identity(resolved)
+                        .map_err(|error| Error::Term(Box::new(error.to_string())))?,
+                    distribution_source,
+                    official_filename,
+                    product_sha256,
+                    product_byte_length,
+                    archive_sha256,
+                    archive_byte_length,
+                    compression,
+                })
+            },
+        )
+        .collect::<NifResult<Vec<_>>>()?;
+    let policy = merge_options_from_terms(
+        position_tolerance_m,
+        clock_tolerance_s,
+        min_agree,
+        clock_min_common,
+        combine,
+        precedence_scope,
+        outlier_reject,
+        target_epoch_interval_s,
+        system_letters,
+        asserted_frame_label_sets,
+        helmert_frame_reconciliation,
+    )?;
+    let identity = Sp3MergeInputIdentity::new(&contributors, &policy)
+        .map_err(|error| Error::Term(Box::new(error.to_string())))?;
+    Ok((identity.schema_version, identity.stable_id))
 }
 
 /// Serialize a loaded SP3 product to standard SP3-c/-d text (the inverse of

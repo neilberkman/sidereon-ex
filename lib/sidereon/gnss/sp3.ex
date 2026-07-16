@@ -29,6 +29,7 @@ defmodule Sidereon.GNSS.SP3 do
   """
 
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
   alias Sidereon.GNSS.PreciseEphemerisSample
@@ -566,6 +567,89 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Build the versioned stable identity for exact SP3 artifacts and merge policy.
+
+  Contributor order and map order do not affect mean or median identity. With
+  `combine: :precedence`, source order is an effective policy control and is
+  therefore bound in order. Every contributor must carry complete
+  requested/resolved identity, distributor, product and archive digests and
+  lengths, official filename, and compression. Cache and HTTP observations are
+  intentionally excluded.
+  """
+  @spec merge_input_identity([map()], keyword()) :: {:ok, map()} | {:error, term()}
+  def merge_input_identity(contributors, opts \\ [])
+
+  def merge_input_identity(contributors, opts) when is_list(contributors) do
+    with {:ok, encoded} <- encode_merge_contributors(contributors),
+         {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])),
+         {:ok, precedence_scope} <-
+           normalize_precedence_scope(Keyword.get(opts, :precedence_scope, :cell)),
+         {:ok, outlier_reject} <- normalize_outlier_reject(Keyword.get(opts, :outlier_reject)),
+         {:ok, asserted_frame_label_sets} <-
+           normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])) do
+      position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
+      clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
+      min_agree = Keyword.get(opts, :min_agree, 2)
+      clock_min_common = Keyword.get(opts, :clock_min_common, 5)
+      combine = opts |> Keyword.get(:combine, :mean) |> to_string()
+      epoch_interval_s = Keyword.get(opts, :epoch_interval_s)
+      helmert = Keyword.get(opts, :helmert, false)
+
+      result =
+        NIF.sp3_merge_input_identity(
+          encoded,
+          position_tolerance_m,
+          clock_tolerance_s,
+          min_agree,
+          clock_min_common,
+          combine,
+          precedence_scope,
+          outlier_reject,
+          epoch_interval_s,
+          system_letters,
+          asserted_frame_label_sets,
+          helmert
+        )
+
+      case result do
+        {schema_version, stable_id} when is_integer(schema_version) and is_binary(stable_id) ->
+          {:ok,
+           %{
+             schema_version: schema_version,
+             stable_id: stable_id,
+             merge_policy: %{
+               position_tolerance_m: position_tolerance_m,
+               clock_tolerance_s: clock_tolerance_s,
+               min_agree: min_agree,
+               clock_min_common: clock_min_common,
+               combine: combine,
+               precedence_artifact_sha256:
+                 if(combine == "precedence",
+                   do: Enum.map(contributors, &Map.fetch!(&1, :product_sha256))
+                 ),
+               precedence_scope: precedence_scope,
+               outlier_reject: outlier_reject_map(outlier_reject),
+               epoch_interval_s: epoch_interval_s,
+               systems: system_letters,
+               asserted_frame_label_sets: asserted_frame_label_sets,
+               helmert: helmert
+             }
+           }}
+
+        {:error, _reason} = error ->
+          error
+
+        other ->
+          {:error, {:invalid_merge_input_identity, other}}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def merge_input_identity(_contributors, _opts), do: {:error, {:invalid_merge_contributors, :not_a_list}}
+
+  @doc """
   Estimate the per-epoch reference-clock offset of `other` relative to
   `reference` (the clock-datum primitive).
 
@@ -756,6 +840,58 @@ defmodule Sidereon.GNSS.SP3 do
     end
   end
 
+  defp encode_merge_contributors(contributors) do
+    contributors
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {contributor, index}, {:ok, encoded} ->
+      case encode_merge_contributor(contributor) do
+        {:ok, value} -> {:cont, {:ok, [value | encoded]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_merge_contributor, index, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, encoded} -> {:ok, Enum.reverse(encoded)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp encode_merge_contributor(%{
+         requested_identity: requested_identity,
+         resolved_identity: resolved_identity,
+         distribution_source: distribution_source,
+         official_filename: official_filename,
+         product_sha256: product_sha256,
+         product_byte_length: product_byte_length,
+         archive_sha256: archive_sha256,
+         archive_byte_length: archive_byte_length,
+         compression: compression
+       })
+       when is_atom(distribution_source) and is_binary(official_filename) and is_binary(product_sha256) and
+              is_integer(product_byte_length) and is_binary(archive_sha256) and is_integer(archive_byte_length) and
+              is_atom(compression) do
+    {:ok,
+     {
+       {ExactCache.identity_fields(requested_identity), ExactCache.identity_fields(resolved_identity)},
+       {Atom.to_string(distribution_source), official_filename},
+       {product_sha256, product_byte_length},
+       {archive_sha256, archive_byte_length},
+       Atom.to_string(compression)
+     }}
+  rescue
+    _error -> {:error, :identity}
+  end
+
+  defp encode_merge_contributor(_contributor), do: {:error, :incomplete}
+
+  defp outlier_reject_map(nil), do: nil
+
+  defp outlier_reject_map({position_tolerance_m, clock_tolerance_s}) do
+    %{
+      position_tolerance_m: position_tolerance_m,
+      clock_tolerance_s: clock_tolerance_s
+    }
+  end
+
   defp normalize_asserted_frame_label_sets(nil), do: {:ok, []}
 
   defp normalize_asserted_frame_label_sets(label_sets) when is_list(label_sets) do
@@ -799,13 +935,20 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   defp normalize_outlier_reject(%{} = value) do
-    position_m = Map.get(value, :position_m)
-    clock_ns = Map.get(value, :clock_ns)
+    case value do
+      %{position_tolerance_m: position_m, clock_tolerance_s: clock_s}
+      when is_number(position_m) and position_m >= 0 and is_number(clock_s) and clock_s >= 0 ->
+        {:ok, {position_m / 1.0, clock_s / 1.0}}
 
-    if is_number(position_m) and position_m >= 0 and is_number(clock_ns) and clock_ns >= 0 do
-      {:ok, {position_m / 1.0, clock_ns * 1.0e-9}}
-    else
-      {:error, {:invalid_outlier_reject, value}}
+      _other ->
+        position_m = Map.get(value, :position_m)
+        clock_ns = Map.get(value, :clock_ns)
+
+        if is_number(position_m) and position_m >= 0 and is_number(clock_ns) and clock_ns >= 0 do
+          {:ok, {position_m / 1.0, clock_ns * 1.0e-9}}
+        else
+          {:error, {:invalid_outlier_reject, value}}
+        end
     end
   end
 

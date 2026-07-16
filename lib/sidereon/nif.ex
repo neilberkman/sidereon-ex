@@ -963,6 +963,21 @@ defmodule Sidereon.NIF do
         _helmert_frame_reconciliation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_merge_input_identity(
+        _contributors,
+        _position_tolerance_m,
+        _clock_tolerance_s,
+        _min_agree,
+        _clock_min_common,
+        _combine,
+        _precedence_scope,
+        _outlier_reject,
+        _target_epoch_interval_s,
+        _system_letters,
+        _asserted_frame_label_sets,
+        _helmert_frame_reconciliation
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def crinex_encode(_text), do: :erlang.nif_error(:nif_not_loaded)

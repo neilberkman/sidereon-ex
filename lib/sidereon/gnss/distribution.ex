@@ -349,7 +349,23 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp do_acquire(request, opts) do
+  @doc false
+  @spec acquire_catalog_product(Data.Product.t(), keyword()) ::
+          {:ok, Result.t()} | {:error, error_reason() | term()}
+  def acquire_catalog_product(%Data.Product{} = product, opts \\ []) do
+    with {:ok, identity} <- catalog_product_identity(product),
+         :ok <- validate_request_identity(identity),
+         {:ok, location} <- catalog_direct_location(product, identity),
+         :ok <- validate_cache_lock_timeout(opts) do
+      do_acquire(
+        %Request{identity: identity, sources: [direct()]},
+        opts,
+        location
+      )
+    end
+  end
+
+  defp do_acquire(request, opts, direct_location \\ nil) do
     auth = Keyword.get(opts, :earthdata_auth, %EarthdataAuth{})
 
     request.sources
@@ -364,7 +380,17 @@ defmodule Sidereon.GNSS.Distribution do
           cache_lock_timeout_ms(opts),
           fn exact_cache ->
             :ok = ExactCache.cleanup_abandoned(exact_cache)
-            acquire_locked(request.identity, source, path, auth, attempts, opts, exact_cache)
+
+            acquire_locked(
+              request.identity,
+              source,
+              path,
+              auth,
+              attempts,
+              opts,
+              exact_cache,
+              direct_location
+            )
           end
         )
 
@@ -389,34 +415,63 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp finish_acquisition({attempts, _reason}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
 
-  defp acquire_locked(identity, source, path, auth, attempts, opts, exact_cache) do
+  defp acquire_locked(identity, source, path, auth, attempts, opts, exact_cache, direct_location) do
     case load_cache(path, identity, source.type, attempts, opts, exact_cache) do
       {:ok, %Result{} = result} ->
         {:ok, result}
 
       :miss ->
-        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, nil, exact_cache)
+        acquire_after_cache_miss(
+          identity,
+          source,
+          path,
+          auth,
+          attempts,
+          opts,
+          nil,
+          exact_cache,
+          direct_location
+        )
 
       {:error, {:cache_write_failed, _detail}} = error ->
         error
 
       {:error, cache_error} ->
-        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error, exact_cache)
+        acquire_after_cache_miss(
+          identity,
+          source,
+          path,
+          auth,
+          attempts,
+          opts,
+          cache_error,
+          exact_cache,
+          direct_location
+        )
     end
   end
 
-  defp acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error, exact_cache) do
+  defp acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error, exact_cache, direct_location) do
     network? = source.type in [:direct, :nasa_cddis]
 
     if network? and truthy?(Keyword.get(opts, :offline)) do
       {:error, cache_error || :offline_cache_miss}
     else
-      acquire_source(identity, source, path, auth, attempts, opts, exact_cache)
+      acquire_source(
+        identity,
+        source,
+        path,
+        auth,
+        attempts,
+        opts,
+        exact_cache,
+        direct_location
+      )
     end
   end
 
-  defp acquire_source(identity, source, _path, auth, attempts, opts, exact_cache) do
-    with {:ok, fetched} <- read_source(identity, source, auth, opts),
+  defp acquire_source(identity, source, _path, auth, attempts, opts, exact_cache, direct_location) do
+    with {:ok, fetched} <- read_source(identity, source, auth, opts, direct_location),
          :ok <- enforce_size(fetched.archive, max_archive_bytes(opts)),
          {:ok, compression} <- resolve_compression(source.compression, fetched.archive),
          {:ok, content} <- decompress(fetched.archive, compression, max_product_bytes(opts)),
@@ -437,35 +492,98 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp read_source(identity, %Source{type: :direct}, auth, opts) do
-    product = product_from_identity(identity)
-
-    with {:ok, url} <- Data.archive_url(product),
-         {:ok, compression} <- core(NIF.data_archive_compression(identity.analysis_center, identity.family)),
+  defp read_source(identity, %Source{type: :direct}, auth, opts, direct_location) do
+    with {:ok, %{url: url, compression: compression}} <-
+           direct_location(identity, direct_location),
          {:ok, fetched} <- download(url, :direct, auth, opts) do
-      {:ok, %{fetched | compression: normalize_compression(compression)}}
+      {:ok, %{fetched | compression: compression}}
     end
   end
 
-  defp read_source(identity, %Source{type: :nasa_cddis}, auth, opts) do
+  defp read_source(identity, %Source{type: :nasa_cddis}, auth, opts, _direct_location) do
     with {:ok, url} <- cddis_url(identity),
          {:ok, fetched} <- download(url, :nasa_cddis, auth, opts) do
       {:ok, %{fetched | compression: :gzip}}
     end
   end
 
-  defp read_source(_identity, %Source{type: :local_file, path: path}, _auth, _opts) when is_binary(path) do
+  defp read_source(_identity, %Source{type: :local_file, path: path}, _auth, _opts, _direct_location)
+       when is_binary(path) do
     case File.read(path) do
       {:ok, bytes} -> {:ok, local_fetch(bytes)}
       {:error, _reason} -> {:error, {:cache_read_failed, :local_file}}
     end
   end
 
-  defp read_source(_identity, %Source{type: :in_memory, content: bytes}, _auth, _opts) when is_binary(bytes),
-    do: {:ok, local_fetch(bytes)}
+  defp read_source(_identity, %Source{type: :in_memory, content: bytes}, _auth, _opts, _direct_location)
+       when is_binary(bytes), do: {:ok, local_fetch(bytes)}
 
-  defp read_source(_identity, %Source{type: type}, _auth, _opts),
+  defp read_source(_identity, %Source{type: type}, _auth, _opts, _direct_location),
     do: {:error, {:unsupported_distribution, type, "source input is invalid"}}
+
+  defp direct_location(identity, nil) do
+    product = product_from_identity(identity)
+
+    with {:ok, url} <- Data.archive_url(product),
+         {:ok, compression} <-
+           core(NIF.data_archive_compression(identity.analysis_center, identity.family)) do
+      {:ok, %{url: url, compression: normalize_compression(compression)}}
+    end
+  end
+
+  defp direct_location(_identity, %{url: url, compression: compression}),
+    do: {:ok, %{url: url, compression: compression}}
+
+  defp catalog_product_identity(product) do
+    case identity(product) do
+      {:ok, identity} ->
+        {:ok, identity}
+
+      {:error, _reason} ->
+        if is_binary(product.pattern) and String.starts_with?(product.pattern, "alias_") do
+          identity(%{
+            product
+            | filename: nil,
+              cache_filename: nil,
+              url: nil,
+              compression: nil,
+              span: nil,
+              pattern: nil
+          })
+        else
+          {:error, {:product_validation_failed, :catalog_identity}}
+        end
+    end
+  end
+
+  defp catalog_direct_location(%Data.Product{url: nil}, identity) do
+    direct_location(identity, nil)
+  end
+
+  defp catalog_direct_location(%Data.Product{} = product, _identity) do
+    with true <- product.product_type == "sp3",
+         true <- is_binary(product.issue),
+         {:ok, rows} <-
+           core(
+             NIF.data_ultra_sp3_locations(
+               product.center,
+               product.date.year,
+               product.date.month,
+               product.date.day,
+               product.issue
+             )
+           ),
+         {_pattern, _span, _sample, _filename, _url, compression} <-
+           Enum.find(rows, fn {pattern, span, sample, filename, url, row_compression} ->
+             pattern == product.pattern and span == product.span and sample == product.sample and
+               filename == product.filename and url == product.url and
+               row_compression == product.compression
+           end) do
+      {:ok, %{url: product.url, compression: normalize_compression(compression)}}
+    else
+      _ -> {:error, {:product_validation_failed, :catalog_location}}
+    end
+  end
 
   defp local_fetch(bytes) do
     %{
@@ -1570,8 +1688,8 @@ defmodule Sidereon.GNSS.Distribution do
          true <- fields.sample == identity.sample,
          true <- identity.format == expected_format,
          true <- identity.prediction_horizon_days == prediction_horizon(identity.analysis_center),
-         {:ok, canonical} <- identity |> product_from_identity() |> Data.canonical_filename(),
-         true <- canonical == identity.official_filename do
+         fields = ExactCache.identity_fields(identity),
+         :ok <- NIF.data_validate_exact_product_set([fields], [fields]) do
       :ok
     else
       {:error, _reason} = error -> error
