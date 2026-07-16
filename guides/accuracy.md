@@ -18,10 +18,9 @@ future live-oracle audit should regenerate those fixtures from the pinned Python
 environment and fail on any `git diff`; that is a separate release-audit task,
 not what `mix test` does today.
 
-The `:skyfield_parity` test tag is historical. It specifically enables the
-Skyfield-tagged coordinate/ephemeris parity tests; running
-`mix test --include skyfield_parity --exclude spk_file` also reruns the regular
-committed-fixture oracle tests because they are part of the normal suite.
+The `:skyfield_parity` test tag specifically selects the committed Skyfield
+coordinate-oracle tests. Run `mix test --only skyfield_parity`; the regular
+committed-fixture oracle tests remain part of the normal suite.
 
 ## Coordinate Transform Oracle Fixtures
 
@@ -51,9 +50,9 @@ precession, frame bias, and precise time scale conversions
 (UTC→TAI→TT→TDB→UT1). The FMA discipline in `mat3_vec3_mul` matches
 numpy's vectorized behavior.
 
-**Test tag:** `:skyfield_parity`, run with `mix test --include skyfield_parity`.
+**Test tag:** `:skyfield_parity`, run with `mix test --only skyfield_parity`.
 All four rows above are tagged `:skyfield_parity`, and CI runs
-`mix test --include skyfield_parity --exclude spk_file`
+`mix test --only skyfield_parity`
 (see `.github/workflows/ci.yml`), so all four are exercised on every
 push and pull request. This tag name should not be read as "all Sidereon oracle
 tests use Skyfield"; most GNSS and application-level oracle fixtures are
@@ -61,13 +60,12 @@ generated from scipy/numpy/gnssanalysis/georinex/Astropy recipes instead.
 
 ## SGP4 Propagation Oracle Fixture
 
-SGP4 propagation uses the published
-[`sgp4`](https://crates.io/crates/sgp4) Rust crate in AFSPC
-compatibility mode. The committed fixture validates the ISS propagation
-case against pinned Skyfield 1.49 vectors.
-
-The oracle test verifies position distance is < 1 mm for the ISS at
-274 minutes from epoch.
+SGP4 propagation uses Sidereon's pure-Rust port of Vallado's reference
+implementation. The core's committed Vallado verification corpus covers 33
+satellites and 198 propagation points (1,098 position/velocity component
+checks), all at 0 ULP against hex-captured outputs from Vallado's C++ reference.
+The Elixir surface also retains an end-to-end ISS propagation check against a
+pinned Skyfield 1.49 vector at the documented sub-millimetre tolerance.
 
 ## Orbit Determination Oracle Fixtures
 
@@ -132,8 +130,8 @@ lunar distance / 0.02 AU of 1 AU in `ephemeris_test.exs`); they are
 
 **Test tag:** `:spk_file`, requires `/tmp/de421.bsp`.
 
-**Not verified in CI.** CI runs `mix test --include skyfield_parity
---exclude spk_file`, so the Mars/Venus 0-ULP test is **excluded** from CI.
+**Not verified in CI.** CI runs `mix test --only skyfield_parity`, so the
+Mars/Venus 0-ULP test is **excluded** from CI.
 The `de421.bsp` fixture it depends on is not committed to the repository,
 so the only way to exercise this row is locally with the file present:
 `mix test --include spk_file` after placing `de421.bsp` at `/tmp/de421.bsp`.
