@@ -31,6 +31,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.GNSS.Constellation
   alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.DGNSS
+  alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.Frequencies
   alias Sidereon.GNSS.Fusion
   alias Sidereon.GNSS.Geometry
@@ -72,7 +73,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.SourceLocalization.Solution
   alias Sidereon.Terrain.MmapTerrain
 
-  @version "0.28.1"
+  @version "0.29.0"
   @source_url "https://github.com/neilberkman/sidereon-ex"
 
   def project do
@@ -141,6 +142,7 @@ defmodule Sidereon.MixProject do
       "README.md",
       "sidereon.livemd",
       "examples",
+      "guides",
       "CHANGELOG.md",
       "LICENSE"
     ] ++ Path.wildcard("checksum-*.exs")
@@ -212,7 +214,7 @@ defmodule Sidereon.MixProject do
           Ephemeris,
           NTRIP
         ],
-        "Data Sources": [Data, Sidereon.Constellation, Sidereon.Terrain, MmapTerrain],
+        "Data Sources": [Data, Distribution, Sidereon.Constellation, Sidereon.Terrain, MmapTerrain],
         Estimation: [
           Estimation,
           AlphaBetaGains,

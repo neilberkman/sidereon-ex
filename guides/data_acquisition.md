@@ -82,6 +82,106 @@ Build products through the catalog wrappers and fetch them to the GNSS cache:
 {:ok, clk_path} = Sidereon.GNSS.Data.fetch(clk_product)
 ```
 
+## Exact Product and Explicit Source Selection
+
+The exact-acquisition API treats product identity and distribution as separate
+public concepts. First build the catalog product, then list only the acceptable
+sources in priority order:
+
+```elixir
+alias Sidereon.GNSS.Data
+alias Sidereon.GNSS.Distribution
+
+{:ok, product} = Data.mgex_sp3(:cod, ~D[2020-06-25])
+
+{:ok, request} =
+  Data.request(product, [
+    Distribution.nasa_cddis(),
+    Distribution.direct()
+  ])
+
+{:ok, result} =
+  Data.acquire(request,
+    earthdata_auth:
+      Distribution.EarthdataAuth.bearer(System.fetch_env!("EARTHDATA_TOKEN"))
+  )
+
+result.path
+result.provenance.distribution_source
+result.provenance.sha256
+```
+
+Only the listed sources are tried. If CDDIS returns 404, the example may try the
+direct archive, but it retains the same publisher, analysis-center product line,
+solution class, issue, date, cadence, family, format, and official filename.
+Earlier failures appear in `result.provenance.attempts`.
+
+Caller-provided inputs use the same validation path:
+
+```elixir
+Distribution.local_file("/data/exact-product.sp3.gz")
+Distribution.in_memory(product_bytes, compression: :none)
+```
+
+These sources do not grant permission to relabel their contents. SP3 and IONEX
+bytes must parse and match the requested start date/time and cadence.
+
+## CDDIS and Earthdata Login
+
+SP3 CDDIS URLs use the GNSS-products GPS-week directory. Current long-name
+IONEX URLs use `ionex/<year>/<day-of-year>`. Both keep the identity's exact
+official filename and use gzip as transport packaging.
+
+Credentials are supplied by the caller. Besides bearer tokens, Earthdata's
+documented netrc mechanism is available:
+
+```text
+machine urs.earthdata.nasa.gov login EARTHDATA_USERNAME password EARTHDATA_PASSWORD
+```
+
+```elixir
+auth = Distribution.EarthdataAuth.netrc()
+{:ok, result} = Data.acquire(request, earthdata_auth: auth)
+```
+
+The bearer token, netrc path and password, cookies, authorization headers, and
+URL queries are excluded from errors and provenance. Redirects are restricted
+to approved HTTPS hosts. Cookies retain their documented host/domain, path, and
+secure restrictions.
+
+The path and authentication decisions follow these official public sources:
+
+- [NASA CDDIS archive access](https://www.earthdata.nasa.gov/centers/cddis-daac/archive-access)
+- [Earthdata curl and wget access](https://urs.earthdata.nasa.gov/documentation/for_users/data_access/curl_and_wget)
+- [Earthdata bearer-token example](https://urs.earthdata.nasa.gov/documentation/for_users/data_access/python_user_token_script)
+- [NASA precise orbit products](https://www.earthdata.nasa.gov/data/space-geodesy-techniques/gnss/precise-orbits-product)
+- [NASA GNSS atmospheric products](https://www.earthdata.nasa.gov/data/space-geodesy-techniques/gnss/atmospheric-products)
+- [IGS long product filename guidelines](https://files.igs.org/pub/resource/guidelines/Guidelines_for_Long_Product_Filenames_in_the_IGS.pdf)
+
+## Exact Acquisition Provenance and Cache
+
+`Distribution.Provenance` records requested and parsed/resolved identity,
+publisher, source, official filename, sanitized original and final URLs,
+retrieval time, decompressed and archive lengths and SHA-256 hashes,
+compression, ETag/Last-Modified when present, cache-hit state, and earlier
+source failures.
+
+The cache key includes the source and every exact identity discriminator. The
+decompressed product, original archive bytes, and a JSON provenance sidecar are
+stored separately. Hits recheck both hashes and lengths, identity, caller
+checksum, and a fresh SP3/IONEX semantic parse. Writes use flushed temporary
+files and atomic promotion; concurrent first requests share one in-process
+lock. The legacy `Data.fetch/2` API and cache layout remain unchanged.
+
+Failures remain typed tagged tuples, including authentication required/failed,
+authorization denied, product not published, retired endpoint, redirect policy,
+malformed URL, transport timeout/connection, HTML or invalid content, content
+length, download size, decompression, checksum, semantic validation, and cache
+read/write errors. Multiple failed sources return
+`{:all_distributors_failed, failures}`. Retries are bounded to meaningful
+transport errors, HTTP 408/429, and server errors; callers should retain the
+verified cache and keep public-service concurrency modest.
+
 Merged SP3 acquisition fetches each contributing center, parses the products, and
 uses the existing SP3 merge implementation:
 

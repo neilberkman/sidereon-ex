@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 0.27"}]
+  [{:sidereon, "~> 0.29"}]
 end
 ```
 
@@ -37,7 +37,7 @@ optional Rustler dependency in the consuming application:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 0.27"},
+    {:sidereon, "~> 0.29"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
@@ -210,8 +210,10 @@ positioning, and conjunction screening; more notebooks live under
 - **Terrain and data acquisition** DTED terrain elevation lookup with typed
   lookup options, memory-mappable terrain stores, EGM2008 raster-window geoid
   loading, and cache-first download of GNSS products (SP3, CLK, NAV, IONEX) and
-  DTED tiles from public archives, with canonical filenames and archive URLs for
-  callers who fetch their own. See `Sidereon.Terrain`, `Sidereon.GNSS.Data`.
+  DTED tiles from public archives. Exact SP3/IONEX requests can select direct,
+  NASA CDDIS/Earthdata, local-file, or in-memory sources without changing
+  product identity, and return verified provenance. See `Sidereon.Terrain`,
+  `Sidereon.GNSS.Data`, and `Sidereon.GNSS.Distribution`.
 - **GNSS/INS fusion** strapdown mechanization with an error-state EKF (UKF
   option), loose and tight coupling with typed measurement inputs, IGG-III loose
   updates, an RTS smoother, encoded-state restore helpers, a serializable filter

@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0]
+
+### Added
+
+- Added exact SP3/IONEX acquisition that separates product identity from an
+  ordered, caller-selected list of direct, NASA CDDIS/Earthdata, local-file,
+  and in-memory sources.
+- Added caller-supplied Earthdata bearer-token and netrc authentication,
+  source-specific verified caches, retained archive bytes, structured failures,
+  parsed semantic checks, and secret-free acquisition provenance.
+
+### Fixed
+
+- Accepts both binary and charlist results from OTP's user-cache-directory
+  helper, preserving the default cache path across supported OTP versions.
+
 ## [0.28.1]
 
 ### Fixed

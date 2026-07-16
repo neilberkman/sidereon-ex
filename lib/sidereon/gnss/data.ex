@@ -32,6 +32,7 @@ defmodule Sidereon.GNSS.Data do
   directly and provide their own transport and cache policy.
   """
 
+  alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
   alias Sidereon.SpaceWeather
@@ -173,6 +174,18 @@ defmodule Sidereon.GNSS.Data do
   """
   @spec allowed_hosts() :: [String.t()]
   def allowed_hosts, do: NIF.data_allowed_hosts()
+
+  @doc "Resolve an exact GNSS product identity independently from its distributor."
+  defdelegate identity(product), to: Distribution
+
+  @doc "Build an exact GNSS request with an ordered caller-controlled source list."
+  defdelegate request(product, sources), to: Distribution
+
+  @doc "Build the official NASA CDDIS URL for an exact SP3 or IONEX identity."
+  defdelegate cddis_url(identity), to: Distribution
+
+  @doc "Acquire an exact GNSS product and return its path plus public provenance."
+  defdelegate acquire(request, opts \\ []), to: Distribution
 
   @doc """
   GPS week number for a date.
@@ -1566,7 +1579,10 @@ defmodule Sidereon.GNSS.Data do
   defp user_cache_root do
     cond do
       function_exported?(:filename, :basedir, 2) ->
-        :filename.basedir(:user_cache, "sidereon") |> List.to_string()
+        case :filename.basedir(:user_cache, "sidereon") do
+          path when is_binary(path) -> path
+          path when is_list(path) -> List.to_string(path)
+        end
 
       is_binary(System.get_env("XDG_CACHE_HOME")) ->
         Path.join(System.fetch_env!("XDG_CACHE_HOME"), "sidereon")
