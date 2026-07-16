@@ -117,6 +117,8 @@ defmodule Sidereon.GNSS.NtripTest do
 
   test "fake caster observes immediate and paced GGA writes" do
     caster = start_fake_caster([accept_gga_probe()])
+    test_process = self()
+    position = %GgaPosition{lat_deg: 40.0, lon_deg: -105.0, height_m: 1600.0}
 
     assert {:ok, pid} =
              Ntrip.Stream.start_link(
@@ -127,7 +129,10 @@ defmodule Sidereon.GNSS.NtripTest do
                sink: self(),
                stall_timeout_s: 1.0,
                gga: %{
-                 position: %GgaPosition{lat_deg: 40.0, lon_deg: -105.0, height_m: 1600.0},
+                 position: fn ->
+                   send(test_process, {:gga_generated, System.monotonic_time(:millisecond)})
+                   position
+                 end,
                  interval_s: 0.1
                },
                reconnect: %{initial_s: 1.0, factor: 1.0, cap_s: 1.0, max_reconnects: 0}
@@ -138,12 +143,15 @@ defmodule Sidereon.GNSS.NtripTest do
     assert_receive {:fake_caster, :accepted, 1}, 1_000
     assert_receive {:fake_caster, :gga, 1, first_gga, first_delay_ms}, 1_000
     assert_receive {:fake_caster, :gga, 2, second_gga, second_delay_ms}, 1_000
+    assert_receive {:gga_generated, first_generated_ms}, 1_000
+    assert_receive {:gga_generated, second_generated_ms}, 1_000
 
     assert first_gga =~ "$GPGGA,"
     assert second_gga =~ "$GPGGA,"
     assert first_delay_ms < 300
-    assert second_delay_ms - first_delay_ms >= 75
-    assert second_delay_ms - first_delay_ms < 350
+    assert second_delay_ms < 400
+    assert second_generated_ms - first_generated_ms >= 75
+    assert second_generated_ms - first_generated_ms < 350
   end
 
   test "fake caster payload can ingest decoded SSR messages into a store sink" do
