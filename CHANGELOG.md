@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-07-16
+
 ### Added
 
 - Merged-SP3 reports now retain a complete exact artifact identity and separate
@@ -22,6 +24,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Merged-SP3 candidate downloads now use the exact acquisition and atomic cache
   path. Existing unverifiable files in the legacy flat merged-SP3 cache are not
   accepted as provenance-bearing contributors.
+- Updated the native backend to `sidereon` and `sidereon-core` 0.31.0.
 
 ### Compatibility
 
