@@ -357,10 +357,16 @@ defmodule Sidereon.GNSS.Distribution do
       path = cache_path(request.identity, source.type, opts)
 
       result =
-        ExactCache.with_lock(path, cache_lock_timeout_ms(opts), fn ->
-          :ok = ExactCache.cleanup_abandoned(path)
-          acquire_locked(request.identity, source, path, auth, attempts, opts)
-        end)
+        ExactCache.with_lock(
+          path,
+          request.identity,
+          source.type,
+          cache_lock_timeout_ms(opts),
+          fn exact_cache ->
+            :ok = ExactCache.cleanup_abandoned(exact_cache)
+            acquire_locked(request.identity, source, path, auth, attempts, opts, exact_cache)
+          end
+        )
 
       case result do
         {:ok, %Result{} = success} ->
@@ -383,33 +389,33 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp finish_acquisition({attempts, _reason}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
 
-  defp acquire_locked(identity, source, path, auth, attempts, opts) do
-    case load_cache(path, identity, source.type, attempts, opts) do
+  defp acquire_locked(identity, source, path, auth, attempts, opts, exact_cache) do
+    case load_cache(path, identity, source.type, attempts, opts, exact_cache) do
       {:ok, %Result{} = result} ->
         {:ok, result}
 
       :miss ->
-        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, nil)
+        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, nil, exact_cache)
 
       {:error, {:cache_write_failed, _detail}} = error ->
         error
 
       {:error, cache_error} ->
-        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error)
+        acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error, exact_cache)
     end
   end
 
-  defp acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error) do
+  defp acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error, exact_cache) do
     network? = source.type in [:direct, :nasa_cddis]
 
     if network? and truthy?(Keyword.get(opts, :offline)) do
       {:error, cache_error || :offline_cache_miss}
     else
-      acquire_source(identity, source, path, auth, attempts, opts)
+      acquire_source(identity, source, path, auth, attempts, opts, exact_cache)
     end
   end
 
-  defp acquire_source(identity, source, path, auth, attempts, opts) do
+  defp acquire_source(identity, source, _path, auth, attempts, opts, exact_cache) do
     with {:ok, fetched} <- read_source(identity, source, auth, opts),
          :ok <- enforce_size(fetched.archive, max_archive_bytes(opts)),
          {:ok, compression} <- resolve_compression(source.compression, fetched.archive),
@@ -426,7 +432,7 @@ defmodule Sidereon.GNSS.Distribution do
              content,
              attempts
            ),
-         {:ok, committed_path} <- commit_cache(path, content, fetched.archive, provenance) do
+         {:ok, committed_path} <- commit_cache(exact_cache, content, fetched.archive, provenance) do
       {:ok, %Result{path: committed_path, provenance: provenance}}
     end
   end
@@ -1129,7 +1135,9 @@ defmodule Sidereon.GNSS.Distribution do
     ])
   end
 
-  defp identity_key(identity) do
+  @doc "Returns the stable cache key derived from every exact identity field."
+  @spec identity_key(ProductIdentity.t()) :: String.t()
+  def identity_key(%ProductIdentity{} = identity) do
     payload =
       [
         identity.family,
@@ -1156,17 +1164,17 @@ defmodule Sidereon.GNSS.Distribution do
     "#{String.downcase(identity.publisher)}-#{identity.solution_class}-#{digest}"
   end
 
-  defp load_cache(path, identity, source, attempts, opts) do
-    case cache_files(path) do
+  defp load_cache(path, identity, source, attempts, opts, exact_cache) do
+    case cache_files(path, identity, source, exact_cache) do
       :miss ->
         :miss
 
-      {:error, _reason} = error ->
-        error
+      {:error, _reason} ->
+        {:error, {:cache_read_failed, Path.basename(path)}}
 
       {:ok, files, legacy?} ->
-        with {:ok, content} <- cache_read(files.product),
-             {:ok, archive} <- cache_read(files.archive),
+        with {:ok, content} <- cache_content(files, :product),
+             {:ok, archive} <- cache_content(files, :archive),
              {:ok, json} <- cache_provenance(files),
              {:ok, map} <- Jason.decode(json),
              {:ok, provenance} <- provenance_from_map(map),
@@ -1179,7 +1187,8 @@ defmodule Sidereon.GNSS.Distribution do
              :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
              {:ok, resolved} <- validate_product(identity, content),
              true <- resolved == provenance.resolved_identity,
-             {:ok, committed_path} <- maybe_migrate_cache(path, content, archive, provenance, files.product, legacy?) do
+             {:ok, committed_path} <-
+               maybe_migrate_cache(exact_cache, content, archive, provenance, files.product, legacy?) do
           {:ok,
            %Result{
              path: committed_path,
@@ -1193,8 +1202,8 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp cache_files(path) do
-    case ExactCache.committed_files(path) do
+  defp cache_files(path, _identity, _source, exact_cache) do
+    case ExactCache.committed_files(exact_cache) do
       {:ok, files} ->
         {:ok, files, false}
 
@@ -1205,21 +1214,27 @@ defmodule Sidereon.GNSS.Distribution do
              product: path,
              archive: archive_path(path),
              provenance: provenance_path(path),
+             product_bytes: nil,
+             archive_bytes: nil,
              provenance_bytes: nil
            }, true}
         else
           :miss
         end
 
-      {:error, _reason} = error ->
-        error
+      {:error, _reason} ->
+        {:error, {:cache_read_failed, Path.basename(path)}}
     end
   end
 
-  defp maybe_migrate_cache(path, content, archive, provenance, _product_path, true),
-    do: commit_cache(path, content, archive, provenance)
+  defp maybe_migrate_cache(exact_cache, content, archive, provenance, _product_path, true),
+    do: commit_cache(exact_cache, content, archive, provenance)
 
-  defp maybe_migrate_cache(_path, _content, _archive, _provenance, product_path, false), do: {:ok, product_path}
+  defp maybe_migrate_cache(_exact_cache, _content, _archive, _provenance, product_path, false), do: {:ok, product_path}
+
+  defp cache_content(%{product_bytes: bytes}, :product) when is_binary(bytes), do: {:ok, bytes}
+  defp cache_content(%{archive_bytes: bytes}, :archive) when is_binary(bytes), do: {:ok, bytes}
+  defp cache_content(files, kind), do: cache_read(Map.fetch!(files, kind))
 
   defp cache_read(path) do
     case File.read(path) do
@@ -1231,9 +1246,13 @@ defmodule Sidereon.GNSS.Distribution do
   defp cache_provenance(%{provenance_bytes: bytes}) when is_binary(bytes), do: {:ok, bytes}
   defp cache_provenance(files), do: cache_read(files.provenance)
 
-  defp commit_cache(path, content, archive, provenance) do
+  defp commit_cache(exact_cache, content, archive, provenance) do
     provenance_json = Jason.encode!(provenance_to_map(provenance), pretty: true)
-    ExactCache.publish(path, content, archive, provenance_json)
+
+    case ExactCache.publish(exact_cache, content, archive, provenance_json) do
+      {:ok, files} -> {:ok, files.product}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp archive_path(path), do: path <> ".archive"
@@ -1494,6 +1513,7 @@ defmodule Sidereon.GNSS.Distribution do
       %ProductIdentity{date: %Date{} = date} = identity, {:ok, fields} ->
         values = [
           identity.family,
+          identity.analysis_center,
           identity.publisher,
           identity.solution_class,
           identity.campaign,
@@ -1506,6 +1526,7 @@ defmodule Sidereon.GNSS.Distribution do
           identity.sample,
           identity.official_filename,
           identity.format,
+          identity.format_version || "",
           if(identity.prediction_horizon_days,
             do: to_string(identity.prediction_horizon_days),
             else: ""

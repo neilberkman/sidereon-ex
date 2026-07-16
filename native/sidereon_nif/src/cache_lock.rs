@@ -1,69 +1,201 @@
-//! OS file-lock and directory-sync glue for exact-product cache publication.
+//! Rustler bridge to the shared exact-product cache implementation.
 
-use fs2::FileExt;
-use rustler::{Encoder, Env, ResourceArc, Term};
-use std::fs::{File, OpenOptions};
-use std::io::ErrorKind;
+use crate::data::product_identity;
+use rustler::{Binary, Encoder, Env, OwnedBinary, ResourceArc, Term};
+use sidereon_core::data::DistributionSource;
+use sidereon_core::exact_cache::{ExactCacheGuard, ExactProductCache};
 use std::sync::Mutex;
+use std::time::Duration;
 
 mod atoms {
     rustler::atoms! {
         ok,
-        busy,
-        error
+        error,
+        miss,
     }
 }
 
-pub struct CacheLockResource {
-    file: Mutex<Option<File>>,
+pub struct ExactCacheResource {
+    cache: ExactProductCache,
+    guard: Mutex<Option<ExactCacheGuard>>,
 }
 
 #[rustler::resource_impl]
-impl rustler::Resource for CacheLockResource {}
+impl rustler::Resource for ExactCacheResource {}
 
-#[rustler::nif(schedule = "DirtyIo")]
-pub fn data_cache_lock_try<'a>(env: Env<'a>, path: String) -> Term<'a> {
-    let opened = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path);
-    let file = match opened {
-        Ok(file) => file,
-        Err(_) => return (atoms::error(), "open").encode(env),
-    };
-    match file.try_lock_exclusive() {
-        Ok(()) => (
-            atoms::ok(),
-            ResourceArc::new(CacheLockResource {
-                file: Mutex::new(Some(file)),
-            }),
-        )
-            .encode(env),
-        Err(error) if error.kind() == ErrorKind::WouldBlock => atoms::busy().encode(env),
-        Err(_) => (atoms::error(), "lock").encode(env),
+fn source(value: &str) -> Option<DistributionSource> {
+    match value {
+        "direct" => Some(DistributionSource::Direct),
+        "nasa_cddis" => Some(DistributionSource::NasaCddis),
+        "local_file" => Some(DistributionSource::LocalFile),
+        "in_memory" => Some(DistributionSource::InMemory),
+        _ => None,
+    }
+}
+
+fn binary<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
+    let mut binary = OwnedBinary::new(bytes.len()).expect("allocate exact-cache binary");
+    binary.as_mut_slice().copy_from_slice(bytes);
+    binary.release(env).encode(env)
+}
+
+fn encode_error<'a>(env: Env<'a>, error: impl std::fmt::Display) -> Term<'a> {
+    (atoms::error(), error.to_string()).encode(env)
+}
+
+fn encode_read<'a>(
+    env: Env<'a>,
+    result: Result<
+        Option<sidereon_core::exact_cache::CommittedExactCacheEntry>,
+        impl std::fmt::Display,
+    >,
+) -> Term<'a> {
+    match result {
+        Ok(None) => atoms::miss().encode(env),
+        Ok(Some(entry)) => rustler::types::tuple::make_tuple(
+            env,
+            &[
+                atoms::ok().encode(env),
+                entry
+                    .product_path
+                    .to_string_lossy()
+                    .into_owned()
+                    .encode(env),
+                entry
+                    .archive_path
+                    .to_string_lossy()
+                    .into_owned()
+                    .encode(env),
+                entry
+                    .provenance_path
+                    .to_string_lossy()
+                    .into_owned()
+                    .encode(env),
+                entry.entry_id.encode(env),
+                binary(env, &entry.product),
+                binary(env, &entry.archive),
+                binary(env, &entry.provenance),
+            ],
+        ),
+        Err(error) => encode_error(env, error),
     }
 }
 
 #[rustler::nif(schedule = "DirtyIo")]
-pub fn data_cache_lock_release<'a>(env: Env<'a>, lock: ResourceArc<CacheLockResource>) -> Term<'a> {
-    let mut guard = match lock.file.lock() {
+pub fn data_exact_cache_open<'a>(
+    env: Env<'a>,
+    path: String,
+    identity_fields: Vec<String>,
+    source_code: String,
+    timeout_ms: u64,
+) -> Term<'a> {
+    let result = product_identity(identity_fields)
+        .map_err(|error| error.to_string())
+        .and_then(|identity| {
+            let source =
+                source(&source_code).ok_or_else(|| "unknown distribution source".to_string())?;
+            ExactProductCache::new(path, identity, source).map_err(|error| error.to_string())
+        })
+        .and_then(|cache| {
+            cache
+                .lock(Duration::from_millis(timeout_ms))
+                .map(|guard| ExactCacheResource {
+                    cache,
+                    guard: Mutex::new(Some(guard)),
+                })
+                .map_err(|error| error.to_string())
+        });
+    match result {
+        Ok(cache) => (atoms::ok(), ResourceArc::new(cache)).encode(env),
+        Err(error) => encode_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_read<'a>(env: Env<'a>, cache: ResourceArc<ExactCacheResource>) -> Term<'a> {
+    let open = cache
+        .guard
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
+    if !open {
+        return encode_error(env, "exact-product cache lock is closed");
+    }
+    encode_read(env, cache.cache.read())
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_read_unlocked<'a>(
+    env: Env<'a>,
+    path: String,
+    identity_fields: Vec<String>,
+    source_code: String,
+) -> Term<'a> {
+    let result = product_identity(identity_fields)
+        .map_err(|error| error.to_string())
+        .and_then(|identity| {
+            let source =
+                source(&source_code).ok_or_else(|| "unknown distribution source".to_string())?;
+            ExactProductCache::new(path, identity, source).map_err(|error| error.to_string())
+        });
+    match result {
+        Ok(cache) => encode_read(env, cache.read()),
+        Err(error) => encode_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_publish<'a>(
+    env: Env<'a>,
+    cache: ResourceArc<ExactCacheResource>,
+    product: Binary<'a>,
+    archive: Binary<'a>,
+    provenance: Binary<'a>,
+) -> Term<'a> {
+    let guard = match cache.guard.lock() {
         Ok(guard) => guard,
-        Err(_) => return (atoms::error(), "poisoned").encode(env),
+        Err(_) => return encode_error(env, "exact-product cache lock was poisoned"),
     };
-    if let Some(file) = guard.take() {
-        if FileExt::unlock(&file).is_err() {
-            return (atoms::error(), "unlock").encode(env);
-        }
-    }
-    atoms::ok().encode(env)
+    let Some(guard) = guard.as_ref() else {
+        return encode_error(env, "exact-product cache lock is closed");
+    };
+    encode_read(
+        env,
+        cache
+            .cache
+            .publish(guard, &product, &archive, &provenance)
+            .map(Some),
+    )
 }
 
 #[rustler::nif(schedule = "DirtyIo")]
-pub fn data_cache_sync_directory<'a>(env: Env<'a>, path: String) -> Term<'a> {
-    match File::open(path).and_then(|directory| directory.sync_all()) {
+pub fn data_exact_cache_cleanup<'a>(
+    env: Env<'a>,
+    cache: ResourceArc<ExactCacheResource>,
+) -> Term<'a> {
+    let guard = match cache.guard.lock() {
+        Ok(guard) => guard,
+        Err(_) => return encode_error(env, "exact-product cache lock was poisoned"),
+    };
+    let Some(guard) = guard.as_ref() else {
+        return encode_error(env, "exact-product cache lock is closed");
+    };
+    match cache.cache.cleanup_abandoned(guard) {
         Ok(()) => atoms::ok().encode(env),
-        Err(_) => (atoms::error(), "sync_directory").encode(env),
+        Err(error) => encode_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_close<'a>(
+    env: Env<'a>,
+    cache: ResourceArc<ExactCacheResource>,
+) -> Term<'a> {
+    match cache.guard.lock() {
+        Ok(mut guard) => {
+            guard.take();
+            atoms::ok().encode(env)
+        }
+        Err(_) => encode_error(env, "exact-product cache lock was poisoned"),
     }
 }

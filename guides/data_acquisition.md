@@ -194,13 +194,16 @@ and directories are synchronized. Hits follow only that record, then recheck
 both hashes and lengths, full requested and resolved identities, source, caller
 checksum, and a fresh SP3/IONEX semantic parse.
 
-On Linux and macOS, threads, BEAM instances, and other cooperating processes use
-the same per-entry POSIX advisory lock across cache validation, acquisition, and
-commit. Waiters therefore reuse the completed entry instead of downloading it
-again. `:cache_lock_timeout_ms` bounds the wait (30,000 milliseconds by
-default); a timeout or cache write failure is terminal and never authorizes
-trying another distributor. The operating system releases a dead owner's lock,
-so abandoned transactions are removed only after a new owner holds it.
+On Linux and macOS, acquisition delegates to the shared Rust transaction
+implementation. Threads, BEAM instances, and other cooperating processes use
+its per-entry advisory lock across cache validation, acquisition, and commit.
+Waiters therefore reuse the completed entry instead of downloading it again.
+`:cache_lock_timeout_ms` bounds the wait (30,000 milliseconds by default); a
+timeout or cache write failure is terminal and never authorizes trying another
+distributor. The operating system releases a dead owner's lock, so abandoned
+transactions are removed only after a new owner holds it. Low-level callers can
+use `Sidereon.GNSS.ExactCache` directly while retaining responsibility for
+transport and product-format validation.
 
 Publication relies on same-filesystem atomic rename, synchronized regular
 files, and synchronized entry, entries, and commit-record directories. A process

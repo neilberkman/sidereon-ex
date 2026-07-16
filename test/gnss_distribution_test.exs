@@ -40,6 +40,8 @@ defmodule Sidereon.GNSS.DistributionTest do
              format: "SP3"
            } = identity
 
+    assert Distribution.identity_key(identity) == "cod-final-a91258c21fa4860c34ce"
+
     assert {:ok, @cddis_url} = Data.cddis_url(identity)
 
     {:ok, ionex} = Data.mgex_ionex(:esa, ~D[2020-06-24])
@@ -522,7 +524,13 @@ defmodule Sidereon.GNSS.DistributionTest do
 
     for {step, committed?} <- steps do
       cache = Path.join(root, Atom.to_string(step))
-      env = [{"SIDEREON_CACHE", cache}, {"SIDEREON_SOURCE", source}, {"SIDEREON_FAILPOINT", Atom.to_string(step)}]
+
+      env = [
+        {"SIDEREON_CACHE", cache},
+        {"SIDEREON_SOURCE", source},
+        {"SIDEREON_TEST_EXACT_CACHE_FAILPOINT", Atom.to_string(step)}
+      ]
+
       {_output, 86} = System.cmd(System.find_executable("elixir"), child_args(crash_child_code()), env: env)
 
       markers = Path.wildcard(Path.join(cache, "**/current.json"), match_dot: true)
@@ -551,42 +559,42 @@ defmodule Sidereon.GNSS.DistributionTest do
       |> Path.dirname()
       |> Path.join(@filename)
 
-    {:ok, old_files} = ExactCache.committed_files(stable)
+    {:ok, old_files} = ExactCache.committed_files(stable, request.identity, :in_memory)
     assert old_files.provenance_bytes == File.read!(old_files.provenance)
-    parent = self()
 
-    writer =
-      Task.async(fn ->
-        Process.put({ExactCache, :failpoint}, fn
-          :after_entry_sync ->
-            send(parent, {:entry_staged, self()})
+    staged =
+      Path.join([
+        Path.dirname(stable),
+        ExactCache.control_directory(),
+        "entries",
+        String.duplicate("e", 32)
+      ])
 
-            receive do
-              :publish -> :ok
-            end
+    File.mkdir_p!(staged)
+    File.cp!(old_files.product, Path.join(staged, Path.basename(old_files.product)))
+    File.cp!(old_files.archive, Path.join(staged, Path.basename(old_files.archive)))
+    File.cp!(old_files.provenance, Path.join(staged, Path.basename(old_files.provenance)))
 
-          _step ->
-            :ok
-        end)
-
-        ExactCache.with_lock(stable, 1_000, fn ->
-          ExactCache.publish(
-            stable,
-            File.read!(old_files.product),
-            File.read!(old_files.archive),
-            File.read!(old_files.provenance)
-          )
-        end)
-      end)
-
-    assert_receive {:entry_staged, writer_pid}, 5_000
-    assert {:ok, during_files} = ExactCache.committed_files(stable)
+    assert {:ok, during_files} = ExactCache.committed_files(stable, request.identity, :in_memory)
     assert during_files.entry_id == old_files.entry_id
-    send(writer_pid, :publish)
-    assert {:ok, new_path} = Task.await(writer, 5_000)
-    assert {:ok, new_files} = ExactCache.committed_files(stable)
+
+    assert {:ok, published} =
+             ExactCache.with_lock(stable, request.identity, :in_memory, 1_000, fn cache ->
+               ExactCache.publish(
+                 cache,
+                 old_files.product_bytes,
+                 old_files.archive_bytes,
+                 old_files.provenance_bytes
+               )
+             end)
+
+    assert published.product_bytes == old_files.product_bytes
+    assert published.archive_bytes == old_files.archive_bytes
+    assert published.provenance_bytes == old_files.provenance_bytes
+
+    assert {:ok, new_files} = ExactCache.committed_files(stable, request.identity, :in_memory)
     refute new_files.entry_id == old_files.entry_id
-    assert new_files.product == new_path
+    assert new_files.product == published.product
     assert {:ok, cached} = Data.acquire(request, cache_dir: root)
     assert cached.provenance.cache_hit
     assert File.read!(cached.path) == content
@@ -613,7 +621,7 @@ defmodule Sidereon.GNSS.DistributionTest do
     File.cp!(seeded.path, stable)
     File.cp!(seeded.path <> ".archive", stable <> ".archive")
     File.cp!(seeded.path <> ".provenance.json", stable <> ".provenance.json")
-    control = Path.join(Path.dirname(stable), ".sidereon-cache-v2")
+    control = Path.join(Path.dirname(stable), ExactCache.control_directory())
     File.mkdir_p!(control)
     File.write!(Path.join(control, "entries"), "not a directory")
     {:ok, counter} = Agent.start_link(fn -> 0 end)
@@ -646,7 +654,15 @@ defmodule Sidereon.GNSS.DistributionTest do
 
     ready = Path.join(root, "lock-ready")
     release = Path.join(root, "lock-release")
-    orphan = Path.join([Path.dirname(stable), ".sidereon-cache-v2", "entries", String.duplicate("f", 32)])
+
+    orphan =
+      Path.join([
+        Path.dirname(stable),
+        ExactCache.control_directory(),
+        "entries",
+        String.duplicate("f", 32)
+      ])
+
     env = [{"SIDEREON_STABLE", stable}, {"SIDEREON_READY", ready}, {"SIDEREON_RELEASE", release}]
 
     holder = Task.async(fn -> System.cmd(System.find_executable("elixir"), child_args(lock_child_code()), env: env) end)
@@ -654,7 +670,9 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert File.dir?(orphan)
 
     assert {:error, {:cache_write_failed, {:lock_timeout, _name}}} =
-             ExactCache.with_lock(stable, 25, fn -> ExactCache.cleanup_abandoned(stable) end)
+             ExactCache.with_lock(stable, seeded_request.identity, :in_memory, 25, fn cache ->
+               ExactCache.cleanup_abandoned(cache)
+             end)
 
     assert File.dir?(orphan)
 
@@ -669,7 +687,16 @@ defmodule Sidereon.GNSS.DistributionTest do
 
     File.write!(release, "release")
     assert {_output, 0} = Task.await(holder, 10_000)
-    assert :ok = ExactCache.with_lock(stable, 1_000, fn -> ExactCache.cleanup_abandoned(stable) end)
+
+    assert :ok =
+             ExactCache.with_lock(
+               stable,
+               seeded_request.identity,
+               :in_memory,
+               1_000,
+               fn cache -> ExactCache.cleanup_abandoned(cache) end
+             )
+
     refute File.exists?(orphan)
   end
 
@@ -817,8 +844,6 @@ defmodule Sidereon.GNSS.DistributionTest do
     alias Sidereon.GNSS.Data
     alias Sidereon.GNSS.Distribution
     content = File.read!(System.fetch_env!("SIDEREON_SOURCE"))
-    target = String.to_atom(System.fetch_env!("SIDEREON_FAILPOINT"))
-    Process.put({Sidereon.GNSS.ExactCache, :failpoint}, fn step -> if step == target, do: :erlang.halt(86), else: :ok end)
     {:ok, product} = Data.mgex_sp3(:cod, Date.new!(2026, 7, 12))
     {:ok, request} = Data.request(product, [Distribution.in_memory(content, compression: :none)])
     Data.acquire(request, cache_dir: System.fetch_env!("SIDEREON_CACHE"))
@@ -828,9 +853,13 @@ defmodule Sidereon.GNSS.DistributionTest do
   defp lock_child_code do
     """
     Application.ensure_all_started(:sidereon)
+    alias Sidereon.GNSS.Data
+    alias Sidereon.GNSS.Distribution
     stable = System.fetch_env!("SIDEREON_STABLE")
-    result = Sidereon.GNSS.ExactCache.with_lock(stable, 5_000, fn ->
-      orphan = Path.join([Path.dirname(stable), ".sidereon-cache-v2", "entries", String.duplicate("f", 32)])
+    {:ok, product} = Data.mgex_sp3(:cod, Date.new!(2026, 7, 12))
+    {:ok, request} = Data.request(product, [Distribution.in_memory(<<>>, compression: :none)])
+    result = Sidereon.GNSS.ExactCache.with_lock(stable, request.identity, :in_memory, 5_000, fn _cache ->
+      orphan = Path.join([Path.dirname(stable), Sidereon.GNSS.ExactCache.control_directory(), "entries", String.duplicate("f", 32)])
       File.mkdir_p!(orphan)
       File.write!(System.fetch_env!("SIDEREON_READY"), "ready")
       wait = fn wait -> if File.exists?(System.fetch_env!("SIDEREON_RELEASE")), do: :ok, else: (Process.sleep(5); wait.(wait)) end

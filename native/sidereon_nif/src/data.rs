@@ -46,19 +46,20 @@ fn identity_field_error(field: &'static str) -> DataCatalogError {
     DataCatalogError::InconsistentProductIdentity { field }
 }
 
-fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, DataCatalogError> {
-    if fields.len() != 14 {
+pub(crate) fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, DataCatalogError> {
+    if fields.len() != 16 {
         return Err(identity_field_error("field_count"));
     }
     let family = product_type(&fields[0])?;
-    let publisher = match fields[1].as_str() {
+    let analysis_center = center(&fields[1])?;
+    let publisher = match fields[2].as_str() {
         "IGS" => ProductPublisher::Igs,
         "COD" => ProductPublisher::Code,
         "ESA" => ProductPublisher::Esa,
         "GFZ" => ProductPublisher::Gfz,
         _ => return Err(identity_field_error("publisher")),
     };
-    let solution = match fields[2].as_str() {
+    let solution = match fields[3].as_str() {
         "final" => SolutionClass::Final,
         "rapid" => SolutionClass::Rapid,
         "ultra_rapid" => SolutionClass::UltraRapid,
@@ -66,53 +67,55 @@ fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, DataCatalogE
         "broadcast" => SolutionClass::Broadcast,
         _ => return Err(identity_field_error("solution_class")),
     };
-    let campaign = match fields[3].as_str() {
+    let campaign = match fields[4].as_str() {
         "OPS" => ProductCampaign::Operational,
         "MGN" => ProductCampaign::MultiGnss,
         "MGX" => ProductCampaign::MultiGnssExperiment,
         "BRD" => ProductCampaign::Broadcast,
         _ => return Err(identity_field_error("campaign")),
     };
-    let version = fields[4]
+    let version = fields[5]
         .parse::<u8>()
         .map_err(|_| identity_field_error("filename_version"))?;
-    let year = fields[5]
+    let year = fields[6]
         .parse::<i32>()
         .map_err(|_| identity_field_error("date"))?;
-    let month = fields[6]
+    let month = fields[7]
         .parse::<u8>()
         .map_err(|_| identity_field_error("date"))?;
-    let day = fields[7]
+    let day = fields[8]
         .parse::<u8>()
         .map_err(|_| identity_field_error("date"))?;
-    let format = match fields[12].as_str() {
+    let format = match fields[13].as_str() {
         "SP3" => ProductFormat::Sp3,
         "IONEX" => ProductFormat::Ionex,
         "RINEX_CLK" => ProductFormat::RinexClock,
         "RINEX_NAV" => ProductFormat::RinexNavigation,
         _ => return Err(identity_field_error("format")),
     };
-    let prediction_horizon_days = if fields[13].is_empty() {
+    let prediction_horizon_days = if fields[15].is_empty() {
         None
     } else {
         Some(
-            fields[13]
+            fields[15]
                 .parse::<u8>()
                 .map_err(|_| identity_field_error("prediction_horizon_days"))?,
         )
     };
     let identity = ProductIdentity {
         family,
+        analysis_center,
         publisher,
         solution,
         campaign,
         version,
         date: ProductDate::new(year, month, day)?,
-        issue: (!fields[8].is_empty()).then(|| fields[8].clone()),
-        span: fields[9].clone(),
-        sample: fields[10].clone(),
-        official_filename: fields[11].clone(),
+        issue: (!fields[9].is_empty()).then(|| fields[9].clone()),
+        span: fields[10].clone(),
+        sample: fields[11].clone(),
+        official_filename: fields[12].clone(),
         format,
+        format_version: (!fields[14].is_empty()).then(|| fields[14].clone()),
         prediction_horizon_days,
     };
     identity.validate()?;
