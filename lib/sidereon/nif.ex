@@ -12,12 +12,16 @@ checksum_current? =
 force_build =
   System.get_env("SIDEREON_BUILD") in ["1", "true"] or source_checkout? or not checksum_current?
 
+rustler_features =
+  if Mix.env() == :test, do: ["exact-cache-test-failpoints"], else: []
+
 defmodule Sidereon.NIF do
   @moduledoc false
 
   use RustlerPrecompiled,
     otp_app: :sidereon,
     crate: "sidereon_nif",
+    features: rustler_features,
     base_url: "https://github.com/neilberkman/sidereon-ex/releases/download/v#{version}",
     force_build: force_build,
     nif_versions: ["2.15"],

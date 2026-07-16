@@ -7,6 +7,9 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+exact-cache-test-failpoints = ["sidereon-core/exact-cache-test-failpoints"]
+
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
