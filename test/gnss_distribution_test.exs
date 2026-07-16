@@ -5,6 +5,7 @@ defmodule Sidereon.GNSS.DistributionTest do
   alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.Distribution.EarthdataAuth
   alias Sidereon.GNSS.Distribution.ProductIdentity
+  alias Sidereon.GNSS.ExactCache
 
   @date ~D[2026-07-12]
   @filename "COD0MGXFIN_20261930000_01D_05M_ORB.SP3"
@@ -367,7 +368,7 @@ defmodule Sidereon.GNSS.DistributionTest do
     end
 
     refute Enum.any?(regular_files(root), &String.ends_with?(&1, @filename))
-    refute Enum.any?(regular_files(root), &String.starts_with?(Path.basename(&1), ".sidereon-"))
+    refute Enum.any?(regular_files(root), &String.starts_with?(Path.basename(&1), ".current.json."))
   end
 
   test "archive byte limits are distinct from decompression errors", %{root: root} do
@@ -393,7 +394,7 @@ defmodule Sidereon.GNSS.DistributionTest do
                retries: 1
              )
 
-    assert File.ls!(root) == []
+    refute Enum.any?(regular_files(root), &String.ends_with?(&1, "current.json"))
   end
 
   test "a requested public format version must match parsed content", %{root: root} do
@@ -490,6 +491,188 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert Agent.get(counter, & &1) == 1
   end
 
+  test "independent OS processes racing one exact source acquire only once", %{root: root} do
+    outcomes = run_child_race(root, [:local_file, :local_file])
+    assert Enum.sort(Enum.map(outcomes, &elem(&1, 0))) == [false, true]
+    assert outcomes |> Enum.map(&elem(&1, 2)) |> Enum.uniq() |> length() == 1
+    assert outcomes |> Enum.map(&elem(&1, 3)) |> Enum.uniq() |> length() == 1
+  end
+
+  test "independent OS processes keep identical bytes from different sources isolated", %{root: root} do
+    outcomes = run_child_race(root, [:local_file, :in_memory])
+    refute Enum.any?(outcomes, &elem(&1, 0))
+    assert outcomes |> MapSet.new(&elem(&1, 1)) == MapSet.new([:local_file, :in_memory])
+    assert outcomes |> Enum.map(&elem(&1, 2)) |> Enum.uniq() |> length() == 2
+    assert outcomes |> Enum.map(&elem(&1, 3)) |> Enum.uniq() |> length() == 1
+  end
+
+  test "process death at each publication boundary accepts only none or a complete entry", %{root: root} do
+    source = Path.join(root, "crash-source.SP3")
+    File.write!(source, sp3_body(@date))
+
+    steps = [
+      after_payload: false,
+      after_archive: false,
+      after_metadata: false,
+      after_entry_sync: false,
+      after_marker_write: false,
+      after_marker_rename: true,
+      after_commit_sync: true
+    ]
+
+    for {step, committed?} <- steps do
+      cache = Path.join(root, Atom.to_string(step))
+      env = [{"SIDEREON_CACHE", cache}, {"SIDEREON_SOURCE", source}, {"SIDEREON_FAILPOINT", Atom.to_string(step)}]
+      {_output, 86} = System.cmd(System.find_executable("elixir"), child_args(crash_child_code()), env: env)
+
+      markers = Path.wildcard(Path.join(cache, "**/current.json"), match_dot: true)
+      assert markers != [] == committed?
+
+      {:ok, product} = Data.mgex_sp3(:cod, @date)
+      {:ok, request} = Data.request(product, [Distribution.in_memory(File.read!(source))])
+      assert {:ok, result} = Data.acquire(request, cache_dir: cache)
+      assert result.provenance.cache_hit == committed?
+      assert File.read!(result.path) == File.read!(source)
+      assert result.provenance.sha256 == sha256(File.read!(result.path))
+    end
+  end
+
+  test "an existing entry remains current until one commit-record rename", %{root: root} do
+    content = sp3_body(@date)
+    {:ok, product} = Data.mgex_sp3(:cod, @date)
+    {:ok, request} = Data.request(product, [Distribution.in_memory(content)])
+    {:ok, first} = Data.acquire(request, cache_dir: root)
+
+    stable =
+      first.path
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.join(@filename)
+
+    {:ok, old_files} = ExactCache.committed_files(stable)
+    assert old_files.provenance_bytes == File.read!(old_files.provenance)
+    parent = self()
+
+    writer =
+      Task.async(fn ->
+        Process.put({ExactCache, :failpoint}, fn
+          :after_entry_sync ->
+            send(parent, {:entry_staged, self()})
+
+            receive do
+              :publish -> :ok
+            end
+
+          _step ->
+            :ok
+        end)
+
+        ExactCache.with_lock(stable, 1_000, fn ->
+          ExactCache.publish(
+            stable,
+            File.read!(old_files.product),
+            File.read!(old_files.archive),
+            File.read!(old_files.provenance)
+          )
+        end)
+      end)
+
+    assert_receive {:entry_staged, writer_pid}, 5_000
+    assert {:ok, during_files} = ExactCache.committed_files(stable)
+    assert during_files.entry_id == old_files.entry_id
+    send(writer_pid, :publish)
+    assert {:ok, new_path} = Task.await(writer, 5_000)
+    assert {:ok, new_files} = ExactCache.committed_files(stable)
+    refute new_files.entry_id == old_files.entry_id
+    assert new_files.product == new_path
+    assert {:ok, cached} = Data.acquire(request, cache_dir: root)
+    assert cached.provenance.cache_hit
+    assert File.read!(cached.path) == content
+  end
+
+  test "a failed legacy migration is terminal before transport", %{root: root} do
+    body = :zlib.gzip(sp3_body(@date))
+    seed_root = Path.join(root, "legacy-seed")
+    target_root = Path.join(root, "legacy-target")
+    client = fn _url, _opts -> {:ok, 200, [], body} end
+    request = request!([Distribution.nasa_cddis()])
+    assert {:ok, seeded} = Data.acquire(request, cache_dir: seed_root, http_client: client)
+
+    seed_stable =
+      seeded.path
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.join(@filename)
+
+    stable = Path.join(target_root, Path.relative_to(seed_stable, seed_root))
+    File.mkdir_p!(Path.dirname(stable))
+    File.cp!(seeded.path, stable)
+    File.cp!(seeded.path <> ".archive", stable <> ".archive")
+    File.cp!(seeded.path <> ".provenance.json", stable <> ".provenance.json")
+    control = Path.join(Path.dirname(stable), ".sidereon-cache-v2")
+    File.mkdir_p!(control)
+    File.write!(Path.join(control, "entries"), "not a directory")
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    should_not_run = fn _url, _opts ->
+      Agent.update(counter, &(&1 + 1))
+      {:ok, 200, [], body}
+    end
+
+    assert {:error, {:cache_write_failed, _detail}} =
+             Data.acquire(request, cache_dir: target_root, http_client: should_not_run)
+
+    assert Agent.get(counter, & &1) == 0
+  end
+
+  test "abandoned cleanup cannot pass a live OS writer lock", %{root: root} do
+    source = Path.join(root, "lock-source.SP3")
+    File.write!(source, sp3_body(@date))
+    {:ok, product} = Data.mgex_sp3(:cod, @date)
+    {:ok, seeded_request} = Data.request(product, [Distribution.in_memory(File.read!(source))])
+    {:ok, seeded} = Data.acquire(seeded_request, cache_dir: root)
+
+    stable =
+      seeded.path
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.join(@filename)
+
+    ready = Path.join(root, "lock-ready")
+    release = Path.join(root, "lock-release")
+    orphan = Path.join([Path.dirname(stable), ".sidereon-cache-v2", "entries", String.duplicate("f", 32)])
+    env = [{"SIDEREON_STABLE", stable}, {"SIDEREON_READY", ready}, {"SIDEREON_RELEASE", release}]
+
+    holder = Task.async(fn -> System.cmd(System.find_executable("elixir"), child_args(lock_child_code()), env: env) end)
+    wait_for_paths!([ready])
+    assert File.dir?(orphan)
+
+    assert {:error, {:cache_write_failed, {:lock_timeout, _name}}} =
+             ExactCache.with_lock(stable, 25, fn -> ExactCache.cleanup_abandoned(stable) end)
+
+    assert File.dir?(orphan)
+
+    {:ok, two_sources} =
+      Data.request(product, [
+        Distribution.in_memory(File.read!(source)),
+        Distribution.local_file(source, compression: :none)
+      ])
+
+    assert {:error, {:cache_write_failed, {:lock_timeout, _name}}} =
+             Data.acquire(two_sources, cache_dir: root, cache_lock_timeout_ms: 25)
+
+    File.write!(release, "release")
+    assert {_output, 0} = Task.await(holder, 10_000)
+    assert :ok = ExactCache.with_lock(stable, 1_000, fn -> ExactCache.cleanup_abandoned(stable) end)
+    refute File.exists?(orphan)
+  end
+
   test "ordered fallback preserves identity and records the failed source", %{root: root} do
     body = sp3_body(@date)
 
@@ -557,6 +740,119 @@ defmodule Sidereon.GNSS.DistributionTest do
     |> Path.join("**/*")
     |> Path.wildcard(match_dot: true)
     |> Enum.filter(&File.regular?/1)
+  end
+
+  defp run_child_race(root, source_kinds) do
+    source = Path.join(root, "process-source.SP3")
+    cache = Path.join(root, "process-cache")
+    start = Path.join(root, "process-start")
+    File.write!(source, sp3_body(@date))
+
+    tasks =
+      source_kinds
+      |> Enum.with_index()
+      |> Enum.map(fn {kind, index} ->
+        ready = Path.join(root, "process-ready-#{index}")
+
+        env = [
+          {"SIDEREON_CACHE", cache},
+          {"SIDEREON_SOURCE", source},
+          {"SIDEREON_SOURCE_KIND", Atom.to_string(kind)},
+          {"SIDEREON_READY", ready},
+          {"SIDEREON_START", start}
+        ]
+
+        task =
+          Task.async(fn ->
+            System.cmd(System.find_executable("elixir"), child_args(acquire_child_code()), env: env)
+          end)
+
+        {task, ready}
+      end)
+
+    wait_for_paths!(Enum.map(tasks, &elem(&1, 1)))
+    File.write!(start, "start")
+
+    Enum.map(tasks, fn {task, _ready} ->
+      assert {output, 0} = Task.await(task, 20_000)
+      encoded = output |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "RESULT "))
+      assert is_binary(encoded), output
+      encoded |> String.replace_prefix("RESULT ", "") |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+    end)
+  end
+
+  defp child_args(code) do
+    code_paths =
+      :code.get_path()
+      |> Enum.map(&(&1 |> List.to_string() |> Path.expand()))
+      |> Enum.flat_map(&["-pa", &1])
+
+    code_paths ++ ["-e", code]
+  end
+
+  defp acquire_child_code do
+    """
+    Application.ensure_all_started(:sidereon)
+    alias Sidereon.GNSS.Data
+    alias Sidereon.GNSS.Distribution
+    content = File.read!(System.fetch_env!("SIDEREON_SOURCE"))
+    source = case System.fetch_env!("SIDEREON_SOURCE_KIND") do
+      "local_file" -> Distribution.local_file(System.fetch_env!("SIDEREON_SOURCE"), compression: :none)
+      "in_memory" -> Distribution.in_memory(content, compression: :none)
+    end
+    {:ok, product} = Data.mgex_sp3(:cod, Date.new!(2026, 7, 12))
+    {:ok, request} = Data.request(product, [source])
+    File.write!(System.fetch_env!("SIDEREON_READY"), "ready")
+    wait = fn wait -> if File.exists?(System.fetch_env!("SIDEREON_START")), do: :ok, else: (Process.sleep(5); wait.(wait)) end
+    wait.(wait)
+    {:ok, result} = Data.acquire(request, cache_dir: System.fetch_env!("SIDEREON_CACHE"))
+    payload = {result.provenance.cache_hit, result.provenance.distribution_source, result.path, result.provenance.sha256}
+    IO.puts("RESULT " <> Base.encode64(:erlang.term_to_binary(payload)))
+    """
+  end
+
+  defp crash_child_code do
+    """
+    Application.ensure_all_started(:sidereon)
+    alias Sidereon.GNSS.Data
+    alias Sidereon.GNSS.Distribution
+    content = File.read!(System.fetch_env!("SIDEREON_SOURCE"))
+    target = String.to_atom(System.fetch_env!("SIDEREON_FAILPOINT"))
+    Process.put({Sidereon.GNSS.ExactCache, :failpoint}, fn step -> if step == target, do: :erlang.halt(86), else: :ok end)
+    {:ok, product} = Data.mgex_sp3(:cod, Date.new!(2026, 7, 12))
+    {:ok, request} = Data.request(product, [Distribution.in_memory(content, compression: :none)])
+    Data.acquire(request, cache_dir: System.fetch_env!("SIDEREON_CACHE"))
+    """
+  end
+
+  defp lock_child_code do
+    """
+    Application.ensure_all_started(:sidereon)
+    stable = System.fetch_env!("SIDEREON_STABLE")
+    result = Sidereon.GNSS.ExactCache.with_lock(stable, 5_000, fn ->
+      orphan = Path.join([Path.dirname(stable), ".sidereon-cache-v2", "entries", String.duplicate("f", 32)])
+      File.mkdir_p!(orphan)
+      File.write!(System.fetch_env!("SIDEREON_READY"), "ready")
+      wait = fn wait -> if File.exists?(System.fetch_env!("SIDEREON_RELEASE")), do: :ok, else: (Process.sleep(5); wait.(wait)) end
+      wait.(wait)
+    end)
+    :ok = result
+    """
+  end
+
+  defp wait_for_paths!(paths) do
+    deadline = System.monotonic_time(:millisecond) + 10_000
+    wait_for_paths!(paths, deadline)
+  end
+
+  defp wait_for_paths!(paths, deadline) do
+    if Enum.all?(paths, &File.exists?/1) do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline, do: flunk("child process did not reach barrier")
+      Process.sleep(5)
+      wait_for_paths!(paths, deadline)
+    end
   end
 
   defp sp3_body(date) do

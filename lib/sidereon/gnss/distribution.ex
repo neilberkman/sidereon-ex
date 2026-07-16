@@ -14,6 +14,7 @@ defmodule Sidereon.GNSS.Distribution do
   """
 
   alias Sidereon.GNSS.Data
+  alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.Ionosphere
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
@@ -21,6 +22,7 @@ defmodule Sidereon.GNSS.Distribution do
   @default_max_archive_bytes 64 * 1024 * 1024
   @default_max_product_bytes 500 * 1024 * 1024
   @default_timeout_s 30.0
+  @default_cache_lock_timeout_ms 30_000
   @default_retries 3
   @default_backoff_s 0.5
   @max_redirects 8
@@ -337,6 +339,7 @@ defmodule Sidereon.GNSS.Distribution do
   @spec acquire(Request.t(), keyword()) :: {:ok, Result.t()} | {:error, error_reason() | term()}
   def acquire(%Request{} = request, opts \\ []) do
     with :ok <- validate_request_identity(request.identity),
+         :ok <- validate_cache_lock_timeout(opts),
          {:ok, sources} <- normalize_sources(request.sources),
          true <- sources != [] do
       do_acquire(%{request | sources: sources}, opts)
@@ -354,13 +357,17 @@ defmodule Sidereon.GNSS.Distribution do
       path = cache_path(request.identity, source.type, opts)
 
       result =
-        :global.trans({{__MODULE__, path}, self()}, fn ->
+        ExactCache.with_lock(path, cache_lock_timeout_ms(opts), fn ->
+          :ok = ExactCache.cleanup_abandoned(path)
           acquire_locked(request.identity, source, path, auth, attempts, opts)
         end)
 
       case result do
         {:ok, %Result{} = success} ->
           {:halt, {:ok, success}}
+
+        {:error, {:cache_write_failed, _detail}} = error ->
+          {:halt, error}
 
         {:error, reason} ->
           failure = source_failure(source.type, reason)
@@ -371,6 +378,7 @@ defmodule Sidereon.GNSS.Distribution do
   end
 
   defp finish_acquisition({:ok, %Result{} = result}), do: {:ok, result}
+  defp finish_acquisition({:error, _reason} = error), do: error
   defp finish_acquisition({[_one], reason}), do: {:error, reason}
 
   defp finish_acquisition({attempts, _reason}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
@@ -382,6 +390,9 @@ defmodule Sidereon.GNSS.Distribution do
 
       :miss ->
         acquire_after_cache_miss(identity, source, path, auth, attempts, opts, nil)
+
+      {:error, {:cache_write_failed, _detail}} = error ->
+        error
 
       {:error, cache_error} ->
         acquire_after_cache_miss(identity, source, path, auth, attempts, opts, cache_error)
@@ -415,8 +426,8 @@ defmodule Sidereon.GNSS.Distribution do
              content,
              attempts
            ),
-         :ok <- commit_cache(path, content, fetched.archive, provenance) do
-      {:ok, %Result{path: path, provenance: provenance}}
+         {:ok, committed_path} <- commit_cache(path, content, fetched.archive, provenance) do
+      {:ok, %Result{path: committed_path, provenance: provenance}}
     end
   end
 
@@ -1146,30 +1157,69 @@ defmodule Sidereon.GNSS.Distribution do
   end
 
   defp load_cache(path, identity, source, attempts, opts) do
-    if File.exists?(path) do
-      with {:ok, content} <- cache_read(path),
-           {:ok, archive} <- cache_read(archive_path(path)),
-           {:ok, json} <- cache_read(provenance_path(path)),
-           {:ok, map} <- Jason.decode(json),
-           {:ok, provenance} <- provenance_from_map(map),
-           true <- provenance.requested_identity == identity,
-           true <- provenance.distribution_source == source,
-           true <- provenance.sha256 == sha256(content),
-           true <- provenance.byte_length == byte_size(content),
-           true <- provenance.archive_sha256 == sha256(archive),
-           true <- provenance.archive_byte_length == byte_size(archive),
-           :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
-           {:ok, resolved} <- validate_product(identity, content),
-           true <- resolved == provenance.resolved_identity do
-        {:ok, %Result{path: path, provenance: %{provenance | cache_hit: true, attempts: Enum.reverse(attempts)}}}
-      else
-        {:error, {:checksum_mismatch, _, _} = reason} -> {:error, reason}
-        _ -> {:error, {:cache_read_failed, Path.basename(path)}}
-      end
-    else
-      :miss
+    case cache_files(path) do
+      :miss ->
+        :miss
+
+      {:error, _reason} = error ->
+        error
+
+      {:ok, files, legacy?} ->
+        with {:ok, content} <- cache_read(files.product),
+             {:ok, archive} <- cache_read(files.archive),
+             {:ok, json} <- cache_provenance(files),
+             {:ok, map} <- Jason.decode(json),
+             {:ok, provenance} <- provenance_from_map(map),
+             true <- provenance.requested_identity == identity,
+             true <- provenance.distribution_source == source,
+             true <- provenance.sha256 == sha256(content),
+             true <- provenance.byte_length == byte_size(content),
+             true <- provenance.archive_sha256 == sha256(archive),
+             true <- provenance.archive_byte_length == byte_size(archive),
+             :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
+             {:ok, resolved} <- validate_product(identity, content),
+             true <- resolved == provenance.resolved_identity,
+             {:ok, committed_path} <- maybe_migrate_cache(path, content, archive, provenance, files.product, legacy?) do
+          {:ok,
+           %Result{
+             path: committed_path,
+             provenance: %{provenance | cache_hit: true, attempts: Enum.reverse(attempts)}
+           }}
+        else
+          {:error, {:checksum_mismatch, _, _} = reason} -> {:error, reason}
+          {:error, {:cache_write_failed, _detail}} = error -> error
+          _ -> {:error, {:cache_read_failed, Path.basename(path)}}
+        end
     end
   end
+
+  defp cache_files(path) do
+    case ExactCache.committed_files(path) do
+      {:ok, files} ->
+        {:ok, files, false}
+
+      :miss ->
+        if File.exists?(path) do
+          {:ok,
+           %{
+             product: path,
+             archive: archive_path(path),
+             provenance: provenance_path(path),
+             provenance_bytes: nil
+           }, true}
+        else
+          :miss
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp maybe_migrate_cache(path, content, archive, provenance, _product_path, true),
+    do: commit_cache(path, content, archive, provenance)
+
+  defp maybe_migrate_cache(_path, _content, _archive, _provenance, product_path, false), do: {:ok, product_path}
 
   defp cache_read(path) do
     case File.read(path) do
@@ -1178,87 +1228,12 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
+  defp cache_provenance(%{provenance_bytes: bytes}) when is_binary(bytes), do: {:ok, bytes}
+  defp cache_provenance(files), do: cache_read(files.provenance)
+
   defp commit_cache(path, content, archive, provenance) do
-    directory = Path.dirname(path)
-
-    with :ok <- ensure_dir(directory) do
-      write_cache_temps(
-        directory,
-        [
-          {:data, content},
-          {:archive, archive},
-          {:provenance, Jason.encode!(provenance_to_map(provenance), pretty: true)}
-        ],
-        [],
-        fn temps ->
-          data_tmp = Keyword.fetch!(temps, :data)
-          archive_tmp = Keyword.fetch!(temps, :archive)
-          provenance_tmp = Keyword.fetch!(temps, :provenance)
-
-          with :ok <- rename(archive_tmp, archive_path(path)),
-               :ok <- rename(provenance_tmp, provenance_path(path)) do
-            rename(data_tmp, path)
-          end
-        end
-      )
-    end
-  end
-
-  defp write_cache_temps(_directory, [], temps, commit) do
-    commit.(temps)
-  after
-    Enum.each(temps, fn {_name, path} -> File.rm(path) end)
-  end
-
-  defp write_cache_temps(directory, [{name, bytes} | rest], temps, commit) do
-    case write_temp(directory, bytes) do
-      {:ok, path} ->
-        write_cache_temps(directory, rest, [{name, path} | temps], commit)
-
-      {:error, _reason} = error ->
-        Enum.each(temps, fn {_name, path} -> File.rm(path) end)
-        error
-    end
-  end
-
-  defp ensure_dir(directory) do
-    case File.mkdir_p(directory) do
-      :ok -> :ok
-      {:error, _reason} -> {:error, {:cache_write_failed, {:mkdir, directory}}}
-    end
-  end
-
-  defp write_temp(directory, bytes) do
-    path = Path.join(directory, ".sidereon-#{System.unique_integer([:positive, :monotonic])}")
-
-    case :file.open(String.to_charlist(path), [:write, :binary, :exclusive]) do
-      {:ok, io} ->
-        result =
-          with :ok <- :file.write(io, bytes),
-               :ok <- :file.sync(io),
-               :ok <- :file.close(io) do
-            {:ok, path}
-          else
-            _ -> {:error, {:cache_write_failed, {:write, Path.basename(path)}}}
-          end
-
-        if match?({:error, _}, result) do
-          :file.close(io)
-          File.rm(path)
-        end
-
-        result
-
-      {:error, _reason} ->
-        {:error, {:cache_write_failed, {:open, Path.basename(path)}}}
-    end
-  end
-
-  defp rename(from, to) do
-    case File.rename(from, to) do
-      :ok -> :ok
-      {:error, _reason} -> {:error, {:cache_write_failed, {:rename, Path.basename(to)}}}
-    end
+    provenance_json = Jason.encode!(provenance_to_map(provenance), pretty: true)
+    ExactCache.publish(path, content, archive, provenance_json)
   end
 
   defp archive_path(path), do: path <> ".archive"
@@ -1624,6 +1599,14 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp max_archive_bytes(opts), do: Keyword.get(opts, :max_archive_bytes, @default_max_archive_bytes)
   defp max_product_bytes(opts), do: Keyword.get(opts, :max_product_bytes, @default_max_product_bytes)
+  defp cache_lock_timeout_ms(opts), do: Keyword.get(opts, :cache_lock_timeout_ms, @default_cache_lock_timeout_ms)
+
+  defp validate_cache_lock_timeout(opts) do
+    case cache_lock_timeout_ms(opts) do
+      value when is_integer(value) and value >= 0 -> :ok
+      _ -> {:error, {:cache_write_failed, {:invalid_lock_timeout, :cache_lock_timeout_ms}}}
+    end
+  end
 
   defp sleep_backoff(opts, attempt) do
     backoff = Keyword.get(opts, :backoff_s, @default_backoff_s)

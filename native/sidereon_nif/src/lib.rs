@@ -8,6 +8,7 @@ mod bias;
 mod bodies;
 mod broadcast;
 mod broadcast_comparison;
+mod cache_lock;
 mod carrier_phase;
 mod cdm;
 mod clock_stability;

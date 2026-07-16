@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 rustler = "0.37.3"
 chrono = "0.4"
 serde_json = "1"
+fs2 = "0.4"
 sidereon-core = "=0.29.2"
 sidereon = "=0.29.2"
 trust-region-least-squares = "0.9.1"

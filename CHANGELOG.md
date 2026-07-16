@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Publishes exact-product cache entries as immutable payload/archive/provenance
+  transactions selected by one atomic digest-bound commit record. Cache hits
+  cannot observe a mixed update after independent BEAM instances race or a
+  process dies at a publication boundary.
+- Coordinates exact acquisition across Linux and macOS processes with a bounded
+  POSIX advisory lock. Dead owners release automatically, waiters avoid a second
+  acquisition, and abandoned transactions are removed only by a lock owner.
+- Revalidates and atomically migrates valid 0.29.0-0.29.2 cache triples without
+  reacquisition. Cache lock/write failures are terminal and never authorize a
+  distributor change.
+
+### Added
+
+- Added the optional `:cache_lock_timeout_ms` acquisition option, defaulting to
+  30,000 milliseconds.
+
 ## [0.29.2]
 
 ### Added
