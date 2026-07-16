@@ -173,9 +173,12 @@ defmodule Sidereon.GNSS.Data do
 
   defmodule MergeReport do
     @moduledoc """
-    Audit report for merged SP3 acquisition.
+    Audit report for merged SP3 acquisition. `requested_centers` preserves the
+    normalized caller order and authenticates the exact contributor/absent
+    partition when a report is persisted and verified.
     """
-    defstruct contributors: [],
+    defstruct requested_centers: [],
+              contributors: [],
               absent: [],
               source_count: 0,
               single_product: false,
@@ -547,10 +550,12 @@ defmodule Sidereon.GNSS.Data do
   def fetch_merged_sp3(target, centers, opts \\ [])
 
   def fetch_merged_sp3(target, centers, opts) when is_list(centers) do
-    with :ok <- validate_centers(centers) do
+    normalized_centers = Enum.map(centers, &normalize_code/1)
+
+    with :ok <- validate_centers(normalized_centers) do
       results =
-        Enum.map(centers, fn center ->
-          fetch_center_sp3(normalize_code(center), target, opts)
+        Enum.map(normalized_centers, fn center ->
+          fetch_center_sp3(center, target, opts)
         end)
 
       contributors = Enum.filter(results, &match?({:ok, _info, _sp3}, &1))
@@ -558,7 +563,7 @@ defmodule Sidereon.GNSS.Data do
 
       if contributors == [],
         do: {:error, {:no_products, absent}},
-        else: merge_sp3_contributors(contributors, absent, opts)
+        else: merge_sp3_contributors(contributors, absent, normalized_centers, opts)
     end
   end
 
@@ -594,6 +599,7 @@ defmodule Sidereon.GNSS.Data do
   def merge_report_to_map(%MergeReport{} = report) do
     %{
       schema_version: 1,
+      requested_centers: report.requested_centers,
       input_identity_schema_version: report.input_identity_schema_version,
       stable_input_identity: report.stable_input_identity,
       merge_policy: report.merge_policy,
@@ -627,6 +633,7 @@ defmodule Sidereon.GNSS.Data do
   def verify_merge_report(report) when is_map(report) do
     fields = [
       :schema_version,
+      :requested_centers,
       :input_identity_schema_version,
       :stable_input_identity,
       :merge_policy,
@@ -642,13 +649,15 @@ defmodule Sidereon.GNSS.Data do
          :ok <- exact_value(values.schema_version, 1, :schema_version),
          true <- is_list(values.contributors) || {:error, {:invalid_field, :contributors}},
          true <- values.contributors != [] || {:error, {:invalid_field, :contributors}},
+         {:ok, requested_centers} <- persisted_requested_centers(values.requested_centers),
          {:ok, artifacts, contributor_centers} <- persisted_contributors(values.contributors),
          {:ok, opts, normalized_policy, precedence} <- persisted_merge_policy(values.merge_policy),
          :ok <- validate_persisted_precedence(artifacts, precedence, opts),
          {:ok, recomputed} <- SP3.merge_input_identity(artifacts, opts),
          :ok <- verify_report_identity(values, recomputed, normalized_policy),
          :ok <- verify_report_counts(values, artifacts),
-         :ok <- verify_absent(values.absent, contributor_centers),
+         {:ok, absent_centers} <- verify_absent(values.absent, contributor_centers),
+         :ok <- verify_requested_partition(requested_centers, contributor_centers, absent_centers),
          :ok <- verify_merge_result(values.merge_report, length(artifacts)) do
       :ok
     else
@@ -948,7 +957,7 @@ defmodule Sidereon.GNSS.Data do
   defp contributor_candidate(product, provenance),
     do: {product.filename || provenance.official_filename, product.pattern || "canonical"}
 
-  defp merge_sp3_contributors(contributors, absent, opts) do
+  defp merge_sp3_contributors(contributors, absent, requested_centers, opts) do
     sources = Enum.map(contributors, fn {:ok, _info, sp3} -> sp3 end)
     infos = Enum.map(contributors, fn {:ok, info, _sp3} -> info end)
 
@@ -974,6 +983,7 @@ defmodule Sidereon.GNSS.Data do
         with {:ok, input_identity} <- SP3.merge_input_identity(artifacts, merge_opts) do
           {:ok, merged,
            %MergeReport{
+             requested_centers: requested_centers,
              contributors: infos,
              absent: absent,
              source_count: length(infos),
@@ -1127,6 +1137,20 @@ defmodule Sidereon.GNSS.Data do
         error
     end
   end
+
+  defp persisted_requested_centers(centers) when is_list(centers) and centers != [] do
+    with true <-
+           Enum.all?(centers, &(is_binary(&1) and &1 != "")) ||
+             {:error, {:invalid_field, :requested_centers}},
+         true <-
+           length(centers) == MapSet.size(MapSet.new(centers)) ||
+             {:error, :duplicate_requested_center},
+         :ok <- validate_centers(centers) do
+      {:ok, centers}
+    end
+  end
+
+  defp persisted_requested_centers(_centers), do: {:error, {:invalid_field, :requested_centers}}
 
   defp persisted_artifact(artifact, index) when is_map(artifact) do
     fields = [
@@ -1530,8 +1554,10 @@ defmodule Sidereon.GNSS.Data do
     end)
     |> case do
       {:ok, centers} ->
+        centers = Enum.reverse(centers)
+
         if length(centers) == MapSet.size(MapSet.new(centers)),
-          do: :ok,
+          do: {:ok, centers},
           else: {:error, :duplicate_absent_center}
 
       {:error, _} = error ->
@@ -1540,6 +1566,28 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp verify_absent(_absent, _contributor_centers), do: {:error, {:invalid_field, :absent}}
+
+  defp verify_requested_partition(requested, contributors, absent) do
+    contributor_set = MapSet.new(contributors)
+    absent_set = MapSet.new(absent)
+
+    cond do
+      not MapSet.disjoint?(contributor_set, absent_set) ->
+        {:error, :requested_center_partition_overlap}
+
+      MapSet.union(contributor_set, absent_set) != MapSet.new(requested) ->
+        {:error, :requested_center_partition_mismatch}
+
+      contributors != Enum.filter(requested, &MapSet.member?(contributor_set, &1)) ->
+        {:error, :contributor_order_mismatch}
+
+      absent != Enum.filter(requested, &MapSet.member?(absent_set, &1)) ->
+        {:error, :absent_order_mismatch}
+
+      true ->
+        :ok
+    end
+  end
 
   defp verify_merge_result(report, source_count) when is_map(report) do
     fields = [
@@ -1653,7 +1701,7 @@ defmodule Sidereon.GNSS.Data do
       with {:ok, values} <- exact_fields(epoch, fields, context),
            :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
            :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
-           :ok <- positive_integer(values.satellites, {context, :satellites}),
+           :ok <- nonnegative_integer(values.satellites, {context, :satellites}),
            :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
            :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
            :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
@@ -2632,12 +2680,18 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp validate_centers(centers) do
-    Enum.reduce_while(centers, :ok, fn center, :ok ->
-      case center_entry(normalize_code(center)) do
-        {:ok, _} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    normalized = Enum.map(centers, &normalize_code/1)
+
+    if length(normalized) == MapSet.size(MapSet.new(normalized)) do
+      Enum.reduce_while(normalized, :ok, fn center, :ok ->
+        case center_entry(center) do
+          {:ok, _} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    else
+      {:error, {:unsupported_product, {:duplicate_centers, normalized}}}
+    end
   end
 
   defp normalize_date(%Date{} = date), do: {:ok, date}

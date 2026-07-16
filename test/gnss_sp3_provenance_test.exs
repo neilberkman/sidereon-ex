@@ -201,6 +201,7 @@ defmodule Sidereon.GNSS.SP3ProvenanceTest do
 
     persisted =
       Data.merge_report_to_map(%Data.MergeReport{
+        requested_centers: ["cod"],
         contributors: [contributor],
         source_count: 1,
         single_product: true,
@@ -242,6 +243,9 @@ defmodule Sidereon.GNSS.SP3ProvenanceTest do
       %{persisted | single_product: false},
       %{persisted | input_identity_schema_version: 2},
       %{persisted | schema_version: 2},
+      %{persisted | requested_centers: []},
+      %{persisted | requested_centers: ["cod", "esa"]},
+      %{persisted | requested_centers: ["cod", "cod"]},
       put_in(persisted, [:contributors, Access.at(0), :center], "esa"),
       put_in(persisted, [:contributors, Access.at(0), :filename], "WRONG.SP3"),
       put_in(persisted, [:contributors, Access.at(0), :date], "2026-07-13"),

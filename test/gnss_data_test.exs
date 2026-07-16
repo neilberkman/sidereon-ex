@@ -118,6 +118,7 @@ defmodule Sidereon.GNSS.DataTest do
     assert %SP3{} = merged
     assert report.single_product
     assert report.merged
+    assert report.requested_centers == ["cod_ult"]
     assert report.input_identity_schema_version == 1
     assert String.starts_with?(report.stable_input_identity, "sidereon-sp3-merge-input-v1:")
 
@@ -200,7 +201,7 @@ defmodule Sidereon.GNSS.DataTest do
     end
 
     assert {:ok, _merged, report} =
-             Data.fetch_merged_sp3(~D[2026-07-12], [:cod_ult, :esa_ult],
+             Data.fetch_merged_sp3(~D[2026-07-12], [:cod_ult, :igs_ult, :esa_ult],
                issue: "0000",
                cache_dir: root,
                http_client: http_client
@@ -216,8 +217,27 @@ defmodule Sidereon.GNSS.DataTest do
                pattern: "alias_latest",
                url: "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3",
                http_status: 404
-             }
+             },
+             %Data.AbsentCenter{center: "igs_ult", reason: "candidate_not_found"}
            ] = report.absent
+
+    assert report.requested_centers == ["cod_ult", "igs_ult", "esa_ult"]
+    persisted = Data.merge_report_to_map(report)
+    assert :ok = Data.verify_merge_report(persisted)
+    assert :ok = persisted |> Jason.encode!() |> Jason.decode!() |> Data.verify_merge_report()
+
+    [cod_absent, igs_absent] = persisted.absent
+
+    invalid_partitions = [
+      %{persisted | absent: [cod_absent]},
+      %{persisted | absent: [cod_absent, igs_absent, %{cod_absent | center: "gfz_ult"}]},
+      %{persisted | absent: Enum.reverse(persisted.absent)},
+      %{persisted | absent: [cod_absent, cod_absent]}
+    ]
+
+    Enum.each(invalid_partitions, fn invalid ->
+      assert {:error, _reason} = Data.verify_merge_report(invalid)
+    end)
   end
 
   test "fetch_merged_sp3 forwards merge policy options", %{root: root} do
@@ -248,6 +268,7 @@ defmodule Sidereon.GNSS.DataTest do
              )
 
     assert length(fetch_report.contributors) == 3
+    assert fetch_report.requested_centers == ["cod_ult", "esa_ult", "gfz_ult"]
 
     assert fetch_report.contributors
            |> Enum.map(& &1.artifact_identity.requested_identity.analysis_center)
@@ -259,6 +280,20 @@ defmodule Sidereon.GNSS.DataTest do
            |> length() == 3
 
     assert :ok = Data.verify_merge_report(fetch_report)
+
+    persisted = Data.merge_report_to_map(fetch_report)
+    assert :ok = persisted |> Jason.encode!() |> Jason.decode!() |> Data.verify_merge_report()
+
+    invalid_requested_centers = [
+      %{persisted | requested_centers: ["cod_ult", "esa_ult"]},
+      %{persisted | requested_centers: ["cod_ult", "esa_ult", "gfz_ult", "igs_ult"]},
+      %{persisted | requested_centers: Enum.reverse(persisted.requested_centers)},
+      %{persisted | requested_centers: ["cod_ult", "esa_ult", "gfz_ult", "gfz_ult"]}
+    ]
+
+    Enum.each(invalid_requested_centers, fn invalid ->
+      assert {:error, _reason} = Data.verify_merge_report(invalid)
+    end)
 
     sources = Enum.map([corrupt, agreeing_a, agreeing_b], fn bytes -> elem(SP3.parse(bytes), 1) end)
     assert {:ok, direct, direct_report} = SP3.merge(sources, merge_opts)

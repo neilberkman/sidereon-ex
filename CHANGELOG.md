@@ -28,7 +28,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepted as provenance-bearing contributors.
 - Latest-product aliases must prove their public catalog equivalence and exact
   artifact duration before publication. Persisted reports now reject unknown
-  or inconsistent fields at every nested schema level.
+  or inconsistent fields at every nested schema level, and authenticate the
+  ordered requested-center partition across contributors and absent centers.
 - Updated the native backend to `sidereon` and `sidereon-core` 0.31.2.
 
 ### Compatibility
