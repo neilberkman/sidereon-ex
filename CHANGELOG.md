@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.1]
+
+### Fixed
+
+- Fetches CODE predicted IONEX P1 and P2 products from their current official
+  tier-specific HTTPS directories, retaining the requested identity year and
+  exact filename across validated AIUB redirects.
+- Routes the legacy IONEX helper through exact acquisition so downloaded and
+  cached bytes receive the same date, issue, and cadence validation. Explicit
+  legacy lookback continues only after typed not-published or offline-miss
+  results; validation and transport failures remain terminal.
+- Keeps P1 and P2 cache identities isolated even when their filenames match.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.29.1.
+
 ## [0.29.0]
 
 ### Added

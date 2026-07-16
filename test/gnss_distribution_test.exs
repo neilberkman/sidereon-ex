@@ -9,6 +9,7 @@ defmodule Sidereon.GNSS.DistributionTest do
   @date ~D[2026-07-12]
   @filename "COD0MGXFIN_20261930000_01D_05M_ORB.SP3"
   @cddis_url "https://cddis.nasa.gov/archive/gnss/products/2427/#{@filename}.gz"
+  @ionex_fixture Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
 
   setup do
     root = Path.join(System.tmp_dir!(), "sidereon-distribution-test-#{System.unique_integer([:positive])}")
@@ -69,6 +70,112 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert result.provenance.sha256 == sha256(body)
     assert result.provenance.archive_sha256 == sha256(:zlib.gzip(body))
     assert result.provenance.etag == "public-etag"
+  end
+
+  test "predicted IONEX direct paths preserve tier, year, and semantic identity", %{root: root} do
+    {:ok, p1} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
+    {:ok, p2} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
+
+    assert {:ok,
+            "https://www.aiub.unibe.ch/download/CODE/IONO/P1/2026/" <>
+              "COD0OPSPRD_20261960000_01D_01H_GIM.INX.gz"} = Data.archive_url(p1)
+
+    assert {:ok,
+            "https://www.aiub.unibe.ch/download/CODE/IONO/P2/2026/" <>
+              "COD0OPSPRD_20261970000_01D_01H_GIM.INX.gz"} = Data.archive_url(p2)
+
+    {:ok, request} = Data.request(p1, [Distribution.in_memory(ionex_body(p1.date))])
+    assert {:ok, result} = Data.acquire(request, cache_dir: root)
+    assert result.provenance.requested_identity == request.identity
+    assert result.provenance.resolved_identity.date == p1.date
+
+    {:ok, boundary} = Data.predicted_ionex(:cod_prd2, ~D[2026-12-31])
+    assert boundary.date == ~D[2027-01-01]
+
+    assert {:ok,
+            "https://www.aiub.unibe.ch/download/CODE/IONO/P2/2027/" <>
+              "COD0OPSPRD_20270010000_01D_01H_GIM.INX.gz"} = Data.archive_url(boundary)
+  end
+
+  test "wrong-date IONEX bytes fail with a typed validation error", %{root: root} do
+    {:ok, product} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
+    {:ok, request} = Data.request(product, [Distribution.in_memory(ionex_body(~D[2026-07-15]))])
+
+    assert {:error, {:product_validation_failed, :ionex_identity_metadata}} =
+             Data.acquire(request, cache_dir: root)
+  end
+
+  test "P1 and P2 with the same filename cannot share a cache hit", %{root: root} do
+    {:ok, p1} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-16])
+    {:ok, p2} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
+    {:ok, p1_identity} = Data.identity(p1)
+    {:ok, p2_identity} = Data.identity(p2)
+    assert p1_identity.official_filename == p2_identity.official_filename
+
+    {:ok, seed} = Data.request(p1, [Distribution.in_memory(ionex_body(p1.date))])
+    assert {:ok, seeded} = Data.acquire(seed, cache_dir: root)
+
+    {:ok, exact_p2} = Data.request(p2, [Distribution.direct()])
+    assert {:error, :offline_cache_miss} = Data.acquire(exact_p2, cache_dir: root, offline: true)
+    refute String.contains?(seeded.path, "cod_prd2")
+  end
+
+  test "exact predicted IONEX 404 is typed and never looks back", %{root: root} do
+    {:ok, product} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
+    {:ok, request} = Data.request(product, [Distribution.direct()])
+    parent = self()
+
+    client = fn url, _opts ->
+      send(parent, {:requested, url})
+      {:ok, 404, [], ""}
+    end
+
+    assert {:error, {:product_not_published, 404, url}} =
+             Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+
+    assert_receive {:requested, ^url}
+    refute_receive {:requested, _other}
+  end
+
+  test "legacy fetch_ionex uses exact semantic validation", %{root: root} do
+    wrong = ionex_body(~D[2026-07-16]) |> :zlib.gzip()
+
+    client = fn _url, _opts -> {:ok, 200, [{"content-type", "application/gzip"}], wrong} end
+
+    assert {:error, {:product_validation_failed, :ionex_identity_metadata}} =
+             Data.fetch_ionex(:cod_prd1, ~D[2026-07-15],
+               cache_dir: root,
+               http_client: client,
+               lookback: 2
+             )
+  end
+
+  test "concurrent different predicted products leave immutable snapshots", %{root: root} do
+    products = [
+      {:cod_prd1, ~D[2026-07-15]},
+      {:cod_prd2, ~D[2026-07-15]}
+    ]
+
+    requests =
+      Enum.map(products, fn {center, target} ->
+        {:ok, product} = Data.predicted_ionex(center, target)
+        bytes = ionex_body(product.date)
+        {:ok, request} = Data.request(product, [Distribution.in_memory(bytes)])
+        {request, bytes}
+      end)
+
+    results =
+      requests
+      |> Task.async_stream(fn {request, _bytes} -> Data.acquire(request, cache_dir: root) end,
+        ordered: false,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, {:ok, result}} -> result end)
+
+    assert results |> Enum.map(& &1.path) |> Enum.uniq() |> length() == 2
+    snapshots = Map.new(results, &{&1.path, File.read!(&1.path)})
+    assert Enum.sort(Map.values(snapshots)) == Enum.sort(Enum.map(requests, &elem(&1, 1)))
+    assert Map.new(Map.keys(snapshots), &{&1, File.read!(&1)}) == snapshots
   end
 
   test "Earthdata redirects retain auth and cookies only on approved hosts and redact secrets", %{root: root} do
@@ -456,6 +563,26 @@ defmodule Sidereon.GNSS.DistributionTest do
       ],
       "\n"
     )
+  end
+
+  defp ionex_body(date) do
+    {lines, _map_count} =
+      @ionex_fixture
+      |> File.read!()
+      |> String.split("\n")
+      |> Enum.map_reduce(0, fn line, map_count ->
+        if line |> String.trim_trailing() |> String.ends_with?("EPOCH OF CURRENT MAP") do
+          prefix =
+            [date.year, date.month, date.day, map_count, 0, 0]
+            |> Enum.map_join(&(&1 |> Integer.to_string() |> String.pad_leading(6)))
+
+          {prefix <> String.slice(line, 36..-1//1), map_count + 1}
+        else
+          {line, map_count}
+        end
+      end)
+
+    Enum.join(lines, "\n")
   end
 
   defp sha256(data), do: :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)

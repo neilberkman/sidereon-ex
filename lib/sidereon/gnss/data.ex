@@ -662,20 +662,35 @@ defmodule Sidereon.GNSS.Data do
     sample = Keyword.get(opts, :sample)
 
     with {:ok, date} <- Date.new(year, month, day),
-         {:ok, product} <- product(center, :ionex, date, sample: sample) do
-      case fetch(product, opts) do
-        {:ok, path} ->
-          {:ok, path}
+         {:ok, product} <- product(center, :ionex, date, sample: sample),
+         {:ok, request} <- request(product, [Distribution.direct()]) do
+      case acquire(request, exact_ionex_opts(opts)) do
+        {:ok, result} ->
+          {:ok, result.path}
 
         {:error, :offline_cache_miss} ->
           fetch_first_ionex(center, rest, opts, :offline_cache_miss)
 
-        {:error, {:not_found_on_archive, _} = reason} ->
+        {:error, {:product_not_published, 404, _} = reason} ->
           fetch_first_ionex(center, rest, opts, reason)
 
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  defp exact_ionex_opts(opts) do
+    opts
+    |> Keyword.drop([:lookback, :sample])
+    |> rename_option(:max_compressed_bytes, :max_archive_bytes)
+    |> rename_option(:max_decompressed_bytes, :max_product_bytes)
+  end
+
+  defp rename_option(opts, old, new) do
+    case Keyword.pop(opts, old) do
+      {nil, opts} -> opts
+      {value, opts} -> Keyword.put(opts, new, value)
     end
   end
 
