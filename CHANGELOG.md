@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.1]
+
+### Fixed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.28.1. CODE
+  ultra-rapid products now use AIUB's current HTTPS download endpoint instead
+  of the retired `ftp.aiub.unibe.ch` HTTP tree.
+- Follows only AIUB's validated HTTPS handoff to its download host and public
+  object store. Missing candidates retain the URL and HTTP status in merge
+  diagnostics without claiming authoritative publication state.
+- Updated the locked Mint HTTP dependency to 1.9.2, clearing the published
+  HTTP/1 and HTTP/2 response memory-exhaustion advisories affecting 1.9.1.
+
 ## [0.28.0]
 
 ### Added

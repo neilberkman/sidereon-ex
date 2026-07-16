@@ -41,6 +41,10 @@ defmodule Sidereon.GNSS.Data do
   @default_timeout_s 30.0
   @default_retries 3
   @default_backoff_s 0.5
+  @max_redirects 5
+  @aiub_web_host "www.aiub.unibe.ch"
+  @aiub_download_host "download.aiub.unibe.ch"
+  @aiub_object_store_suffix ".s3.cloud.switch.ch"
 
   @type error_reason ::
           :offline_cache_miss
@@ -115,7 +119,7 @@ defmodule Sidereon.GNSS.Data do
     SP3 center that did not contribute to a merge.
     """
     @enforce_keys [:center, :reason]
-    defstruct [:center, :filename, :pattern, :reason]
+    defstruct [:center, :filename, :pattern, :reason, :url, :http_status]
   end
 
   defmodule Contributor do
@@ -678,11 +682,12 @@ defmodule Sidereon.GNSS.Data do
   defp fetch_first_center_sp3(center, [], _opts, nil),
     do: {:absent, %AbsentCenter{center: center, reason: "no_candidate"}}
 
-  defp fetch_first_center_sp3(center, [], _opts, {filename, pattern, reason}),
-    do: {:absent, %AbsentCenter{center: center, filename: filename, pattern: pattern, reason: reason_string(reason)}}
+  defp fetch_first_center_sp3(center, [], _opts, {filename, pattern, candidate_url, reason}),
+    do: {:absent, absent_center(center, filename, pattern, candidate_url, reason)}
 
   defp fetch_first_center_sp3(center, [product | rest], opts, _last) do
     {:ok, filename} = canonical_filename(product)
+    {:ok, candidate_url} = archive_url(product)
 
     case fetch(product, opts) do
       {:ok, path} ->
@@ -698,7 +703,7 @@ defmodule Sidereon.GNSS.Data do
              }, sp3}
 
           {:error, reason} ->
-            {:absent, %AbsentCenter{center: center, filename: filename, reason: reason_string(reason)}}
+            {:absent, absent_center(center, filename, product.pattern || "canonical", candidate_url, reason)}
         end
 
       {:error, :offline_cache_miss} ->
@@ -706,14 +711,19 @@ defmodule Sidereon.GNSS.Data do
           center,
           rest,
           opts,
-          {filename, product.pattern || "canonical", :offline_cache_miss}
+          {filename, product.pattern || "canonical", candidate_url, :offline_cache_miss}
         )
 
       {:error, {:not_found_on_archive, _} = reason} ->
-        fetch_first_center_sp3(center, rest, opts, {filename, product.pattern || "canonical", reason})
+        fetch_first_center_sp3(
+          center,
+          rest,
+          opts,
+          {filename, product.pattern || "canonical", candidate_url, reason}
+        )
 
       {:error, reason} ->
-        {:absent, %AbsentCenter{center: center, filename: filename, reason: reason_string(reason)}}
+        {:absent, absent_center(center, filename, product.pattern || "canonical", candidate_url, reason)}
     end
   end
 
@@ -1136,13 +1146,19 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp download_once(url, opts) do
+  defp download_once(url, opts), do: do_download_once(url, opts, 0)
+
+  defp do_download_once(url, opts, redirect_count) do
     case Keyword.get(opts, :http_client) do
       fun when is_function(fun, 2) ->
-        normalize_http_response(fun.(url, opts), url)
+        fun.(url, opts)
+        |> normalize_http_response(url)
+        |> handle_http_response(url, opts, redirect_count)
 
       nil ->
-        req_download(url, opts)
+        url
+        |> req_download(opts)
+        |> handle_http_response(url, opts, redirect_count)
     end
   rescue
     e -> {:error, {:network, Exception.message(e)}}
@@ -1161,28 +1177,89 @@ defmodule Sidereon.GNSS.Data do
            finch: :"Elixir.Sidereon.GNSS.Data.Finch",
            decode_body: false
          ) do
-      {:ok, %Req.Response{status: status, body: body}} ->
-        normalize_http_response({:ok, status, IO.iodata_to_binary(body)}, url)
+      {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
+        {:ok, status, headers, IO.iodata_to_binary(body)}
 
       {:error, reason} ->
         {:error, {:network, reason}}
     end
   end
 
-  defp normalize_http_response({:ok, %{status: status, body: body}}, url),
-    do: normalize_http_response({:ok, status, body}, url)
+  defp normalize_http_response({:ok, %{status: status, body: body} = response}, _url),
+    do: {:ok, status, Map.get(response, :headers, []), IO.iodata_to_binary(body)}
 
-  defp normalize_http_response({:ok, status, body}, url) when is_integer(status) do
-    cond do
-      status in 200..299 -> {:ok, IO.iodata_to_binary(body)}
-      status == 404 -> {:error, {:not_found_on_archive, url}}
-      status in 300..399 -> {:error, {:redirect_not_allowed, status, url}}
-      true -> {:error, {:http_status, status, url}}
-    end
-  end
+  defp normalize_http_response({:ok, status, headers, body}, _url) when is_integer(status),
+    do: {:ok, status, headers, IO.iodata_to_binary(body)}
+
+  defp normalize_http_response({:ok, status, body}, _url) when is_integer(status),
+    do: {:ok, status, [], IO.iodata_to_binary(body)}
 
   defp normalize_http_response({:error, reason}, _url), do: {:error, {:network, reason}}
   defp normalize_http_response(other, _url), do: {:error, {:network, {:bad_http_response, other}}}
+
+  defp handle_http_response({:ok, status, headers, body}, url, opts, redirect_count) do
+    cond do
+      status in 200..299 ->
+        {:ok, body}
+
+      status == 404 ->
+        {:error, {:not_found_on_archive, url}}
+
+      status in 300..399 ->
+        with true <- redirect_count < @max_redirects,
+             location when is_binary(location) <- header_value(headers, "location"),
+             {:ok, target_url} <- validated_redirect_url(url, status, location) do
+          do_download_once(target_url, opts, redirect_count + 1)
+        else
+          _ -> {:error, {:redirect_not_allowed, status, url}}
+        end
+
+      true ->
+        {:error, {:http_status, status, url}}
+    end
+  end
+
+  defp handle_http_response({:error, _} = error, _url, _opts, _redirect_count), do: error
+
+  defp validated_redirect_url(source_url, status, location) do
+    source = URI.parse(source_url)
+    target = URI.merge(source_url, location)
+    source_host = source.host && String.downcase(source.host)
+    target_host = target.host && String.downcase(target.host)
+
+    allowed? =
+      source.scheme == "https" and target.scheme == "https" and
+        ((source_host == @aiub_web_host and target_host == @aiub_download_host) or
+           (source_host in [@aiub_web_host, @aiub_download_host] and
+              is_binary(target_host) and String.ends_with?(target_host, @aiub_object_store_suffix)))
+
+    if allowed?,
+      do: {:ok, URI.to_string(target)},
+      else: {:error, {:redirect_not_allowed, status, source_url}}
+  end
+
+  defp header_value(headers, name) when is_map(headers) do
+    headers
+    |> Enum.find_value(fn {key, value} ->
+      if String.downcase(to_string(key)) == name, do: first_header_value(value)
+    end)
+  end
+
+  defp header_value(headers, name) when is_list(headers) do
+    Enum.find_value(headers, fn
+      {key, value} ->
+        if String.downcase(to_string(key)) == name, do: first_header_value(value)
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp header_value(_headers, _name), do: nil
+
+  defp first_header_value([value | _]), do: IO.iodata_to_binary(value)
+  defp first_header_value(value) when is_binary(value), do: value
+  defp first_header_value(_value), do: nil
 
   defp check_host(url, protocol) do
     uri = URI.parse(url)
@@ -1461,8 +1538,25 @@ defmodule Sidereon.GNSS.Data do
 
   defp candidate_cache_filename(_pattern, _center, _date, _issue, _filename), do: nil
 
+  defp absent_center(center, filename, pattern, candidate_url, reason) do
+    {_response_url, http_status} = diagnostic_fields(reason)
+
+    %AbsentCenter{
+      center: center,
+      filename: filename,
+      pattern: pattern,
+      reason: reason_string(reason),
+      url: candidate_url,
+      http_status: http_status
+    }
+  end
+
+  defp diagnostic_fields({:not_found_on_archive, url}), do: {url, 404}
+  defp diagnostic_fields({:http_status, status, url}), do: {url, status}
+  defp diagnostic_fields(_reason), do: {nil, nil}
+
   defp reason_string(:offline_cache_miss), do: "offline_miss"
-  defp reason_string({:not_found_on_archive, _}), do: "not_published"
+  defp reason_string({:not_found_on_archive, _}), do: "candidate_not_found"
   defp reason_string({:checksum_mismatch, _, _}), do: "checksum"
   defp reason_string({:http_status, status, _}), do: "http_status:#{status}"
   defp reason_string(reason), do: inspect(reason)

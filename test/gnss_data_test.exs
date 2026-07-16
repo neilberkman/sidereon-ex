@@ -97,7 +97,7 @@ defmodule Sidereon.GNSS.DataTest do
     assert File.read!(nav_path) == "product"
   end
 
-  test "ultra-rapid fetch falls back to a documented alias and reports the pattern", %{root: root} do
+  test "CODE ultra-rapid candidates pin official primary, alternate, and alias URLs", %{root: root} do
     parent = self()
 
     http_client = fn url, _opts ->
@@ -109,7 +109,7 @@ defmodule Sidereon.GNSS.DataTest do
     end
 
     assert {:ok, merged, report} =
-             Data.fetch_merged_sp3(~D[2026-06-03], [:cod_ult],
+             Data.fetch_merged_sp3(~D[2026-07-14], [:cod_ult],
                issue: "0000",
                cache_dir: root,
                http_client: http_client
@@ -122,11 +122,15 @@ defmodule Sidereon.GNSS.DataTest do
     assert [%Data.Contributor{pattern: "alias_latest", filename: "COD0OPSULT.SP3"}] =
              report.contributors
 
-    assert_received {:url, url1}
-    assert url1 =~ "_01D_05M_ORB.SP3"
-    assert_received {:url, url2}
-    assert url2 =~ "_02D_05M_ORB.SP3"
-    assert_received {:url, "http://ftp.aiub.unibe.ch/CODE/COD0OPSULT.SP3"}
+    assert_received {:url,
+                     "https://www.aiub.unibe.ch/download/CODE/" <>
+                       "COD0OPSULT_20261950000_01D_05M_ORB.SP3"}
+
+    assert_received {:url,
+                     "https://www.aiub.unibe.ch/download/CODE/" <>
+                       "COD0OPSULT_20261950000_02D_05M_ORB.SP3"}
+
+    assert_received {:url, "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3"}
   end
 
   test "all variants absent does not prevent another center from contributing", %{root: root} do
@@ -149,7 +153,15 @@ defmodule Sidereon.GNSS.DataTest do
     assert [%Data.Contributor{center: "esa_ult", pattern: "primary_02D_05M"}] =
              report.contributors
 
-    assert [%Data.AbsentCenter{center: "cod_ult", reason: "not_published"}] = report.absent
+    assert [
+             %Data.AbsentCenter{
+               center: "cod_ult",
+               reason: "candidate_not_found",
+               pattern: "alias_latest",
+               url: "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3",
+               http_status: 404
+             }
+           ] = report.absent
   end
 
   test "fetch_merged_sp3 forwards merge policy options", %{root: root} do
@@ -159,7 +171,7 @@ defmodule Sidereon.GNSS.DataTest do
 
     http_client = fn url, _opts ->
       cond do
-        String.contains?(url, "ftp.aiub.unibe.ch") -> {:ok, 200, corrupt}
+        String.contains?(url, "www.aiub.unibe.ch") -> {:ok, 200, corrupt}
         String.contains?(url, "navigation-office.esa.int") -> {:ok, 200, :zlib.gzip(agreeing_a)}
         String.contains?(url, "isdc-data.gfz.de") -> {:ok, 200, :zlib.gzip(agreeing_b)}
       end
@@ -198,6 +210,61 @@ defmodule Sidereon.GNSS.DataTest do
 
     assert {:error, {:download_size_exceeded, 3}} =
              Data.fetch(product, cache_dir: root, http_client: oversized, max_compressed_bytes: 3)
+  end
+
+  test "AIUB download follows only the validated public HTTPS redirect chain", %{root: root} do
+    {:ok, product} = Data.mgex_sp3(:cod_ult, ~D[2026-07-14], issue: "0000")
+
+    source =
+      "https://www.aiub.unibe.ch/download/CODE/" <>
+        "COD0OPSULT_20261950000_01D_05M_ORB.SP3"
+
+    download =
+      "https://download.aiub.unibe.ch/CODE/" <>
+        "COD0OPSULT_20261950000_01D_05M_ORB.SP3"
+
+    target =
+      "https://zhw-b.s3.cloud.switch.ch/aiub/CODE/" <>
+        "COD0OPSULT_20261950000_01D_05M_ORB.SP3"
+
+    parent = self()
+
+    http_client = fn url, _opts ->
+      send(parent, {:redirect_url, url})
+
+      case url do
+        ^source -> {:ok, 302, [{"location", download}], ""}
+        ^download -> {:ok, %{status: 301, headers: %{"location" => [target]}, body: ""}}
+        ^target -> {:ok, 200, sp3_body(15_000.0)}
+      end
+    end
+
+    assert {:ok, path} = Data.fetch(product, cache_dir: root, http_client: http_client)
+    assert {:ok, sp3} = SP3.load(path)
+    assert SP3.epoch_count(sp3) == 1
+    assert_received {:redirect_url, ^source}
+    assert_received {:redirect_url, ^download}
+    assert_received {:redirect_url, ^target}
+  end
+
+  test "AIUB download rejects an unrelated redirect target", %{root: root} do
+    {:ok, product} = Data.mgex_sp3(:cod_ult, ~D[2026-07-14], issue: "0000")
+    http_client = fn _url, _opts -> {:ok, 302, [{"location", "https://example.com/product.sp3"}], ""} end
+
+    assert {:error, {:redirect_not_allowed, 302, url}} =
+             Data.fetch(product, cache_dir: root, http_client: http_client)
+
+    assert url =~ "https://www.aiub.unibe.ch/download/CODE/"
+  end
+
+  @tag :network
+  test "live CODE ultra-rapid day 195 downloads and parses", %{root: root} do
+    {:ok, product} = Data.mgex_sp3(:cod_ult, ~D[2026-07-14], issue: "0000")
+    assert {:ok, path} = Data.fetch(product, cache_dir: root)
+    assert File.stat!(path).size == 1_473_962
+    assert "#dP" <> _ = File.read!(path)
+    assert {:ok, sp3} = SP3.load(path)
+    assert SP3.epoch_count(sp3) == 289
   end
 
   test "terrain 404 writes an authoritative no-coverage marker", %{root: root} do
