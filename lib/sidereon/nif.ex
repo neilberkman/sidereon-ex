@@ -1961,6 +1961,7 @@ defmodule Sidereon.NIF do
   def data_centers, do: :erlang.nif_error(:nif_not_loaded)
   def data_content_types, do: :erlang.nif_error(:nif_not_loaded)
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
+  def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)

@@ -116,6 +116,26 @@ direct archive, but it retains the same publisher, analysis-center product line,
 solution class, issue, date, cadence, family, format, and official filename.
 Earlier failures appear in `result.provenance.attempts`.
 
+When several exact products are required, declare the complete identity set and
+gate dependent processing on the resolved acquisition identities:
+
+```elixir
+expected = [request_a.identity, request_b.identity]
+
+available = [
+  result_a.provenance.resolved_identity,
+  result_b.provenance.resolved_identity
+]
+
+:ok = Data.validate_exact_product_set(expected, available)
+```
+
+The gate rejects empty declarations, duplicates, missing products, undeclared
+products, and same-filename identities with different prediction metadata. For
+SP3 observed/predicted timing, use
+`Sidereon.GNSS.SP3.prediction_summary/1`; issue times and catalog fields are not
+substitutes for the product's record flags.
+
 Caller-provided inputs use the same validation path:
 
 ```elixir

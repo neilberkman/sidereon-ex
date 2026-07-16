@@ -288,6 +288,27 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
+  @doc """
+  Require available identities to be exactly the declared product set.
+
+  The expected set must be non-empty. Both lists reject duplicates; missing and
+  undeclared identities fail. Comparison includes every identity field, not
+  only the official filename. For SP3 observed/predicted timing, use
+  `Sidereon.GNSS.SP3.prediction_summary/1`; catalog fields and issue times are
+  not substitutes for product record flags.
+  """
+  @spec validate_exact_product_set([ProductIdentity.t()], [ProductIdentity.t()]) ::
+          :ok | {:error, error_reason() | term()}
+  def validate_exact_product_set(expected, available) when is_list(expected) and is_list(available) do
+    with {:ok, expected} <- identity_fields(expected),
+         {:ok, available} <- identity_fields(available) do
+      NIF.data_validate_exact_product_set(expected, available)
+    end
+  end
+
+  def validate_exact_product_set(_expected, _available),
+    do: {:error, {:exact_product_set, "expected and available must be lists"}}
+
   @doc "Build the official CDDIS URL for an exact SP3 or IONEX identity."
   @spec cddis_url(ProductIdentity.t()) :: {:ok, String.t()} | {:error, error_reason() | term()}
   def cddis_url(%ProductIdentity{} = identity) do
@@ -1491,6 +1512,51 @@ defmodule Sidereon.GNSS.Distribution do
   defp prediction_horizon("cod_prd1"), do: 1
   defp prediction_horizon("cod_prd2"), do: 2
   defp prediction_horizon(_center), do: nil
+
+  defp identity_fields(identities) do
+    identities
+    |> Enum.reduce_while({:ok, []}, fn
+      %ProductIdentity{date: %Date{} = date} = identity, {:ok, fields} ->
+        values = [
+          identity.family,
+          identity.publisher,
+          identity.solution_class,
+          identity.campaign,
+          to_string(identity.filename_version),
+          to_string(date.year),
+          to_string(date.month),
+          to_string(date.day),
+          identity.issue || "",
+          identity.span,
+          identity.sample,
+          identity.official_filename,
+          identity.format,
+          if(identity.prediction_horizon_days,
+            do: to_string(identity.prediction_horizon_days),
+            else: ""
+          )
+        ]
+
+        case validate_request_identity(identity) do
+          :ok ->
+            if Enum.all?(values, &is_binary/1) do
+              {:cont, {:ok, [values | fields]}}
+            else
+              {:halt, {:error, {:exact_product_set, "identity fields must use their declared types"}}}
+            end
+
+          {:error, _reason} = error ->
+            {:halt, error}
+        end
+
+      _, _acc ->
+        {:halt, {:error, {:exact_product_set, "entries must be ProductIdentity structs"}}}
+    end)
+    |> case do
+      {:ok, fields} -> {:ok, Enum.reverse(fields)}
+      error -> error
+    end
+  end
 
   defp validate_request_identity(%ProductIdentity{} = identity) do
     expected_format = if identity.family == "sp3", do: "SP3", else: "IONEX"

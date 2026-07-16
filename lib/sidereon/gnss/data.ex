@@ -184,6 +184,9 @@ defmodule Sidereon.GNSS.Data do
   @doc "Build the official NASA CDDIS URL for an exact SP3 or IONEX identity."
   defdelegate cddis_url(identity), to: Distribution
 
+  @doc "Require available identities to be exactly the declared product set."
+  defdelegate validate_exact_product_set(expected, available), to: Distribution
+
   @doc "Acquire an exact GNSS product and return its path plus public provenance."
   defdelegate acquire(request, opts \\ []), to: Distribution
 

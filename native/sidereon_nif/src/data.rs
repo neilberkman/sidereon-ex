@@ -6,8 +6,9 @@
 
 use rustler::{Binary, Encoder, Env, OwnedBinary, Term};
 use sidereon_core::data::{
-    self, AnalysisCenter, DataCatalogError, HgtConversionError, ProductDate, ProductDateTime,
-    ProductType, SpaceWeatherProduct,
+    self, AnalysisCenter, DataCatalogError, HgtConversionError, ProductCampaign, ProductDate,
+    ProductDateTime, ProductFormat, ProductIdentity, ProductPublisher, ProductType, SolutionClass,
+    SpaceWeatherProduct,
 };
 
 mod atoms {
@@ -23,6 +24,7 @@ mod atoms {
         bad_hgt_length,
         no_open_mirror,
         unknown_product_type,
+        exact_product_set,
     }
 }
 
@@ -38,6 +40,83 @@ fn center(code: &str) -> Result<AnalysisCenter, DataCatalogError> {
 
 fn product_type(code: &str) -> Result<ProductType, DataCatalogError> {
     code.parse()
+}
+
+fn identity_field_error(field: &'static str) -> DataCatalogError {
+    DataCatalogError::InconsistentProductIdentity { field }
+}
+
+fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, DataCatalogError> {
+    if fields.len() != 14 {
+        return Err(identity_field_error("field_count"));
+    }
+    let family = product_type(&fields[0])?;
+    let publisher = match fields[1].as_str() {
+        "IGS" => ProductPublisher::Igs,
+        "COD" => ProductPublisher::Code,
+        "ESA" => ProductPublisher::Esa,
+        "GFZ" => ProductPublisher::Gfz,
+        _ => return Err(identity_field_error("publisher")),
+    };
+    let solution = match fields[2].as_str() {
+        "final" => SolutionClass::Final,
+        "rapid" => SolutionClass::Rapid,
+        "ultra_rapid" => SolutionClass::UltraRapid,
+        "predicted" => SolutionClass::Predicted,
+        "broadcast" => SolutionClass::Broadcast,
+        _ => return Err(identity_field_error("solution_class")),
+    };
+    let campaign = match fields[3].as_str() {
+        "OPS" => ProductCampaign::Operational,
+        "MGN" => ProductCampaign::MultiGnss,
+        "MGX" => ProductCampaign::MultiGnssExperiment,
+        "BRD" => ProductCampaign::Broadcast,
+        _ => return Err(identity_field_error("campaign")),
+    };
+    let version = fields[4]
+        .parse::<u8>()
+        .map_err(|_| identity_field_error("filename_version"))?;
+    let year = fields[5]
+        .parse::<i32>()
+        .map_err(|_| identity_field_error("date"))?;
+    let month = fields[6]
+        .parse::<u8>()
+        .map_err(|_| identity_field_error("date"))?;
+    let day = fields[7]
+        .parse::<u8>()
+        .map_err(|_| identity_field_error("date"))?;
+    let format = match fields[12].as_str() {
+        "SP3" => ProductFormat::Sp3,
+        "IONEX" => ProductFormat::Ionex,
+        "RINEX_CLK" => ProductFormat::RinexClock,
+        "RINEX_NAV" => ProductFormat::RinexNavigation,
+        _ => return Err(identity_field_error("format")),
+    };
+    let prediction_horizon_days = if fields[13].is_empty() {
+        None
+    } else {
+        Some(
+            fields[13]
+                .parse::<u8>()
+                .map_err(|_| identity_field_error("prediction_horizon_days"))?,
+        )
+    };
+    let identity = ProductIdentity {
+        family,
+        publisher,
+        solution,
+        campaign,
+        version,
+        date: ProductDate::new(year, month, day)?,
+        issue: (!fields[8].is_empty()).then(|| fields[8].clone()),
+        span: fields[9].clone(),
+        sample: fields[10].clone(),
+        official_filename: fields[11].clone(),
+        format,
+        prediction_horizon_days,
+    };
+    identity.validate()?;
+    Ok(identity)
 }
 
 fn space_weather_product(code: &str) -> Result<SpaceWeatherProduct, DataCatalogError> {
@@ -188,6 +267,35 @@ fn data_allowed_hosts() -> Vec<String> {
         .iter()
         .map(|host| (*host).to_string())
         .collect()
+}
+
+#[rustler::nif]
+fn data_validate_exact_product_set<'a>(
+    env: Env<'a>,
+    expected: Vec<Vec<String>>,
+    available: Vec<Vec<String>>,
+) -> Term<'a> {
+    let expected = expected
+        .into_iter()
+        .map(product_identity)
+        .collect::<Result<Vec<_>, _>>();
+    let available = available
+        .into_iter()
+        .map(product_identity)
+        .collect::<Result<Vec<_>, _>>();
+    match (expected, available) {
+        (Ok(expected), Ok(available)) => {
+            match data::validate_exact_product_set(&expected, &available) {
+                Ok(()) => atoms::ok().encode(env),
+                Err(error) => (
+                    atoms::error(),
+                    (atoms::exact_product_set(), error.to_string()),
+                )
+                    .encode(env),
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => encode_catalog_error(env, error),
+    }
 }
 
 #[rustler::nif]

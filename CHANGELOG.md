@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.2]
+
+### Added
+
+- Added `Sidereon.GNSS.Distribution.validate_exact_product_set/2`, a fail-closed
+  gate for a declared exact identity inventory. Empty declarations,
+  duplicates, missing products, and undeclared products are rejected.
+- Exact-set comparison preserves prediction-tier identity. SP3
+  observed/predicted timing remains sourced from the parser's authoritative
+  record-flag summary.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.29.2.
+
 ## [0.29.1]
 
 ### Fixed

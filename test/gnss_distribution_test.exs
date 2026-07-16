@@ -49,6 +49,38 @@ defmodule Sidereon.GNSS.DistributionTest do
               "ESA0OPSFIN_20201760000_01D_02H_GIM.INX.gz"} = Data.cddis_url(ionex_identity)
   end
 
+  test "exact product sets are order independent and fail closed" do
+    {:ok, first_product} = Data.mgex_sp3(:cod, ~D[2026-07-12])
+    {:ok, second_product} = Data.mgex_sp3(:cod, ~D[2026-07-13])
+    {:ok, first} = Data.identity(first_product)
+    {:ok, second} = Data.identity(second_product)
+
+    assert :ok = Data.validate_exact_product_set([first, second], [second, first])
+
+    assert {:error, {:exact_product_set, message}} =
+             Data.validate_exact_product_set([first, second], [first])
+
+    assert message =~ "missing:"
+
+    assert {:error, {:exact_product_set, message}} =
+             Data.validate_exact_product_set([first, first], [first, second, second])
+
+    assert message =~ "duplicate expected:"
+  end
+
+  test "exact product sets retain prediction tier metadata" do
+    {:ok, one_day_product} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
+    {:ok, two_day_product} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-14])
+    {:ok, one_day} = Data.identity(one_day_product)
+    {:ok, two_day} = Data.identity(two_day_product)
+    assert one_day.official_filename == two_day.official_filename
+
+    assert {:error, {:exact_product_set, message}} =
+             Data.validate_exact_product_set([one_day], [two_day])
+
+    assert message =~ "unexpected:"
+  end
+
   test "CDDIS gzip acquisition records verified secret-free provenance", %{root: root} do
     request = request!([Distribution.nasa_cddis()])
     body = sp3_body(@date)
