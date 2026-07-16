@@ -104,7 +104,7 @@ defmodule Sidereon.GNSS.DataTest do
       send(parent, {:url, url})
 
       if String.ends_with?(url, "/COD0OPSULT.SP3"),
-        do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14])},
+        do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14], 86_400)},
         else: {:ok, 404, ""}
     end
 
@@ -169,6 +169,24 @@ defmodule Sidereon.GNSS.DataTest do
                        "COD0OPSULT_20261950000_02D_05M_ORB.SP3"}
 
     assert_received {:url, "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3"}
+  end
+
+  test "CODE latest alias rejects a valid SP3 artifact with the wrong duration without provenance", %{root: root} do
+    http_client = fn url, _opts ->
+      if String.ends_with?(url, "/COD0OPSULT.SP3"),
+        do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14], 172_800)},
+        else: {:ok, 404, ""}
+    end
+
+    assert {:error, {:no_products, [%Data.AbsentCenter{center: "cod_ult"} = absent]}} =
+             Data.fetch_merged_sp3(~D[2026-07-14], [:cod_ult],
+               issue: "0000",
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert absent.reason =~ "product_validation_failed"
+    assert Path.wildcard(Path.join(root, "**/*.provenance.json")) == []
   end
 
   test "all variants absent does not prevent another center from contributing", %{root: root} do
@@ -420,32 +438,42 @@ defmodule Sidereon.GNSS.DataTest do
     File.write!(path <> ".provenance.json", Jason.encode!(provenance))
   end
 
-  defp sp3_body(x_km, date \\ ~D[2026-07-12]) do
+  defp sp3_body(x_km, date \\ ~D[2026-07-12], duration_s \\ 0) do
     record =
       "PG01" <>
         (:io_lib.format(~c"~14.6f", [x_km]) |> IO.iodata_to_binary()) <>
         " -20000.000000   5000.000000 999999.999999"
 
-    Enum.join(
-      [
-        "#cP#{date.year} #{date.month |> Integer.to_string() |> String.pad_leading(2)} #{date.day |> Integer.to_string() |> String.pad_leading(2)}  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
-        "## 2427 000000.00000000   300.00000000 61233 0.0000000000000",
-        "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
-        "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
-        "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
-        "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
-        "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
-        "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
-        "%i    0    0    0    0      0      0      0      0         0",
-        "%i    0    0    0    0      0      0      0      0         0",
-        "/* TEST SP3-c FIXTURE",
-        "*  #{date.year} #{date.month |> Integer.to_string() |> String.pad_leading(2)} #{date.day |> Integer.to_string() |> String.pad_leading(2)}  0  0  0.00000000",
-        record,
-        "EOF",
-        ""
-      ],
-      "\n"
-    )
+    start = NaiveDateTime.new!(date, ~T[00:00:00])
+    epoch_count = div(duration_s, 300) + 1
+
+    epochs =
+      for index <- 0..(epoch_count - 1),
+          epoch = NaiveDateTime.add(start, index * 300, :second),
+          line <- [
+            "*  #{epoch.year} #{epoch.month |> Integer.to_string() |> String.pad_leading(2)} #{epoch.day |> Integer.to_string() |> String.pad_leading(2)} #{epoch.hour |> Integer.to_string() |> String.pad_leading(2)} #{epoch.minute |> Integer.to_string() |> String.pad_leading(2)}  0.00000000",
+            record
+          ],
+          do: line
+
+    [
+      "#cP#{date.year} #{date.month |> Integer.to_string() |> String.pad_leading(2)} #{date.day |> Integer.to_string() |> String.pad_leading(2)}  0  0  0.00000000#{epoch_count |> Integer.to_string() |> String.pad_leading(8)} ORBIT IGS14 FIT  TST",
+      "## 2427 000000.00000000   300.00000000 61233 0.0000000000000",
+      "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+      "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+      "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
+      "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "/* TEST SP3-c FIXTURE",
+      epochs,
+      "EOF",
+      ""
+    ]
+    |> List.flatten()
+    |> Enum.join("\n")
   end
 
   defp synthetic_hgt do

@@ -29,6 +29,7 @@ defmodule Sidereon.GNSS.SP3 do
   """
 
   alias Sidereon.GNSS.Core.Types
+  alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
@@ -506,34 +507,22 @@ defmodule Sidereon.GNSS.SP3 do
   """
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
-    with {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])),
-         {:ok, precedence_scope} <-
-           normalize_precedence_scope(Keyword.get(opts, :precedence_scope, :cell)),
-         {:ok, outlier_reject} <- normalize_outlier_reject(Keyword.get(opts, :outlier_reject)),
-         {:ok, asserted_frame_label_sets} <-
-           normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])) do
+    with {:ok, policy} <- normalize_merge_policy(opts) do
       handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
-      position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
-      clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
-      min_agree = Keyword.get(opts, :min_agree, 2)
-      clock_min_common = Keyword.get(opts, :clock_min_common, 5)
-      combine = opts |> Keyword.get(:combine, :mean) |> to_string()
-      epoch_interval_s = Keyword.get(opts, :epoch_interval_s)
-      helmert = Keyword.get(opts, :helmert, false)
 
       case NIF.sp3_merge(
              handles,
-             position_tolerance_m,
-             clock_tolerance_s,
-             min_agree,
-             clock_min_common,
-             combine,
-             precedence_scope,
-             outlier_reject,
-             epoch_interval_s,
-             system_letters,
-             asserted_frame_label_sets,
-             helmert
+             policy.position_tolerance_m,
+             policy.clock_tolerance_s,
+             policy.min_agree,
+             policy.clock_min_common,
+             Atom.to_string(policy.combine),
+             Atom.to_string(policy.precedence_scope),
+             policy.outlier_reject,
+             policy.epoch_interval_s,
+             policy.systems,
+             policy.asserted_frame_label_sets,
+             policy.helmert
            ) do
         {handle, {quarantined, single_source, position_outliers, clock_outliers, {frame_reconciliations, agreement}}}
         when is_reference(handle) ->
@@ -574,67 +563,46 @@ defmodule Sidereon.GNSS.SP3 do
   therefore bound in order. Every contributor must carry complete
   requested/resolved identity, distributor, product and archive digests and
   lengths, official filename, and compression. Cache and HTTP observations are
-  intentionally excluded.
+  intentionally excluded. The returned map includes core's complete canonical
+  `:contributors` and, for precedence combination, the ordered
+  `:precedence_contributors`.
   """
   @spec merge_input_identity([map()], keyword()) :: {:ok, map()} | {:error, term()}
   def merge_input_identity(contributors, opts \\ [])
 
   def merge_input_identity(contributors, opts) when is_list(contributors) do
     with {:ok, encoded} <- encode_merge_contributors(contributors),
-         {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])),
-         {:ok, precedence_scope} <-
-           normalize_precedence_scope(Keyword.get(opts, :precedence_scope, :cell)),
-         {:ok, outlier_reject} <- normalize_outlier_reject(Keyword.get(opts, :outlier_reject)),
-         {:ok, asserted_frame_label_sets} <-
-           normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])) do
-      position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
-      clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
-      min_agree = Keyword.get(opts, :min_agree, 2)
-      clock_min_common = Keyword.get(opts, :clock_min_common, 5)
-      combine = opts |> Keyword.get(:combine, :mean) |> to_string()
-      epoch_interval_s = Keyword.get(opts, :epoch_interval_s)
-      helmert = Keyword.get(opts, :helmert, false)
-
+         {:ok, policy} <- normalize_merge_policy(opts) do
       result =
         NIF.sp3_merge_input_identity(
           encoded,
-          position_tolerance_m,
-          clock_tolerance_s,
-          min_agree,
-          clock_min_common,
-          combine,
-          precedence_scope,
-          outlier_reject,
-          epoch_interval_s,
-          system_letters,
-          asserted_frame_label_sets,
-          helmert
+          policy.position_tolerance_m,
+          policy.clock_tolerance_s,
+          policy.min_agree,
+          policy.clock_min_common,
+          Atom.to_string(policy.combine),
+          Atom.to_string(policy.precedence_scope),
+          policy.outlier_reject,
+          policy.epoch_interval_s,
+          policy.systems,
+          policy.asserted_frame_label_sets,
+          policy.helmert
         )
 
       case result do
-        {schema_version, stable_id} when is_integer(schema_version) and is_binary(stable_id) ->
-          {:ok,
-           %{
-             schema_version: schema_version,
-             stable_id: stable_id,
-             merge_policy: %{
-               position_tolerance_m: position_tolerance_m,
-               clock_tolerance_s: clock_tolerance_s,
-               min_agree: min_agree,
-               clock_min_common: clock_min_common,
-               combine: combine,
-               precedence_artifact_sha256:
-                 if(combine == "precedence",
-                   do: Enum.map(contributors, &Map.fetch!(&1, :product_sha256))
-                 ),
-               precedence_scope: precedence_scope,
-               outlier_reject: outlier_reject_map(outlier_reject),
-               epoch_interval_s: epoch_interval_s,
-               systems: system_letters,
-               asserted_frame_label_sets: asserted_frame_label_sets,
-               helmert: helmert
-             }
-           }}
+        {schema_version, stable_id, canonical, precedence}
+        when is_integer(schema_version) and is_binary(stable_id) and is_list(canonical) ->
+          with {:ok, canonical} <- decode_core_artifacts(canonical),
+               {:ok, precedence} <- decode_optional_core_artifacts(precedence) do
+            {:ok,
+             %{
+               schema_version: schema_version,
+               stable_id: stable_id,
+               contributors: canonical,
+               precedence_contributors: precedence,
+               merge_policy: merge_policy_map(policy, precedence)
+             }}
+          end
 
         {:error, _reason} = error ->
           error
@@ -883,6 +851,239 @@ defmodule Sidereon.GNSS.SP3 do
 
   defp encode_merge_contributor(_contributor), do: {:error, :incomplete}
 
+  defp decode_core_artifacts(artifacts) do
+    artifacts
+    |> Enum.reduce_while({:ok, []}, fn artifact, {:ok, acc} ->
+      case decode_core_artifact(artifact) do
+        {:ok, decoded} -> {:cont, {:ok, [decoded | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, decoded} -> {:ok, Enum.reverse(decoded)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp decode_optional_core_artifacts(nil), do: {:ok, nil}
+  defp decode_optional_core_artifacts(artifacts) when is_list(artifacts), do: decode_core_artifacts(artifacts)
+  defp decode_optional_core_artifacts(_artifacts), do: {:error, :invalid_core_precedence_contributors}
+
+  defp decode_core_artifact(
+         {{requested, resolved}, {source, official_filename}, {product_sha256, product_byte_length},
+          {archive_sha256, archive_byte_length}, compression}
+       ) do
+    with {:ok, requested} <- decode_core_product_identity(requested),
+         {:ok, resolved} <- decode_core_product_identity(resolved),
+         {:ok, source} <- decode_core_source(source),
+         {:ok, compression} <- decode_core_compression(compression) do
+      {:ok,
+       %{
+         requested_identity: requested,
+         resolved_identity: resolved,
+         distribution_source: source,
+         official_filename: official_filename,
+         product_sha256: product_sha256,
+         product_byte_length: product_byte_length,
+         archive_sha256: archive_sha256,
+         archive_byte_length: archive_byte_length,
+         compression: compression
+       }}
+    end
+  end
+
+  defp decode_core_artifact(_artifact), do: {:error, :invalid_core_contributor}
+
+  defp decode_core_product_identity([
+         family,
+         analysis_center,
+         publisher,
+         solution_class,
+         campaign,
+         filename_version,
+         year,
+         month,
+         day,
+         issue,
+         span,
+         sample,
+         official_filename,
+         format,
+         format_version,
+         prediction_horizon_days
+       ]) do
+    with {filename_version, ""} <- Integer.parse(filename_version),
+         {year, ""} <- Integer.parse(year),
+         {month, ""} <- Integer.parse(month),
+         {day, ""} <- Integer.parse(day),
+         {:ok, date} <- Date.new(year, month, day),
+         {:ok, prediction_horizon_days} <- decode_optional_integer(prediction_horizon_days) do
+      {:ok,
+       %Distribution.ProductIdentity{
+         family: family,
+         analysis_center: analysis_center,
+         publisher: publisher,
+         solution_class: solution_class,
+         campaign: campaign,
+         filename_version: filename_version,
+         date: date,
+         issue: empty_to_nil(issue),
+         span: span,
+         sample: sample,
+         official_filename: official_filename,
+         format: format,
+         format_version: empty_to_nil(format_version),
+         prediction_horizon_days: prediction_horizon_days
+       }}
+    else
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp decode_core_product_identity(_fields), do: {:error, :invalid_core_product_identity}
+
+  defp decode_optional_integer(""), do: {:ok, nil}
+
+  defp decode_optional_integer(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> {:ok, integer}
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
+
+  defp decode_core_source("direct"), do: {:ok, :direct}
+  defp decode_core_source("nasa_cddis"), do: {:ok, :nasa_cddis}
+  defp decode_core_source("local_file"), do: {:ok, :local_file}
+  defp decode_core_source("in_memory"), do: {:ok, :in_memory}
+  defp decode_core_source(_source), do: {:error, :invalid_core_distribution_source}
+
+  defp decode_core_compression("gzip"), do: {:ok, :gzip}
+  defp decode_core_compression("none"), do: {:ok, :none}
+  defp decode_core_compression(_compression), do: {:error, :invalid_core_compression}
+
+  defp merge_policy_map(policy, precedence) do
+    %{
+      position_tolerance_m: policy.position_tolerance_m,
+      clock_tolerance_s: policy.clock_tolerance_s,
+      min_agree: policy.min_agree,
+      clock_min_common: policy.clock_min_common,
+      combine: Atom.to_string(policy.combine),
+      precedence_artifact_sha256: if(precedence, do: Enum.map(precedence, & &1.product_sha256)),
+      precedence_scope: Atom.to_string(policy.precedence_scope),
+      outlier_reject: outlier_reject_map(policy.outlier_reject),
+      epoch_interval_s: policy.epoch_interval_s,
+      systems: policy.systems,
+      asserted_frame_label_sets: policy.asserted_frame_label_sets,
+      helmert: policy.helmert
+    }
+  end
+
+  @merge_policy_keys [
+    :position_tolerance_m,
+    :clock_tolerance_s,
+    :min_agree,
+    :clock_min_common,
+    :combine,
+    :precedence_scope,
+    :outlier_reject,
+    :epoch_interval_s,
+    :systems,
+    :asserted_frame_label_sets,
+    :helmert
+  ]
+
+  defp normalize_merge_policy(opts) when is_list(opts) do
+    keys = Keyword.keys(opts)
+
+    with true <- Keyword.keyword?(opts) || {:error, {:invalid_merge_policy, :not_keyword}},
+         true <- Enum.all?(keys, &(&1 in @merge_policy_keys)) || {:error, {:invalid_merge_policy, :unknown_option}},
+         true <- length(keys) == MapSet.size(MapSet.new(keys)) || {:error, {:invalid_merge_policy, :duplicate_option}},
+         {:ok, position_tolerance_m} <-
+           normalize_nonnegative_float(Keyword.get(opts, :position_tolerance_m, 0.5), :position_tolerance_m),
+         {:ok, clock_tolerance_s} <-
+           normalize_nonnegative_float(Keyword.get(opts, :clock_tolerance_s, 5.0e-9), :clock_tolerance_s),
+         {:ok, min_agree} <- normalize_positive_integer(Keyword.get(opts, :min_agree, 2), :min_agree),
+         {:ok, clock_min_common} <-
+           normalize_positive_integer(Keyword.get(opts, :clock_min_common, 5), :clock_min_common),
+         {:ok, combine} <- normalize_combine(Keyword.get(opts, :combine, :mean)),
+         {:ok, precedence_scope} <-
+           normalize_precedence_scope(Keyword.get(opts, :precedence_scope, :cell)),
+         {:ok, outlier_reject} <- normalize_outlier_reject(Keyword.get(opts, :outlier_reject)),
+         {:ok, epoch_interval_s} <- normalize_epoch_interval(Keyword.get(opts, :epoch_interval_s)),
+         {:ok, systems} <- normalize_policy_systems(opts),
+         {:ok, asserted_frame_label_sets} <-
+           normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])),
+         {:ok, helmert} <- normalize_boolean(Keyword.get(opts, :helmert, false), :helmert) do
+      {:ok,
+       %{
+         position_tolerance_m: position_tolerance_m,
+         clock_tolerance_s: clock_tolerance_s,
+         min_agree: min_agree,
+         clock_min_common: clock_min_common,
+         combine: combine,
+         precedence_scope: precedence_scope,
+         outlier_reject: outlier_reject,
+         epoch_interval_s: epoch_interval_s,
+         systems: systems,
+         asserted_frame_label_sets: asserted_frame_label_sets,
+         helmert: helmert
+       }}
+    else
+      false -> {:error, {:invalid_merge_policy, :invalid}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp normalize_merge_policy(_opts), do: {:error, {:invalid_merge_policy, :not_keyword}}
+
+  defp normalize_nonnegative_float(value, field) when is_number(value) do
+    value = value / 1.0
+
+    if value >= 0.0 and value - value == 0.0 do
+      {:ok, if(value == 0.0, do: 0.0, else: value)}
+    else
+      {:error, {:invalid_merge_policy, field}}
+    end
+  end
+
+  defp normalize_nonnegative_float(_value, field), do: {:error, {:invalid_merge_policy, field}}
+
+  defp normalize_positive_integer(value, _field) when is_integer(value) and value > 0, do: {:ok, value}
+  defp normalize_positive_integer(_value, field), do: {:error, {:invalid_merge_policy, field}}
+
+  defp normalize_combine(value) when value in [:mean, :median, :precedence], do: {:ok, value}
+  defp normalize_combine(_value), do: {:error, {:invalid_merge_policy, :combine}}
+
+  defp normalize_epoch_interval(nil), do: {:ok, nil}
+
+  defp normalize_epoch_interval(value) when is_number(value) do
+    value = value / 1.0
+    rounded = Float.round(value)
+
+    if value - value == 0.0 and rounded >= 1.0 and abs(value - rounded) <= 1.0e-9 do
+      {:ok, rounded}
+    else
+      {:error, {:invalid_merge_policy, :epoch_interval_s}}
+    end
+  end
+
+  defp normalize_epoch_interval(_value), do: {:error, {:invalid_merge_policy, :epoch_interval_s}}
+
+  defp normalize_policy_systems(opts) do
+    case Keyword.fetch(opts, :systems) do
+      :error -> {:ok, []}
+      {:ok, nil} -> {:ok, []}
+      {:ok, []} -> {:error, {:invalid_merge_policy, :systems}}
+      {:ok, systems} -> normalize_merge_systems(systems)
+    end
+  end
+
+  defp normalize_boolean(value, _field) when is_boolean(value), do: {:ok, value}
+  defp normalize_boolean(_value, field), do: {:error, {:invalid_merge_policy, field}}
+
   defp outlier_reject_map(nil), do: nil
 
   defp outlier_reject_map({position_tolerance_m, clock_tolerance_s}) do
@@ -913,21 +1114,28 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end)
     |> case do
-      {:ok, sets} -> {:ok, Enum.reverse(sets)}
-      {:error, _} = err -> err
+      {:ok, sets} ->
+        sets = sets |> Enum.reverse() |> Enum.sort()
+
+        if length(sets) == MapSet.size(MapSet.new(sets)),
+          do: {:ok, sets},
+          else: {:error, {:invalid_frame_label_sets, :duplicate}}
+
+      {:error, _} = err ->
+        err
     end
   end
 
   defp normalize_asserted_frame_label_sets(value), do: {:error, {:invalid_frame_label_sets, value}}
 
-  defp normalize_precedence_scope(:cell), do: {:ok, "cell"}
-  defp normalize_precedence_scope(:satellite_arc), do: {:ok, "satellite_arc"}
+  defp normalize_precedence_scope(:cell), do: {:ok, :cell}
+  defp normalize_precedence_scope(:satellite_arc), do: {:ok, :satellite_arc}
   defp normalize_precedence_scope(value), do: {:error, {:invalid_precedence_scope, value}}
 
   defp normalize_outlier_reject(nil), do: {:ok, nil}
 
   defp normalize_outlier_reject(value) when is_list(value) do
-    if Keyword.keyword?(value) do
+    if Keyword.keyword?(value) and length(Keyword.keys(value)) == MapSet.size(MapSet.new(Keyword.keys(value))) do
       value |> Map.new() |> normalize_outlier_reject()
     else
       {:error, {:invalid_outlier_reject, value}}
@@ -936,16 +1144,23 @@ defmodule Sidereon.GNSS.SP3 do
 
   defp normalize_outlier_reject(%{} = value) do
     case value do
-      %{position_tolerance_m: position_m, clock_tolerance_s: clock_s}
-      when is_number(position_m) and position_m >= 0 and is_number(clock_s) and clock_s >= 0 ->
-        {:ok, {position_m / 1.0, clock_s / 1.0}}
+      %{position_tolerance_m: position_m, clock_tolerance_s: clock_s} when map_size(value) == 2 ->
+        with {:ok, position_m} <- normalize_nonnegative_float(position_m, :outlier_position_tolerance_m),
+             {:ok, clock_s} <- normalize_nonnegative_float(clock_s, :outlier_clock_tolerance_s) do
+          {:ok, {position_m, clock_s}}
+        end
 
       _other ->
         position_m = Map.get(value, :position_m)
         clock_ns = Map.get(value, :clock_ns)
 
-        if is_number(position_m) and position_m >= 0 and is_number(clock_ns) and clock_ns >= 0 do
-          {:ok, {position_m / 1.0, clock_ns * 1.0e-9}}
+        if map_size(value) == 2 do
+          with {:ok, position_m} <- normalize_nonnegative_float(position_m, :outlier_position_m),
+               {:ok, clock_ns} <- normalize_nonnegative_float(clock_ns, :outlier_clock_ns) do
+            {:ok, {position_m, canonical_zero(clock_ns * 1.0e-9)}}
+          else
+            _ -> {:error, {:invalid_outlier_reject, value}}
+          end
         else
           {:error, {:invalid_outlier_reject, value}}
         end
@@ -957,21 +1172,26 @@ defmodule Sidereon.GNSS.SP3 do
   defp normalize_frame_labels(labels, index) do
     labels
     |> Enum.reduce_while({:ok, []}, fn label, {:ok, acc} ->
-      normalized = label |> to_string() |> String.trim()
+      normalized = if(is_binary(label), do: String.trim(label))
 
-      if normalized == "" do
+      if not is_binary(normalized) or normalized == "" do
         {:halt, {:error, {:invalid_frame_label_set, index, labels}}}
       else
         {:cont, {:ok, [normalized | acc]}}
       end
     end)
     |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _} = err -> err
+      {:ok, normalized} ->
+        normalized = normalized |> Enum.reverse() |> Enum.uniq() |> Enum.sort()
+
+        if length(normalized) >= 2,
+          do: {:ok, normalized},
+          else: {:error, {:invalid_frame_label_set, index, labels}}
+
+      {:error, _} = err ->
+        err
     end
   end
-
-  defp normalize_merge_systems(nil), do: {:ok, []}
 
   defp normalize_merge_systems(systems) when is_list(systems) do
     systems
@@ -982,7 +1202,7 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end)
     |> case do
-      {:ok, letters} -> {:ok, letters |> Enum.reverse() |> Enum.uniq()}
+      {:ok, letters} -> {:ok, letters |> Enum.reverse() |> Enum.uniq() |> Enum.sort()}
       {:error, _} = err -> err
     end
   end
@@ -1010,6 +1230,9 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   defp normalize_merge_system(other), do: {:error, {:unsupported_system, other}}
+
+  defp canonical_zero(value) when value == 0.0, do: 0.0
+  defp canonical_zero(value), do: value
 
   defp validate_coverage(%__MODULE__{} = sp3, epoch, opts) do
     if extrapolate?(opts) or covers_epoch?(sp3, epoch) do

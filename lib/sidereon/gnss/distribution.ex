@@ -476,7 +476,7 @@ defmodule Sidereon.GNSS.Distribution do
          {:ok, compression} <- resolve_compression(source.compression, fetched.archive),
          {:ok, content} <- decompress(fetched.archive, compression, max_product_bytes(opts)),
          :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
-         {:ok, resolved_identity} <- validate_product(identity, content),
+         {:ok, resolved_identity} <- validate_product(identity, content, fetched.original_url),
          provenance =
            provenance(
              identity,
@@ -1073,11 +1073,12 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp verify_checksum(_bytes, expected), do: {:error, {:checksum_mismatch, inspect(expected), ""}}
 
-  defp validate_product(%ProductIdentity{family: "sp3"} = identity, bytes) do
+  defp validate_product(%ProductIdentity{family: "sp3"} = identity, bytes, original_url) do
     with {:ok, sp3} <- SP3.parse(bytes),
          true <- SP3.epoch_count(sp3) > 0,
          {:ok, version} <- sp3_version(bytes),
          :ok <- validate_sp3_metadata(identity, bytes),
+         :ok <- validate_sp3_catalog_equivalence(identity, sp3, bytes, original_url),
          resolved_version = "SP3-#{version}",
          :ok <- validate_requested_format_version(identity.format_version, resolved_version) do
       {:ok, %{identity | format_version: resolved_version}}
@@ -1088,7 +1089,7 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp validate_product(%ProductIdentity{family: "ionex"} = identity, bytes) do
+  defp validate_product(%ProductIdentity{family: "ionex"} = identity, bytes, _original_url) do
     with {:ok, _handle} <- Ionosphere.parse_ionex(bytes),
          {:ok, version} <- ionex_version(bytes),
          :ok <- validate_ionex_metadata(identity, bytes),
@@ -1101,7 +1102,8 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp validate_product(identity, _bytes), do: {:error, {:unsupported_distribution, :validation, identity.family}}
+  defp validate_product(identity, _bytes, _original_url),
+    do: {:error, {:unsupported_distribution, :validation, identity.family}}
 
   defp validate_requested_format_version(nil, _resolved), do: :ok
   defp validate_requested_format_version(version, version), do: :ok
@@ -1132,6 +1134,101 @@ defmodule Sidereon.GNSS.Distribution do
     end
   rescue
     _error -> {:error, {:product_validation_failed, :sp3_identity_metadata}}
+  end
+
+  defp validate_sp3_catalog_equivalence(
+         %ProductIdentity{solution_class: "ultra_rapid", issue: issue} = identity,
+         sp3,
+         bytes,
+         original_url
+       )
+       when is_binary(issue) and is_binary(original_url) do
+    with {:ok, rows} <-
+           core(
+             NIF.data_ultra_sp3_locations(
+               identity.analysis_center,
+               identity.date.year,
+               identity.date.month,
+               identity.date.day,
+               issue
+             )
+           ),
+         {pattern, span, sample, filename, ^original_url, _compression} <-
+           Enum.find(rows, fn {_pattern, _span, _sample, _filename, url, _compression} ->
+             url == original_url
+           end),
+         true <- span == identity.span,
+         true <- sample == identity.sample,
+         :ok <- validate_catalog_filename(identity, pattern, filename),
+         :ok <- validate_alias_span(pattern, span, sample, sp3, bytes) do
+      :ok
+    else
+      _ -> {:error, {:product_validation_failed, :sp3_catalog_identity}}
+    end
+  end
+
+  defp validate_sp3_catalog_equivalence(%ProductIdentity{solution_class: "ultra_rapid"}, _sp3, _bytes, _url),
+    do: {:error, {:product_validation_failed, :sp3_catalog_identity}}
+
+  defp validate_sp3_catalog_equivalence(_identity, _sp3, _bytes, _original_url), do: :ok
+
+  defp validate_catalog_filename(identity, "alias_" <> _rest, alias_filename) do
+    with true <- alias_filename != identity.official_filename,
+         {:ok, canonical} <- Data.canonical_filename(product_from_identity(identity)),
+         true <- canonical == identity.official_filename do
+      :ok
+    else
+      _ -> {:error, {:product_validation_failed, :sp3_catalog_filename}}
+    end
+  end
+
+  defp validate_catalog_filename(identity, _pattern, filename) do
+    if filename == identity.official_filename,
+      do: :ok,
+      else: {:error, {:product_validation_failed, :sp3_catalog_filename}}
+  end
+
+  defp validate_alias_span("alias_" <> _rest, span, sample, sp3, bytes) do
+    epochs = SP3.epochs_j2000_seconds(sp3)
+
+    with span_s when is_integer(span_s) <- sample_seconds(span),
+         cadence_s when is_integer(cadence_s) <- sample_seconds(sample),
+         true <- rem(span_s, cadence_s) == 0,
+         expected_count = div(span_s, cadence_s) + 1,
+         true <- SP3.epoch_count(sp3) == expected_count,
+         true <- length(epochs) == expected_count,
+         true <- declared_sp3_epoch_count(bytes) == expected_count,
+         true <- abs(List.last(epochs) - hd(epochs) - span_s) <= 1.0e-6,
+         true <- cadence_matches?(epochs, cadence_s) do
+      :ok
+    else
+      _ -> {:error, {:product_validation_failed, :sp3_alias_span}}
+    end
+  end
+
+  defp validate_alias_span(_pattern, _span, _sample, _sp3, _bytes), do: :ok
+
+  defp declared_sp3_epoch_count(bytes) do
+    first = bytes |> String.split("\n", parts: 2) |> hd()
+
+    case Regex.run(~r/^#[a-dA-D][PV]\d{4}\s+\d+\s+\d+\s+\d+\s+\d+\s+\S+\s+(\d+)\s+ORBIT\b/, first) do
+      [_, count] ->
+        case Integer.parse(count) do
+          {count, ""} -> count
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp cadence_matches?([_one], _cadence_s), do: true
+
+  defp cadence_matches?(epochs, cadence_s) do
+    epochs
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.all?(fn [left, right] -> abs(right - left - cadence_s) <= 1.0e-6 end)
   end
 
   defp ionex_version(bytes) do
@@ -1303,7 +1400,7 @@ defmodule Sidereon.GNSS.Distribution do
              true <- provenance.archive_sha256 == sha256(archive),
              true <- provenance.archive_byte_length == byte_size(archive),
              :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
-             {:ok, resolved} <- validate_product(identity, content),
+             {:ok, resolved} <- validate_product(identity, content, provenance.original_url),
              true <- resolved == provenance.resolved_identity,
              {:ok, committed_path} <-
                maybe_migrate_cache(exact_cache, content, archive, provenance, files.product, legacy?) do

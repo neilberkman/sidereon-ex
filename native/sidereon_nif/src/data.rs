@@ -122,6 +122,29 @@ pub(crate) fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, D
     Ok(identity)
 }
 
+pub(crate) fn product_identity_fields(identity: &ProductIdentity) -> Vec<String> {
+    vec![
+        identity.family.code().to_string(),
+        identity.analysis_center.code().to_string(),
+        identity.publisher.code().to_string(),
+        identity.solution.code().to_string(),
+        identity.campaign.code().to_string(),
+        identity.version.to_string(),
+        identity.date.year.to_string(),
+        identity.date.month.to_string(),
+        identity.date.day.to_string(),
+        identity.issue.clone().unwrap_or_default(),
+        identity.span.clone(),
+        identity.sample.clone(),
+        identity.official_filename.clone(),
+        identity.format.code().to_string(),
+        identity.format_version.clone().unwrap_or_default(),
+        identity
+            .prediction_horizon_days
+            .map_or_else(String::new, |days| days.to_string()),
+    ]
+}
+
 fn space_weather_product(code: &str) -> Result<SpaceWeatherProduct, DataCatalogError> {
     code.parse()
 }

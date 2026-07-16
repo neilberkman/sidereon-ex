@@ -658,6 +658,29 @@ type ArtifactIdentityTuple = (
     String,
 );
 
+type MergeInputIdentityTuple = (
+    u8,
+    String,
+    Vec<ArtifactIdentityTuple>,
+    Option<Vec<ArtifactIdentityTuple>>,
+);
+
+fn artifact_identity_tuple(value: Sp3ArtifactIdentity) -> ArtifactIdentityTuple {
+    (
+        (
+            crate::data::product_identity_fields(&value.requested_identity),
+            crate::data::product_identity_fields(&value.resolved_identity),
+        ),
+        (
+            value.distribution_source.code().to_string(),
+            value.official_filename,
+        ),
+        (value.product_sha256, value.product_byte_length),
+        (value.archive_sha256, value.archive_byte_length),
+        value.compression.as_str().to_string(),
+    )
+}
+
 /// Build the shared, versioned identity for exact SP3 artifacts and merge policy.
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
@@ -674,7 +697,7 @@ fn sp3_merge_input_identity(
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
-) -> NifResult<(u8, String)> {
+) -> NifResult<MergeInputIdentityTuple> {
     let contributors = contributors
         .into_iter()
         .map(
@@ -728,7 +751,21 @@ fn sp3_merge_input_identity(
     )?;
     let identity = Sp3MergeInputIdentity::new(&contributors, &policy)
         .map_err(|error| Error::Term(Box::new(error.to_string())))?;
-    Ok((identity.schema_version, identity.stable_id))
+    Ok((
+        identity.schema_version,
+        identity.stable_id,
+        identity
+            .contributors
+            .into_iter()
+            .map(artifact_identity_tuple)
+            .collect(),
+        identity.precedence_contributors.map(|contributors| {
+            contributors
+                .into_iter()
+                .map(artifact_identity_tuple)
+                .collect()
+        }),
+    ))
 }
 
 /// Serialize a loaded SP3 product to standard SP3-c/-d text (the inverse of

@@ -601,8 +601,8 @@ defmodule Sidereon.GNSS.Data do
       single_product: report.single_product,
       merged: report.merged,
       contributors: Enum.map(report.contributors, &contributor_to_map/1),
-      absent: Enum.map(report.absent, &Map.from_struct/1),
-      merge_report: report.merge_report
+      absent: Enum.map(report.absent, &absent_to_map/1),
+      merge_report: merge_result_to_map(report.merge_report)
     }
   end
 
@@ -611,29 +611,49 @@ defmodule Sidereon.GNSS.Data do
 
   This reconstructs no filename and reads no cache directory. It validates the
   complete persisted artifact records and merge policy through the shared Rust
-  canonicalizer, then compares both the schema version and stable identity.
+  canonicalizer, then compares both the schema version and stable identity. All
+  report and nested record schemas are exact: unknown, duplicated, coercive, or
+  internally inconsistent fields fail closed.
   Maps returned by `merge_report_to_map/1`, including a JSON encode/decode
   round-trip with string keys, are accepted.
   """
   @spec verify_merge_report(MergeReport.t() | map()) :: :ok | {:error, term()}
+  def verify_merge_report(%MergeReport{} = report) do
+    report
+    |> merge_report_to_map()
+    |> verify_merge_report()
+  end
+
   def verify_merge_report(report) when is_map(report) do
-    with {:ok, contributors} <- public_field(report, :contributors),
-         true <- is_list(contributors),
-         {:ok, artifacts} <- persisted_artifacts(contributors),
-         {:ok, policy} <- public_field(report, :merge_policy),
-         {:ok, {opts, precedence}} <- persisted_merge_opts(policy),
+    fields = [
+      :schema_version,
+      :input_identity_schema_version,
+      :stable_input_identity,
+      :merge_policy,
+      :source_count,
+      :single_product,
+      :merged,
+      :contributors,
+      :absent,
+      :merge_report
+    ]
+
+    with {:ok, values} <- exact_fields(report, fields, :report),
+         :ok <- exact_value(values.schema_version, 1, :schema_version),
+         true <- is_list(values.contributors) || {:error, {:invalid_field, :contributors}},
+         true <- values.contributors != [] || {:error, {:invalid_field, :contributors}},
+         {:ok, artifacts, contributor_centers} <- persisted_contributors(values.contributors),
+         {:ok, opts, normalized_policy, precedence} <- persisted_merge_policy(values.merge_policy),
          :ok <- validate_persisted_precedence(artifacts, precedence, opts),
-         {:ok, expected_schema} <- public_field(report, :input_identity_schema_version),
-         {:ok, expected_id} <- public_field(report, :stable_input_identity),
          {:ok, recomputed} <- SP3.merge_input_identity(artifacts, opts),
-         true <- recomputed.schema_version == expected_schema,
-         true <- recomputed.stable_id == expected_id do
+         :ok <- verify_report_identity(values, recomputed, normalized_policy),
+         :ok <- verify_report_counts(values, artifacts),
+         :ok <- verify_absent(values.absent, contributor_centers),
+         :ok <- verify_merge_result(values.merge_report, length(artifacts)) do
       :ok
     else
-      false -> {:error, :merge_input_identity_mismatch}
-      :error -> {:error, :incomplete_merge_report}
       {:error, _reason} = error -> error
-      _other -> {:error, :incomplete_merge_report}
+      _other -> {:error, :invalid_merge_report}
     end
   end
 
@@ -835,13 +855,15 @@ defmodule Sidereon.GNSS.Data do
       {:ok, result} ->
         case SP3.load(result.path) do
           {:ok, sp3} ->
+            {contributor_filename, contributor_pattern} = contributor_candidate(product, result.provenance)
+
             {:ok,
              %Contributor{
                center: center,
-               filename: filename,
+               filename: contributor_filename,
                date: product.date,
                issue: product.issue,
-               pattern: product.pattern || "canonical",
+               pattern: contributor_pattern,
                artifact_identity: artifact_identity(result.provenance),
                acquisition: acquisition_facts(result.provenance, Enum.reverse(attempts))
              }, sp3}
@@ -899,6 +921,32 @@ defmodule Sidereon.GNSS.Data do
     |> rename_option(:max_compressed_bytes, :max_archive_bytes)
     |> rename_option(:max_decompressed_bytes, :max_product_bytes)
   end
+
+  defp contributor_candidate(%Product{issue: issue} = product, provenance) when is_binary(issue) do
+    NIF.data_ultra_sp3_locations(
+      product.center,
+      product.date.year,
+      product.date.month,
+      product.date.day,
+      issue
+    )
+    |> core()
+    |> case do
+      {:ok, rows} ->
+        case Enum.find(rows, fn {_pattern, _span, _sample, _filename, url, _compression} ->
+               url == provenance.original_url
+             end) do
+          {pattern, _span, _sample, filename, _url, _compression} -> {filename, pattern}
+          nil -> {product.filename || provenance.official_filename, product.pattern || "canonical"}
+        end
+
+      {:error, _reason} ->
+        {product.filename || provenance.official_filename, product.pattern || "canonical"}
+    end
+  end
+
+  defp contributor_candidate(product, provenance),
+    do: {product.filename || provenance.official_filename, product.pattern || "canonical"}
 
   defp merge_sp3_contributors(contributors, absent, opts) do
     sources = Enum.map(contributors, fn {:ok, _info, sp3} -> sp3 end)
@@ -1018,60 +1066,110 @@ defmodule Sidereon.GNSS.Data do
     end)
   end
 
-  defp persisted_artifacts(contributors) do
+  defp absent_to_map(%AbsentCenter{} = absent), do: Map.from_struct(absent)
+
+  defp merge_result_to_map(nil), do: nil
+
+  defp merge_result_to_map(report) when is_map(report) do
+    Map.update!(report, :frame_reconciliations, fn reconciliations ->
+      Enum.map(reconciliations, fn reconciliation ->
+        Map.update!(reconciliation, :epoch_year_span, fn
+          nil -> nil
+          {first, last} -> [first, last]
+          [first, last] -> [first, last]
+        end)
+      end)
+    end)
+  end
+
+  defp merge_result_to_map(report), do: report
+
+  defp persisted_contributors(contributors) do
     contributors
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {contributor, index}, {:ok, artifacts} ->
-      with {:ok, artifact} <- public_field(contributor, :artifact_identity),
-           {:ok, normalized} <- persisted_artifact(artifact) do
-        {:cont, {:ok, [normalized | artifacts]}}
+    |> Enum.reduce_while({:ok, [], []}, fn {contributor, index}, {:ok, artifacts, centers} ->
+      with {:ok, values} <-
+             exact_fields(
+               contributor,
+               [:center, :filename, :date, :issue, :pattern, :artifact_identity, :acquisition],
+               {:contributor, index}
+             ),
+           :ok <- nonempty_binary(values.center, {:contributor, index, :center}),
+           :ok <- nonempty_binary(values.filename, {:contributor, index, :filename}),
+           {:ok, date} <- persisted_date(values.date),
+           :ok <- optional_binary(values.issue, {:contributor, index, :issue}),
+           :ok <- nonempty_binary(values.pattern, {:contributor, index, :pattern}),
+           {:ok, artifact} <- persisted_artifact(values.artifact_identity, index),
+           {:ok, acquisition} <- persisted_acquisition(values.acquisition, index),
+           :ok <-
+             verify_contributor_metadata(
+               %{values | date: date},
+               artifact,
+               acquisition,
+               index
+             ) do
+        {:cont, {:ok, [artifact | artifacts], [values.center | centers]}}
       else
-        _error -> {:halt, {:error, {:invalid_merge_contributor, index, :incomplete}}}
+        {:error, _} = error -> {:halt, error}
+        _error -> {:halt, {:error, {:invalid_merge_contributor, index}}}
       end
     end)
     |> case do
-      {:ok, artifacts} -> {:ok, Enum.reverse(artifacts)}
-      {:error, _reason} = error -> error
+      {:ok, artifacts, centers} ->
+        artifacts = Enum.reverse(artifacts)
+        centers = Enum.reverse(centers)
+
+        if length(centers) == MapSet.size(MapSet.new(centers)),
+          do: {:ok, artifacts, centers},
+          else: {:error, :duplicate_contributor_center}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  defp persisted_artifact(%ArtifactIdentity{} = artifact), do: {:ok, Map.from_struct(artifact)}
+  defp persisted_artifact(artifact, index) when is_map(artifact) do
+    fields = [
+      :requested_identity,
+      :resolved_identity,
+      :distribution_source,
+      :official_filename,
+      :product_sha256,
+      :product_byte_length,
+      :archive_sha256,
+      :archive_byte_length,
+      :compression
+    ]
 
-  defp persisted_artifact(artifact) when is_map(artifact) do
-    with {:ok, requested} <- public_field(artifact, :requested_identity),
-         {:ok, requested} <- persisted_product_identity(requested),
-         {:ok, resolved} <- public_field(artifact, :resolved_identity),
-         {:ok, resolved} <- persisted_product_identity(resolved),
-         {:ok, source} <- public_field(artifact, :distribution_source),
-         {:ok, source} <- persisted_source(source),
-         {:ok, official_filename} <- public_field(artifact, :official_filename),
-         {:ok, product_sha256} <- public_field(artifact, :product_sha256),
-         {:ok, product_byte_length} <- public_field(artifact, :product_byte_length),
-         {:ok, archive_sha256} <- public_field(artifact, :archive_sha256),
-         {:ok, archive_byte_length} <- public_field(artifact, :archive_byte_length),
-         {:ok, compression} <- public_field(artifact, :compression),
-         {:ok, compression} <- persisted_compression(compression) do
+    with {:ok, values} <- exact_fields(artifact, fields, {:artifact, index}),
+         {:ok, requested} <- persisted_product_identity(values.requested_identity, {:artifact, index, :requested}),
+         {:ok, resolved} <- persisted_product_identity(values.resolved_identity, {:artifact, index, :resolved}),
+         {:ok, source} <- persisted_source(values.distribution_source),
+         :ok <- nonempty_binary(values.official_filename, {:artifact, index, :official_filename}),
+         :ok <- valid_digest(values.product_sha256, {:artifact, index, :product_sha256}),
+         :ok <- positive_integer(values.product_byte_length, {:artifact, index, :product_byte_length}),
+         :ok <- valid_digest(values.archive_sha256, {:artifact, index, :archive_sha256}),
+         :ok <- positive_integer(values.archive_byte_length, {:artifact, index, :archive_byte_length}),
+         {:ok, compression} <- persisted_compression(values.compression) do
       {:ok,
        %{
          requested_identity: requested,
          resolved_identity: resolved,
          distribution_source: source,
-         official_filename: official_filename,
-         product_sha256: product_sha256,
-         product_byte_length: product_byte_length,
-         archive_sha256: archive_sha256,
-         archive_byte_length: archive_byte_length,
+         official_filename: values.official_filename,
+         product_sha256: values.product_sha256,
+         product_byte_length: values.product_byte_length,
+         archive_sha256: values.archive_sha256,
+         archive_byte_length: values.archive_byte_length,
          compression: compression
        }}
     end
   end
 
-  defp persisted_artifact(_artifact), do: {:error, :incomplete}
+  defp persisted_artifact(_artifact, index), do: {:error, {:invalid_field, {:artifact, index}}}
 
-  defp persisted_product_identity(%Distribution.ProductIdentity{} = identity), do: {:ok, identity}
-
-  defp persisted_product_identity(identity) when is_map(identity) do
-    required = [
+  defp persisted_product_identity(identity, context) when is_map(identity) do
+    fields = [
       :family,
       :analysis_center,
       :publisher,
@@ -1088,18 +1186,132 @@ defmodule Sidereon.GNSS.Data do
       :prediction_horizon_days
     ]
 
-    with {:ok, values} <- public_fields(identity, required),
-         {:ok, date} <- persisted_date(values.date) do
-      {:ok, struct!(Distribution.ProductIdentity, Map.put(values, :date, date))}
+    with {:ok, values} <- exact_fields(identity, fields, context),
+         :ok <- nonempty_binary(values.family, {context, :family}),
+         :ok <- nonempty_binary(values.analysis_center, {context, :analysis_center}),
+         :ok <- nonempty_binary(values.publisher, {context, :publisher}),
+         :ok <- nonempty_binary(values.solution_class, {context, :solution_class}),
+         :ok <- nonempty_binary(values.campaign, {context, :campaign}),
+         :ok <- nonnegative_integer(values.filename_version, {context, :filename_version}),
+         {:ok, date} <- persisted_date(values.date),
+         :ok <- optional_binary(values.issue, {context, :issue}),
+         :ok <- nonempty_binary(values.span, {context, :span}),
+         :ok <- nonempty_binary(values.sample, {context, :sample}),
+         :ok <- nonempty_binary(values.official_filename, {context, :official_filename}),
+         :ok <- nonempty_binary(values.format, {context, :format}),
+         :ok <- optional_binary(values.format_version, {context, :format_version}),
+         :ok <- optional_nonnegative_integer(values.prediction_horizon_days, {context, :prediction_horizon_days}) do
+      {:ok, struct!(Distribution.ProductIdentity, %{values | date: date})}
     end
   rescue
-    _error -> {:error, :identity}
+    _error -> {:error, {:invalid_field, context}}
   end
 
-  defp persisted_product_identity(_identity), do: {:error, :identity}
+  defp persisted_product_identity(_identity, context), do: {:error, {:invalid_field, context}}
 
-  defp persisted_merge_opts(policy) when is_map(policy) do
-    required = [
+  defp persisted_acquisition(acquisition, index) when is_map(acquisition) do
+    fields = [:retrieved_at, :cache_hit, :original_url, :final_url, :etag, :last_modified, :attempts]
+
+    with {:ok, values} <- exact_fields(acquisition, fields, {:acquisition, index}),
+         :ok <- valid_timestamp(values.retrieved_at, {:acquisition, index, :retrieved_at}),
+         true <- is_boolean(values.cache_hit) || {:error, {:invalid_field, {:acquisition, index, :cache_hit}}},
+         :ok <- public_url(values.original_url, {:acquisition, index, :original_url}),
+         :ok <- public_url(values.final_url, {:acquisition, index, :final_url}),
+         :ok <- optional_binary(values.etag, {:acquisition, index, :etag}),
+         :ok <- optional_binary(values.last_modified, {:acquisition, index, :last_modified}),
+         true <- is_list(values.attempts) || {:error, {:invalid_field, {:acquisition, index, :attempts}}},
+         :ok <- persisted_attempts(values.attempts, index) do
+      {:ok, values}
+    end
+  end
+
+  defp persisted_acquisition(_acquisition, index), do: {:error, {:invalid_field, {:acquisition, index}}}
+
+  @failure_types ~w(
+    authentication_required authentication_failed authorization_denied product_not_published
+    retired_endpoint redirect_policy_failure malformed_url transport http_status invalid_content_type
+    error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch
+    product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution
+    acquisition unknown
+  )
+
+  defp persisted_attempts(attempts, contributor_index) do
+    attempts
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {attempt, attempt_index}, :ok ->
+      context = {:attempt, contributor_index, attempt_index}
+
+      with {:ok, values} <- exact_fields(attempt, [:source, :error_type, :message, :url, :status], context),
+           {:ok, _source} <- persisted_source(values.source),
+           :ok <- failure_type(values.error_type, context),
+           :ok <- nonempty_binary(values.message, {context, :message}),
+           :ok <- public_url(values.url, {context, :url}),
+           :ok <- optional_http_status(values.status, {context, :status}) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp failure_type(value, context) when is_atom(value), do: failure_type(Atom.to_string(value), context)
+  defp failure_type(value, _context) when is_binary(value) and value in @failure_types, do: :ok
+  defp failure_type(_value, context), do: {:error, {:invalid_field, {context, :error_type}}}
+
+  defp verify_contributor_metadata(values, artifact, acquisition, index) do
+    requested = artifact.requested_identity
+    resolved = artifact.resolved_identity
+
+    with true <- values.center == requested.analysis_center || {:error, {:contributor_mismatch, index, :center}},
+         true <- values.center == resolved.analysis_center || {:error, {:contributor_mismatch, index, :center}},
+         true <- values.date == requested.date || {:error, {:contributor_mismatch, index, :date}},
+         true <- values.date == resolved.date || {:error, {:contributor_mismatch, index, :date}},
+         true <- values.issue == requested.issue || {:error, {:contributor_mismatch, index, :issue}} do
+      verify_contributor_catalog(values, artifact, acquisition, index)
+    end
+  end
+
+  defp verify_contributor_catalog(%{pattern: pattern, filename: filename}, artifact, _acquisition, _index)
+       when pattern in ["canonical", "requested_sample"] do
+    if filename == artifact.official_filename,
+      do: :ok,
+      else: {:error, :contributor_filename_mismatch}
+  end
+
+  defp verify_contributor_catalog(values, artifact, acquisition, index) do
+    identity = artifact.requested_identity
+
+    with true <- identity.solution_class == "ultra_rapid" || {:error, {:contributor_mismatch, index, :pattern}},
+         true <- is_binary(acquisition.original_url) || {:error, {:contributor_mismatch, index, :original_url}},
+         {:ok, rows} <-
+           core(
+             NIF.data_ultra_sp3_locations(
+               identity.analysis_center,
+               identity.date.year,
+               identity.date.month,
+               identity.date.day,
+               identity.issue
+             )
+           ),
+         {pattern, span, sample, filename, url, compression} <-
+           Enum.find(rows, fn {pattern, span, sample, filename, url, compression} ->
+             pattern == values.pattern and filename == values.filename and
+               span == identity.span and sample == identity.sample and
+               url == acquisition.original_url and
+               compression == Atom.to_string(artifact.compression)
+           end),
+         true <-
+           pattern == values.pattern and filename == values.filename and url == acquisition.original_url and
+             span == identity.span and sample == identity.sample and
+             compression == Atom.to_string(artifact.compression) do
+      :ok
+    else
+      _ -> {:error, {:contributor_mismatch, index, :catalog}}
+    end
+  end
+
+  defp persisted_merge_policy(policy) when is_map(policy) do
+    fields = [
       :position_tolerance_m,
       :clock_tolerance_s,
       :min_agree,
@@ -1114,38 +1326,60 @@ defmodule Sidereon.GNSS.Data do
       :helmert
     ]
 
-    with {:ok, values} <- public_fields(policy, required),
+    with {:ok, values} <- exact_fields(policy, fields, :merge_policy),
+         {:ok, position_tolerance_m} <- persisted_nonnegative_float(values.position_tolerance_m, :position_tolerance_m),
+         {:ok, clock_tolerance_s} <- persisted_nonnegative_float(values.clock_tolerance_s, :clock_tolerance_s),
+         :ok <- positive_integer(values.min_agree, {:merge_policy, :min_agree}),
+         :ok <- positive_integer(values.clock_min_common, {:merge_policy, :clock_min_common}),
          {:ok, combine} <- persisted_combine(values.combine),
          {:ok, precedence_scope} <- persisted_precedence_scope(values.precedence_scope),
-         {:ok, outlier_reject} <- persisted_outlier_reject(values.outlier_reject) do
-      {:ok,
-       {
-         [
-           position_tolerance_m: values.position_tolerance_m,
-           clock_tolerance_s: values.clock_tolerance_s,
-           min_agree: values.min_agree,
-           clock_min_common: values.clock_min_common,
-           combine: combine,
-           precedence_scope: precedence_scope,
-           outlier_reject: outlier_reject,
-           epoch_interval_s: values.epoch_interval_s,
-           systems: values.systems,
-           asserted_frame_label_sets: values.asserted_frame_label_sets,
-           helmert: values.helmert
-         ],
-         values.precedence_artifact_sha256
-       }}
+         {:ok, outlier_reject, outlier_map} <- persisted_outlier_reject(values.outlier_reject),
+         {:ok, epoch_interval_s} <- persisted_epoch_interval(values.epoch_interval_s),
+         {:ok, systems} <- persisted_systems(values.systems),
+         {:ok, label_sets} <- persisted_label_sets(values.asserted_frame_label_sets),
+         true <- is_boolean(values.helmert) || {:error, {:invalid_field, {:merge_policy, :helmert}}},
+         :ok <- persisted_precedence_list(values.precedence_artifact_sha256) do
+      opts = [
+        position_tolerance_m: position_tolerance_m,
+        clock_tolerance_s: clock_tolerance_s,
+        min_agree: values.min_agree,
+        clock_min_common: values.clock_min_common,
+        combine: combine,
+        precedence_scope: precedence_scope,
+        outlier_reject: outlier_reject,
+        epoch_interval_s: epoch_interval_s,
+        asserted_frame_label_sets: label_sets,
+        helmert: values.helmert
+      ]
+
+      opts = if systems == [], do: opts, else: Keyword.put(opts, :systems, systems)
+
+      normalized = %{
+        position_tolerance_m: position_tolerance_m,
+        clock_tolerance_s: clock_tolerance_s,
+        min_agree: values.min_agree,
+        clock_min_common: values.clock_min_common,
+        combine: Atom.to_string(combine),
+        precedence_artifact_sha256: values.precedence_artifact_sha256,
+        precedence_scope: Atom.to_string(precedence_scope),
+        outlier_reject: outlier_map,
+        epoch_interval_s: epoch_interval_s,
+        systems: systems,
+        asserted_frame_label_sets: label_sets,
+        helmert: values.helmert
+      }
+
+      {:ok, opts, normalized, values.precedence_artifact_sha256}
     end
   end
 
-  defp persisted_merge_opts(_policy), do: {:error, :invalid_merge_policy}
+  defp persisted_merge_policy(_policy), do: {:error, :invalid_merge_policy}
 
-  defp validate_persisted_precedence(artifacts, nil, opts),
-    do:
-      if(artifacts != [] and Keyword.fetch!(opts, :combine) != :precedence,
-        do: :ok,
-        else: {:error, :incomplete_merge_report}
-      )
+  defp validate_persisted_precedence(_artifacts, nil, opts) do
+    if Keyword.fetch!(opts, :combine) == :precedence,
+      do: {:error, :merge_precedence_mismatch},
+      else: :ok
+  end
 
   defp validate_persisted_precedence(artifacts, precedence, opts) when is_list(precedence) do
     if Keyword.fetch!(opts, :combine) == :precedence and
@@ -1156,21 +1390,80 @@ defmodule Sidereon.GNSS.Data do
 
   defp validate_persisted_precedence(_artifacts, _precedence, _opts), do: {:error, :invalid_merge_policy}
 
-  defp persisted_outlier_reject(nil), do: {:ok, nil}
+  defp persisted_outlier_reject(nil), do: {:ok, nil, nil}
 
   defp persisted_outlier_reject(value) when is_map(value) do
-    with {:ok, position} <- public_field(value, :position_tolerance_m),
-         {:ok, clock} <- public_field(value, :clock_tolerance_s),
-         true <- is_number(position) and is_number(clock) do
-      {:ok, %{position_tolerance_m: position, clock_tolerance_s: clock}}
-    else
-      _other -> {:error, :invalid_outlier_reject}
+    with {:ok, values} <-
+           exact_fields(value, [:position_tolerance_m, :clock_tolerance_s], {:merge_policy, :outlier_reject}),
+         {:ok, position} <- persisted_nonnegative_float(values.position_tolerance_m, :outlier_position_tolerance_m),
+         {:ok, clock} <- persisted_nonnegative_float(values.clock_tolerance_s, :outlier_clock_tolerance_s) do
+      {:ok, %{position_tolerance_m: position, clock_tolerance_s: clock},
+       %{position_tolerance_m: position, clock_tolerance_s: clock}}
     end
   end
 
   defp persisted_outlier_reject(_value), do: {:error, :invalid_outlier_reject}
 
-  defp persisted_date(%Date{} = date), do: {:ok, date}
+  defp persisted_nonnegative_float(value, field) when is_float(value) do
+    if value >= 0.0 and value - value == 0.0,
+      do: {:ok, if(value == 0.0, do: 0.0, else: value)},
+      else: {:error, {:invalid_field, {:merge_policy, field}}}
+  end
+
+  defp persisted_nonnegative_float(_value, field), do: {:error, {:invalid_field, {:merge_policy, field}}}
+
+  defp persisted_epoch_interval(nil), do: {:ok, nil}
+
+  defp persisted_epoch_interval(value) when is_float(value) do
+    rounded = Float.round(value)
+
+    if value - value == 0.0 and rounded >= 1.0 and abs(value - rounded) <= 1.0e-9,
+      do: {:ok, rounded},
+      else: {:error, {:invalid_field, {:merge_policy, :epoch_interval_s}}}
+  end
+
+  defp persisted_epoch_interval(_value), do: {:error, {:invalid_field, {:merge_policy, :epoch_interval_s}}}
+
+  defp persisted_systems(systems) when is_list(systems) do
+    valid = Enum.all?(systems, &(&1 in ~w(G R E C J I S)))
+    canonical = systems |> Enum.uniq() |> Enum.sort()
+
+    if valid and systems == canonical,
+      do: {:ok, systems},
+      else: {:error, {:invalid_field, {:merge_policy, :systems}}}
+  end
+
+  defp persisted_systems(_systems), do: {:error, {:invalid_field, {:merge_policy, :systems}}}
+
+  defp persisted_label_sets(label_sets) when is_list(label_sets) do
+    with true <-
+           Enum.all?(label_sets, fn labels ->
+             is_list(labels) and length(labels) >= 2 and
+               Enum.all?(labels, &(is_binary(&1) and String.trim(&1) == &1 and &1 != "")) and
+               labels == labels |> Enum.uniq() |> Enum.sort()
+           end) || {:error, {:invalid_field, {:merge_policy, :asserted_frame_label_sets}}},
+         true <-
+           label_sets == Enum.sort(label_sets) ||
+             {:error, {:invalid_field, {:merge_policy, :asserted_frame_label_sets}}},
+         true <-
+           length(label_sets) == MapSet.size(MapSet.new(label_sets)) ||
+             {:error, {:invalid_field, {:merge_policy, :asserted_frame_label_sets}}} do
+      {:ok, label_sets}
+    end
+  end
+
+  defp persisted_label_sets(_label_sets), do: {:error, {:invalid_field, {:merge_policy, :asserted_frame_label_sets}}}
+
+  defp persisted_precedence_list(nil), do: :ok
+
+  defp persisted_precedence_list(values) when is_list(values) do
+    if values != [] and Enum.all?(values, &valid_digest_value?/1),
+      do: :ok,
+      else: {:error, {:invalid_field, {:merge_policy, :precedence_artifact_sha256}}}
+  end
+
+  defp persisted_precedence_list(_values), do: {:error, {:invalid_field, {:merge_policy, :precedence_artifact_sha256}}}
+
   defp persisted_date(date) when is_binary(date), do: Date.from_iso8601(date)
   defp persisted_date(_date), do: {:error, :invalid_date}
 
@@ -1190,28 +1483,419 @@ defmodule Sidereon.GNSS.Data do
   defp persisted_combine(_value), do: {:error, :invalid_merge_policy}
 
   defp persisted_precedence_scope(value) when value in [:cell, "cell"], do: {:ok, :cell}
-
   defp persisted_precedence_scope(value) when value in [:satellite_arc, "satellite_arc"], do: {:ok, :satellite_arc}
-
   defp persisted_precedence_scope(_value), do: {:error, :invalid_merge_policy}
 
-  defp public_fields(map, fields) do
-    Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, values} ->
-      case public_field(map, field) do
-        {:ok, value} -> {:cont, {:ok, Map.put(values, field, value)}}
-        :error -> {:halt, {:error, :incomplete}}
+  defp verify_report_identity(values, recomputed, normalized_policy) do
+    cond do
+      not is_integer(values.input_identity_schema_version) -> {:error, {:invalid_field, :input_identity_schema_version}}
+      not is_binary(values.stable_input_identity) -> {:error, {:invalid_field, :stable_input_identity}}
+      recomputed.schema_version != values.input_identity_schema_version -> {:error, :merge_input_identity_mismatch}
+      recomputed.stable_id != values.stable_input_identity -> {:error, :merge_input_identity_mismatch}
+      recomputed.merge_policy != normalized_policy -> {:error, :merge_policy_mismatch}
+      true -> :ok
+    end
+  end
+
+  defp verify_report_counts(values, artifacts) do
+    count = length(artifacts)
+
+    if is_integer(values.source_count) and values.source_count == count and
+         is_boolean(values.single_product) and values.single_product == (count == 1) and
+         values.merged == true do
+      :ok
+    else
+      {:error, :merge_report_count_mismatch}
+    end
+  end
+
+  defp verify_absent(absent, contributor_centers) when is_list(absent) do
+    absent
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {entry, index}, {:ok, centers} ->
+      fields = [:center, :filename, :pattern, :reason, :url, :http_status]
+
+      with {:ok, values} <- exact_fields(entry, fields, {:absent, index}),
+           :ok <- nonempty_binary(values.center, {:absent, index, :center}),
+           :ok <- optional_binary(values.filename, {:absent, index, :filename}),
+           :ok <- optional_binary(values.pattern, {:absent, index, :pattern}),
+           :ok <- nonempty_binary(values.reason, {:absent, index, :reason}),
+           :ok <- public_url(values.url, {:absent, index, :url}),
+           :ok <- optional_http_status(values.http_status, {:absent, index, :http_status}),
+           true <- values.center not in contributor_centers || {:error, :absent_contributor_overlap} do
+        {:cont, {:ok, [values.center | centers]}}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, centers} ->
+        if length(centers) == MapSet.size(MapSet.new(centers)),
+          do: :ok,
+          else: {:error, :duplicate_absent_center}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp verify_absent(_absent, _contributor_centers), do: {:error, {:invalid_field, :absent}}
+
+  defp verify_merge_result(report, source_count) when is_map(report) do
+    fields = [
+      :frame_reconciliations,
+      :quarantined,
+      :single_source,
+      :position_outliers,
+      :clock_outliers,
+      :agreement
+    ]
+
+    with {:ok, values} <- exact_fields(report, fields, :merge_result),
+         :ok <- verify_frame_reconciliations(values.frame_reconciliations, source_count),
+         :ok <- verify_flags(values.quarantined, source_count, :quarantined),
+         :ok <- verify_flags(values.single_source, source_count, :single_source),
+         :ok <- verify_flags(values.position_outliers, source_count, :position_outliers),
+         :ok <- verify_flags(values.clock_outliers, source_count, :clock_outliers) do
+      verify_agreement(values.agreement, source_count)
+    end
+  end
+
+  defp verify_merge_result(_report, _source_count), do: {:error, {:invalid_field, :merge_result}}
+
+  defp verify_flags(flags, source_count, kind) when is_list(flags) do
+    flags
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {flag, index}, :ok ->
+      context = {kind, index}
+
+      with {:ok, values} <- exact_fields(flag, [:satellite, :jd_whole, :jd_fraction, :sources], context),
+           :ok <- satellite_id(values.satellite, {context, :satellite}),
+           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
+           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- source_indices(values.sources, source_count, {context, :sources}) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  defp public_field(map, field) when is_map(map) do
-    case Map.fetch(map, field) do
-      {:ok, value} -> {:ok, value}
-      :error -> Map.fetch(map, Atom.to_string(field))
+  defp verify_flags(_flags, _source_count, kind), do: {:error, {:invalid_field, kind}}
+
+  defp verify_agreement(agreement, source_count) when is_map(agreement) do
+    fields = [:position_rms_m, :position_max_m, :clock_rms_s, :clock_max_s, :cells, :epochs]
+
+    with {:ok, values} <- exact_fields(agreement, fields, :agreement),
+         :ok <- optional_nonnegative_float(values.position_rms_m, {:agreement, :position_rms_m}),
+         :ok <- optional_nonnegative_float(values.position_max_m, {:agreement, :position_max_m}),
+         :ok <- optional_nonnegative_float(values.clock_rms_s, {:agreement, :clock_rms_s}),
+         :ok <- optional_nonnegative_float(values.clock_max_s, {:agreement, :clock_max_s}),
+         :ok <- verify_agreement_cells(values.cells, source_count) do
+      verify_agreement_epochs(values.epochs)
     end
   end
 
-  defp public_field(_map, _field), do: :error
+  defp verify_agreement(_agreement, _source_count), do: {:error, {:invalid_field, :agreement}}
+
+  defp verify_agreement_cells(cells, source_count) when is_list(cells) do
+    cells
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {cell, index}, :ok ->
+      context = {:agreement_cell, index}
+
+      fields = [
+        :satellite,
+        :jd_whole,
+        :jd_fraction,
+        :position_members,
+        :position_rms_m,
+        :position_max_m,
+        :clock_members,
+        :clock_rms_s,
+        :clock_max_s
+      ]
+
+      with {:ok, values} <- exact_fields(cell, fields, context),
+           :ok <- satellite_id(values.satellite, {context, :satellite}),
+           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
+           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- bounded_count(values.position_members, source_count, {context, :position_members}, false),
+           :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
+           :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
+           :ok <- bounded_count(values.clock_members, source_count, {context, :clock_members}, true),
+           :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
+           :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}),
+           :ok <- verify_clock_metric_presence(values, context) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_agreement_cells(_cells, _source_count), do: {:error, {:invalid_field, :agreement_cells}}
+
+  defp verify_clock_metric_presence(%{clock_members: 0, clock_rms_s: nil, clock_max_s: nil}, _context), do: :ok
+
+  defp verify_clock_metric_presence(%{clock_members: members, clock_rms_s: rms, clock_max_s: max}, _context)
+       when members > 0 and is_float(rms) and is_float(max), do: :ok
+
+  defp verify_clock_metric_presence(_values, context), do: {:error, {:invalid_field, {context, :clock_metrics}}}
+
+  defp verify_agreement_epochs(epochs) when is_list(epochs) do
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {epoch, index}, :ok ->
+      context = {:agreement_epoch, index}
+      fields = [:jd_whole, :jd_fraction, :satellites, :position_rms_m, :position_max_m, :clock_rms_s, :clock_max_s]
+
+      with {:ok, values} <- exact_fields(epoch, fields, context),
+           :ok <- finite_float(values.jd_whole, {context, :jd_whole}),
+           :ok <- finite_float(values.jd_fraction, {context, :jd_fraction}),
+           :ok <- positive_integer(values.satellites, {context, :satellites}),
+           :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
+           :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
+           :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
+           :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_agreement_epochs(_epochs), do: {:error, {:invalid_field, :agreement_epochs}}
+
+  defp verify_frame_reconciliations(reconciliations, source_count) when is_list(reconciliations) do
+    reconciliations
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {reconciliation, index}, :ok ->
+      case verify_frame_reconciliation(reconciliation, source_count, index) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_frame_reconciliations(_reconciliations, _source_count),
+    do: {:error, {:invalid_field, :frame_reconciliations}}
+
+  defp verify_frame_reconciliation(reconciliation, source_count, index) do
+    context = {:frame_reconciliation, index}
+
+    fields = [
+      :source_index,
+      :source_label,
+      :target_label,
+      :method,
+      :asserted_label_set,
+      :source_frame,
+      :target_frame,
+      :catalog_source_frame,
+      :catalog_target_frame,
+      :catalog_inverse,
+      :reference_epoch_year,
+      :parameters,
+      :rates,
+      :provenance,
+      :epoch_year_span,
+      :records_affected,
+      :identity
+    ]
+
+    with {:ok, values} <- exact_fields(reconciliation, fields, context),
+         :ok <- source_index(values.source_index, source_count, {context, :source_index}),
+         :ok <- nonempty_binary(values.source_label, {context, :source_label}),
+         :ok <- nonempty_binary(values.target_label, {context, :target_label}),
+         :ok <- reconciliation_method(values.method, {context, :method}),
+         :ok <- optional_label_set(values.asserted_label_set, {context, :asserted_label_set}),
+         :ok <- optional_binary(values.source_frame, {context, :source_frame}),
+         :ok <- optional_binary(values.target_frame, {context, :target_frame}),
+         :ok <- optional_binary(values.catalog_source_frame, {context, :catalog_source_frame}),
+         :ok <- optional_binary(values.catalog_target_frame, {context, :catalog_target_frame}),
+         true <- is_boolean(values.catalog_inverse) || {:error, {:invalid_field, {context, :catalog_inverse}}},
+         :ok <- optional_float(values.reference_epoch_year, {context, :reference_epoch_year}),
+         :ok <- optional_transform(values.parameters, :parameters, context),
+         :ok <- optional_transform(values.rates, :rates, context),
+         :ok <- optional_binary(values.provenance, {context, :provenance}),
+         :ok <- optional_epoch_span(values.epoch_year_span, {context, :epoch_year_span}),
+         :ok <- positive_integer(values.records_affected, {context, :records_affected}),
+         true <- is_boolean(values.identity) || {:error, {:invalid_field, {context, :identity}}} do
+      :ok
+    end
+  end
+
+  defp reconciliation_method(value, _field)
+       when value in [:asserted_equivalence, "asserted_equivalence", :helmert, "helmert"], do: :ok
+
+  defp reconciliation_method(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_label_set(nil, _field), do: :ok
+
+  defp optional_label_set(labels, field) when is_list(labels) do
+    if length(labels) >= 2 and Enum.all?(labels, &(is_binary(&1) and &1 != "")) and
+         labels == labels |> Enum.uniq() |> Enum.sort(),
+       do: :ok,
+       else: {:error, {:invalid_field, field}}
+  end
+
+  defp optional_label_set(_labels, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_transform(nil, _kind, _context), do: :ok
+
+  defp optional_transform(transform, kind, context) when is_map(transform) do
+    {translation, scale, rotation} =
+      case kind do
+        :parameters -> {:translation_mm, :scale_ppb, :rotation_mas}
+        :rates -> {:translation_mm_per_year, :scale_ppb_per_year, :rotation_mas_per_year}
+      end
+
+    with {:ok, values} <- exact_fields(transform, [translation, scale, rotation], {context, kind}),
+         :ok <- float_vector(Map.fetch!(values, translation), {context, kind, translation}),
+         :ok <- finite_float(Map.fetch!(values, scale), {context, kind, scale}) do
+      float_vector(Map.fetch!(values, rotation), {context, kind, rotation})
+    end
+  end
+
+  defp optional_transform(_transform, kind, context), do: {:error, {:invalid_field, {context, kind}}}
+
+  defp optional_epoch_span(nil, _field), do: :ok
+
+  defp optional_epoch_span([first, last], field) do
+    with :ok <- finite_float(first, field),
+         :ok <- finite_float(last, field),
+         true <- first <= last || {:error, {:invalid_field, field}} do
+      :ok
+    end
+  end
+
+  defp optional_epoch_span(_span, field), do: {:error, {:invalid_field, field}}
+
+  defp source_indices(indices, source_count, field) when is_list(indices) and indices != [] do
+    if Enum.all?(indices, &(is_integer(&1) and &1 >= 0 and &1 < source_count)) and
+         length(indices) == MapSet.size(MapSet.new(indices)),
+       do: :ok,
+       else: {:error, {:invalid_field, field}}
+  end
+
+  defp source_indices(_indices, _source_count, field), do: {:error, {:invalid_field, field}}
+
+  defp source_index(value, source_count, _field) when is_integer(value) and value >= 0 and value < source_count, do: :ok
+
+  defp source_index(_value, _source_count, field), do: {:error, {:invalid_field, field}}
+
+  defp bounded_count(value, maximum, _field, allow_zero)
+       when is_integer(value) and value <= maximum and ((allow_zero and value >= 0) or value > 0), do: :ok
+
+  defp bounded_count(_value, _maximum, field, _allow_zero), do: {:error, {:invalid_field, field}}
+
+  defp satellite_id(value, _field) when is_binary(value) do
+    if String.match?(value, ~r/^[GRECJIS][0-9]{2,3}$/), do: :ok, else: {:error, :invalid_satellite_id}
+  end
+
+  defp satellite_id(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp float_vector(values, field) when is_list(values) and length(values) == 3 do
+    if Enum.all?(values, &(finite_float(&1, field) == :ok)), do: :ok, else: {:error, {:invalid_field, field}}
+  end
+
+  defp float_vector(_values, field), do: {:error, {:invalid_field, field}}
+
+  defp finite_float(value, _field) when is_float(value) and value - value == 0.0, do: :ok
+  defp finite_float(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_float(nil, _field), do: :ok
+  defp optional_float(value, field), do: finite_float(value, field)
+
+  defp nonnegative_float(value, field) when is_float(value) and value >= 0.0, do: finite_float(value, field)
+  defp nonnegative_float(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_nonnegative_float(nil, _field), do: :ok
+  defp optional_nonnegative_float(value, field), do: nonnegative_float(value, field)
+
+  defp exact_fields(map, fields, context) when is_map(map) do
+    allowed = MapSet.new(Enum.flat_map(fields, &[&1, Atom.to_string(&1)]))
+
+    with nil <- Enum.find(Map.keys(map), &(not MapSet.member?(allowed, &1))),
+         nil <- Enum.find(fields, &(Map.has_key?(map, &1) and Map.has_key?(map, Atom.to_string(&1)))) do
+      Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, values} ->
+        case Map.fetch(map, field) do
+          {:ok, value} ->
+            {:cont, {:ok, Map.put(values, field, value)}}
+
+          :error ->
+            case Map.fetch(map, Atom.to_string(field)) do
+              {:ok, value} -> {:cont, {:ok, Map.put(values, field, value)}}
+              :error -> {:halt, {:error, {:missing_field, context, field}}}
+            end
+        end
+      end)
+    else
+      unknown when not is_nil(unknown) -> {:error, {:unknown_or_duplicate_field, context, unknown}}
+    end
+  end
+
+  defp exact_fields(_map, _fields, context), do: {:error, {:invalid_field, context}}
+
+  defp exact_value(value, expected, _field) when value === expected, do: :ok
+  defp exact_value(_value, _expected, field), do: {:error, {:invalid_field, field}}
+
+  defp nonempty_binary(value, _field) when is_binary(value) and byte_size(value) > 0, do: :ok
+  defp nonempty_binary(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_binary(nil, _field), do: :ok
+  defp optional_binary(value, field), do: nonempty_binary(value, field)
+
+  defp positive_integer(value, _field) when is_integer(value) and value > 0, do: :ok
+  defp positive_integer(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp nonnegative_integer(value, _field) when is_integer(value) and value >= 0, do: :ok
+  defp nonnegative_integer(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_nonnegative_integer(nil, _field), do: :ok
+
+  defp optional_nonnegative_integer(value, _field) when is_integer(value) and value >= 0, do: :ok
+
+  defp optional_nonnegative_integer(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp valid_digest(value, _field) when is_binary(value) do
+    if valid_digest_value?(value), do: :ok, else: {:error, :invalid_digest}
+  end
+
+  defp valid_digest(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp valid_digest_value?(value) do
+    is_binary(value) and String.match?(value, ~r/^[0-9a-f]{64}$/)
+  end
+
+  defp valid_timestamp(value, field) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, _datetime, _offset} -> :ok
+      _ -> {:error, {:invalid_field, field}}
+    end
+  end
+
+  defp valid_timestamp(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp public_url(nil, _field), do: :ok
+
+  defp public_url(value, field) when is_binary(value) do
+    uri = URI.parse(value)
+
+    if uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
+         is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
+       do: :ok,
+       else: {:error, {:invalid_field, field}}
+  end
+
+  defp public_url(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_http_status(nil, _field), do: :ok
+
+  defp optional_http_status(value, _field) when is_integer(value) and value >= 100 and value <= 599, do: :ok
+
+  defp optional_http_status(_value, field), do: {:error, {:invalid_field, field}}
 
   defp sp3_candidates(center, target, opts) do
     with {:ok, entry} <- center_entry(center),

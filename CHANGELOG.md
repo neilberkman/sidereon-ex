@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.31.0] - 2026-07-16
+## [0.31.2] - 2026-07-16
 
 ### Added
 
@@ -18,13 +18,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Sidereon.GNSS.Data.merge_report_to_map/1`, `verify_merge_report/1`, and
   `fetch_merged_sp3_file_with_report/4` for validation, secret-free
   persistence, and file output without discarding provenance.
+- Added the shared literal merged-SP3 canonicalization fixture and returns the
+  complete core-canonical contributor list plus semantic precedence order.
 
 ### Changed
 
 - Merged-SP3 candidate downloads now use the exact acquisition and atomic cache
   path. Existing unverifiable files in the legacy flat merged-SP3 cache are not
   accepted as provenance-bearing contributors.
-- Updated the native backend to `sidereon` and `sidereon-core` 0.31.0.
+- Latest-product aliases must prove their public catalog equivalence and exact
+  artifact duration before publication. Persisted reports now reject unknown
+  or inconsistent fields at every nested schema level.
+- Updated the native backend to `sidereon` and `sidereon-core` 0.31.2.
 
 ### Compatibility
 

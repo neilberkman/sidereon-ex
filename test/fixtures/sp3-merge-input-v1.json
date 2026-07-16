@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "id_prefix": "sidereon-sp3-merge-input-v1:",
+  "artifacts": {
+    "esa": {
+      "requested_identity": {
+        "family": "sp3",
+        "analysis_center": "esa",
+        "publisher": "ESA",
+        "solution": "final",
+        "campaign": "MGN",
+        "version": 0,
+        "date": "2026-07-16",
+        "issue": "0000",
+        "span": "01D",
+        "sample": "05M",
+        "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+        "format": "SP3",
+        "format_version": null,
+        "prediction_horizon_days": null
+      },
+      "resolved_identity": {
+        "family": "sp3",
+        "analysis_center": "esa",
+        "publisher": "ESA",
+        "solution": "final",
+        "campaign": "MGN",
+        "version": 0,
+        "date": "2026-07-16",
+        "issue": "0000",
+        "span": "01D",
+        "sample": "05M",
+        "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+        "format": "SP3",
+        "format_version": "SP3-d",
+        "prediction_horizon_days": null
+      },
+      "distribution_source": "direct",
+      "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+      "product_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "product_byte_length": 12345,
+      "archive_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+      "archive_byte_length": 6789,
+      "compression": "gzip"
+    },
+    "cod": {
+      "requested_identity": {
+        "family": "sp3",
+        "analysis_center": "cod",
+        "publisher": "COD",
+        "solution": "final",
+        "campaign": "MGX",
+        "version": 0,
+        "date": "2026-07-16",
+        "issue": "0000",
+        "span": "01D",
+        "sample": "05M",
+        "official_filename": "COD0MGXFIN_20261970000_01D_05M_ORB.SP3",
+        "format": "SP3",
+        "format_version": null,
+        "prediction_horizon_days": null
+      },
+      "resolved_identity": {
+        "family": "sp3",
+        "analysis_center": "cod",
+        "publisher": "COD",
+        "solution": "final",
+        "campaign": "MGX",
+        "version": 0,
+        "date": "2026-07-16",
+        "issue": "0000",
+        "span": "01D",
+        "sample": "05M",
+        "official_filename": "COD0MGXFIN_20261970000_01D_05M_ORB.SP3",
+        "format": "SP3",
+        "format_version": "SP3-d",
+        "prediction_horizon_days": null
+      },
+      "distribution_source": "direct",
+      "official_filename": "COD0MGXFIN_20261970000_01D_05M_ORB.SP3",
+      "product_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "product_byte_length": 12345,
+      "archive_sha256": "2323232323232323232323232323232323232323232323232323232323232323",
+      "archive_byte_length": 6789,
+      "compression": "gzip"
+    }
+  },
+  "complete_policy": {
+    "position_tolerance_m": 0.0,
+    "clock_tolerance_s": 2.5e-9,
+    "min_agree": 2,
+    "clock_min_common": 3,
+    "precedence_scope": "satellite_arc",
+    "outlier_reject": {
+      "position_tolerance_m": 1.25,
+      "clock_tolerance_s": 7.5e-9
+    },
+    "target_epoch_interval_s": 900.0,
+    "systems": ["G", "E"],
+    "frame_reconciliation": {
+      "asserted_equivalent_label_sets": [
+        ["IGS20", "ITRF2020"],
+        ["IGS14", "ITRF2014"]
+      ],
+      "helmert": true
+    }
+  },
+  "expected": {
+    "mean_esa_cod": "sidereon-sp3-merge-input-v1:bfba88f693a65c2068208ce66e9282d4e447812ff4cffc2e94972da8fb1a8ed9",
+    "median_esa_cod": "sidereon-sp3-merge-input-v1:4c102b45c1a845f7ef84dbcda74af867bbc8f48278a2ed78dd422121a5d734eb",
+    "precedence_esa_cod": "sidereon-sp3-merge-input-v1:a6098cc21485781411418ca235555ed7cace5275981e8f597d5e41ae83f6893b",
+    "precedence_cod_esa": "sidereon-sp3-merge-input-v1:0f91ca5d17ec2f912b080d4c83dd6fabbdabb5ac0f615c9e278f9011d1ca3df7",
+    "single_mean_esa": "sidereon-sp3-merge-input-v1:61b7a723717a9e03db1701d769e965e18ce81c87ed2caffae33e9e0c41e75c94"
+  },
+  "required_mutations": {
+    "changed_product_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "changed_resolved_format_version": "SP3-c",
+    "changed_clock_tolerance_s": 3.5e-9,
+    "malformed_product_sha256": "not-a-digest",
+    "fractional_target_epoch_interval_s": 1.5,
+    "empty_systems": []
+  }
+}
