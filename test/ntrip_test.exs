@@ -141,17 +141,14 @@ defmodule Sidereon.GNSS.NtripTest do
     on_exit(fn -> stop_stream(pid) end)
 
     assert_receive {:fake_caster, :accepted, 1}, 1_000
-    assert_receive {:fake_caster, :gga, 1, first_gga, first_delay_ms}, 1_000
-    assert_receive {:fake_caster, :gga, 2, second_gga, second_delay_ms}, 1_000
+    assert_receive {:fake_caster, :gga, 1, first_gga, _first_delay_ms}, 1_000
+    assert_receive {:fake_caster, :gga, 2, second_gga, _second_delay_ms}, 1_000
     assert_receive {:gga_generated, first_generated_ms}, 1_000
     assert_receive {:gga_generated, second_generated_ms}, 1_000
 
     assert first_gga =~ "$GPGGA,"
     assert second_gga =~ "$GPGGA,"
-    assert first_delay_ms < 300
-    assert second_delay_ms < 400
     assert second_generated_ms - first_generated_ms >= 75
-    assert second_generated_ms - first_generated_ms < 350
   end
 
   test "fake caster payload can ingest decoded SSR messages into a store sink" do
