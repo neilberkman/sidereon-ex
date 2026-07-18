@@ -11,9 +11,10 @@ use crate::errors;
 use rustler::types::atom::Atom;
 use rustler::{Decoder, Encoder, Env, NifResult, Term};
 use sidereon_core::astro::omm::{parse_json_array, Omm, OmmEpoch};
+use sidereon_core::astro::passes::UtcInstant;
 use sidereon_core::constellation::{
-    self as cc, BoolStyle, CelestrakSource, ConstellationError, Diff, NavcenSource, NavcenStatus,
-    Record, RecordSource, Validation,
+    self as cc, BoolStyle, CelestrakSource, ConstellationError, Diff, NavcenAssessment,
+    NavcenSource, NavcenStatus, NavcenTiming, Record, RecordSource, Validation,
 };
 use sidereon_core::GnssSystem;
 
@@ -312,6 +313,36 @@ fn encode_navcen_status<'a>(env: Env<'a>, s: &NavcenStatus) -> Term<'a> {
     put(env, m, "clock", s.clock.clone())
 }
 
+fn encode_navcen_assessment<'a>(env: Env<'a>, assessment: &NavcenAssessment) -> Term<'a> {
+    let (timing, effective_start_unix_us, effective_end_unix_us) = match assessment.timing {
+        NavcenTiming::NotApplicable => ("not_applicable", None, None),
+        NavcenTiming::Parsed(interval) => (
+            "parsed",
+            Some(interval.start_utc.unix_microseconds()),
+            Some(interval.end_utc.unix_microseconds()),
+        ),
+        NavcenTiming::Unparseable => ("unparseable", None, None),
+    };
+
+    let m = Term::map_new(env);
+    let m = put(
+        env,
+        m,
+        "status",
+        encode_navcen_status(env, &assessment.status),
+    );
+    let m = put(
+        env,
+        m,
+        "evaluated_at_unix_us",
+        assessment.evaluated_at_utc.unix_microseconds(),
+    );
+    let m = put(env, m, "outage_start", assessment.outage_start.clone());
+    let m = put(env, m, "timing", timing);
+    let m = put(env, m, "effective_start_unix_us", effective_start_unix_us);
+    put(env, m, "effective_end_unix_us", effective_end_unix_us)
+}
+
 fn encode_change<'a, V: Encoder>(
     env: Env<'a>,
     system: GnssSystem,
@@ -535,6 +566,25 @@ pub fn constellation_parse_navcen<'a>(env: Env<'a>, html: String) -> Term<'a> {
             let encoded: Vec<Term> = statuses
                 .iter()
                 .map(|s| encode_navcen_status(env, s))
+                .collect();
+            (atoms::ok(), encoded).encode(env)
+        }
+        Err(e) => (atoms::error(), e.to_string()).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn constellation_parse_navcen_at<'a>(
+    env: Env<'a>,
+    html: String,
+    evaluated_at_unix_us: i64,
+) -> Term<'a> {
+    let evaluated_at_utc = UtcInstant::from_unix_microseconds(evaluated_at_unix_us);
+    match cc::parse_navcen_at(html.as_bytes(), evaluated_at_utc) {
+        Ok(assessments) => {
+            let encoded: Vec<Term> = assessments
+                .iter()
+                .map(|assessment| encode_navcen_assessment(env, assessment))
                 .collect();
             (atoms::ok(), encoded).encode(env)
         }

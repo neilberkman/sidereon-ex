@@ -1745,6 +1745,8 @@ defmodule Sidereon.NIF do
 
   def constellation_parse_navcen(_html), do: :erlang.nif_error(:nif_not_loaded)
 
+  def constellation_parse_navcen_at(_html, _evaluated_at_unix_us), do: :erlang.nif_error(:nif_not_loaded)
+
   def constellation_merge_navcen(_records, _statuses), do: :erlang.nif_error(:nif_not_loaded)
 
   def constellation_to_csv(_records, _booleans), do: :erlang.nif_error(:nif_not_loaded)

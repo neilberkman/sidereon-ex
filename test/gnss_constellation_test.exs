@@ -70,6 +70,12 @@ defmodule Sidereon.GNSS.ConstellationTest do
     |> File.read!()
   end
 
+  defp navcen_forecast_html do
+    @fixtures
+    |> Path.join("navcen_forecast_cases.html")
+    |> File.read!()
+  end
+
   defp merged_records do
     {:ok, records} = Constellation.from_celestrak_omm(:gps, celestrak_omms())
     {:ok, statuses} = Constellation.parse_navcen_html(navcen_html())
@@ -298,6 +304,107 @@ defmodule Sidereon.GNSS.ConstellationTest do
 
     test "reports a tagged error for HTML without GPS rows" do
       assert {:error, {:bad_navcen_html, _}} = Constellation.parse_navcen_html("<html></html>")
+    end
+
+    test "evaluates bounded forecasts at explicit UTC instants without a host clock" do
+      times = [
+        ~U[2026-07-18 00:00:00Z],
+        ~U[2026-07-24 01:14:00Z],
+        ~U[2026-07-24 01:15:00Z],
+        ~U[2026-07-24 13:15:00Z]
+      ]
+
+      assessments =
+        Enum.map(times, fn evaluated_at ->
+          assert {:ok, rows} =
+                   Constellation.parse_navcen_html_at(navcen_forecast_html(), evaluated_at)
+
+          Enum.find(rows, &(&1.status.prn == 7))
+        end)
+
+      assert Enum.map(assessments, & &1.status.usable?) == [true, true, false, true]
+
+      during = Enum.at(assessments, 2)
+      assert DateTime.compare(during.evaluated_at_utc, ~U[2026-07-24 01:15:00Z]) == :eq
+      assert during.timing == :parsed
+      assert during.outage_start == "24 JUL 2026"
+
+      assert DateTime.compare(during.effective_start_utc, ~U[2026-07-24 01:15:00Z]) ==
+               :eq
+
+      assert DateTime.compare(during.effective_end_utc, ~U[2026-07-24 13:15:00Z]) == :eq
+      assert during.status.nanu_type == "FCSTDV"
+
+      assert during.status.nanu_subject ==
+               "SVN48 (PRN07) FORECAST OUTAGE JDAY 205/0115 - JDAY 205/1315"
+    end
+
+    test "retains ambiguous forecasts and immediate terminal notices explicitly" do
+      assert {:ok, rows} =
+               Constellation.parse_navcen_html_at(
+                 navcen_forecast_html(),
+                 ~U[2026-07-24 02:00:00Z]
+               )
+
+      malformed = Enum.find(rows, &(&1.status.prn == 4))
+      assert malformed.timing == :unparseable
+      assert malformed.status.usable?
+      assert malformed.effective_start_utc == nil
+      assert malformed.effective_end_utc == nil
+
+      decom = Enum.find(rows, &(&1.status.prn == 13))
+      assert decom.timing == :not_applicable
+      refute decom.status.usable?
+
+      unusable = Enum.find(rows, &(&1.status.prn == 19))
+      assert unusable.timing == :not_applicable
+      refute unusable.status.usable?
+
+      inactive = Enum.find(rows, &(&1.status.prn == 8))
+      assert inactive.timing == :parsed
+      refute inactive.status.active_nanu?
+      assert inactive.status.usable?
+
+      unusufn = Enum.find(rows, &(&1.status.prn == 20))
+      assert unusufn.timing == :not_applicable
+      assert unusufn.status.nanu_type == "UNUSUFN"
+      refute unusufn.status.usable?
+    end
+
+    test "keeps the legacy parser's pre-existing UNUSUFN behavior" do
+      assert {:ok, rows} = Constellation.parse_navcen_html(navcen_forecast_html())
+
+      refute Enum.find(rows, &(&1.prn == 7)).usable?
+      assert Enum.find(rows, &(&1.prn == 20)).usable?
+    end
+
+    test "distinguishes invalid HTML and evaluation-time arguments" do
+      assert {:error, {:bad_navcen_html, :not_binary}} =
+               Constellation.parse_navcen_html_at(:not_html, ~U[2026-07-24 02:00:00Z])
+
+      assert {:error, {:invalid_evaluated_at_utc, :not_a_datetime}} =
+               Constellation.parse_navcen_html_at(navcen_forecast_html(), :not_a_datetime)
+    end
+
+    test "merges the explicitly evaluated status while leaving the assessment auditable" do
+      assert {:ok, during} =
+               Constellation.parse_navcen_html_at(
+                 navcen_forecast_html(),
+                 ~U[2026-07-24 02:00:00Z]
+               )
+
+      assert {:ok, after_outage} =
+               Constellation.parse_navcen_html_at(
+                 navcen_forecast_html(),
+                 ~U[2026-07-24 13:15:00Z]
+               )
+
+      [during_record] = Constellation.merge_navcen_at([record(7, svn: 48)], during)
+      [after_record] = Constellation.merge_navcen_at([record(7, svn: 48)], after_outage)
+
+      refute during_record.usable?
+      assert after_record.usable?
+      assert Enum.find(during, &(&1.status.prn == 7)).timing == :parsed
     end
 
     test "overlays NAVCEN SVN and usability on CelesTrak identity records" do

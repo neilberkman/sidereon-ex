@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `Sidereon.GNSS.Constellation.parse_navcen_html_at/2` and
+  `merge_navcen_at/2` for deterministic UTC evaluation of NAVCEN forecast
+  outages. Assessments retain the raw NANU fields, Outage Start cell, and a
+  parsed half-open interval or explicit ambiguity; the existing clock-free
+  parsing and merge APIs remain unchanged.
+- The time-aware path recognizes active `UNUSUFN` notices as immediately
+  unusable while preserving the legacy parser's pre-existing behavior.
+
 ## [0.31.2] - 2026-07-16
 
 ### Added

@@ -177,6 +177,43 @@ defmodule Sidereon.GNSS.Constellation do
           }
   end
 
+  defmodule NavcenAssessment do
+    @moduledoc """
+    A NAVCEN status row evaluated at an explicit UTC instant.
+
+    `timing` is `:parsed` for a complete bounded forecast interval,
+    `:unparseable` when a forecast cannot be resolved without guessing, and
+    `:not_applicable` for notice types that do not carry a bounded forecast.
+    Parsed intervals are half-open: the satellite is affected at
+    `effective_start_utc` and unaffected again at `effective_end_utc`.
+    Duplicate Outage Start cells are joined with `" | "` and make bounded
+    forecast timing `:unparseable`.
+    """
+
+    alias Sidereon.GNSS.Constellation.NavcenStatus
+
+    @enforce_keys [:status, :evaluated_at_utc, :timing]
+    defstruct [
+      :status,
+      :evaluated_at_utc,
+      :outage_start,
+      :timing,
+      :effective_start_utc,
+      :effective_end_utc
+    ]
+
+    @type timing :: :parsed | :unparseable | :not_applicable
+
+    @type t :: %__MODULE__{
+            status: NavcenStatus.t(),
+            evaluated_at_utc: DateTime.t(),
+            outage_start: String.t() | nil,
+            timing: timing(),
+            effective_start_utc: DateTime.t() | nil,
+            effective_end_utc: DateTime.t() | nil
+          }
+  end
+
   defmodule Validation do
     @moduledoc """
     Validation report for a GNSS constellation catalog.
@@ -415,6 +452,37 @@ defmodule Sidereon.GNSS.Constellation do
   def parse_navcen_html(_), do: {:error, {:bad_navcen_html, :not_binary}}
 
   @doc """
+  Parse NAVCEN's GPS constellation status HTML at an explicit UTC instant.
+
+  This deterministic companion to `parse_navcen_html/1` evaluates active
+  bounded forecast notices only during their parsed half-open interval. It
+  preserves the raw NANU type, subject, outage-start cell, and either the
+  complete interval or an explicit `:unparseable` result. It never reads the
+  host clock.
+
+  Active `UNUSABLE` and `DECOM` notices retain their legacy immediate-unusable
+  behavior. This time-aware path additionally recognizes `UNUSUFN` as
+  immediately unusable; the legacy parser's pre-existing omission remains
+  unchanged. An ambiguous forecast is retained and conservatively leaves the
+  satellite usable rather than inventing a time window.
+  """
+  @spec parse_navcen_html_at(String.t(), DateTime.t()) ::
+          {:ok, [NavcenAssessment.t()]} | error()
+  def parse_navcen_html_at(html, %DateTime{} = evaluated_at_utc) when is_binary(html) do
+    evaluated_at_unix_us = DateTime.to_unix(evaluated_at_utc, :microsecond)
+
+    case NIF.constellation_parse_navcen_at(html, evaluated_at_unix_us) do
+      {:ok, assessments} -> {:ok, Enum.map(assessments, &from_nif_assessment/1)}
+      {:error, reason} -> {:error, {:bad_navcen_html, reason}}
+    end
+  end
+
+  def parse_navcen_html_at(html, _evaluated_at_utc) when not is_binary(html),
+    do: {:error, {:bad_navcen_html, :not_binary}}
+
+  def parse_navcen_html_at(_html, _evaluated_at_utc), do: {:error, {:invalid_evaluated_at_utc, :not_a_datetime}}
+
+  @doc """
   Merge NAVCEN status rows into normalized records by PRN.
 
   NAVCEN does not publish NORAD ids, so CelesTrak stays the identity base. When a
@@ -439,6 +507,18 @@ defmodule Sidereon.GNSS.Constellation do
       end
     end)
     |> Enum.sort_by(&{Map.fetch!(@system_order, &1.system), &1.prn})
+  end
+
+  @doc """
+  Merge explicitly timed NAVCEN assessments into normalized records.
+
+  The merged usability is the result computed for each assessment's
+  `evaluated_at_utc`; the full assessments remain available to the caller for
+  audit and interval display.
+  """
+  @spec merge_navcen_at([Record.t()], [NavcenAssessment.t()]) :: [Record.t()]
+  def merge_navcen_at(records, assessments) when is_list(records) and is_list(assessments) do
+    merge_navcen(records, Enum.map(assessments, & &1.status))
   end
 
   defp nif_merge_navcen(records, statuses) do
@@ -765,6 +845,24 @@ defmodule Sidereon.GNSS.Constellation do
       clock: map.clock
     }
   end
+
+  defp from_nif_assessment(%{} = map) do
+    %NavcenAssessment{
+      status: from_nif_status(map.status),
+      evaluated_at_utc: DateTime.from_unix!(map.evaluated_at_unix_us, :microsecond),
+      outage_start: map.outage_start,
+      timing: navcen_timing(map.timing),
+      effective_start_utc: optional_datetime(map.effective_start_unix_us),
+      effective_end_utc: optional_datetime(map.effective_end_unix_us)
+    }
+  end
+
+  defp navcen_timing("parsed"), do: :parsed
+  defp navcen_timing("unparseable"), do: :unparseable
+  defp navcen_timing("not_applicable"), do: :not_applicable
+
+  defp optional_datetime(nil), do: nil
+  defp optional_datetime(unix_us), do: DateTime.from_unix!(unix_us, :microsecond)
 
   defp from_nif_validation(%{} = map) do
     %Validation{

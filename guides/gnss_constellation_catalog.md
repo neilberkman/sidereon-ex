@@ -25,6 +25,28 @@ For reproducible workflows, fetch bytes elsewhere and parse explicitly:
 records = Sidereon.GNSS.Constellation.merge_navcen(records, navcen)
 ```
 
+For a reproducible operational assessment, pass the evaluation instant
+explicitly. This API never reads the host clock:
+
+```elixir
+evaluated_at_utc = ~U[2026-07-24 02:00:00Z]
+
+{:ok, assessments} =
+  Sidereon.GNSS.Constellation.parse_navcen_html_at(navcen_html, evaluated_at_utc)
+
+records = Sidereon.GNSS.Constellation.merge_navcen_at(records, assessments)
+```
+
+An active bounded forecast affects usability on its parsed half-open interval
+`[effective_start_utc, effective_end_utc)`. Each assessment retains the raw
+NANU type, subject, Outage Start cell, and timing result. A malformed or
+ambiguous forecast is returned as `timing: :unparseable` and does not invent an
+outage interval. Active `UNUSABLE` and `DECOM` notices retain their legacy
+immediate-unusable behavior. The time-aware path also recognizes active
+`UNUSUFN` notices as immediately unusable; the legacy parser historically did
+not, and remains unchanged for compatibility. Unbounded or administrative
+forecast codes do not cause Sidereon to invent an interval.
+
 NAVCEN rows are merged by PRN only when the NAVCEN block type is compatible
 with the CelesTrak object name. If a PRN is in transition and NAVCEN still
 carries a NANU for an older vehicle, the row is kept in
