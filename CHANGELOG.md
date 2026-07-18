@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-07-18
+
 ### Added
 
 - Added `Sidereon.GNSS.Constellation.parse_navcen_html_at/2` and
@@ -15,6 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parsing and merge APIs remain unchanged.
 - The time-aware path recognizes active `UNUSUFN` notices as immediately
   unusable while preserving the legacy parser's pre-existing behavior.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.32.0.
 
 ## [0.31.2] - 2026-07-16
 
