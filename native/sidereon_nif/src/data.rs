@@ -385,6 +385,26 @@ fn data_product_solution_class<'a>(
     encode_result(env, result, |env, solution| solution.code().encode(env))
 }
 
+/// Resolve the cataloged relationship between an SP3 filename epoch and its
+/// first content epoch. Historical publication rules remain in the core.
+#[rustler::nif]
+fn data_sp3_content_start_convention<'a>(
+    env: Env<'a>,
+    center_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    issue: Option<String>,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_date(year, month, day)
+            .and_then(|date| data::sp3_content_start_convention(center, date, issue.as_deref()))
+    });
+    encode_result(env, result, |env, convention| {
+        (convention.code(), convention.content_start_offset_s()).encode(env)
+    })
+}
+
 /// Date-aware sampling default used whenever an exact product is derived.
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
@@ -403,6 +423,33 @@ fn data_default_sample_for_date<'a>(
         })
     });
     encode_result(env, result, |env, sample| sample.encode(env))
+}
+
+/// Officially cataloged sampling tokens for an exact product date and issue.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_supported_samples<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    issue: Option<String>,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_date(year, month, day).and_then(|date| {
+                data::supported_samples(center, kind, date, issue.as_deref()).map(|samples| {
+                    samples
+                        .iter()
+                        .map(|sample| (*sample).to_owned())
+                        .collect::<Vec<_>>()
+                })
+            })
+        })
+    });
+    encode_result(env, result, |env, samples| samples.encode(env))
 }
 
 /// Issue-aware sampling default for exact product derivation. Resolving the
@@ -479,8 +526,7 @@ fn data_distribution_location_for_identity<'a>(
     })
 }
 
-/// Current primary ultra-rapid SP3 archive location followed by known filename
-/// alternates and documented aliases.
+/// Officially cataloged dated ultra-rapid SP3 locations for one exact issue.
 #[rustler::nif]
 fn data_ultra_sp3_locations<'a>(
     env: Env<'a>,

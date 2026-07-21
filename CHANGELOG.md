@@ -6,6 +6,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-21
+
+### Added
+
+- `Sidereon.GNSS.Data.sp3_content_start_convention/3` exposes the core's exact
+  relationship between an SP3 filename epoch and first content epoch, including
+  the official historical GFZ ultra-rapid transition.
+- `Sidereon.GNSS.Data.supported_samples/4` exposes the core's product-, date-,
+  and issue-aware set of officially cataloged sampling tokens. Product
+  constructors enforce the same set before deriving filenames, URLs,
+  identities, or cache keys.
+
+### Fixed
+
+- Exact SP3 parsing and acquisition now accept the public terminal-record
+  variants supported by the core: bare `EOF` or `EOF` followed only by ASCII
+  spaces through column 80, with LF, CRLF, or no final separator. Malformed or
+  missing terminal records and nonblank trailing content remain terminal
+  integrity failures.
+- Bounded gzip acquisition now follows RFC 1952's member-sequence model under
+  one cumulative output limit. Every member must have a complete header,
+  DEFLATE stream, CRC32, and ISIZE trailer; corrupt or truncated later members
+  and non-member trailing data fail before exact-product parsing, distributor
+  fallback, or cache publication. Valid concatenated members and large legal
+  optional headers are accepted.
+- Built-in HTTP and local-file acquisition now stop at the compressed-input
+  cap instead of buffering an oversized archive first. Error precedence for
+  redirects and ordinary publication absence is unchanged.
+- Identity-derived exact SP3 validation now applies cataloged filename/content
+  start semantics. Direct `Sidereon.GNSS.SP3.ExactRequest.new/4` requests
+  retain supplied-date semantics.
+- Ultra-rapid exact candidates now contain only dated span/cadence variants
+  evidenced for the exact center, date, and issue. CODE's moving latest-product
+  snapshot is excluded because it is not the dated one-day product; the
+  documented GFZ `2021-05-15 0000` cadence overlap remains the only
+  two-candidate issue. Caller-built identities must use the cataloged span.
+
+### Changed
+
+- Updated the native backend to `sidereon` and `sidereon-core` 0.34.0.
+
+### Compatibility
+
+- The new catalog query is additive; existing Elixir call signatures and all
+  numerical behavior are unchanged. Ultra-SP3 candidate lists can be shorter
+  because unsupported alternate spans/cadences and CODE's non-exact moving
+  snapshot are no longer returned. Reports or cache entries that claimed that
+  snapshot as a dated identity no longer verify. This is a minor release
+  because the catalog API is public and historical GFZ and canonical-span
+  validation are newly enforced.
+
 ## [0.33.1] - 2026-07-20
 
 ### Changed

@@ -98,15 +98,53 @@ defmodule Sidereon.GNSS.DataTest do
     assert File.read!(nav_path) == "product"
   end
 
-  test "CODE ultra-rapid candidates pin official primary, alternate, and alias URLs", %{root: root} do
+  test "legacy fetch bounds the complete gzip member sequence before cache publication", %{root: root} do
+    {:ok, product} = Data.mgex_sp3(:esa, ~D[2020-06-24])
+    {:ok, filename} = Data.canonical_filename(product)
+    content = "first member" <> "second member"
+    archive = :zlib.gzip("first member") <> :zlib.gzip(<<>>) <> :zlib.gzip("second member")
+    http_client = fn _url, _opts -> {:ok, 200, archive} end
+
+    assert {:error, {:decompress, {:decompressed_size_exceeded, limit}}} =
+             Data.fetch(product,
+               cache_dir: root,
+               http_client: http_client,
+               max_decompressed_bytes: byte_size(content) - 1
+             )
+
+    assert limit == byte_size(content) - 1
+    refute File.exists?(Path.join(root, filename))
+
+    truncated = binary_part(archive, 0, byte_size(archive) - 1)
+
+    assert {:error, {:decompress, :data_error}} =
+             Data.fetch(product,
+               cache_dir: root,
+               http_client: fn _url, _opts -> {:ok, 200, truncated} end,
+               max_decompressed_bytes: byte_size(content)
+             )
+
+    refute File.exists?(Path.join(root, filename))
+
+    assert {:ok, path} =
+             Data.fetch(product,
+               cache_dir: root,
+               http_client: http_client,
+               max_decompressed_bytes: byte_size(content)
+             )
+
+    assert File.read!(path) == content
+  end
+
+  test "CODE ultra-rapid candidates exclude the moving latest snapshot", %{root: root} do
     parent = self()
 
     http_client = fn url, _opts ->
       send(parent, {:url, url})
 
-      if String.ends_with?(url, "/COD0OPSULT.SP3"),
+      if String.ends_with?(url, "/COD0OPSULT_20261950000_01D_05M_ORB.SP3"),
         do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14], 86_400, "AIUB")},
-        else: {:ok, 404, ""}
+        else: flunk("uncataloged CODE candidate requested: #{url}")
     end
 
     assert {:ok, merged, report} =
@@ -125,8 +163,8 @@ defmodule Sidereon.GNSS.DataTest do
 
     assert [
              %Data.Contributor{
-               pattern: "alias_latest",
-               filename: "COD0OPSULT.SP3",
+               pattern: "primary_01D_05M",
+               filename: "COD0OPSULT_20261950000_01D_05M_ORB.SP3",
                artifact_identity: %Data.ArtifactIdentity{} = artifact,
                acquisition: %Data.AcquisitionFacts{cache_hit: false, attempts: attempts}
              }
@@ -136,7 +174,7 @@ defmodule Sidereon.GNSS.DataTest do
     assert artifact.requested_identity == Map.put(artifact.resolved_identity, :format_version, nil)
     assert artifact.product_sha256 =~ ~r/^[0-9a-f]{64}$/
     assert artifact.archive_sha256 =~ ~r/^[0-9a-f]{64}$/
-    assert Enum.map(attempts, & &1.error_type) == [:product_not_published, :product_not_published]
+    assert attempts == []
 
     assert {:ok, _cached, cached_report} =
              Data.fetch_merged_sp3(~D[2026-07-14], [:cod_ult],
@@ -166,22 +204,53 @@ defmodule Sidereon.GNSS.DataTest do
                      "https://www.aiub.unibe.ch/download/CODE/" <>
                        "COD0OPSULT_20261950000_01D_05M_ORB.SP3"}
 
-    assert_received {:url,
-                     "https://www.aiub.unibe.ch/download/CODE/" <>
-                       "COD0OPSULT_20261950000_02D_05M_ORB.SP3"}
-
-    assert_received {:url, "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3"}
+    refute_received {:url, "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3"}
   end
 
-  test "CODE latest alias rejects a valid SP3 artifact with the wrong duration without provenance", %{root: root} do
+  test "GFZ cataloged cadence overlap falls back after ordinary absence", %{root: root} do
+    parent = self()
+    product = sp3_body(15_000.0, ~D[2021-05-14], 172_800, "GFZ")
+
     http_client = fn url, _opts ->
-      if String.ends_with?(url, "/COD0OPSULT.SP3"),
-        do: {:ok, 200, sp3_body(15_000.0, ~D[2026-07-14], 172_800, "AIUB")},
-        else: {:ok, 404, ""}
+      send(parent, {:url, url})
+
+      if String.contains?(url, "_02D_15M_ORB.SP3.gz"),
+        do: {:ok, 404, ""},
+        else: {:ok, 200, :zlib.gzip(product)}
+    end
+
+    assert {:ok, _merged, report} =
+             Data.fetch_merged_sp3(~D[2021-05-15], [:gfz_ult],
+               issue: "0000",
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert [
+             %Data.Contributor{
+               pattern: "alternate_02D_05M",
+               acquisition: %Data.AcquisitionFacts{attempts: [attempt]}
+             }
+           ] = report.contributors
+
+    assert attempt.error_type == :product_not_published
+    assert_received {:url, primary}
+    assert String.contains?(primary, "_02D_15M_ORB.SP3.gz")
+    assert_received {:url, alternate}
+    assert String.contains?(alternate, "_02D_05M_ORB.SP3.gz")
+  end
+
+  test "integrity failure on the GFZ overlap alternate is terminal", %{root: root} do
+    wrong_span = sp3_body(15_000.0, ~D[2021-05-14], 86_400, "GFZ")
+
+    http_client = fn url, _opts ->
+      if String.contains?(url, "_02D_15M_ORB.SP3.gz"),
+        do: {:ok, 404, ""},
+        else: {:ok, 200, :zlib.gzip(wrong_span)}
     end
 
     assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
-             Data.fetch_merged_sp3(~D[2026-07-14], [:cod_ult],
+             Data.fetch_merged_sp3(~D[2021-05-15], [:gfz_ult],
                issue: "0000",
                cache_dir: root,
                http_client: http_client
@@ -214,8 +283,10 @@ defmodule Sidereon.GNSS.DataTest do
              %Data.AbsentCenter{
                center: "cod_ult",
                reason: "candidate_not_found",
-               pattern: "alias_latest",
-               url: "https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3",
+               pattern: "primary_01D_05M",
+               url:
+                 "https://www.aiub.unibe.ch/download/CODE/" <>
+                   "COD0OPSULT_20261930000_01D_05M_ORB.SP3",
                http_status: 404
              },
              %Data.AbsentCenter{center: "igs_ult", reason: "candidate_not_found"}

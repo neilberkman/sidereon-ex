@@ -2014,7 +2014,12 @@ defmodule Sidereon.NIF do
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_product_solution_class(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_sp3_content_start_convention(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_default_sample_for_date(_center, _product_type, _year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_supported_samples(_center, _product_type, _year, _month, _day, _issue),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def data_default_sample_for_issue(_center, _product_type, _year, _month, _day, _issue),
     do: :erlang.nif_error(:nif_not_loaded)

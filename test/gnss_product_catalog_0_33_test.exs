@@ -64,6 +64,65 @@ defmodule Sidereon.GNSS.ProductCatalog033Test do
     assert after_identity.sample == "05M"
   end
 
+  test "supported samples expose exact catalog lines and constructors enforce them" do
+    assert {:ok, ["05M"]} = Data.supported_samples(:esa, :sp3, ~D[2026-06-15])
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.mgex_sp3(:esa, ~D[2026-06-15], sample: "15M")
+
+    assert reason =~ "does not publish sample interval"
+
+    assert {:ok, ["15M"]} = Data.supported_samples(:gfz, :sp3, ~D[2021-05-17])
+    assert {:ok, ["05M"]} = Data.supported_samples(:gfz, :sp3, ~D[2021-05-18])
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.mgex_sp3(:gfz, ~D[2021-05-17], sample: "05M")
+
+    assert reason =~ "does not publish sample interval"
+
+    assert {:ok, ["15M"]} =
+             Data.supported_samples(:esa_ult, :sp3, ~D[2025-02-02], "0600")
+
+    assert {:ok, ["05M"]} =
+             Data.supported_samples(:esa_ult, :sp3, ~D[2025-02-02], "1200")
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.ops_ultra_sp3(:esa_ult, ~D[2025-02-02], issue: "0600", sample: "05M")
+
+    assert reason =~ "does not publish sample interval"
+
+    assert {:ok, ["15M", "05M"]} =
+             Data.supported_samples(:gfz_ult, :sp3, ~D[2021-05-15])
+
+    assert {:ok, ["15M", "05M"]} =
+             Data.supported_samples(:gfz_ult, :sp3, ~D[2021-05-15], "0000")
+
+    assert {:ok, ["15M"]} =
+             Data.supported_samples(:gfz_ult, :sp3, ~D[2021-05-15], "2100")
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.ops_ultra_sp3(:gfz_ult, ~D[2021-05-15], issue: "2100", sample: "05M")
+
+    assert reason =~ "does not publish sample interval"
+  end
+
+  test "supported samples enforce issue rules" do
+    assert {:error, {:unsupported_product, reason}} =
+             Data.supported_samples(:esa_ult, :sp3, ~D[2025-02-02], "0130")
+
+    assert reason =~ "does not publish issue"
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.supported_samples(:esa_ult, :sp3, ~D[2025-02-02], "2400")
+
+    assert reason =~ "invalid issue time"
+
+    assert {:error, {:unsupported_product, reason}} =
+             Data.supported_samples(:esa, :sp3, ~D[2025-02-02], "0000")
+
+    assert reason =~ "does not take an issue"
+  end
+
   test "verified SP3 family floors reject invented earlier products and CDDIS paths" do
     for {center, day_before, first_day, expected_sample} <- [
           {:esa, ~D[2014-01-04], ~D[2014-01-05], "05M"},
@@ -139,6 +198,53 @@ defmodule Sidereon.GNSS.ProductCatalog033Test do
 
     assert gfz_before.sample == "15M"
     assert gfz_after.sample == "05M"
+  end
+
+  test "GFZ ultra filename epochs map to cataloged content starts across the 2022 transition" do
+    minus_one_day = %Data.Sp3ContentStartConvention{
+      value: :filename_epoch_minus_one_day,
+      content_start_offset_s: -86_400
+    }
+
+    aligned = %Data.Sp3ContentStartConvention{
+      value: :filename_epoch,
+      content_start_offset_s: 0
+    }
+
+    assert {:ok, ^minus_one_day} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-06], "2100")
+
+    assert {:ok, ^aligned} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-07], "0000")
+
+    assert {:ok, ^minus_one_day} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-07], "0300")
+
+    assert {:ok, ^minus_one_day} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-08], "0600")
+
+    assert {:ok, ^aligned} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-08], "0900")
+
+    assert {:ok, ^aligned} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-09], "2100")
+  end
+
+  test "SP3 content-start queries enforce exact issue semantics" do
+    assert {:error, {:unsupported_product, _reason}} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-08])
+
+    assert {:error, {:unsupported_product, _reason}} =
+             Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-08], "0130")
+
+    assert {:error, {:unsupported_product, _reason}} =
+             Data.sp3_content_start_convention(:gfz, ~D[2022-09-08], "0000")
+
+    assert {:ok,
+            %Data.Sp3ContentStartConvention{
+              value: :filename_epoch,
+              content_start_offset_s: 0
+            }} = Data.sp3_content_start_convention(:gfz, ~D[2022-09-08])
   end
 
   test "CODE routes each current product family through its documented path" do

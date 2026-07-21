@@ -1,10 +1,29 @@
 defmodule Sidereon.GNSS.SP3ExactTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.SP3
   alias Sidereon.TestSupport.ExactSp3Fixture
 
   @date ~D[2020-01-01]
+  @terminal_record_corpus Path.join(__DIR__, "fixtures/sp3-terminal-record-v1.json")
+
+  test "public exact parser obeys the shared terminal-record corpus" do
+    corpus = @terminal_record_corpus |> File.read!() |> Jason.decode!()
+    assert corpus["schema"] == "sidereon-sp3-terminal-record-v1"
+    assert corpus["record_width"] == 80
+    assert corpus["record_width_authority"] == "sidereon-interoperability-policy"
+
+    {:ok, request} = SP3.ExactRequest.new(@date, "01H", "05M", issue: "0000")
+    base = ExactSp3Fixture.build(@date, span_s: 3_600)
+
+    for entry <- corpus["cases"] do
+      result = base |> terminal_case_bytes(entry) |> SP3.parse_exact(request)
+
+      assert terminal_result_class(result) == entry["expect"],
+             "terminal-record corpus case #{entry["name"]}"
+    end
+  end
 
   test "accepts both official one-day five-minute boundary representations" do
     request = request!()
@@ -93,8 +112,70 @@ defmodule Sidereon.GNSS.SP3ExactTest do
     assert {:ok, _product, :half_open} = SP3.parse_exact(matching, required)
   end
 
+  test "identity-derived historical GFZ ultra request accepts its cataloged prior-day content start" do
+    filename_date = ~D[2022-09-04]
+    content_date = ~D[2022-09-03]
+
+    {:ok, product} = Data.ops_ultra_sp3(:gfz_ult, filename_date, issue: "0000")
+    {:ok, identity} = Data.identity(product)
+    {:ok, request} = SP3.ExactRequest.from_identity(identity)
+
+    bytes =
+      ExactSp3Fixture.build(filename_date,
+        content_date: content_date,
+        issue: "0000",
+        span_s: 2 * 86_400,
+        agency: "GFZ"
+      )
+
+    assert request.date == filename_date
+    assert {:ok, parsed, :half_open} = SP3.parse_exact(bytes, request)
+    assert SP3.epoch_count(parsed) == 576
+
+    {:ok, same_date_request} =
+      SP3.ExactRequest.new(filename_date, "02D", "05M",
+        issue: "0000",
+        expected_agency: "GFZ"
+      )
+
+    assert {:error, {:exact_sp3_validation_failed, message}} =
+             SP3.parse_exact(bytes, same_date_request)
+
+    assert message =~ "declared start"
+  end
+
   defp request! do
     {:ok, request} = SP3.ExactRequest.new(@date, "01D", "05M", issue: "0000")
     request
   end
+
+  defp terminal_case_bytes(base, entry) do
+    true = String.ends_with?(base, "EOF\n")
+    prefix_size = byte_size(base) - byte_size("EOF\n")
+    <<prefix::binary-size(^prefix_size), "EOF\n">> = base
+
+    prefix <>
+      decode_hex(entry["leading_hex"]) <>
+      (entry["marker"] || "") <>
+      String.duplicate(" ", entry["padding_spaces"]) <>
+      decode_hex(entry["suffix_hex"]) <>
+      decode_hex(entry["separator_hex"]) <>
+      decode_hex(entry["trailing_hex"])
+  end
+
+  defp decode_hex(""), do: ""
+  defp decode_hex(value), do: value |> String.upcase() |> Base.decode16!()
+
+  defp terminal_result_class({:ok, %SP3{}, coverage}) when coverage in [:half_open, :inclusive], do: "accept"
+
+  defp terminal_result_class({:error, {:exact_sp3_validation_failed, message}}) do
+    cond do
+      String.contains?(message, "malformed EOF record") -> "malformed_eof_record"
+      String.contains?(message, "missing its EOF record") -> "missing_eof"
+      String.contains?(message, "nonblank records after EOF") -> "trailing_content_after_eof"
+      true -> flunk("terminal corpus reached unrelated exact error: #{inspect(message)}")
+    end
+  end
+
+  defp terminal_result_class(other), do: flunk("terminal corpus returned an unexpected result: #{inspect(other)}")
 end

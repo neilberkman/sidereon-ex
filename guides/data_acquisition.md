@@ -174,6 +174,13 @@ ultra-rapid, and predicted products retain their documented CODE-family paths.
 GFZ rapid SP3 defaults to `15M` through 2021-05-17 and `05M` from 2021-05-18;
 dated derivation uses `Data.default_sample_for_date/3` automatically.
 
+Use `Data.supported_samples/4` when a caller needs the complete evidenced set
+for an exact catalog line rather than its default. The result follows the GFZ
+rapid date boundary and the issue-level ESA/GFZ ultra-rapid transitions, and
+product constructors enforce the same result before deriving a filename, URL,
+identity, or cache key. Omitting the issue for an issue-based query selects its
+`0000` publication; constructing that product still requires the issue.
+
 The catalog also enforces the verified start of each modeled long-name SP3
 family: ESA final starts on 2014-01-05, GFZ rapid on 2020-05-13, ESA
 ultra-rapid on 2022-10-04, and GFZ ultra-rapid on 2020-10-06. IGS ultra-rapid
@@ -181,6 +188,32 @@ is modeled only from GPS week 2238. ESA ultra-rapid uses `15M` through the
 2025-02-02 0600 issue and `05M` from the 1200 issue; the date-only default uses
 the start-of-day (`0000`) convention. GFZ ultra-rapid uses `15M` through
 2021-05-15 and `05M` from 2021-05-16.
+
+Ultra-rapid acquisition enumerates only dated cadence/span variants evidenced
+for the exact center, date, and issue. The GFZ 2021-05-15 `0000` issue is the
+only cataloged two-candidate overlap. AIUB's separately documented
+`COD0OPSULT.SP3` is a moving two-day snapshot, not an exact alias for CODE's
+dated `01D_05M` product, so it is not a fallback candidate.
+
+For historical GFZ ultra-rapid products, the filename epoch and first content
+epoch are not always the same. Query the product-aware core catalog instead of
+inferring from either the filename or retrieval time:
+
+```elixir
+{:ok, convention} =
+  Data.sp3_content_start_convention(:gfz_ult, ~D[2022-09-04], "0000")
+
+convention.value == :filename_epoch_minus_one_day
+convention.content_start_offset_s == -86_400
+```
+
+The transition is issue-specific: on 2022-09-07 the 0000 issue is aligned and
+later issues retain the prior-day convention; on 2022-09-08 the 0000 issue is
+aligned, the 0300 and 0600 issues revert to the prior-day convention, and 0900
+onward are aligned. All GFZ ultra issues are aligned from 2022-09-09. Exact
+requests built from catalog identity apply this rule automatically while
+keeping strict header, GPS-week, MJD, cadence, epoch-grid, span, and agency
+validation.
 
 CDDIS requests for every pre-week-2238 long-name SP3 identity are rejected.
 The historical IGS combined-final product remains supported because its exact
@@ -264,6 +297,7 @@ The path and authentication decisions follow these official public sources:
 - [NASA precise orbit products](https://www.earthdata.nasa.gov/data/space-geodesy-techniques/gnss/precise-orbits-product)
 - [NASA GNSS atmospheric products](https://www.earthdata.nasa.gov/data/space-geodesy-techniques/gnss/atmospheric-products)
 - [IGS long product filename guidelines](https://files.igs.org/pub/resource/guidelines/Guidelines_for_Long_Product_Filenames_in_the_IGS_v2.2_EN.pdf)
+- [RFC 1952 gzip file format](https://www.rfc-editor.org/rfc/rfc1952) (accessed 2026-07-21)
 
 ### Public evidence for the 0.33 catalog audit
 
@@ -285,6 +319,8 @@ All sources in this table were accessed on 2026-07-20.
 | GFZ's operational ultra-rapid SP3 listing begins on 2020-10-06. | [GFZ week-2126 listing](https://isdc-data.gfz.de/gnss/products/ultra/w2126/), [first ultra SP3 object](https://isdc-data.gfz.de/gnss/products/ultra/w2126/GFZ0OPSULT_20202800000_02D_15M_ORB.SP3.gz) |
 | ESA ultra-rapid SP3 changes from `15M` at the 2025-02-02 0600 issue to `05M` at 1200. | [ESA week-2352 listing](https://navigation-office.esa.int/products/gnss-products/2352/), [0600 15M object](https://navigation-office.esa.int/products/gnss-products/2352/ESA0OPSULT_20250330600_02D_15M_ORB.SP3.gz), [1200 05M object](https://navigation-office.esa.int/products/gnss-products/2352/ESA0OPSULT_20250331200_02D_05M_ORB.SP3.gz) |
 | GFZ ultra-rapid SP3 defaults to `15M` through 2021-05-15 and `05M` from 2021-05-16; one 0000 `05M` object overlaps the otherwise-`15M` final day. | [GFZ week-2157 listing](https://isdc-data.gfz.de/gnss/products/ultra/w2157/), [last 15M issue](https://isdc-data.gfz.de/gnss/products/ultra/w2157/GFZ0OPSULT_20211352100_02D_15M_ORB.SP3.gz), [overlapping 05M object](https://isdc-data.gfz.de/gnss/products/ultra/w2157/GFZ0OPSULT_20211350000_02D_05M_ORB.SP3.gz), [GFZ week-2158 listing](https://isdc-data.gfz.de/gnss/products/ultra/w2158/), [first next-day 05M object](https://isdc-data.gfz.de/gnss/products/ultra/w2158/GFZ0OPSULT_20211360000_02D_05M_ORB.SP3.gz) |
+| CODE's dated ultra-rapid orbit is `01D_05M`; `COD0OPSULT.SP3` is a distinct moving snapshot and is excluded from exact fallback. On 2026-07-21 the snapshot started 2026-07-20 12:00 and declared 577 epochs at 300 seconds, while the dated product started 00:00 and declared 289. | [AIUB product inventory](https://www.aiub.unibe.ch/download/AIUB_AFTP.TXT), [current CODE listing](https://code.aiub.unibe.ch/s3_script/aiub_s3_bucket_listing.php?path=CODE), [moving snapshot](https://www.aiub.unibe.ch/download/CODE/COD0OPSULT.SP3), [dated product](https://www.aiub.unibe.ch/download/CODE/COD0OPSULT_20262010000_01D_05M_ORB.SP3) |
+| Historical GFZ ultra-rapid SP3 used a filename epoch one day after content start through 2022-09-06, transitioned issue by issue on September 7–8, and is aligned from September 9. | [GFZ week-2226 listing](https://isdc-data.gfz.de/gnss/products/ultra/w2226/), [GPS-week-crossing old convention](https://isdc-data.gfz.de/gnss/products/ultra/w2226/GFZ0OPSULT_20222470000_02D_05M_ORB.SP3.gz), [September 7 aligned 0000](https://isdc-data.gfz.de/gnss/products/ultra/w2226/GFZ0OPSULT_20222500000_02D_05M_ORB.SP3.gz), [September 8 old-convention 0600](https://isdc-data.gfz.de/gnss/products/ultra/w2226/GFZ0OPSULT_20222510600_02D_05M_ORB.SP3.gz), [September 8 aligned 0900](https://isdc-data.gfz.de/gnss/products/ultra/w2226/GFZ0OPSULT_20222510900_02D_05M_ORB.SP3.gz), [post-transition issue](https://isdc-data.gfz.de/gnss/products/ultra/w2226/GFZ0OPSULT_20222520000_02D_05M_ORB.SP3.gz) |
 
 ## Exact Acquisition Provenance and Cache
 
@@ -349,13 +385,13 @@ uses the existing SP3 merge implementation:
   Sidereon.GNSS.Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :gfz_ult])
 ```
 
-Ultra-rapid acquisition probes each center's current primary filename pattern,
-then known duration/sampling alternates and documented latest-product aliases
-only when an archive returns ordinary publication absence. Integrity failure
-does not mark that center absent and does not authorize another candidate or
-center; it is returned to the caller. `report.contributors` records the pattern
-that succeeded. Merge policy options are forwarded unchanged, including
-guarded cell precedence:
+Ultra-rapid acquisition probes only the dated variants returned by the exact
+catalog, and advances only when an archive returns ordinary publication
+absence. A second candidate currently exists only for GFZ's documented
+2021-05-15 `0000` cadence overlap. Integrity failure does not mark that center
+absent and does not authorize another candidate or center; it is returned to
+the caller. `report.contributors` records the pattern that succeeded. Merge
+policy options are forwarded unchanged, including guarded cell precedence:
 
 ```elixir
 {:ok, merged_sp3, report} =

@@ -6,6 +6,7 @@ defmodule Sidereon.TestSupport.ExactSp3Fixture do
   @mjd_epoch ~D[1858-11-17]
 
   def build(date, opts \\ []) do
+    content_date = Keyword.get(opts, :content_date, date)
     sample_s = Keyword.get(opts, :sample_s, 300)
     span_s = Keyword.get(opts, :span_s, @seconds_per_day)
     coverage = Keyword.get(opts, :coverage, :half_open)
@@ -22,12 +23,12 @@ defmodule Sidereon.TestSupport.ExactSp3Fixture do
     issue = Keyword.get(opts, :issue, "0000")
     x_km = Keyword.get(opts, :x_km, 15_000.0)
     {hour, minute} = parse_issue!(issue)
-    start = NaiveDateTime.new!(date, Time.new!(hour, minute, 0))
+    start = NaiveDateTime.new!(content_date, Time.new!(hour, minute, 0))
 
-    gps_days = Date.diff(date, @gps_epoch)
+    gps_days = Date.diff(content_date, @gps_epoch)
     gps_week = div(gps_days, 7)
     seconds_of_week = rem(gps_days, 7) * @seconds_per_day + hour * 3_600 + minute * 60
-    mjd = Date.diff(date, @mjd_epoch) + (hour * 3_600 + minute * 60) / @seconds_per_day
+    mjd = Date.diff(content_date, @mjd_epoch) + (hour * 3_600 + minute * 60) / @seconds_per_day
 
     header = [
       "#dP#{datetime_fields(start)} #{pad(declared_count, 7)} " <>

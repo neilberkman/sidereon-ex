@@ -32,6 +32,8 @@ defmodule Sidereon.GNSS.Data do
   directly and provide their own transport and cache policy.
   """
 
+  alias Sidereon.GNSS.ArchiveCompression
+  alias Sidereon.GNSS.ArchiveIngress
   alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
@@ -99,6 +101,22 @@ defmodule Sidereon.GNSS.Data do
             url: String.t() | nil,
             compression: String.t() | nil
           }
+  end
+
+  defmodule Sp3ContentStartConvention do
+    @moduledoc """
+    Cataloged relationship between an SP3 filename epoch and its first content
+    epoch.
+
+    Add `content_start_offset_s` to the filename epoch to obtain the declared
+    content start. The value is derived by the canonical core catalog.
+    """
+
+    @enforce_keys [:value, :content_start_offset_s]
+    defstruct [:value, :content_start_offset_s]
+
+    @type value :: :filename_epoch | :filename_epoch_minus_one_day
+    @type t :: %__MODULE__{value: value(), content_start_offset_s: 0 | -86_400}
   end
 
   defmodule TerrainFetchReport do
@@ -244,6 +262,35 @@ defmodule Sidereon.GNSS.Data do
     core(NIF.data_product_solution_class(normalize_code(center), normalize_code(product_type)))
   end
 
+  @doc """
+  Return the cataloged first-content convention for one exact SP3 issue.
+
+  Ultra-rapid centers require an official `HHMM` issue. Product lines without
+  issue times require `nil`. The result comes directly from the core catalog,
+  including historical publication transitions.
+  """
+  @spec sp3_content_start_convention(
+          term(),
+          Date.t() | NaiveDateTime.t() | tuple(),
+          term() | nil
+        ) :: {:ok, Sp3ContentStartConvention.t()} | {:error, error_reason()}
+  def sp3_content_start_convention(center, date, issue \\ nil) do
+    with {:ok, date} <- normalize_date(date),
+         issue = if(!is_nil(issue), do: to_string(issue)),
+         {:ok, {value, offset_s}} <-
+           core(
+             NIF.data_sp3_content_start_convention(
+               normalize_code(center),
+               date.year,
+               date.month,
+               date.day,
+               issue
+             )
+           ) do
+      decode_sp3_content_start_convention(value, offset_s)
+    end
+  end
+
   @doc "Return the catalog's compatibility sampling default without a product date."
   @spec default_sample(term(), term()) :: {:ok, String.t()} | {:error, error_reason()}
   def default_sample(center, product_type) do
@@ -262,6 +309,37 @@ defmodule Sidereon.GNSS.Data do
           date.year,
           date.month,
           date.day
+        )
+      )
+    end
+  end
+
+  @doc """
+  Return officially cataloged sampling tokens for one product date and issue.
+
+  The result is product-, date-, and issue-aware. For an issue-based product
+  line, omitting `issue` queries the `0000` issue; product construction still
+  requires an explicit issue. Unsupported centers, products, eras, and issue
+  values return `{:error, {:unsupported_product, reason}}`.
+  """
+  @spec supported_samples(
+          term(),
+          term(),
+          Date.t() | NaiveDateTime.t() | tuple(),
+          term() | nil
+        ) :: {:ok, [String.t()]} | {:error, error_reason()}
+  def supported_samples(center, product_type, date, issue \\ nil) do
+    with {:ok, date} <- normalize_date(date) do
+      issue = if(!is_nil(issue), do: to_string(issue))
+
+      core(
+        NIF.data_supported_samples(
+          normalize_code(center),
+          normalize_code(product_type),
+          date.year,
+          date.month,
+          date.day,
+          issue
         )
       )
     end
@@ -570,9 +648,10 @@ defmodule Sidereon.GNSS.Data do
   @doc """
   Fetch SP3 products from several centers and merge the contributors.
 
-  Ultra-rapid centers try the current primary duration/sampling pattern, known
-  alternates, and documented latest-product aliases on archive 404s. Each
-  successful contributor records the satisfying `:pattern` in the report.
+  Ultra-rapid centers try only officially cataloged dated variants after an
+  archive miss. A second candidate exists only for an explicitly evidenced
+  publication overlap. Each successful contributor records the satisfying
+  `:pattern` in the report.
 
   All `Sidereon.GNSS.SP3.merge/2` options are forwarded, including `:combine`,
   `:min_agree`, `:precedence_scope`, and `:outlier_reject`. A single successful
@@ -2904,7 +2983,6 @@ defmodule Sidereon.GNSS.Data do
              span: span,
              pattern: pattern,
              filename: filename,
-             cache_filename: candidate_cache_filename(pattern, center, date, issue, filename),
              url: url,
              compression: compression
            }
@@ -3258,15 +3336,24 @@ defmodule Sidereon.GNSS.Data do
            retry: false,
            receive_timeout: timeout_ms,
            finch: :"Elixir.Sidereon.GNSS.Data.Finch",
-           decode_body: false
+           decode_body: false,
+           into: ArchiveIngress.req_into(max_compressed_bytes(opts))
          ) do
-      {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
-        {:ok, status, headers, IO.iodata_to_binary(body)}
+      {:ok, %Req.Response{status: status, headers: headers} = response} ->
+        with {:ok, body, overflow?} <- ArchiveIngress.finish_response(response, max_compressed_bytes(opts)),
+             :ok <- enforce_streamed_size(status, overflow?, max_compressed_bytes(opts)) do
+          {:ok, status, headers, body}
+        end
 
       {:error, reason} ->
         {:error, {:network, reason}}
     end
   end
+
+  defp enforce_streamed_size(status, true, limit) when status in 200..299,
+    do: {:error, {:download_size_exceeded, limit}}
+
+  defp enforce_streamed_size(_status, _overflow?, _limit), do: :ok
 
   defp normalize_http_response({:ok, %{status: status, body: body} = response}, _url),
     do: {:ok, status, Map.get(response, :headers, []), IO.iodata_to_binary(body)}
@@ -3360,13 +3447,12 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp decompress_if_needed(data, "gzip", max_bytes) do
-    decompressed = :zlib.gunzip(data)
-
-    if byte_size(decompressed) > max_bytes,
-      do: {:error, {:decompress, {:decompressed_size_exceeded, max_bytes}}},
-      else: {:ok, decompressed}
-  rescue
-    e in ErlangError -> {:error, {:decompress, e.original}}
+    case ArchiveCompression.decompress(data, :gzip, max_bytes) do
+      {:ok, decompressed} -> {:ok, decompressed}
+      {:error, :size_limit} -> {:error, {:decompress, {:decompressed_size_exceeded, max_bytes}}}
+      {:error, :invalid_gzip} -> {:error, {:decompress, :data_error}}
+      {:error, detail} -> {:error, {:decompress, detail}}
+    end
   end
 
   defp decompress_if_needed(data, "none", max_bytes) do
@@ -3376,9 +3462,9 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp decompress_if_needed(data, "unix_compress", max_bytes) do
-    case NIF.data_unix_compress_decompress(data, max_bytes) do
+    case ArchiveCompression.decompress(data, :unix_compress, max_bytes) do
       {:ok, decompressed} -> {:ok, decompressed}
-      {:error, {:decompress, reason}} -> {:error, {:decompress, reason}}
+      {:error, {:unix_compress, reason}} -> {:error, {:decompress, reason}}
       {:error, reason} -> {:error, {:decompress, reason}}
     end
   end
@@ -3637,18 +3723,33 @@ defmodule Sidereon.GNSS.Data do
   defp core({:error, reason}), do: {:error, reason}
   defp core(value), do: {:ok, value}
 
+  defp decode_sp3_content_start_convention("filename_epoch", 0) do
+    {:ok,
+     %Sp3ContentStartConvention{
+       value: :filename_epoch,
+       content_start_offset_s: 0
+     }}
+  end
+
+  defp decode_sp3_content_start_convention("filename_epoch_minus_one_day", -86_400) do
+    {:ok,
+     %Sp3ContentStartConvention{
+       value: :filename_epoch_minus_one_day,
+       content_start_offset_s: -86_400
+     }}
+  end
+
+  defp decode_sp3_content_start_convention(value, offset_s) do
+    {:error,
+     {:unsupported_product,
+      "core returned inconsistent SP3 content-start convention #{inspect(value)}/#{inspect(offset_s)}"}}
+  end
+
   defp product_archive_compression(%Product{compression: compression}) when is_binary(compression),
     do: {:ok, compression}
 
   defp product_archive_compression(%Product{} = product),
     do: core(NIF.data_archive_compression(product.center, product.product_type))
-
-  defp candidate_cache_filename("alias_" <> _, center, date, issue, filename) do
-    compact_date = date |> Date.to_iso8601() |> String.replace("-", "")
-    "#{center}_#{compact_date}_#{issue}_#{filename}"
-  end
-
-  defp candidate_cache_filename(_pattern, _center, _date, _issue, _filename), do: nil
 
   defp absent_center(center, filename, pattern, candidate_url, reason) do
     {_response_url, http_status} = diagnostic_fields(reason)

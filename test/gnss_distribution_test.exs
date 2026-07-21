@@ -50,6 +50,15 @@ defmodule Sidereon.GNSS.DistributionTest do
 
     assert {:ok, @cddis_url} = Data.cddis_url(identity)
 
+    noncatalog_span = %{
+      identity
+      | span: "02D",
+        official_filename: String.replace(identity.official_filename, "_01D_", "_02D_")
+    }
+
+    assert {:error, {:product_validation_failed, :requested_identity}} =
+             Distribution.location(noncatalog_span, :direct)
+
     {:ok, historical_ionex} = Data.mgex_ionex(:esa, ~D[2020-06-24])
     assert {:ok, historical_ionex_identity} = Data.identity(historical_ionex)
 
@@ -125,6 +134,138 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert result.provenance.sha256 == sha256(body)
     assert result.provenance.archive_sha256 == sha256(:zlib.gzip(body))
     assert result.provenance.etag == "public-etag"
+  end
+
+  test "exact acquisition accepts an 80-column padded terminal record", %{root: root} do
+    bare = sp3_body(@date)
+    padded = String.replace_suffix(bare, "EOF\n", "EOF" <> String.duplicate(" ", 77) <> "\r\n")
+    archive = :zlib.gzip(padded)
+
+    request = request!([Distribution.in_memory(archive, compression: :gzip)])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root)
+    assert File.read!(result.path) == padded
+    assert result.provenance.archive_compression == :gzip
+    assert result.provenance.sha256 == sha256(padded)
+    assert result.provenance.archive_sha256 == sha256(archive)
+  end
+
+  test "historical GFZ ultra acquisition validates the cataloged prior-day content start", %{root: root} do
+    filename_date = ~D[2022-09-04]
+
+    bytes =
+      ExactSp3Fixture.build(filename_date,
+        content_date: ~D[2022-09-03],
+        issue: "0000",
+        span_s: 2 * 86_400,
+        agency: "GFZ"
+      )
+
+    archive = :zlib.gzip(bytes)
+    {:ok, product} = Data.ops_ultra_sp3(:gfz_ult, filename_date, issue: "0000")
+
+    {:ok, request} =
+      Data.request(product, [Distribution.in_memory(archive, compression: :gzip)])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root)
+    assert File.read!(result.path) == bytes
+    assert result.provenance.requested_identity.date == filename_date
+    assert result.provenance.resolved_identity.date == filename_date
+  end
+
+  test "truncated gzip is rejected before exact-product parsing", %{root: root} do
+    archive = sp3_body(@date) |> :zlib.gzip()
+    truncated = binary_part(archive, 0, byte_size(archive) - 1)
+    request = request!([Distribution.in_memory(truncated, compression: :gzip)])
+
+    assert {:error, {:decompression_failed, :invalid_gzip}} =
+             Data.acquire(request, cache_dir: root)
+  end
+
+  test "invalid gzip is terminal before a valid later distributor", %{root: root} do
+    archive = sp3_body(@date) |> :zlib.gzip()
+    truncated = binary_part(archive, 0, byte_size(archive) - 1)
+    parent = self()
+
+    client = fn url, _opts ->
+      send(parent, {:unexpected_request, url})
+      {:ok, 200, [{"content-type", "application/gzip"}], :zlib.gzip(sp3_body(@date))}
+    end
+
+    request =
+      request!([
+        Distribution.in_memory(truncated, compression: :gzip),
+        Distribution.direct()
+      ])
+
+    assert {:error, {:decompression_failed, :invalid_gzip}} =
+             Data.acquire(request, cache_dir: root, http_client: client)
+
+    refute_receive {:unexpected_request, _url}
+  end
+
+  test "concatenated gzip members are decoded completely", %{root: root} do
+    content = sp3_body(@date)
+    split_at = div(byte_size(content), 2)
+    <<first::binary-size(^split_at), second::binary>> = content
+    archive = :zlib.gzip(first) <> :zlib.gzip(<<>>) <> :zlib.gzip(second)
+    request = request!([Distribution.in_memory(archive, compression: :gzip)])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root)
+    assert File.read!(result.path) == content
+    assert result.provenance.archive_sha256 == sha256(archive)
+  end
+
+  test "every gzip member trailer and the archive tail are validated", %{root: root} do
+    content = sp3_body(@date)
+    split_at = div(byte_size(content), 2)
+    <<first::binary-size(^split_at), second::binary>> = content
+    archive = :zlib.gzip(first) <> :zlib.gzip(second)
+
+    for {label, candidate} <- [
+          {"later-crc", flip_byte(archive, byte_size(archive) - 8)},
+          {"later-isize", flip_byte(archive, byte_size(archive) - 1)},
+          {"later-truncated", binary_part(archive, 0, byte_size(archive) - 1)},
+          {"partial-header", archive <> <<0x1F, 0x8B>>},
+          {"junk-tail", archive <> "not another gzip member"}
+        ] do
+      request = request!([Distribution.in_memory(candidate, compression: :gzip)])
+
+      assert {:error, {:decompression_failed, :invalid_gzip}} =
+               Data.acquire(request, cache_dir: Path.join(root, label))
+    end
+  end
+
+  test "product size limit is cumulative across gzip members", %{root: root} do
+    content = sp3_body(@date)
+    split_at = div(byte_size(content), 2)
+    <<first::binary-size(^split_at), second::binary>> = content
+    archive = :zlib.gzip(first) <> :zlib.gzip(second)
+    request = request!([Distribution.in_memory(archive, compression: :gzip)])
+
+    assert {:error, {:decompression_failed, :size_limit}} =
+             Data.acquire(request,
+               cache_dir: root,
+               max_product_bytes: byte_size(content) - 1
+             )
+  end
+
+  test "large RFC 1952 optional headers do not trigger a false truncation", %{root: root} do
+    content = sp3_body(@date)
+    archive = :zlib.gzip(content)
+    extra = <<?A, ?B, 49_996::little-unsigned-integer-size(16), :binary.copy(<<0>>, 49_996)::binary>>
+
+    variants = [
+      {"extra", gzip_with_extra(archive, extra)},
+      {"comment", gzip_with_comment(archive, :binary.copy("x", 70_000))}
+    ]
+
+    for {label, candidate} <- variants do
+      request = request!([Distribution.in_memory(candidate, compression: :gzip)])
+      assert {:ok, result} = Data.acquire(request, cache_dir: Path.join(root, label))
+      assert File.read!(result.path) == content
+      assert result.provenance.archive_sha256 == sha256(candidate)
+    end
   end
 
   test "predicted IONEX direct paths preserve tier, year, and semantic identity", %{root: root} do
@@ -402,6 +543,17 @@ defmodule Sidereon.GNSS.DistributionTest do
                http_client: client,
                max_archive_bytes: 3,
                retries: 1
+             )
+  end
+
+  test "local-file archive reads enforce the compressed-byte limit before parsing", %{root: root} do
+    source = Path.join(root, "oversized.SP3.gz")
+    File.write!(source, "abcd" <> String.duplicate("x", 1_000_000))
+
+    assert {:error, {:download_size_exceeded, 3}} =
+             Data.acquire(request!([Distribution.local_file(source)]),
+               cache_dir: Path.join(root, "cache"),
+               max_archive_bytes: 3
              )
   end
 
@@ -1374,6 +1526,23 @@ defmodule Sidereon.GNSS.DistributionTest do
       end)
 
     Enum.join(lines, "\n")
+  end
+
+  defp flip_byte(binary, index) do
+    <<prefix::binary-size(^index), byte, suffix::binary>> = binary
+    <<prefix::binary, Bitwise.bxor(byte, 1), suffix::binary>>
+  end
+
+  defp gzip_with_extra(<<0x1F, 0x8B, 8, flags, mtime::binary-size(4), xfl, os, rest::binary>>, extra)
+       when byte_size(extra) <= 65_535 do
+    <<0x1F, 0x8B, 8, Bitwise.bor(flags, 0x04), mtime::binary, xfl, os,
+      byte_size(extra)::little-unsigned-integer-size(16), extra::binary, rest::binary>>
+  end
+
+  defp gzip_with_comment(<<0x1F, 0x8B, 8, flags, mtime::binary-size(4), xfl, os, rest::binary>>, comment) do
+    :nomatch = :binary.match(comment, <<0>>)
+
+    <<0x1F, 0x8B, 8, Bitwise.bor(flags, 0x10), mtime::binary, xfl, os, comment::binary, 0, rest::binary>>
   end
 
   defp sha256(data), do: :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)

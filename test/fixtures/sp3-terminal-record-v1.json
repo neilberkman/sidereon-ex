@@ -1,0 +1,26 @@
+{
+  "schema": "sidereon-sp3-terminal-record-v1",
+  "record_width": 80,
+  "record_width_authority": "sidereon-interoperability-policy",
+  "cases": [
+    {"name":"bare_lf","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"accept"},
+    {"name":"bare_crlf","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0d0a","trailing_hex":"","expect":"accept"},
+    {"name":"bare_no_separator","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"","trailing_hex":"","expect":"accept"},
+    {"name":"one_space_lf","leading_hex":"","marker":"EOF","padding_spaces":1,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"accept"},
+    {"name":"gfz_37_spaces_lf","leading_hex":"","marker":"EOF","padding_spaces":37,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"accept"},
+    {"name":"esa_77_spaces_lf","leading_hex":"","marker":"EOF","padding_spaces":77,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"accept"},
+    {"name":"esa_77_spaces_crlf","leading_hex":"","marker":"EOF","padding_spaces":77,"suffix_hex":"","separator_hex":"0d0a","trailing_hex":"","expect":"accept"},
+    {"name":"esa_77_spaces_no_separator","leading_hex":"","marker":"EOF","padding_spaces":77,"suffix_hex":"","separator_hex":"","trailing_hex":"","expect":"accept"},
+    {"name":"over_policy_width","leading_hex":"","marker":"EOF","padding_spaces":78,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"tab_padding","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"09","separator_hex":"0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"eofx","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"58","separator_hex":"0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"eof_space_x","leading_hex":"","marker":"EOF","padding_spaces":1,"suffix_hex":"58","separator_hex":"0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"leading_space","leading_hex":"20","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"lone_cr","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"0d","separator_hex":"","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"double_cr_before_lf","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0d0d0a","trailing_hex":"","expect":"malformed_eof_record"},
+    {"name":"absent","leading_hex":"","marker":null,"padding_spaces":0,"suffix_hex":"","separator_hex":"","trailing_hex":"","expect":"missing_eof"},
+    {"name":"ascii_blank_tail","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0a","trailing_hex":"0a2020200a","expect":"accept"},
+    {"name":"tab_tail","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0a","trailing_hex":"090a","expect":"trailing_content_after_eof"},
+    {"name":"data_tail","leading_hex":"","marker":"EOF","padding_spaces":0,"suffix_hex":"","separator_hex":"0a","trailing_hex":"454f46580a","expect":"trailing_content_after_eof"}
+  ]
+}

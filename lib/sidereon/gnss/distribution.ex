@@ -13,6 +13,8 @@ defmodule Sidereon.GNSS.Distribution do
   `acquire/2` here.
   """
 
+  alias Sidereon.GNSS.ArchiveCompression
+  alias Sidereon.GNSS.ArchiveIngress
   alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.Ionosphere
@@ -587,10 +589,11 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  defp read_source(_identity, %Source{type: :local_file, path: path}, _auth, _opts, _direct_location)
+  defp read_source(_identity, %Source{type: :local_file, path: path}, _auth, opts, _direct_location)
        when is_binary(path) do
-    case File.read(path) do
+    case ArchiveIngress.read_file(path, max_archive_bytes(opts)) do
       {:ok, bytes} -> {:ok, local_fetch(bytes)}
+      {:error, {:download_size_exceeded, _limit}} = error -> error
       {:error, _reason} -> {:error, {:cache_read_failed, :local_file}}
     end
   end
@@ -620,19 +623,7 @@ defmodule Sidereon.GNSS.Distribution do
         {:ok, identity}
 
       {:error, _reason} ->
-        if is_binary(product.pattern) and String.starts_with?(product.pattern, "alias_") do
-          identity(%{
-            product
-            | filename: nil,
-              cache_filename: nil,
-              url: nil,
-              compression: nil,
-              span: nil,
-              pattern: nil
-          })
-        else
-          {:error, {:product_validation_failed, :catalog_identity}}
-        end
+        {:error, {:product_validation_failed, :catalog_identity}}
     end
   end
 
@@ -786,10 +777,14 @@ defmodule Sidereon.GNSS.Distribution do
            retry: false,
            receive_timeout: timeout_ms,
            finch: :"Elixir.Sidereon.GNSS.Data.Finch",
-           decode_body: false
+           decode_body: false,
+           into: ArchiveIngress.req_into(max_archive_bytes(opts))
          ) do
-      {:ok, %Req.Response{status: status, headers: response_headers, body: body}} ->
-        {:ok, status, response_headers, IO.iodata_to_binary(body)}
+      {:ok, %Req.Response{status: status, headers: response_headers} = response} ->
+        with {:ok, body, overflow?} <- ArchiveIngress.finish_response(response, max_archive_bytes(opts)),
+             :ok <- enforce_streamed_size(status, overflow?, max_archive_bytes(opts)) do
+          {:ok, status, response_headers, body}
+        end
 
       {:error, reason} ->
         {:error, {:transport, transport_kind(reason), sanitize_url(url)}}
@@ -799,6 +794,11 @@ defmodule Sidereon.GNSS.Distribution do
   catch
     _kind, _reason -> {:error, {:transport, :other, sanitize_url(url)}}
   end
+
+  defp enforce_streamed_size(status, true, limit) when status in 200..299,
+    do: {:error, {:download_size_exceeded, limit}}
+
+  defp enforce_streamed_size(_status, _overflow?, _limit), do: :ok
 
   defp handle_response(status, headers, _body, current, original, source, auth, opts, redirects, cookies)
        when status in 300..399 do
@@ -1125,69 +1125,14 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp source_compression(%Source{compression: compression}, _fetched), do: compression
 
-  defp decompress(bytes, :none, limit),
-    do: if(byte_size(bytes) <= limit, do: {:ok, bytes}, else: {:error, {:decompression_failed, :size_limit}})
-
-  defp decompress(bytes, :gzip, limit) do
-    stream = :zlib.open()
-
-    try do
-      :ok = :zlib.inflateInit(stream, 31)
-      bounded_inflate(stream, :zlib.safeInflate(stream, bytes), limit, 0, [], 0)
-    rescue
-      _error -> {:error, {:decompression_failed, :invalid_gzip}}
-    catch
-      _kind, _reason -> {:error, {:decompression_failed, :invalid_gzip}}
-    after
-      try do
-        :zlib.inflateEnd(stream)
-      rescue
-        _error -> :ok
-      catch
-        _kind, _reason -> :ok
-      end
-
-      :zlib.close(stream)
-    end
-  end
-
-  defp decompress(bytes, :unix_compress, limit) do
-    case NIF.data_unix_compress_decompress(bytes, limit) do
+  defp decompress(bytes, compression, limit) do
+    case ArchiveCompression.decompress(bytes, compression, limit) do
       {:ok, content} -> {:ok, content}
-      {:error, {:decompress, detail}} -> {:error, {:decompression_failed, detail}}
+      {:error, {:unix_compress, detail}} -> {:error, {:decompression_failed, detail}}
+      {:error, {:unsupported, detail}} -> {:error, {:decompression_failed, {:unknown, detail}}}
       {:error, detail} -> {:error, {:decompression_failed, detail}}
     end
   end
-
-  defp bounded_inflate(stream, {status, chunk}, limit, size, chunks, empty_count)
-       when status in [:continue, :finished] do
-    chunk_size = :erlang.iolist_size(chunk)
-    empty_count = if chunk_size == 0, do: empty_count + 1, else: 0
-
-    cond do
-      size + chunk_size > limit ->
-        {:error, {:decompression_failed, :size_limit}}
-
-      status == :finished ->
-        {:ok, [chunk | chunks] |> Enum.reverse() |> IO.iodata_to_binary()}
-
-      empty_count > 4 ->
-        {:error, {:decompression_failed, :invalid_gzip}}
-
-      true ->
-        bounded_inflate(
-          stream,
-          :zlib.safeInflate(stream, []),
-          limit,
-          size + chunk_size,
-          [chunk | chunks],
-          empty_count
-        )
-    end
-  end
-
-  defp bounded_inflate(_stream, {:need_dictionary, _adler, _chunk}, _limit, _size, _chunks, _empty_count),
-    do: {:error, {:decompression_failed, :dictionary_required}}
 
   defp verify_checksum(_bytes, nil), do: :ok
 
