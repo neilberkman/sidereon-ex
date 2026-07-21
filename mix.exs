@@ -73,7 +73,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.SourceLocalization.Solution
   alias Sidereon.Terrain.MmapTerrain
 
-  @version "0.32.0"
+  @version "0.33.0"
   @source_url "https://github.com/neilberkman/sidereon-ex"
 
   def project do
@@ -144,7 +144,8 @@ defmodule Sidereon.MixProject do
       "examples",
       "guides",
       "CHANGELOG.md",
-      "LICENSE"
+      "LICENSE",
+      "THIRD-PARTY-NOTICES.md"
     ] ++ Path.wildcard("checksum-*.exs")
   end
 

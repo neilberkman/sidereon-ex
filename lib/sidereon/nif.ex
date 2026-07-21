@@ -598,7 +598,24 @@ defmodule Sidereon.NIF do
 
   def sp3_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_declared_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_declared_start_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_epochs_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_exact_request_new(_year, _month, _day, _issue, _span, _sample, _expected_agency),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_exact_request_from_identity(_identity_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_exact_request_fields(_request), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_exact_request_require_agency(_request, _agency), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_parse_exact(_bytes, _request), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_validate_exact(_product, _request), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_prediction_summary(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1995,8 +2012,21 @@ defmodule Sidereon.NIF do
   def data_exact_cache_close(_cache), do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
+  def data_product_solution_class(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_default_sample_for_date(_center, _product_type, _year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_default_sample_for_issue(_center, _product_type, _year, _month, _day, _issue),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_product_identity(_center, _product_type, _year, _month, _day, _sample, _issue),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_distribution_location_for_identity(_identity_fields, _source), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
   def data_archive_compression(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
+  def data_unix_compress_decompress(_archive, _limit), do: :erlang.nif_error(:nif_not_loaded)
   def data_gps_week(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
   def data_day_of_year(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
   def data_predicted_day_offset(_center), do: :erlang.nif_error(:nif_not_loaded)

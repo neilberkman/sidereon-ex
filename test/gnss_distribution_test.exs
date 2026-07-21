@@ -6,11 +6,14 @@ defmodule Sidereon.GNSS.DistributionTest do
   alias Sidereon.GNSS.Distribution.EarthdataAuth
   alias Sidereon.GNSS.Distribution.ProductIdentity
   alias Sidereon.GNSS.ExactCache
+  alias Sidereon.TestSupport.ExactSp3Fixture
 
   @date ~D[2026-07-12]
   @filename "COD0MGXFIN_20261930000_01D_05M_ORB.SP3"
   @cddis_url "https://cddis.nasa.gov/archive/gnss/products/2427/#{@filename}.gz"
   @ionex_fixture Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
+  # Deterministic ncompress output for the synthetic ExactSp3Fixture used below.
+  @unix_compress_sp3_fixture Path.join(__DIR__, "fixtures/gnss_data/igs22376.sp3.Z.b64")
 
   setup do
     root = Path.join(System.tmp_dir!(), "sidereon-distribution-test-#{System.unique_integer([:positive])}")
@@ -44,12 +47,26 @@ defmodule Sidereon.GNSS.DistributionTest do
 
     assert {:ok, @cddis_url} = Data.cddis_url(identity)
 
-    {:ok, ionex} = Data.mgex_ionex(:esa, ~D[2020-06-24])
-    assert {:ok, ionex_identity} = Data.identity(ionex)
+    {:ok, historical_ionex} = Data.mgex_ionex(:esa, ~D[2020-06-24])
+    assert {:ok, historical_ionex_identity} = Data.identity(historical_ionex)
+
+    assert {:error, {:unsupported_product, _reason}} =
+             Data.cddis_url(historical_ionex_identity)
+
+    {:ok, current_ionex} = Data.mgex_ionex(:esa, ~D[2024-06-24])
+    assert {:ok, current_ionex_identity} = Data.identity(current_ionex)
 
     assert {:ok,
-            "https://cddis.nasa.gov/archive/gnss/products/ionex/2020/176/" <>
-              "ESA0OPSFIN_20201760000_01D_02H_GIM.INX.gz"} = Data.cddis_url(ionex_identity)
+            "https://cddis.nasa.gov/archive/gnss/products/ionex/2024/176/" <>
+              "ESA0OPSFIN_20241760000_01D_02H_GIM.INX.gz"} =
+             Data.cddis_url(current_ionex_identity)
+
+    {:ok, current_esa_sp3} = Data.mgex_sp3(:esa, ~D[2024-06-24])
+    assert {:ok, current_esa_sp3_identity} = Data.identity(current_esa_sp3)
+    assert String.starts_with?(current_esa_sp3_identity.official_filename, "ESA0MGNFIN_")
+
+    assert {:error, {:unsupported_product, _reason}} =
+             Distribution.location(current_esa_sp3_identity, :nasa_cddis)
   end
 
   test "exact product sets are order independent and fail closed" do
@@ -98,7 +115,7 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert File.read!(result.path) == body
     assert result.provenance.distribution_source == :nasa_cddis
     assert result.provenance.requested_identity == request.identity
-    assert result.provenance.resolved_identity.format_version == "SP3-c"
+    assert result.provenance.resolved_identity.format_version == "SP3-d"
     assert result.provenance.original_url == @cddis_url
     assert result.provenance.final_url == @cddis_url
     assert result.provenance.archive_compression == :gzip
@@ -385,6 +402,54 @@ defmodule Sidereon.GNSS.DistributionTest do
              )
   end
 
+  test "Unix compress archives are decoded with the same bounded product gate", %{root: root} do
+    # Hand-crafted non-block .Z containing the two literal bytes "AB".
+    archive = <<0x1F, 0x9D, 0x10, 0x41, 0x84, 0x00>>
+    assert {:ok, "AB"} = Sidereon.NIF.data_unix_compress_decompress(archive, 2)
+
+    assert {:error, {:decompress, :size_limit}} =
+             Sidereon.NIF.data_unix_compress_decompress(archive, 1)
+
+    {:ok, product} = Data.mgex_sp3(:igs, ~D[2022-11-26])
+
+    {:ok, request} =
+      Data.request(product, [Distribution.in_memory(archive, compression: :unix_compress)])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, _message}}} =
+             Data.acquire(request, cache_dir: root)
+  end
+
+  test "a valid Unix compress SP3 is acquired and records exact provenance", %{root: root} do
+    archive =
+      @unix_compress_sp3_fixture
+      |> File.read!()
+      |> String.replace(~r/\s+/, "")
+      |> Base.decode64!()
+
+    body = ExactSp3Fixture.build(~D[2022-11-26], agency: "IGS", sample_s: 900)
+    assert {:ok, ^body} = Sidereon.NIF.data_unix_compress_decompress(archive, byte_size(body))
+
+    assert {:ok, product} = Data.mgex_sp3(:igs, ~D[2022-11-26])
+
+    assert {:ok, request} =
+             Data.request(product, [Distribution.in_memory(archive, compression: :unix_compress)])
+
+    assert {:error, {:decompression_failed, :size_limit}} =
+             Data.acquire(request,
+               cache_dir: Path.join(root, "one-byte-short"),
+               max_product_bytes: byte_size(body) - 1
+             )
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root)
+    assert File.read!(result.path) == body
+    assert result.provenance.requested_identity == request.identity
+    assert result.provenance.resolved_identity == %{request.identity | format_version: "SP3-d"}
+    assert result.provenance.distribution_source == :in_memory
+    assert result.provenance.archive_compression == :unix_compress
+    assert result.provenance.sha256 == sha256(body)
+    assert result.provenance.archive_sha256 == sha256(archive)
+  end
+
   test "decompression is bounded before product parsing", %{root: root} do
     client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(sp3_body(@date))} end
 
@@ -401,9 +466,10 @@ defmodule Sidereon.GNSS.DistributionTest do
 
   test "a requested public format version must match parsed content", %{root: root} do
     request = request!([Distribution.in_memory(sp3_body(@date))])
-    identity = %{request.identity | format_version: "SP3-d"}
+    identity = %{request.identity | format_version: "SP3-c"}
 
-    assert {:error, {:product_validation_failed, :format_version}} =
+    assert {:error,
+            {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 format-version mismatch:" <> _detail}}} =
              Data.acquire(%{request | identity: identity}, cache_dir: root)
   end
 
@@ -704,7 +770,9 @@ defmodule Sidereon.GNSS.DistributionTest do
     body = sp3_body(@date)
 
     client = fn url, _opts ->
-      if String.contains?(url, "cddis.nasa.gov"), do: {:ok, 404, [], ""}, else: {:ok, 200, [], body}
+      if String.contains?(url, "cddis.nasa.gov"),
+        do: {:ok, 404, [], ""},
+        else: {:ok, 200, [], :zlib.gzip(body)}
     end
 
     request = request!([Distribution.nasa_cddis(), Distribution.direct()])
@@ -719,20 +787,125 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert failure.status == 404
   end
 
-  test "all allowed sources failing returns a structured aggregate", %{root: root} do
+  test "malformed or parse-invalid candidates are terminal before a valid later source", %{root: root} do
+    valid = sp3_body(@date)
+
+    malformed_client = fn _url, _opts ->
+      {:ok, 200, [{"content-type", "text/html"}], "<html>not a product</html>"}
+    end
+
+    malformed_request =
+      request!([Distribution.direct(), Distribution.in_memory(valid, compression: :none)])
+
+    assert {:error, {:invalid_content_type, "text/html", _url}} =
+             Data.acquire(malformed_request,
+               cache_dir: Path.join(root, "malformed"),
+               http_client: malformed_client,
+               retries: 1
+             )
+
+    parse_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip("not an SP3 product")} end
+    parse_request = request!([Distribution.direct(), Distribution.in_memory(valid, compression: :none)])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, _message}}} =
+             Data.acquire(parse_request,
+               cache_dir: Path.join(root, "parse"),
+               http_client: parse_client,
+               retries: 1
+             )
+  end
+
+  test "digest, identity, cadence, and span failures never try a valid later source", %{root: root} do
+    valid = sp3_body(@date)
+    later = Distribution.in_memory(valid, compression: :none)
+
+    wrong_digest_body = ExactSp3Fixture.build(@date, agency: "AIUB", x_km: 16_000.0)
+    digest_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(wrong_digest_body)} end
+    digest_request = request!([Distribution.direct(), later])
+
+    assert {:error, {:checksum_mismatch, _expected, _actual}} =
+             Data.acquire(digest_request,
+               cache_dir: Path.join(root, "digest"),
+               http_client: digest_client,
+               sha256: sha256(valid),
+               retries: 1
+             )
+
+    wrong_date = ExactSp3Fixture.build(Date.add(@date, 1), agency: "AIUB")
+    identity_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(wrong_date)} end
+    identity_request = request!([Distribution.direct(), later])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, _identity_message}}} =
+             Data.acquire(identity_request,
+               cache_dir: Path.join(root, "identity"),
+               http_client: identity_client,
+               retries: 1
+             )
+
+    bad_cadence = ExactSp3Fixture.build(@date, agency: "AIUB", header_cadence: "900.00000000")
+    cadence_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(bad_cadence)} end
+    cadence_request = request!([Distribution.direct(), later])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 cadence mismatch:" <> _detail}}} =
+             Data.acquire(cadence_request,
+               cache_dir: Path.join(root, "cadence"),
+               http_client: cadence_client,
+               retries: 1
+             )
+
+    bad_span = ExactSp3Fixture.build(@date, agency: "AIUB", count: 287)
+    span_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(bad_span)} end
+    span_request = request!([Distribution.direct(), later])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
+             Data.acquire(span_request,
+               cache_dir: Path.join(root, "span"),
+               http_client: span_client,
+               retries: 1
+             )
+  end
+
+  test "ordinary absence may advance, but the first later integrity failure is terminal", %{root: root} do
+    valid = sp3_body(@date)
+    bad = ExactSp3Fixture.build(@date, agency: "AIUB", count: 287)
+    parent = self()
+
+    client = fn url, _opts ->
+      send(parent, {:requested, url})
+
+      if String.contains?(url, "cddis.nasa.gov"),
+        do: {:ok, 404, [], ""},
+        else: {:ok, 200, [], :zlib.gzip(bad)}
+    end
+
+    request =
+      request!([
+        Distribution.nasa_cddis(),
+        Distribution.direct(),
+        Distribution.in_memory(valid, compression: :none)
+      ])
+
+    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
+             Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+
+    assert_receive {:requested, url}
+    assert String.contains?(url, "cddis.nasa.gov")
+    assert_receive {:requested, url}
+    assert String.contains?(url, "www.aiub.unibe.ch")
+    refute_receive {:requested, _url}
+  end
+
+  test "a terminal source failure is not hidden in an aggregate", %{root: root} do
     client = fn url, _opts ->
       if String.contains?(url, "cddis.nasa.gov"), do: {:ok, 404, [], ""}, else: {:ok, 410, [], ""}
     end
 
     request = request!([Distribution.nasa_cddis(), Distribution.direct()])
 
-    assert {:error, {:all_distributors_failed, failures}} =
+    assert {:error, {:retired_endpoint, 410, url}} =
              Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
 
-    assert Enum.map(failures, &{&1.source, &1.error_type, &1.status}) == [
-             {:nasa_cddis, :product_not_published, 404},
-             {:direct, :retired_endpoint, 410}
-           ]
+    assert String.contains?(url, "www.aiub.unibe.ch")
   end
 
   test "different exact identities never share cache entries", %{root: root} do
@@ -885,41 +1058,7 @@ defmodule Sidereon.GNSS.DistributionTest do
   end
 
   defp sp3_body(date) do
-    year = date.year
-    month = date.month
-    day = date.day
-
-    record =
-      "PG01" <>
-        (:io_lib.format(~c"~14.6f", [15_000.0]) |> IO.iodata_to_binary()) <>
-        " -20000.000000   5000.000000 999999.999999"
-
-    Enum.join(
-      [
-        :io_lib.format(~c"#cP~4..0B ~2.. B ~2.. B  0  0  0.00000000       1 ORBIT IGS14 FIT  TST", [
-          year,
-          month,
-          day
-        ])
-        |> IO.iodata_to_binary(),
-        "## 2427 000000.00000000   300.00000000 61233 0.0000000000000",
-        "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
-        "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
-        "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
-        "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
-        "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
-        "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
-        "%i    0    0    0    0      0      0      0      0         0",
-        "%i    0    0    0    0      0      0      0      0         0",
-        "/* TEST SP3-c FIXTURE",
-        :io_lib.format(~c"*  ~4..0B ~2.. B ~2.. B  0  0  0.00000000", [year, month, day])
-        |> IO.iodata_to_binary(),
-        record,
-        "EOF",
-        ""
-      ],
-      "\n"
-    )
+    ExactSp3Fixture.build(date, agency: "AIUB")
   end
 
   defp ionex_body(date) do

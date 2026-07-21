@@ -30,6 +30,7 @@ defmodule Sidereon.GNSS.SP3 do
 
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.Distribution
+  alias Sidereon.GNSS.Distribution.ProductIdentity
   alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
@@ -46,6 +47,120 @@ defmodule Sidereon.GNSS.SP3 do
           coverage_start: float(),
           coverage_end: float()
         }
+
+  @typedoc "Exact declared-span representation found by the core validator."
+  @type exact_coverage :: :half_open | :inclusive
+
+  defmodule ExactRequest do
+    @moduledoc """
+    Source-independent request used to validate one exact SP3 product.
+
+    Construct requests with `new/4` or `from_identity/1`. The opaque core
+    handle retains identity-derived format-revision and producing-agency
+    constraints; the remaining fields are exposed for inspection only.
+    """
+
+    alias Sidereon.NIF
+
+    @derive {Inspect, except: [:handle]}
+    @enforce_keys [:handle, :date, :span, :sample]
+    defstruct [:handle, :date, :issue, :span, :sample, :format_version, :expected_agency]
+
+    @type t :: %__MODULE__{
+            handle: reference(),
+            date: Date.t(),
+            issue: String.t() | nil,
+            span: String.t(),
+            sample: String.t(),
+            format_version: String.t() | nil,
+            expected_agency: String.t() | nil
+          }
+
+    @doc """
+    Build and validate an exact SP3 request.
+
+    `opts` accepts `:issue` (`HHMM`) and `:expected_agency` (the one-to-four
+    character upper-case SP3 producer code).
+    """
+    @spec new(Date.t() | NaiveDateTime.t() | tuple(), String.t(), String.t(), keyword()) ::
+            {:ok, t()} | {:error, term()}
+    def new(date, span, sample, opts \\ [])
+
+    def new(date, span, sample, opts) when is_binary(span) and is_binary(sample) and is_list(opts) do
+      with {:ok, date} <- normalize_date(date),
+           issue = optional_string(Keyword.get(opts, :issue)),
+           expected_agency = optional_string(Keyword.get(opts, :expected_agency)),
+           {:ok, handle} <-
+             NIF.sp3_exact_request_new(
+               date.year,
+               date.month,
+               date.day,
+               issue,
+               span,
+               sample,
+               expected_agency
+             ) do
+        {:ok, from_handle(handle)}
+      end
+    rescue
+      e in ErlangError -> {:error, e.original}
+    end
+
+    def new(_date, _span, _sample, _opts),
+      do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 request arguments"}}
+
+    @doc "Build an exact request from a complete catalog product identity."
+    @spec from_identity(ProductIdentity.t()) :: {:ok, t()} | {:error, term()}
+    def from_identity(%ProductIdentity{} = identity) do
+      with {:ok, handle} <- NIF.sp3_exact_request_from_identity(ExactCache.identity_fields(identity)) do
+        {:ok, from_handle(handle)}
+      end
+    rescue
+      e in ErlangError -> {:error, e.original}
+      _error -> {:error, {:exact_sp3_validation_failed, "invalid exact SP3 identity"}}
+    end
+
+    def from_identity(_identity), do: {:error, {:exact_sp3_validation_failed, "expected a product identity"}}
+
+    @doc "Return a copy requiring a particular SP3 producing-agency code."
+    @spec require_agency(t(), String.t()) :: {:ok, t()} | {:error, term()}
+    def require_agency(%__MODULE__{handle: handle}, agency) when is_binary(agency) do
+      with {:ok, updated} <- NIF.sp3_exact_request_require_agency(handle, agency) do
+        {:ok, from_handle(updated)}
+      end
+    rescue
+      e in ErlangError -> {:error, e.original}
+    end
+
+    def require_agency(_request, _agency),
+      do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 agency constraint"}}
+
+    defp from_handle(handle) do
+      {{year, month, day}, issue, span, sample, format_version, expected_agency} =
+        NIF.sp3_exact_request_fields(handle)
+
+      %__MODULE__{
+        handle: handle,
+        date: Date.new!(year, month, day),
+        issue: issue,
+        span: span,
+        sample: sample,
+        format_version: format_version,
+        expected_agency: expected_agency
+      }
+    end
+
+    defp normalize_date(%Date{} = date), do: {:ok, date}
+    defp normalize_date(%NaiveDateTime{} = datetime), do: {:ok, NaiveDateTime.to_date(datetime)}
+    defp normalize_date({year, month, day}), do: Date.new(year, month, day)
+    defp normalize_date({{year, month, day}, _time}), do: Date.new(year, month, day)
+
+    defp normalize_date(_date), do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 date"}}
+
+    defp optional_string(nil), do: nil
+    defp optional_string(value) when is_binary(value), do: value
+    defp optional_string(value), do: to_string(value)
+  end
 
   defmodule State do
     @moduledoc """
@@ -123,15 +238,7 @@ defmodule Sidereon.GNSS.SP3 do
   defp parse_bytes(bytes) do
     case NIF.sp3_parse(bytes) do
       handle when is_reference(handle) ->
-        with {:ok, {coverage_start, coverage_end}} <- coverage_from_bytes(bytes) do
-          {:ok,
-           %__MODULE__{
-             handle: handle,
-             time_scale: NIF.sp3_time_scale(handle),
-             coverage_start: coverage_start,
-             coverage_end: coverage_end
-           }}
-        end
+        from_handle(handle, bytes)
 
       {:error, _} = err ->
         err
@@ -142,6 +249,50 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Parse and validate decompressed SP3 bytes against an exact request.
+
+  Returns the parsed product together with `:half_open` or `:inclusive` to
+  identify the accepted boundary representation. Parse, identity, cadence,
+  grid, and span failures are returned as exact-product integrity errors.
+  """
+  @spec parse_exact(binary(), ExactRequest.t()) ::
+          {:ok, t(), exact_coverage()} | {:error, term()}
+  def parse_exact(bytes, %ExactRequest{handle: request}) when is_binary(bytes) do
+    case NIF.sp3_parse_exact(bytes, request) do
+      {:ok, {handle, coverage}} when is_reference(handle) and coverage in [:half_open, :inclusive] ->
+        with {:ok, product} <- from_handle(handle, bytes) do
+          {:ok, product, coverage}
+        end
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def parse_exact(_bytes, _request), do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 parse arguments"}}
+
+  @doc """
+  Validate an already parsed SP3 product against an exact request.
+
+  The returned coverage atom has the same meaning as `parse_exact/2`.
+  """
+  @spec validate_exact(t(), ExactRequest.t()) ::
+          {:ok, exact_coverage()} | {:error, term()}
+  def validate_exact(%__MODULE__{handle: product}, %ExactRequest{handle: request}) do
+    NIF.sp3_validate_exact(product, request)
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def validate_exact(_product, _request),
+    do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 validation arguments"}}
 
   @doc """
   Return the product coverage interval.
@@ -210,6 +361,40 @@ defmodule Sidereon.GNSS.SP3 do
     e in ErlangError ->
       reraise ArgumentError, [message: "could not read SP3 epoch count: #{inspect(e.original)}"], __STACKTRACE__
   end
+
+  @doc """
+  Return the epoch count declared on SP3 header line 1.
+
+  This can differ from `epoch_count/1` for a truncated or inconsistent product
+  accepted by the compatibility parser. `validate_exact/2` requires equality.
+  """
+  @spec declared_epoch_count(t()) :: non_neg_integer()
+  def declared_epoch_count(%__MODULE__{handle: handle}) do
+    NIF.sp3_declared_epoch_count(handle)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not read declared SP3 epoch count: #{inspect(e.original)}"],
+              __STACKTRACE__
+  end
+
+  @doc """
+  Return the start epoch declared on SP3 header line 1.
+
+  The value is seconds since J2000 in the product's own time scale, or `nil`
+  when the permissive parser could not interpret the declaration.
+  """
+  @spec declared_start_j2000_seconds(t()) :: float() | nil
+  def declared_start_j2000_seconds(%__MODULE__{handle: handle}) do
+    NIF.sp3_declared_start_j2000_seconds(handle)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError, [message: "could not read declared SP3 start: #{inspect(e.original)}"], __STACKTRACE__
+  end
+
+  @doc "Alias for `declared_start_j2000_seconds/1`."
+  @spec declared_start_j2000_s(t()) :: float() | nil
+  def declared_start_j2000_s(%__MODULE__{} = sp3), do: declared_start_j2000_seconds(sp3)
 
   @doc """
   Return the parsed SP3 epoch grid as seconds since J2000.
@@ -964,6 +1149,7 @@ defmodule Sidereon.GNSS.SP3 do
 
   defp decode_core_compression("gzip"), do: {:ok, :gzip}
   defp decode_core_compression("none"), do: {:ok, :none}
+  defp decode_core_compression("unix_compress"), do: {:ok, :unix_compress}
   defp decode_core_compression(_compression), do: {:error, :invalid_core_compression}
 
   defp merge_policy_map(policy, precedence) do
@@ -1260,6 +1446,18 @@ defmodule Sidereon.GNSS.SP3 do
              {:ok, end_s} <- epochs |> List.last() |> coverage_epoch_seconds() do
           {:ok, {start_s, end_s}}
         end
+    end
+  end
+
+  defp from_handle(handle, bytes) do
+    with {:ok, {coverage_start, coverage_end}} <- coverage_from_bytes(bytes) do
+      {:ok,
+       %__MODULE__{
+         handle: handle,
+         time_scale: NIF.sp3_time_scale(handle),
+         coverage_start: coverage_start,
+         coverage_end: coverage_end
+       }}
     end
   end
 

@@ -43,7 +43,7 @@ defmodule Sidereon.GNSS.Distribution do
             type: source_type(),
             path: String.t() | nil,
             content: binary() | nil,
-            compression: :auto | :none | :gzip
+            compression: :auto | :none | :gzip | :unix_compress
           }
   end
 
@@ -88,7 +88,7 @@ defmodule Sidereon.GNSS.Distribution do
             campaign: String.t(),
             filename_version: non_neg_integer(),
             date: Date.t(),
-            issue: String.t(),
+            issue: String.t() | nil,
             span: String.t(),
             sample: String.t(),
             official_filename: String.t(),
@@ -188,7 +188,7 @@ defmodule Sidereon.GNSS.Distribution do
             etag: String.t() | nil,
             last_modified: String.t() | nil,
             cache_hit: boolean(),
-            archive_compression: :none | :gzip,
+            archive_compression: :none | :gzip | :unix_compress,
             archive_byte_length: non_neg_integer(),
             archive_sha256: String.t(),
             attempts: [SourceFailure.t()]
@@ -248,9 +248,32 @@ defmodule Sidereon.GNSS.Distribution do
 
   @doc "Resolve an existing data product to exact distributor-independent identity."
   @spec identity(Data.Product.t()) :: {:ok, ProductIdentity.t()} | {:error, error_reason() | term()}
+  def identity(%Data.Product{filename: nil} = product) do
+    date = product.date
+
+    with %Date{} <- date,
+         {:ok, fields} <-
+           core(
+             NIF.data_product_identity(
+               product.center,
+               product.product_type,
+               date.year,
+               date.month,
+               date.day,
+               product.sample,
+               product.issue
+             )
+           ),
+         {:ok, identity} <- decode_core_product_identity(fields) do
+      {:ok, identity}
+    else
+      {:error, _reason} = error -> error
+      _ -> {:error, {:product_validation_failed, :requested_identity}}
+    end
+  end
+
   def identity(%Data.Product{} = product) do
-    with true <- product.product_type in ["sp3", "ionex"],
-         {:ok, filename} <- Data.canonical_filename(product),
+    with {:ok, filename} <- Data.canonical_filename(product),
          :ok <- validate_filename(filename),
          {:ok, fields} <- parse_long_filename(filename),
          true <- fields.family == product.product_type do
@@ -281,6 +304,7 @@ defmodule Sidereon.GNSS.Distribution do
           {:ok, Request.t()} | {:error, error_reason() | term()}
   def request(%Data.Product{} = product, sources) when is_list(sources) do
     with {:ok, identity} <- identity(product),
+         :ok <- validate_request_identity(identity),
          {:ok, normalized} <- normalize_sources(sources),
          true <- normalized != [] do
       {:ok, %Request{identity: identity, sources: normalized}}
@@ -311,27 +335,51 @@ defmodule Sidereon.GNSS.Distribution do
   def validate_exact_product_set(_expected, _available),
     do: {:error, {:exact_product_set, "expected and available must be lists"}}
 
+  @doc "Resolve an official distribution location for a complete exact identity."
+  @spec location(ProductIdentity.t(), Source.source_type() | String.t()) ::
+          {:ok,
+           %{
+             source: Source.source_type(),
+             original_url: String.t() | nil,
+             archive_filename: String.t(),
+             compression: :none | :gzip | :unix_compress
+           }}
+          | {:error, error_reason() | term()}
+  def location(%ProductIdentity{} = identity, source) when is_atom(source) or is_binary(source) do
+    source_code = to_string(source)
+
+    with :ok <- validate_core_identity(identity),
+         {:ok, {resolved_source, original_url, archive_filename, compression}} <-
+           core(
+             NIF.data_distribution_location_for_identity(
+               ExactCache.identity_fields(identity),
+               source_code
+             )
+           ),
+         {:ok, resolved_source} <- decode_source(resolved_source),
+         {:ok, compression} <- decode_compression(compression) do
+      {:ok,
+       %{
+         source: resolved_source,
+         original_url: original_url,
+         archive_filename: archive_filename,
+         compression: compression
+       }}
+    end
+  end
+
+  def location(_identity, source), do: {:error, {:unsupported_distribution, source, "invalid exact product identity"}}
+
   @doc "Build the official CDDIS URL for an exact SP3 or IONEX identity."
   @spec cddis_url(ProductIdentity.t()) :: {:ok, String.t()} | {:error, error_reason() | term()}
   def cddis_url(%ProductIdentity{} = identity) do
-    with :ok <- validate_request_identity(identity) do
-      case identity.family do
-        "sp3" ->
-          with {:ok, week} <- Data.gps_week(identity.date) do
-            {:ok, "https://#{@cddis_host}/archive/gnss/products/#{week}/#{identity.official_filename}.gz"}
-          end
-
-        "ionex" ->
-          with {:ok, day} <- Data.day_of_year(identity.date) do
-            doy = day |> Integer.to_string() |> String.pad_leading(3, "0")
-
-            {:ok,
-             "https://#{@cddis_host}/archive/gnss/products/ionex/#{identity.date.year}/#{doy}/#{identity.official_filename}.gz"}
-          end
-
-        family ->
-          {:error, {:unsupported_distribution, :nasa_cddis, family}}
-      end
+    with :ok <- validate_request_identity(identity),
+         {:ok, %{original_url: url}} <- location(identity, :nasa_cddis),
+         true <- is_binary(url) do
+      {:ok, url}
+    else
+      false -> {:error, {:unsupported_distribution, :nasa_cddis, identity.family}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -398,12 +446,13 @@ defmodule Sidereon.GNSS.Distribution do
         {:ok, %Result{} = success} ->
           {:halt, {:ok, success}}
 
-        {:error, {:cache_write_failed, _detail}} = error ->
-          {:halt, error}
-
         {:error, reason} ->
-          failure = source_failure(source.type, reason)
-          {:cont, {[failure | attempts], reason}}
+          if recoverable_absence?(reason) do
+            failure = source_failure(source.type, reason)
+            {:cont, {[failure | attempts], reason}}
+          else
+            {:halt, {:error, reason}}
+          end
       end
     end)
     |> finish_acquisition()
@@ -414,6 +463,10 @@ defmodule Sidereon.GNSS.Distribution do
   defp finish_acquisition({[_one], reason}), do: {:error, reason}
 
   defp finish_acquisition({attempts, _reason}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
+
+  defp recoverable_absence?(:offline_cache_miss), do: true
+  defp recoverable_absence?({:product_not_published, 404, _url}), do: true
+  defp recoverable_absence?(_reason), do: false
 
   defp acquire_locked(identity, source, path, auth, attempts, opts, exact_cache, direct_location) do
     case load_cache(path, identity, source.type, attempts, opts, exact_cache) do
@@ -457,23 +510,28 @@ defmodule Sidereon.GNSS.Distribution do
     if network? and truthy?(Keyword.get(opts, :offline)) do
       {:error, cache_error || :offline_cache_miss}
     else
-      acquire_source(
-        identity,
-        source,
-        path,
-        auth,
-        attempts,
-        opts,
-        exact_cache,
-        direct_location
-      )
+      case acquire_source(
+             identity,
+             source,
+             path,
+             auth,
+             attempts,
+             opts,
+             exact_cache,
+             direct_location
+           ) do
+        {:ok, %Result{} = result} -> {:ok, result}
+        {:error, _reason} when not is_nil(cache_error) -> {:error, cache_error}
+        {:error, _reason} = error -> error
+      end
     end
   end
 
   defp acquire_source(identity, source, _path, auth, attempts, opts, exact_cache, direct_location) do
     with {:ok, fetched} <- read_source(identity, source, auth, opts, direct_location),
          :ok <- enforce_size(fetched.archive, max_archive_bytes(opts)),
-         {:ok, compression} <- resolve_compression(source.compression, fetched.archive),
+         {:ok, compression} <-
+           resolve_compression(source_compression(source, fetched), fetched.archive),
          {:ok, content} <- decompress(fetched.archive, compression, max_product_bytes(opts)),
          :ok <- verify_checksum(content, Keyword.get(opts, :sha256)),
          {:ok, resolved_identity} <- validate_product(identity, content, fetched.original_url),
@@ -501,9 +559,14 @@ defmodule Sidereon.GNSS.Distribution do
   end
 
   defp read_source(identity, %Source{type: :nasa_cddis}, auth, opts, _direct_location) do
-    with {:ok, url} <- cddis_url(identity),
+    with {:ok, %{original_url: url, compression: compression}} <-
+           location(identity, :nasa_cddis),
+         true <- is_binary(url),
          {:ok, fetched} <- download(url, :nasa_cddis, auth, opts) do
-      {:ok, %{fetched | compression: :gzip}}
+      {:ok, %{fetched | compression: compression}}
+    else
+      false -> {:error, {:unsupported_distribution, :nasa_cddis, identity.family}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -522,12 +585,12 @@ defmodule Sidereon.GNSS.Distribution do
     do: {:error, {:unsupported_distribution, type, "source input is invalid"}}
 
   defp direct_location(identity, nil) do
-    product = product_from_identity(identity)
-
-    with {:ok, url} <- Data.archive_url(product),
-         {:ok, compression} <-
-           core(NIF.data_archive_compression(identity.analysis_center, identity.family)) do
-      {:ok, %{url: url, compression: normalize_compression(compression)}}
+    with {:ok, %{original_url: url, compression: compression}} <- location(identity, :direct),
+         true <- is_binary(url) do
+      {:ok, %{url: url, compression: compression}}
+    else
+      false -> {:error, {:unsupported_distribution, :direct, identity.family}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -592,18 +655,6 @@ defmodule Sidereon.GNSS.Distribution do
       final_url: nil,
       headers: [],
       compression: :auto
-    }
-  end
-
-  defp product_from_identity(identity) do
-    issue = if identity.solution_class == "ultra_rapid", do: identity.issue
-
-    %Data.Product{
-      center: identity.analysis_center,
-      product_type: identity.family,
-      date: identity.date,
-      sample: identity.sample,
-      issue: issue
     }
   end
 
@@ -997,15 +1048,26 @@ defmodule Sidereon.GNSS.Distribution do
   defp header_values(_headers, _name), do: []
 
   defp resolve_compression(:auto, <<0x1F, 0x8B, _rest::binary>>), do: {:ok, :gzip}
+  defp resolve_compression(:auto, <<0x1F, 0x9D, _rest::binary>>), do: {:ok, :unix_compress}
   defp resolve_compression(:auto, _bytes), do: {:ok, :none}
-  defp resolve_compression(compression, _bytes) when compression in [:none, :gzip], do: {:ok, compression}
+
+  defp resolve_compression(compression, _bytes) when compression in [:none, :gzip, :unix_compress],
+    do: {:ok, compression}
+
   defp resolve_compression(compression, _bytes), do: {:error, {:decompression_failed, {:unknown, compression}}}
 
   defp normalize_compression("gzip"), do: :gzip
   defp normalize_compression("none"), do: :none
+  defp normalize_compression("unix_compress"), do: :unix_compress
   defp normalize_compression(:gzip), do: :gzip
   defp normalize_compression(:none), do: :none
+  defp normalize_compression(:unix_compress), do: :unix_compress
   defp normalize_compression(_), do: :auto
+
+  defp source_compression(%Source{type: type}, %{compression: compression})
+       when type in [:direct, :nasa_cddis] and compression in [:none, :gzip, :unix_compress], do: compression
+
+  defp source_compression(%Source{compression: compression}, _fetched), do: compression
 
   defp decompress(bytes, :none, limit),
     do: if(byte_size(bytes) <= limit, do: {:ok, bytes}, else: {:error, {:decompression_failed, :size_limit}})
@@ -1030,6 +1092,14 @@ defmodule Sidereon.GNSS.Distribution do
       end
 
       :zlib.close(stream)
+    end
+  end
+
+  defp decompress(bytes, :unix_compress, limit) do
+    case NIF.data_unix_compress_decompress(bytes, limit) do
+      {:ok, content} -> {:ok, content}
+      {:error, {:decompress, detail}} -> {:error, {:decompression_failed, detail}}
+      {:error, detail} -> {:error, {:decompression_failed, detail}}
     end
   end
 
@@ -1073,17 +1143,14 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp verify_checksum(_bytes, expected), do: {:error, {:checksum_mismatch, inspect(expected), ""}}
 
-  defp validate_product(%ProductIdentity{family: "sp3"} = identity, bytes, original_url) do
-    with {:ok, sp3} <- SP3.parse(bytes),
-         true <- SP3.epoch_count(sp3) > 0,
+  defp validate_product(%ProductIdentity{family: "sp3"} = identity, bytes, _original_url) do
+    with {:ok, request} <- SP3.ExactRequest.from_identity(identity),
+         {:ok, _sp3, _coverage} <- SP3.parse_exact(bytes, request),
          {:ok, version} <- sp3_version(bytes),
-         :ok <- validate_sp3_metadata(identity, bytes),
-         :ok <- validate_sp3_catalog_equivalence(identity, sp3, bytes, original_url),
          resolved_version = "SP3-#{version}",
          :ok <- validate_requested_format_version(identity.format_version, resolved_version) do
       {:ok, %{identity | format_version: resolved_version}}
     else
-      false -> {:error, {:product_validation_failed, :empty_sp3}}
       {:error, {:product_validation_failed, _} = reason} -> {:error, reason}
       {:error, reason} -> {:error, {:product_validation_failed, reason}}
     end
@@ -1115,121 +1182,6 @@ defmodule Sidereon.GNSS.Distribution do
     do: {:ok, <<version>> |> String.downcase()}
 
   defp sp3_version(_bytes), do: {:error, {:product_validation_failed, :sp3_version}}
-
-  defp validate_sp3_metadata(identity, bytes) do
-    [first, second | _] = String.split(bytes, "\n")
-
-    with [_, year, month, day, hour, minute] <-
-           Regex.run(~r/^#[a-dA-D][PV](\d{4})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})/, first),
-         {:ok, date} <- Date.new(String.to_integer(year), String.to_integer(month), String.to_integer(day)),
-         true <- date == identity.date,
-         true <- String.pad_leading(hour, 2, "0") <> String.pad_leading(minute, 2, "0") == identity.issue,
-         [_, cadence] <- Regex.run(~r/^##\s+\d+\s+\S+\s+(\S+)/, second),
-         {cadence_s, ""} <- Float.parse(cadence),
-         expected when is_integer(expected) <- sample_seconds(identity.sample),
-         true <- abs(cadence_s - expected) <= 1.0e-6 do
-      :ok
-    else
-      _ -> {:error, {:product_validation_failed, :sp3_identity_metadata}}
-    end
-  rescue
-    _error -> {:error, {:product_validation_failed, :sp3_identity_metadata}}
-  end
-
-  defp validate_sp3_catalog_equivalence(
-         %ProductIdentity{solution_class: "ultra_rapid", issue: issue} = identity,
-         sp3,
-         bytes,
-         original_url
-       )
-       when is_binary(issue) and is_binary(original_url) do
-    with {:ok, rows} <-
-           core(
-             NIF.data_ultra_sp3_locations(
-               identity.analysis_center,
-               identity.date.year,
-               identity.date.month,
-               identity.date.day,
-               issue
-             )
-           ),
-         {pattern, span, sample, filename, ^original_url, _compression} <-
-           Enum.find(rows, fn {_pattern, _span, _sample, _filename, url, _compression} ->
-             url == original_url
-           end),
-         true <- span == identity.span,
-         true <- sample == identity.sample,
-         :ok <- validate_catalog_filename(identity, pattern, filename),
-         :ok <- validate_alias_span(pattern, span, sample, sp3, bytes) do
-      :ok
-    else
-      _ -> {:error, {:product_validation_failed, :sp3_catalog_identity}}
-    end
-  end
-
-  defp validate_sp3_catalog_equivalence(%ProductIdentity{solution_class: "ultra_rapid"}, _sp3, _bytes, _url),
-    do: {:error, {:product_validation_failed, :sp3_catalog_identity}}
-
-  defp validate_sp3_catalog_equivalence(_identity, _sp3, _bytes, _original_url), do: :ok
-
-  defp validate_catalog_filename(identity, "alias_" <> _rest, alias_filename) do
-    with true <- alias_filename != identity.official_filename,
-         {:ok, canonical} <- Data.canonical_filename(product_from_identity(identity)),
-         true <- canonical == identity.official_filename do
-      :ok
-    else
-      _ -> {:error, {:product_validation_failed, :sp3_catalog_filename}}
-    end
-  end
-
-  defp validate_catalog_filename(identity, _pattern, filename) do
-    if filename == identity.official_filename,
-      do: :ok,
-      else: {:error, {:product_validation_failed, :sp3_catalog_filename}}
-  end
-
-  defp validate_alias_span("alias_" <> _rest, span, sample, sp3, bytes) do
-    epochs = SP3.epochs_j2000_seconds(sp3)
-
-    with span_s when is_integer(span_s) <- sample_seconds(span),
-         cadence_s when is_integer(cadence_s) <- sample_seconds(sample),
-         true <- rem(span_s, cadence_s) == 0,
-         expected_count = div(span_s, cadence_s) + 1,
-         true <- SP3.epoch_count(sp3) == expected_count,
-         true <- length(epochs) == expected_count,
-         true <- declared_sp3_epoch_count(bytes) == expected_count,
-         true <- abs(List.last(epochs) - hd(epochs) - span_s) <= 1.0e-6,
-         true <- cadence_matches?(epochs, cadence_s) do
-      :ok
-    else
-      _ -> {:error, {:product_validation_failed, :sp3_alias_span}}
-    end
-  end
-
-  defp validate_alias_span(_pattern, _span, _sample, _sp3, _bytes), do: :ok
-
-  defp declared_sp3_epoch_count(bytes) do
-    first = bytes |> String.split("\n", parts: 2) |> hd()
-
-    case Regex.run(~r/^#[a-dA-D][PV]\d{4}\s+\d+\s+\d+\s+\d+\s+\d+\s+\S+\s+(\d+)\s+ORBIT\b/, first) do
-      [_, count] ->
-        case Integer.parse(count) do
-          {count, ""} -> count
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp cadence_matches?([_one], _cadence_s), do: true
-
-  defp cadence_matches?(epochs, cadence_s) do
-    epochs
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [left, right] -> abs(right - left - cadence_s) <= 1.0e-6 end)
-  end
 
   defp ionex_version(bytes) do
     first = bytes |> String.split("\n", parts: 2) |> hd()
@@ -1647,6 +1599,7 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp compression_atom("gzip"), do: {:ok, :gzip}
   defp compression_atom("none"), do: {:ok, :none}
+  defp compression_atom("unix_compress"), do: {:ok, :unix_compress}
   defp compression_atom(_value), do: {:error, :invalid_compression}
 
   @failure_atoms ~w(authentication_required authentication_failed authorization_denied product_not_published retired_endpoint redirect_policy_failure malformed_url transport http_status invalid_content_type error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution)a
@@ -1680,10 +1633,11 @@ defmodule Sidereon.GNSS.Distribution do
     do: {:ok, source}
 
   defp normalize_source(%Source{type: :local_file, path: path, content: nil, compression: compression} = source)
-       when is_binary(path) and byte_size(path) > 0 and compression in [:auto, :none, :gzip], do: {:ok, source}
+       when is_binary(path) and byte_size(path) > 0 and compression in [:auto, :none, :gzip, :unix_compress],
+       do: {:ok, source}
 
   defp normalize_source(%Source{type: :in_memory, path: nil, content: content, compression: compression} = source)
-       when is_binary(content) and compression in [:auto, :none, :gzip], do: {:ok, source}
+       when is_binary(content) and compression in [:auto, :none, :gzip, :unix_compress], do: {:ok, source}
 
   defp normalize_source(%Source{type: type}), do: {:error, {:unsupported_distribution, type, "source input is invalid"}}
 
@@ -1722,6 +1676,77 @@ defmodule Sidereon.GNSS.Distribution do
   defp prediction_horizon("cod_prd2"), do: 2
   defp prediction_horizon(_center), do: nil
 
+  defp decode_core_product_identity([
+         family,
+         analysis_center,
+         publisher,
+         solution_class,
+         campaign,
+         filename_version,
+         year,
+         month,
+         day,
+         issue,
+         span,
+         sample,
+         official_filename,
+         format,
+         format_version,
+         prediction_horizon_days
+       ]) do
+    with {filename_version, ""} <- Integer.parse(filename_version),
+         {year, ""} <- Integer.parse(year),
+         {month, ""} <- Integer.parse(month),
+         {day, ""} <- Integer.parse(day),
+         {:ok, date} <- Date.new(year, month, day),
+         {:ok, prediction_horizon_days} <- decode_optional_integer(prediction_horizon_days) do
+      {:ok,
+       %ProductIdentity{
+         family: family,
+         analysis_center: analysis_center,
+         publisher: publisher,
+         solution_class: solution_class,
+         campaign: campaign,
+         filename_version: filename_version,
+         date: date,
+         issue: empty_to_nil(issue),
+         span: span,
+         sample: sample,
+         official_filename: official_filename,
+         format: format,
+         format_version: empty_to_nil(format_version),
+         prediction_horizon_days: prediction_horizon_days
+       }}
+    else
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp decode_core_product_identity(_fields), do: {:error, :invalid_core_product_identity}
+
+  defp decode_optional_integer(""), do: {:ok, nil}
+
+  defp decode_optional_integer(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> {:ok, integer}
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
+
+  defp decode_source("direct"), do: {:ok, :direct}
+  defp decode_source("nasa_cddis"), do: {:ok, :nasa_cddis}
+  defp decode_source("local_file"), do: {:ok, :local_file}
+  defp decode_source("in_memory"), do: {:ok, :in_memory}
+  defp decode_source(_source), do: {:error, :invalid_core_distribution_source}
+
+  defp decode_compression("gzip"), do: {:ok, :gzip}
+  defp decode_compression("none"), do: {:ok, :none}
+  defp decode_compression("unix_compress"), do: {:ok, :unix_compress}
+  defp decode_compression(_compression), do: {:error, :invalid_core_compression}
+
   defp identity_fields(identities) do
     identities
     |> Enum.reduce_while({:ok, []}, fn
@@ -1748,7 +1773,7 @@ defmodule Sidereon.GNSS.Distribution do
           )
         ]
 
-        case validate_request_identity(identity) do
+        case validate_core_identity(identity) do
           :ok ->
             if Enum.all?(values, &is_binary/1) do
               {:cont, {:ok, [values | fields]}}
@@ -1770,33 +1795,46 @@ defmodule Sidereon.GNSS.Distribution do
   end
 
   defp validate_request_identity(%ProductIdentity{} = identity) do
-    expected_format = if identity.family == "sp3", do: "SP3", else: "IONEX"
-
     with true <- identity.family in ["sp3", "ionex"],
-         :ok <- validate_filename(identity.official_filename),
-         {:ok, fields} <- parse_long_filename(identity.official_filename),
-         true <- fields.family == identity.family,
-         true <- fields.publisher == identity.publisher,
-         true <- fields.solution_class == identity.solution_class,
-         true <- fields.campaign == identity.campaign,
-         true <- fields.filename_version == identity.filename_version,
-         true <- fields.issue == identity.issue,
-         true <- fields.span == identity.span,
-         true <- fields.sample == identity.sample,
-         true <- identity.format == expected_format,
-         true <- identity.prediction_horizon_days == prediction_horizon(identity.analysis_center),
-         fields = ExactCache.identity_fields(identity),
-         :ok <- NIF.data_validate_exact_product_set([fields], [fields]) do
+         :ok <- validate_core_identity(identity) do
       :ok
     else
       {:error, _reason} = error -> error
-      _ -> {:error, {:product_validation_failed, :requested_identity}}
+      _ -> {:error, {:unsupported_product, identity.family}}
     end
   rescue
     _error -> {:error, {:product_validation_failed, :requested_identity}}
   end
 
   defp validate_request_identity(_identity), do: {:error, {:product_validation_failed, :requested_identity}}
+
+  defp validate_core_identity(%ProductIdentity{} = identity) do
+    supported_combination = identity.analysis_center <> "/" <> identity.family
+
+    with :ok <- validate_filename(identity.official_filename),
+         fields = ExactCache.identity_fields(identity),
+         true <- Enum.all?(fields, &is_binary/1),
+         :ok <- NIF.data_validate_exact_product_set([fields], [fields]) do
+      :ok
+    else
+      {:error, {:malformed_url, _message}} = error ->
+        error
+
+      {:error, {:unknown_center, _code}} = error ->
+        error
+
+      {:error, {:unsupported_product, ^supported_combination}} = error ->
+        error
+
+      {:error, _reason} ->
+        {:error, {:product_validation_failed, :requested_identity}}
+
+      _ ->
+        {:error, {:product_validation_failed, :requested_identity}}
+    end
+  rescue
+    _error -> {:error, {:product_validation_failed, :requested_identity}}
+  end
 
   defp validate_filename(filename) when is_binary(filename) and filename not in ["", ".", ".."] do
     if Path.basename(filename) == filename and not String.contains?(filename, ["..", "\0", "/", "\\"]),

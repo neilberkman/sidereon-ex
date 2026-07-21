@@ -6,6 +6,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-07-20
+
+### Added
+
+- Added product-aware `Sidereon.GNSS.Data.product_solution_class/2`, dated
+  `default_sample_for_date/3`, core-derived exact product identities and
+  distribution locations, and historical IGS final-SP3 naming support.
+- Added `Sidereon.GNSS.SP3.ExactRequest`, `parse_exact/2`,
+  `validate_exact/2`, declared epoch-count/start accessors, and explicit
+  half-open/inclusive coverage results.
+- Added size-limited Unix `compress` (`.Z`) decoding for historical CDDIS
+  products.
+
+### Changed
+
+- Exact SP3 acquisition now validates mandatory SP3 structure, producing
+  agency, declared and parsed start/count, requested cadence, regular epoch
+  grid, and exact span before publishing bytes or provenance.
+- Source and ultra-rapid candidate fallback now continues only after ordinary
+  publication absence. Malformed content, parsing, digest, identity, cadence,
+  span, caller configuration, and cache-integrity failures are terminal.
+- IGS final SP3 uses the official short filename and CDDIS `.Z` layout before
+  GPS week 2238, then the long filename and gzip layout. IGS broadcast
+  navigation remains independently classified as `broadcast`.
+- CODE SP3/clock/IONEX URLs are resolved by product family, and GFZ rapid-SP3
+  sampling defaults are selected by date across the 2021 15-minute to
+  five-minute transition.
+- Catalog derivation now enforces the verified publication floors for ESA
+  final, GFZ rapid, and IGS/ESA/GFZ ultra-rapid SP3. ESA and GFZ ultra-rapid
+  defaults follow their historical cadence eras, including ESA's intraday
+  transition between the 2025-02-02 0600 and 1200 issues. CDDIS rejects
+  pre-week-2238 long-name SP3 identities instead of inventing archive paths.
+- Updated the native backend to `sidereon` and `sidereon-core` 0.33.0.
+
+### Compatibility
+
+- Existing permissive `Sidereon.GNSS.SP3.parse/1` remains available, and the
+  core's date-free sampling query is exposed as `Data.default_sample/2` for
+  compatibility-oriented catalog inspection. Exact acquisition is
+  intentionally stricter, and unsupported center/product combinations now fail
+  before transport. This additive API and integrity-policy change requires a
+  minor release.
+
 ## [0.32.0] - 2026-07-18
 
 ### Added

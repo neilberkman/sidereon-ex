@@ -17,11 +17,12 @@
 
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
-use sidereon_core::data::{ArchiveCompression, DistributionSource};
+use sidereon_core::data::{ArchiveCompression, DistributionSource, ProductDate};
 use sidereon_core::ephemeris::{
-    align_clock_reference, clock_reference_offset, merge as crate_merge, AgreementMetric,
-    EpochAgreement, MergeCombine, MergeFlag, MergeOptions, MergePrecedenceScope, MergeReport,
-    OutlierRejectOptions, Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet, Sp3FrameReconciliation,
+    align_clock_reference, clock_reference_offset, merge as crate_merge, parse_exact_sp3,
+    validate_exact_sp3, AgreementMetric, EpochAgreement, ExactSp3Coverage, ExactSp3Request,
+    MergeCombine, MergeFlag, MergeOptions, MergePrecedenceScope, MergeReport, OutlierRejectOptions,
+    Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet, Sp3FrameReconciliation,
     Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
@@ -32,7 +33,10 @@ mod atoms {
         ok,
         error,
         epoch_out_of_range,
-        unknown_satellite
+        unknown_satellite,
+        exact_sp3_validation_failed,
+        half_open,
+        inclusive
     }
 }
 
@@ -45,8 +49,23 @@ pub struct Sp3Resource {
     pub sp3: Sp3,
 }
 
+/// Opaque validated exact-SP3 request. Keeping the core value in a resource
+/// preserves identity-derived agency and format-revision constraints without
+/// asking Elixir to reconstruct them.
+pub struct ExactSp3RequestResource {
+    request: ExactSp3Request,
+}
+
 type Vec3Tuple = (f64, f64, f64);
 type FlagsTuple = (bool, bool, bool, bool);
+type ExactRequestFields = (
+    (i32, u8, u8),
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 type StateTuple = (
     f64,
     f64,
@@ -59,6 +78,24 @@ type StateTuple = (
 
 #[rustler::resource_impl]
 impl rustler::Resource for Sp3Resource {}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ExactSp3RequestResource {}
+
+fn exact_coverage<'a>(env: Env<'a>, coverage: ExactSp3Coverage) -> Term<'a> {
+    match coverage {
+        ExactSp3Coverage::HalfOpen => atoms::half_open().encode(env),
+        ExactSp3Coverage::Inclusive => atoms::inclusive().encode(env),
+    }
+}
+
+fn exact_error<'a>(env: Env<'a>, error: impl std::fmt::Display) -> Term<'a> {
+    (
+        atoms::error(),
+        (atoms::exact_sp3_validation_failed(), error.to_string()),
+    )
+        .encode(env)
+}
 
 /// Map a GNSS single-letter system identifier (as the Elixir side passes it,
 /// e.g. `"G"`) onto the crate's [`GnssSystem`]. Pure identifier translation.
@@ -215,10 +252,140 @@ fn sp3_epoch_count(handle: ResourceArc<Sp3Resource>) -> usize {
     handle.sp3.epoch_count()
 }
 
+/// Epoch count declared on SP3 header line 1.
+#[rustler::nif]
+fn sp3_declared_epoch_count(handle: ResourceArc<Sp3Resource>) -> u64 {
+    handle.sp3.declared_epoch_count()
+}
+
+/// Start epoch declared on SP3 header line 1, in product-scale J2000 seconds.
+#[rustler::nif]
+fn sp3_declared_start_j2000_seconds(handle: ResourceArc<Sp3Resource>) -> Option<f64> {
+    handle.sp3.declared_start_j2000_s()
+}
+
 /// Parsed SP3 epoch grid as seconds since J2000 in the product's own time scale.
 #[rustler::nif]
 fn sp3_epochs_j2000_seconds(handle: ResourceArc<Sp3Resource>) -> Vec<f64> {
     handle.sp3.epochs_j2000_seconds()
+}
+
+/// Construct and validate a source-independent exact-SP3 request.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn sp3_exact_request_new<'a>(
+    env: Env<'a>,
+    year: i32,
+    month: u8,
+    day: u8,
+    issue: Option<String>,
+    span: String,
+    sample: String,
+    expected_agency: Option<String>,
+) -> Term<'a> {
+    let request = ProductDate::new(year, month, day)
+        .map_err(|error| error.to_string())
+        .and_then(|date| {
+            ExactSp3Request::new(date, issue.as_deref(), &span, &sample)
+                .map_err(|error| error.to_string())
+        })
+        .and_then(|request| match expected_agency.as_deref() {
+            Some(agency) => request
+                .with_expected_agency(agency)
+                .map_err(|error| error.to_string()),
+            None => Ok(request),
+        });
+
+    match request {
+        Ok(request) => (
+            atoms::ok(),
+            ResourceArc::new(ExactSp3RequestResource { request }),
+        )
+            .encode(env),
+        Err(error) => exact_error(env, error),
+    }
+}
+
+/// Construct an exact-SP3 request from a complete core-validated identity.
+#[rustler::nif]
+fn sp3_exact_request_from_identity<'a>(env: Env<'a>, fields: Vec<String>) -> Term<'a> {
+    let request = crate::data::product_identity(fields)
+        .map_err(|error| error.to_string())
+        .and_then(|identity| {
+            ExactSp3Request::from_identity(&identity).map_err(|error| error.to_string())
+        });
+    match request {
+        Ok(request) => (
+            atoms::ok(),
+            ResourceArc::new(ExactSp3RequestResource { request }),
+        )
+            .encode(env),
+        Err(error) => exact_error(env, error),
+    }
+}
+
+/// Return the normalized public request fields carried by an opaque request.
+#[rustler::nif]
+fn sp3_exact_request_fields(handle: ResourceArc<ExactSp3RequestResource>) -> ExactRequestFields {
+    let date = handle.request.date();
+    (
+        (date.year, date.month, date.day),
+        handle.request.issue().map(ToOwned::to_owned),
+        handle.request.span().to_owned(),
+        handle.request.sample().to_owned(),
+        handle.request.format_version().map(ToOwned::to_owned),
+        handle.request.expected_agency().map(ToOwned::to_owned),
+    )
+}
+
+/// Return a cloned request with a validated producing-agency constraint.
+#[rustler::nif]
+fn sp3_exact_request_require_agency<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<ExactSp3RequestResource>,
+    agency: String,
+) -> Term<'a> {
+    match handle.request.clone().with_expected_agency(&agency) {
+        Ok(request) => (
+            atoms::ok(),
+            ResourceArc::new(ExactSp3RequestResource { request }),
+        )
+            .encode(env),
+        Err(error) => exact_error(env, error),
+    }
+}
+
+/// Parse and validate exact SP3 bytes in one core operation.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_parse_exact<'a>(
+    env: Env<'a>,
+    bytes: rustler::Binary<'a>,
+    request: ResourceArc<ExactSp3RequestResource>,
+) -> Term<'a> {
+    match parse_exact_sp3(bytes.as_slice(), &request.request) {
+        Ok((sp3, coverage)) => (
+            atoms::ok(),
+            (
+                ResourceArc::new(Sp3Resource { sp3 }),
+                exact_coverage(env, coverage),
+            ),
+        )
+            .encode(env),
+        Err(error) => exact_error(env, error),
+    }
+}
+
+/// Validate an already parsed SP3 product against an exact request.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_validate_exact<'a>(
+    env: Env<'a>,
+    product: ResourceArc<Sp3Resource>,
+    request: ResourceArc<ExactSp3RequestResource>,
+) -> Term<'a> {
+    match validate_exact_sp3(&product.sp3, &request.request) {
+        Ok(coverage) => (atoms::ok(), exact_coverage(env, coverage)).encode(env),
+        Err(error) => exact_error(env, error),
+    }
 }
 
 type PredictionEpochTuple = ((f64, f64), bool, Vec<String>, Vec<String>);

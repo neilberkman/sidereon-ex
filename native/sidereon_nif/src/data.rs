@@ -6,9 +6,9 @@
 
 use rustler::{Binary, Encoder, Env, OwnedBinary, Term};
 use sidereon_core::data::{
-    self, AnalysisCenter, DataCatalogError, HgtConversionError, ProductCampaign, ProductDate,
-    ProductDateTime, ProductFormat, ProductIdentity, ProductPublisher, ProductType, SolutionClass,
-    SpaceWeatherProduct,
+    self, AnalysisCenter, DataCatalogError, DistributionSource, HgtConversionError,
+    ProductCampaign, ProductDate, ProductDateTime, ProductFormat, ProductIdentity,
+    ProductPublisher, ProductType, SolutionClass, SpaceWeatherProduct,
 };
 
 mod atoms {
@@ -22,6 +22,8 @@ mod atoms {
         invalid_tile_id,
         decompress,
         bad_hgt_length,
+        invalid_unix_compress,
+        size_limit,
         no_open_mirror,
         unknown_product_type,
         exact_product_set,
@@ -40,6 +42,18 @@ fn center(code: &str) -> Result<AnalysisCenter, DataCatalogError> {
 
 fn product_type(code: &str) -> Result<ProductType, DataCatalogError> {
     code.parse()
+}
+
+fn distribution_source(code: &str) -> Result<DistributionSource, DataCatalogError> {
+    match code {
+        "direct" => Ok(DistributionSource::Direct),
+        "nasa_cddis" => Ok(DistributionSource::NasaCddis),
+        "local_file" => Ok(DistributionSource::LocalFile),
+        "in_memory" => Ok(DistributionSource::InMemory),
+        _ => Err(DataCatalogError::InconsistentProductIdentity {
+            field: "distribution_source",
+        }),
+    }
 }
 
 fn identity_field_error(field: &'static str) -> DataCatalogError {
@@ -357,6 +371,114 @@ fn data_default_sample<'a>(env: Env<'a>, center_code: String, product_code: Stri
     encode_result(env, result, |env, sample| sample.encode(env))
 }
 
+/// Product-aware solution classification. This keeps the legacy center-wide
+/// query out of the binding and lets the core reject unsupported combinations.
+#[rustler::nif]
+fn data_product_solution_class<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| data::product_solution_class(center, kind))
+    });
+    encode_result(env, result, |env, solution| solution.code().encode(env))
+}
+
+/// Date-aware sampling default used whenever an exact product is derived.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_default_sample_for_date<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_date(year, month, day)
+                .and_then(|date| data::default_sample_for_date(center, kind, date))
+        })
+    });
+    encode_result(env, result, |env, sample| sample.encode(env))
+}
+
+/// Issue-aware sampling default for exact product derivation. Resolving the
+/// complete identity in the core keeps intraday publication transitions in one
+/// catalog rather than duplicating them in this binding.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_default_sample_for_issue<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    issue: String,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_date(year, month, day).and_then(|date| {
+                data::product_identity(center, kind, date, None, Some(&issue))
+                    .map(|identity| identity.sample)
+            })
+        })
+    });
+    encode_result(env, result, |env, sample| sample.encode(env))
+}
+
+/// Resolve a complete distributor-independent identity through the core
+/// catalog, including historical naming eras and product-aware solution class.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_product_identity<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    sample: Option<String>,
+    issue: Option<String>,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_date(year, month, day).and_then(|date| {
+                data::product_identity(center, kind, date, sample.as_deref(), issue.as_deref())
+            })
+        })
+    });
+    encode_result(env, result, |env, identity| {
+        product_identity_fields(&identity).encode(env)
+    })
+}
+
+/// Resolve a cataloged distribution location without reconstructing or
+/// weakening the caller's exact identity.
+#[rustler::nif]
+fn data_distribution_location_for_identity<'a>(
+    env: Env<'a>,
+    identity_fields: Vec<String>,
+    source_code: String,
+) -> Term<'a> {
+    let result = product_identity(identity_fields).and_then(|identity| {
+        distribution_source(&source_code)
+            .and_then(|source| data::distribution_location_for_identity(&identity, source))
+    });
+    encode_result(env, result, |env, location| {
+        (
+            location.source.code(),
+            location.original_url,
+            location.archive_filename,
+            location.compression.as_str(),
+        )
+            .encode(env)
+    })
+}
+
 /// Current primary ultra-rapid SP3 archive location followed by known filename
 /// alternates and documented aliases.
 #[rustler::nif]
@@ -637,5 +759,24 @@ fn data_hgt_to_dted<'a>(env: Env<'a>, lat_index: i32, lon_index: i32, hgt: Binar
     match data::hgt_to_dted(lat_index, lon_index, hgt.as_slice()) {
         Ok(dt2) => (atoms::ok(), bytes_to_binary(env, &dt2)).encode(env),
         Err(err) => encode_hgt_error(env, err),
+    }
+}
+
+/// Decode a historical Unix-compress (`.Z`) archive. The transport layer owns
+/// compression; the core continues to receive only decompressed product bytes.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn data_unix_compress_decompress<'a>(env: Env<'a>, archive: Binary<'a>, limit: u64) -> Term<'a> {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+
+    match crate::unix_compress::decode_bounded(archive.as_slice(), limit) {
+        Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
+        Err(crate::unix_compress::DecodeError::SizeLimit) => {
+            (atoms::error(), (atoms::decompress(), atoms::size_limit())).encode(env)
+        }
+        Err(_) => (
+            atoms::error(),
+            (atoms::decompress(), atoms::invalid_unix_compress()),
+        )
+            .encode(env),
     }
 }

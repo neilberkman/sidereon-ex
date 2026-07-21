@@ -91,6 +91,7 @@ mod tle_fit;
 mod track_estimation;
 mod trls;
 mod tropo;
+mod unix_compress;
 mod velocity;
 
 use rustler::{Env, NifResult, Term};

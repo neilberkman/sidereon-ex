@@ -238,6 +238,35 @@ defmodule Sidereon.GNSS.Data do
   @doc "Acquire an exact GNSS product and return its path plus public provenance."
   defdelegate acquire(request, opts \\ []), to: Distribution
 
+  @doc "Return the solution class for a specific center/product family."
+  @spec product_solution_class(term(), term()) :: {:ok, String.t()} | {:error, error_reason()}
+  def product_solution_class(center, product_type) do
+    core(NIF.data_product_solution_class(normalize_code(center), normalize_code(product_type)))
+  end
+
+  @doc "Return the catalog's compatibility sampling default without a product date."
+  @spec default_sample(term(), term()) :: {:ok, String.t()} | {:error, error_reason()}
+  def default_sample(center, product_type) do
+    core(NIF.data_default_sample(normalize_code(center), normalize_code(product_type)))
+  end
+
+  @doc "Return the catalog sampling default for an exact product date."
+  @spec default_sample_for_date(term(), term(), Date.t() | NaiveDateTime.t() | tuple()) ::
+          {:ok, String.t()} | {:error, error_reason()}
+  def default_sample_for_date(center, product_type, date) do
+    with {:ok, date} <- normalize_date(date) do
+      core(
+        NIF.data_default_sample_for_date(
+          normalize_code(center),
+          normalize_code(product_type),
+          date.year,
+          date.month,
+          date.day
+        )
+      )
+    end
+  end
+
   @doc """
   GPS week number for a date.
   """
@@ -268,9 +297,9 @@ defmodule Sidereon.GNSS.Data do
     product_type = normalize_code(product_type)
 
     with {:ok, date} <- normalize_date(date),
-         {:ok, sample} <- product_sample(center, product_type, opts),
          issue = Keyword.get(opts, :issue),
          issue = if(!is_nil(issue), do: to_string(issue)),
+         {:ok, sample} <- product_sample(center, product_type, date, issue, opts),
          product = %Product{center: center, product_type: product_type, date: date, sample: sample, issue: issue},
          {:ok, _filename} <- canonical_filename(product) do
       {:ok, product}
@@ -316,13 +345,17 @@ defmodule Sidereon.GNSS.Data do
 
   @doc """
   Build an ultra-rapid OPS SP3 product.
+
+  When `:sample` is omitted, the core catalog selects the published cadence for
+  the exact issue, including intraday cadence transitions.
   """
   def ops_ultra_sp3(center, target, opts \\ []) do
     center = normalize_code(center)
 
-    with {:ok, sample} <- product_sample(center, "sp3", opts),
-         {:ok, {date, issue}} <- ultra_target(center, target, Keyword.get(opts, :issue)) do
-      product(center, :sp3, date, sample: sample, issue: issue)
+    with {:ok, {date, issue}} <- ultra_target(center, target, Keyword.get(opts, :issue)),
+         {:ok, sample} <-
+           ultra_sp3_default_sample(center, date, issue, Keyword.get(opts, :sample)) do
+      product(center, :sp3, date, opts |> Keyword.put(:issue, issue) |> Keyword.put(:sample, sample))
     end
   end
 
@@ -553,17 +586,29 @@ defmodule Sidereon.GNSS.Data do
     normalized_centers = Enum.map(centers, &normalize_code/1)
 
     with :ok <- validate_centers(normalized_centers) do
-      results =
-        Enum.map(normalized_centers, fn center ->
-          fetch_center_sp3(center, target, opts)
-        end)
+      normalized_centers
+      |> Enum.reduce_while({:ok, [], []}, fn center, {:ok, contributors, absent} ->
+        case fetch_center_sp3(center, target, opts) do
+          {:ok, info, sp3} -> {:cont, {:ok, [{:ok, info, sp3} | contributors], absent}}
+          {:absent, info} -> {:cont, {:ok, contributors, [info | absent]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, [], absent} ->
+          {:error, {:no_products, Enum.reverse(absent)}}
 
-      contributors = Enum.filter(results, &match?({:ok, _info, _sp3}, &1))
-      absent = Enum.filter(results, &match?({:absent, _info}, &1)) |> Enum.map(fn {:absent, info} -> info end)
+        {:ok, contributors, absent} ->
+          merge_sp3_contributors(
+            Enum.reverse(contributors),
+            Enum.reverse(absent),
+            normalized_centers,
+            opts
+          )
 
-      if contributors == [],
-        do: {:error, {:no_products, absent}},
-        else: merge_sp3_contributors(contributors, absent, normalized_centers, opts)
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
@@ -852,11 +897,8 @@ defmodule Sidereon.GNSS.Data do
       {:ok, candidates} ->
         fetch_first_center_sp3(center, candidates, opts, {nil, []})
 
-      {:error, {:unsupported_product, reason}} ->
-        {:absent, %AbsentCenter{center: center, reason: reason_string({:unsupported_product, reason})}}
-
       {:error, reason} ->
-        {:absent, %AbsentCenter{center: center, reason: reason_string(reason)}}
+        {:error, reason}
     end
   end
 
@@ -867,9 +909,13 @@ defmodule Sidereon.GNSS.Data do
     do: {:absent, absent_center(center, filename, pattern, candidate_url, reason)}
 
   defp fetch_first_center_sp3(center, [product | rest], opts, {_last, attempts}) do
-    {:ok, filename} = canonical_filename(product)
-    {:ok, candidate_url} = archive_url(product)
+    with {:ok, filename} <- canonical_filename(product),
+         {:ok, candidate_url} <- archive_url(product) do
+      fetch_sp3_candidate(center, product, rest, opts, attempts, filename, candidate_url)
+    end
+  end
 
+  defp fetch_sp3_candidate(center, product, rest, opts, attempts, filename, candidate_url) do
     case Distribution.acquire_catalog_product(product, exact_sp3_opts(opts)) do
       {:ok, result} ->
         case SP3.load(result.path) do
@@ -888,7 +934,7 @@ defmodule Sidereon.GNSS.Data do
              }, sp3}
 
           {:error, reason} ->
-            {:absent, absent_center(center, filename, product.pattern || "canonical", candidate_url, reason)}
+            {:error, {:product_validation_failed, reason}}
         end
 
       {:error, :offline_cache_miss} ->
@@ -914,7 +960,7 @@ defmodule Sidereon.GNSS.Data do
         )
 
       {:error, reason} ->
-        {:absent, absent_center(center, filename, product.pattern || "canonical", candidate_url, reason)}
+        {:error, reason}
     end
   end
 
@@ -2758,8 +2804,9 @@ defmodule Sidereon.GNSS.Data do
 
   defp sp3_candidates(center, target, opts) do
     with {:ok, entry} <- center_entry(center),
-         true <- "sp3" in entry.products || {:error, {:unsupported_product, "#{center}/sp3"}},
-         {:ok, sample} <- product_sample(center, "sp3", opts) do
+         true <- "sp3" in entry.products || {:error, {:unsupported_product, "#{center}/sp3"}} do
+      sample = if Keyword.has_key?(opts, :sample), do: opts[:sample] && to_string(opts[:sample])
+
       cond do
         entry.issues != [] and match?(%NaiveDateTime{}, target) and is_nil(Keyword.get(opts, :issue)) ->
           with {:ok, rows} <- ultra_issue_rows(center, target) do
@@ -2780,7 +2827,8 @@ defmodule Sidereon.GNSS.Data do
 
         true ->
           with {:ok, date} <- normalize_date(target),
-               {:ok, product} <- product(center, :sp3, date, sample: sample) do
+               product_opts = if(is_nil(sample), do: [], else: [sample: sample]),
+               {:ok, product} <- product(center, :sp3, date, product_opts) do
             {:ok, [product]}
           end
       end
@@ -2863,6 +2911,24 @@ defmodule Sidereon.GNSS.Data do
   defp ultra_target(_center, target, issue) do
     with {:ok, date} <- normalize_date(target) do
       {:ok, {date, (issue || "0000") |> to_string()}}
+    end
+  end
+
+  defp ultra_sp3_default_sample(_center, _date, _issue, sample) when not is_nil(sample), do: {:ok, to_string(sample)}
+
+  defp ultra_sp3_default_sample(center, date, issue, nil) do
+    center
+    |> NIF.data_ultra_sp3_locations(date.year, date.month, date.day, issue)
+    |> core()
+    |> case do
+      {:ok, [{_pattern, _span, sample, _filename, _url, _compression} | _]} ->
+        {:ok, sample}
+
+      {:ok, []} ->
+        {:error, {:unsupported_product, :no_ultra_location}}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -3285,6 +3351,14 @@ defmodule Sidereon.GNSS.Data do
       else: {:ok, data}
   end
 
+  defp decompress_if_needed(data, "unix_compress", max_bytes) do
+    case NIF.data_unix_compress_decompress(data, max_bytes) do
+      {:ok, decompressed} -> {:ok, decompressed}
+      {:error, {:decompress, reason}} -> {:error, {:decompress, reason}}
+      {:error, reason} -> {:error, {:decompress, reason}}
+    end
+  end
+
   defp decompress_if_needed(_data, compression, _max_bytes),
     do: {:error, {:decompress, {:unknown_compression, compression}}}
 
@@ -3469,10 +3543,25 @@ defmodule Sidereon.GNSS.Data do
   defp seconds_to_ms(seconds) when is_number(seconds), do: round(seconds * 1000)
   defp seconds_to_ms(_), do: round(@default_timeout_s * 1000)
 
-  defp product_sample(center, product_type, opts) do
+  defp product_sample(center, product_type, date, issue, opts) do
     case Keyword.fetch(opts, :sample) do
-      {:ok, sample} when not is_nil(sample) -> {:ok, to_string(sample)}
-      _ -> core(NIF.data_default_sample(center, product_type))
+      {:ok, sample} when not is_nil(sample) ->
+        {:ok, to_string(sample)}
+
+      _ when not is_nil(issue) ->
+        core(
+          NIF.data_default_sample_for_issue(
+            center,
+            product_type,
+            date.year,
+            date.month,
+            date.day,
+            issue
+          )
+        )
+
+      _ ->
+        default_sample_for_date(center, product_type, date)
     end
   end
 
