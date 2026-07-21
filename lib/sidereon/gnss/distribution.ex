@@ -205,6 +205,7 @@ defmodule Sidereon.GNSS.Distribution do
 
   @type error_reason ::
           :offline_cache_miss
+          | {:invalid_option, :max_archive_bytes | :max_product_bytes}
           | {:unsupported_distribution, atom(), String.t()}
           | {:authentication_required, integer(), String.t()}
           | {:authentication_failed, integer(), String.t()}
@@ -214,6 +215,7 @@ defmodule Sidereon.GNSS.Distribution do
           | {:redirect_policy_failure, integer(), String.t()}
           | {:malformed_url, String.t()}
           | {:transport, atom(), String.t()}
+          | {:http_client_failure, atom(), String.t()}
           | {:http_status, integer(), String.t()}
           | {:invalid_content_type, String.t(), String.t()}
           | {:error_document, String.t()}
@@ -387,6 +389,7 @@ defmodule Sidereon.GNSS.Distribution do
   @spec acquire(Request.t(), keyword()) :: {:ok, Result.t()} | {:error, error_reason() | term()}
   def acquire(%Request{} = request, opts \\ []) do
     with :ok <- validate_request_identity(request.identity),
+         :ok <- validate_size_limits(opts),
          :ok <- validate_cache_lock_timeout(opts),
          {:ok, sources} <- normalize_sources(request.sources),
          true <- sources != [] do
@@ -404,6 +407,7 @@ defmodule Sidereon.GNSS.Distribution do
     with {:ok, identity} <- catalog_product_identity(product),
          :ok <- validate_request_identity(identity),
          {:ok, location} <- catalog_direct_location(product, identity),
+         :ok <- validate_size_limits(opts),
          :ok <- validate_cache_lock_timeout(opts) do
       do_acquire(
         %Request{identity: identity, sources: [direct()]},
@@ -417,7 +421,7 @@ defmodule Sidereon.GNSS.Distribution do
     auth = Keyword.get(opts, :earthdata_auth, %EarthdataAuth{})
 
     request.sources
-    |> Enum.reduce_while({[], nil}, fn source, {attempts, _last_error} ->
+    |> Enum.reduce_while({[], nil, nil}, fn source, {attempts, _last_error, first_availability_error} ->
       path = cache_path(request.identity, source.type, opts)
 
       result =
@@ -447,11 +451,19 @@ defmodule Sidereon.GNSS.Distribution do
           {:halt, {:ok, success}}
 
         {:error, reason} ->
-          if recoverable_absence?(reason) do
-            failure = source_failure(source.type, reason)
-            {:cont, {[failure | attempts], reason}}
-          else
-            {:halt, {:error, reason}}
+          case distributor_fallback_kind(reason) do
+            nil ->
+              {:halt, {:error, reason}}
+
+            kind ->
+              failure = source_failure(source.type, reason)
+
+              first_availability_error =
+                if kind == :availability and is_nil(first_availability_error),
+                  do: reason,
+                  else: first_availability_error
+
+              {:cont, {[failure | attempts], reason, first_availability_error}}
           end
       end
     end)
@@ -460,13 +472,18 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp finish_acquisition({:ok, %Result{} = result}), do: {:ok, result}
   defp finish_acquisition({:error, _reason} = error), do: error
-  defp finish_acquisition({[_one], reason}), do: {:error, reason}
 
-  defp finish_acquisition({attempts, _reason}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
+  defp finish_acquisition({_attempts, _reason, first_availability_error}) when not is_nil(first_availability_error),
+    do: {:error, first_availability_error}
 
-  defp recoverable_absence?(:offline_cache_miss), do: true
-  defp recoverable_absence?({:product_not_published, 404, _url}), do: true
-  defp recoverable_absence?(_reason), do: false
+  defp finish_acquisition({[_one], reason, nil}), do: {:error, reason}
+
+  defp finish_acquisition({attempts, _reason, nil}), do: {:error, {:all_distributors_failed, Enum.reverse(attempts)}}
+
+  defp distributor_fallback_kind(:offline_cache_miss), do: :absence
+  defp distributor_fallback_kind({:product_not_published, 404, _url}), do: :absence
+  defp distributor_fallback_kind({:retired_endpoint, 410, _url}), do: :absence
+  defp distributor_fallback_kind(reason), do: if(retryable?(reason), do: :availability)
 
   defp acquire_locked(identity, source, path, auth, attempts, opts, exact_cache, direct_location) do
     case load_cache(path, identity, source.type, attempts, opts, exact_cache) do
@@ -697,52 +714,91 @@ defmodule Sidereon.GNSS.Distribution do
       |> Keyword.drop([:earthdata_auth, :http_client, :sha256])
       |> Keyword.put(:headers, headers)
 
-    case Keyword.get(opts, :http_client) do
-      fun when is_function(fun, 2) ->
-        case normalize_http_response(fun.(url, request_opts)) do
-          {:error, {:transport, kind, nil}} -> {:error, {:transport, kind, sanitize_url(url)}}
-          response -> response
-        end
+    case Keyword.fetch(opts, :http_client) do
+      {:ok, fun} when is_function(fun, 2) -> request_custom_http(fun, url, request_opts)
+      {:ok, nil} -> request_req_http(url, headers, opts)
+      :error -> request_req_http(url, headers, opts)
+      {:ok, _invalid} -> http_client_failure(:invalid_option, url)
+    end
+  end
 
-      nil ->
-        timeout_ms =
-          opts
-          |> Keyword.get(:timeout, Keyword.get(opts, :timeout_s, @default_timeout_s))
-          |> seconds_to_ms()
+  defp request_custom_http(fun, url, request_opts) do
+    result =
+      try do
+        {:ok, fun.(url, request_opts)}
+      rescue
+        _exception -> {:error, :raised}
+      catch
+        :throw, _reason -> {:error, :thrown}
+        :exit, _reason -> {:error, :exited}
+      end
 
-        case Req.get(
-               url: url,
-               headers: headers,
-               redirect: false,
-               retry: false,
-               receive_timeout: timeout_ms,
-               finch: :"Elixir.Sidereon.GNSS.Data.Finch",
-               decode_body: false
-             ) do
-          {:ok, %Req.Response{status: status, headers: response_headers, body: body}} ->
-            {:ok, status, response_headers, IO.iodata_to_binary(body)}
+    case result do
+      {:ok, response} -> normalize_custom_http_response(response, url)
+      {:error, kind} -> http_client_failure(kind, url)
+    end
+  end
 
-          {:error, reason} ->
-            {:error, {:transport, transport_kind(reason), sanitize_url(url)}}
-        end
+  defp normalize_custom_http_response({:ok, %{status: status, body: body} = response}, url) when is_integer(status),
+    do: custom_http_success(status, Map.get(response, :headers, []), body, url)
+
+  defp normalize_custom_http_response({:ok, status, headers, body}, url) when is_integer(status),
+    do: custom_http_success(status, headers, body, url)
+
+  defp normalize_custom_http_response({:ok, status, body}, url) when is_integer(status),
+    do: custom_http_success(status, [], body, url)
+
+  defp normalize_custom_http_response({:error, reason}, url) do
+    case custom_retryable_transport_kind(reason) do
+      {:ok, kind} -> {:error, {:transport, kind, sanitize_url(url)}}
+      :error -> http_client_failure(:reported_failure, url)
+    end
+  end
+
+  defp normalize_custom_http_response(_other, url), do: http_client_failure(:invalid_response, url)
+
+  defp custom_http_success(status, headers, body, url) do
+    {:ok, status, headers, IO.iodata_to_binary(body)}
+  rescue
+    _exception -> http_client_failure(:invalid_response, url)
+  catch
+    _kind, _reason -> http_client_failure(:invalid_response, url)
+  end
+
+  defp custom_retryable_transport_kind(%Req.TransportError{} = reason), do: {:ok, transport_kind(reason)}
+
+  defp custom_retryable_transport_kind(:timeout), do: {:ok, :timeout}
+  defp custom_retryable_transport_kind(reason) when reason in [:econnrefused, :nxdomain], do: {:ok, :connection}
+  defp custom_retryable_transport_kind(_reason), do: :error
+
+  defp http_client_failure(kind, url), do: {:error, {:http_client_failure, kind, sanitize_url(url)}}
+
+  defp request_req_http(url, headers, opts) do
+    timeout_ms =
+      opts
+      |> Keyword.get(:timeout, Keyword.get(opts, :timeout_s, @default_timeout_s))
+      |> seconds_to_ms()
+
+    case Req.get(
+           url: url,
+           headers: headers,
+           redirect: false,
+           retry: false,
+           receive_timeout: timeout_ms,
+           finch: :"Elixir.Sidereon.GNSS.Data.Finch",
+           decode_body: false
+         ) do
+      {:ok, %Req.Response{status: status, headers: response_headers, body: body}} ->
+        {:ok, status, response_headers, IO.iodata_to_binary(body)}
+
+      {:error, reason} ->
+        {:error, {:transport, transport_kind(reason), sanitize_url(url)}}
     end
   rescue
     _exception -> {:error, {:transport, :other, sanitize_url(url)}}
   catch
     _kind, _reason -> {:error, {:transport, :other, sanitize_url(url)}}
   end
-
-  defp normalize_http_response({:ok, %{status: status, body: body} = response}),
-    do: {:ok, status, Map.get(response, :headers, []), IO.iodata_to_binary(body)}
-
-  defp normalize_http_response({:ok, status, headers, body}) when is_integer(status),
-    do: {:ok, status, headers, IO.iodata_to_binary(body)}
-
-  defp normalize_http_response({:ok, status, body}) when is_integer(status),
-    do: {:ok, status, [], IO.iodata_to_binary(body)}
-
-  defp normalize_http_response({:error, reason}), do: {:error, {:transport, transport_kind(reason), nil}}
-  defp normalize_http_response(_other), do: {:error, {:transport, :other, nil}}
 
   defp handle_response(status, headers, _body, current, original, source, auth, opts, redirects, cookies)
        when status in 300..399 do
@@ -1575,6 +1631,10 @@ defmodule Sidereon.GNSS.Distribution do
             ], do: {type, Atom.to_string(type), url, status}
 
   defp failure_fields({:transport, kind, url}), do: {:transport, "transport:#{kind}", url, nil}
+
+  defp failure_fields({:http_client_failure, kind, url}),
+    do: {:http_client_failure, "http_client_failure:#{kind}", url, nil}
+
   defp failure_fields({:malformed_url, url}), do: {:malformed_url, "malformed_url", url, nil}
 
   defp failure_fields({type, _expected, _got}) when type in [:checksum_mismatch],
@@ -1602,7 +1662,7 @@ defmodule Sidereon.GNSS.Distribution do
   defp compression_atom("unix_compress"), do: {:ok, :unix_compress}
   defp compression_atom(_value), do: {:error, :invalid_compression}
 
-  @failure_atoms ~w(authentication_required authentication_failed authorization_denied product_not_published retired_endpoint redirect_policy_failure malformed_url transport http_status invalid_content_type error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution)a
+  @failure_atoms ~w(authentication_required authentication_failed authorization_denied product_not_published retired_endpoint redirect_policy_failure malformed_url transport http_client_failure http_status invalid_content_type error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution)a
 
   defp failure_atom(value) when is_binary(value) do
     atom = String.to_existing_atom(value)
@@ -1862,7 +1922,7 @@ defmodule Sidereon.GNSS.Distribution do
   defp enforce_size(_bytes, limit), do: {:error, {:download_size_exceeded, limit}}
 
   defp retryable?({:transport, _kind, _url}), do: true
-  defp retryable?({:http_status, status, _url}), do: status in [408, 429] or status >= 500
+  defp retryable?({:http_status, status, _url}), do: status in [408, 429] or status in 500..599
   defp retryable?(_reason), do: false
 
   defp transport_kind(%Req.TransportError{reason: :timeout}), do: :timeout
@@ -1874,6 +1934,15 @@ defmodule Sidereon.GNSS.Distribution do
   defp max_archive_bytes(opts), do: Keyword.get(opts, :max_archive_bytes, @default_max_archive_bytes)
   defp max_product_bytes(opts), do: Keyword.get(opts, :max_product_bytes, @default_max_product_bytes)
   defp cache_lock_timeout_ms(opts), do: Keyword.get(opts, :cache_lock_timeout_ms, @default_cache_lock_timeout_ms)
+
+  defp validate_size_limits(opts) do
+    with :ok <- validate_positive_byte_limit(max_archive_bytes(opts), :max_archive_bytes) do
+      validate_positive_byte_limit(max_product_bytes(opts), :max_product_bytes)
+    end
+  end
+
+  defp validate_positive_byte_limit(value, _option) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive_byte_limit(_value, option), do: {:error, {:invalid_option, option}}
 
   defp validate_cache_lock_timeout(opts) do
     case cache_lock_timeout_ms(opts) do

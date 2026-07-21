@@ -240,6 +240,39 @@ defmodule Sidereon.GNSS.DataTest do
     end)
   end
 
+  test "a center outside its verified catalog era is absent without hiding configuration failures", %{root: root} do
+    parent = self()
+    date = ~D[2022-11-26]
+    body = :zlib.gzip(sp3_body(15_000.0, date, 86_400, "ESOC"))
+
+    http_client = fn url, _opts ->
+      send(parent, {:url, url})
+      {:ok, 200, body}
+    end
+
+    assert {:ok, _merged, report} =
+             Data.fetch_merged_sp3(date, [:esa, :cod],
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert [%Data.Contributor{center: "esa"}] = report.contributors
+
+    assert [%Data.AbsentCenter{center: "cod", reason: "catalog_unavailable"}] =
+             report.absent
+
+    assert report.requested_centers == ["esa", "cod"]
+    assert_received {:url, esa_url}
+    assert String.contains?(esa_url, "navigation-office.esa.int")
+    refute_received {:url, _other_url}
+
+    assert {:error, {:unsupported_product, "cod_prd1/sp3"}} =
+             Data.fetch_merged_sp3(date, [:esa, :cod_prd1],
+               cache_dir: Path.join(root, "invalid-center-product"),
+               http_client: fn _url, _opts -> {:ok, 200, body} end
+             )
+  end
+
   test "fetch_merged_sp3 forwards merge policy options", %{root: root} do
     corrupt = sp3_body(16_000.0, ~D[2026-07-12], 86_400, "AIUB")
     agreeing_a = sp3_body(15_000.0, ~D[2026-07-12], 172_800, "ESOC")

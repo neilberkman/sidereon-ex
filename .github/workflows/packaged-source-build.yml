@@ -12,15 +12,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@988e02bfe678367a02564f65ca2e37726dc0268f # v1.9.0
         with:
-          otp-version: "28"
-          elixir-version: "1.19"
+          otp-version: "28.3"
+          elixir-version: "1.19.4"
 
       - name: Install Hex
-        run: mix local.hex --force
+        run: mix local.hex 2.5.1 --force
 
       - name: Build package and force its source-build path
         run: bash .github/scripts/check-packaged-source-build.sh

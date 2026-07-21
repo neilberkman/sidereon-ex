@@ -162,7 +162,11 @@ week 2238, beginning 2022-11-27, the identity uses the IGS long filename and
 CDDIS packages it with gzip. `Distribution.location/2` returns the exact URL,
 archive filename, and compression without changing the identity. Sidereon does
 not derive a historical direct-BKG URL because the reviewed BKG listings do not
-establish one uniform historical layout.
+establish one uniform historical layout. Unix-compress decoding rejects
+detectable partial terminal codes and nonzero terminal padding before product
+parsing. The format has no end marker, so a code-aligned truncation is not
+structurally distinguishable from a shorter stream; exact product validation
+and any caller-supplied digest remain the final integrity checks.
 
 CODE routing is also product-specific. Current MGEX final SP3 and clock files
 use `CODE_MGEX/CODE/<year>`, final IONEX uses `CODE/<year>`, and rapid,
@@ -210,11 +214,24 @@ not from untrusted header values.
 
 Fallback is deliberately narrow. An ordinary HTTP 404/not-yet-published result
 or offline cache absence may advance to the next explicitly selected source or
-official catalog candidate. Malformed content, parse failure, checksum or
-digest failure, cadence/span/identity mismatch, cache integrity failure, and
-caller configuration errors are terminal. No official source reviewed for
-this release documented a moving-alias validation race that justified a
-broader exception.
+official catalog candidate. A retired endpoint may advance to another
+explicitly selected distributor for the same exact identity. An exhausted
+timeout, connection, 408, 429, or server failure may do the same, but the first
+such availability failure is preserved if no source succeeds. Malformed
+content, parse failure, checksum or digest failure, cadence/span/identity
+mismatch, cache integrity failure, and caller configuration errors are
+terminal. No official source reviewed for this release documented a
+moving-alias validation race that justified a validation-error exception.
+Invalid `:http_client` options or callback responses, and callbacks that raise,
+throw, or exit, return `{:http_client_failure, kind, sanitized_url}` and are
+terminal. Only explicit timeout or connection atoms, typed `Req.TransportError`
+values, and HTTP 408/429 or server-status results from a custom client enter the
+retry and availability-fallback policy.
+
+Acquisition byte limits are mandatory positive integers. Invalid
+`:max_archive_bytes` or `:max_product_bytes` values—including zero, negatives,
+fractions, and infinity-like atoms—return `{:invalid_option, option}` before
+cache or transport work begins.
 
 ## CDDIS and Earthdata Login
 
@@ -308,14 +325,21 @@ API and cache layout remain unchanged.
 
 Failures remain typed tagged tuples, including authentication required/failed,
 authorization denied, product not published, retired endpoint, redirect policy,
-malformed URL, transport timeout/connection, HTML or invalid content, content
-length, download size, decompression, checksum, semantic validation, and cache
-read/write errors. When every attempted source ends in ordinary publication
-absence, multiple attempts return `{:all_distributors_failed, failures}`. The
-first integrity or configuration failure is returned directly and stops
-fallback. Retries are bounded to meaningful transport errors, HTTP 408/429,
-and server errors; callers should retain the verified cache and keep
-public-service concurrency modest.
+malformed URL, transport timeout/connection, caller HTTP-client failure, HTML or
+invalid content, content length, download size, decompression, checksum,
+semantic validation, and cache read/write errors. When every attempted source
+ends in ordinary publication absence, multiple attempts return
+`{:all_distributors_failed, failures}`. The first exhausted availability failure
+is preserved if no source succeeds. The first integrity or configuration
+failure is returned directly and stops fallback. Retries are bounded to
+meaningful transport errors, HTTP 408/429, and server errors; callers should
+retain the verified cache and keep public-service concurrency modest.
+
+For multi-center merge acquisition, a center that supports SP3 but has no
+publicly verified catalog convention for the requested date is recorded as
+`reason: "catalog_unavailable"` without attempting transport. This does not
+weaken the configuration boundary: unsupported center/product combinations,
+invalid dates or issues, and other catalog errors remain terminal.
 
 Merged SP3 acquisition fetches each contributing center, parses the products, and
 uses the existing SP3 merge implementation:

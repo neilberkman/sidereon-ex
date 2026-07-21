@@ -45,7 +45,6 @@ pub(crate) fn decode_bounded(input: &[u8], limit: usize) -> Result<Vec<u8>, Deco
     if !(INIT_BITS..=MAX_MAXBITS).contains(&maxbits) {
         return Err(DecodeError::BadMaxBits);
     }
-
     decode_codes(&input[3..], block_mode, maxbits, limit)
 }
 
@@ -64,6 +63,28 @@ fn read_code(data: &[u8], total_bits: u64, bitpos: u64, n_bits: u32) -> Option<u
         i += 1;
     }
     Some(code)
+}
+
+/// Accept only the zero bits used to round the final code up to a byte.
+///
+/// A complete ncompress stream can leave at most seven unused bits after its
+/// final code, and the encoder zero-fills them. More remaining bits means the
+/// archive ended partway through another code. Nonzero padding likewise proves
+/// that a code was cut short rather than cleanly byte-padded.
+fn validate_terminal_padding(data: &[u8], total_bits: u64, bitpos: u64) -> Result<(), DecodeError> {
+    let remaining = total_bits
+        .checked_sub(bitpos)
+        .ok_or(DecodeError::Truncated)?;
+    if remaining > 7 {
+        return Err(DecodeError::Truncated);
+    }
+
+    for position in bitpos..total_bits {
+        if ((data[(position >> 3) as usize] >> (position & 7)) & 1) != 0 {
+            return Err(DecodeError::Truncated);
+        }
+    }
+    Ok(())
 }
 
 /// Advance to the next ncompress code-group boundary at a width transition.
@@ -147,7 +168,8 @@ fn decode_codes(
             bit_position += u64::from(code_width);
             code
         }
-        None => return Ok(out),
+        None if total_bits == 0 => return Ok(out),
+        None => return Err(DecodeError::Truncated),
     };
     if old_code >= 256 {
         return Err(DecodeError::InvalidCode);
@@ -155,7 +177,7 @@ fn decode_codes(
     let mut final_character = old_code as u8;
     push_output(&mut out, final_character, limit)?;
 
-    'outer: while let Some(raw_code) = read_code(data, total_bits, bit_position, code_width) {
+    while let Some(raw_code) = read_code(data, total_bits, bit_position, code_width) {
         bit_position += u64::from(code_width);
         let mut code = raw_code;
 
@@ -168,7 +190,7 @@ fn decode_codes(
             max_code = (1u32 << code_width) - 1;
 
             let Some(literal) = read_code(data, total_bits, bit_position, code_width) else {
-                break 'outer;
+                return Err(DecodeError::Truncated);
             };
             bit_position += u64::from(code_width);
             if literal >= 256 {
@@ -219,6 +241,7 @@ fn decode_codes(
         old_code = input_code;
     }
 
+    validate_terminal_padding(data, total_bits, bit_position)?;
     Ok(out)
 }
 
@@ -258,6 +281,10 @@ mod tests {
     fn zero_limit_accepts_only_empty_output() {
         assert_eq!(decode_bounded(&[], 0), Ok(Vec::new()));
         assert_eq!(
+            decode_bounded(&[MAGIC[0], MAGIC[1], MAX_MAXBITS as u8], 0),
+            Ok(Vec::new())
+        );
+        assert_eq!(
             decode_bounded(&literal_archive(b"A"), 0),
             Err(DecodeError::SizeLimit)
         );
@@ -273,6 +300,27 @@ mod tests {
         assert_eq!(
             decode_bounded(&[0x1f, 0x9d, 0x08], 10),
             Err(DecodeError::BadMaxBits)
+        );
+    }
+
+    #[test]
+    fn incomplete_codes_and_nonzero_terminal_padding_are_truncated() {
+        assert_eq!(
+            decode_bounded(&[MAGIC[0], MAGIC[1], MAX_MAXBITS as u8, b'A'], 10),
+            Err(DecodeError::Truncated)
+        );
+
+        let two_literals = literal_archive(b"AB");
+        assert_eq!(
+            decode_bounded(&two_literals[..two_literals.len() - 1], 10),
+            Err(DecodeError::Truncated)
+        );
+
+        let mut nonzero_padding = literal_archive(b"A");
+        *nonzero_padding.last_mut().unwrap() |= 0x80;
+        assert_eq!(
+            decode_bounded(&nonzero_padding, 10),
+            Err(DecodeError::Truncated)
         );
     }
 }

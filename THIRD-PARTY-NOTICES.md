@@ -34,18 +34,20 @@ The integer least-squares (MLAMBDA/LAMBDA) routine is a Rust port of RTKLIB's
 
 Nutation/precession coefficient tables and conventions are derived from ERFA
 (Essential Routines for Fundamental Astronomy), itself derived from IAU SOFA.
-
-  Copyright (C) 2013-2023, NumFOCUS Foundation. All rights reserved.
-  Licensed under the BSD 3-Clause License.
+The complete BSD 3-Clause license, including ERFA's SOFA-heritage terms, is
+distributed as `LICENSES/ERFA-BSD-3-Clause.txt`, copied byte-for-byte from the
+official [ERFA 2.0.1 license](https://raw.githubusercontent.com/liberfa/erfa/v2.0.1/LICENSE)
+(accessed 2026-07-20).
 
 --------------------------------------------------------------------------------
 ## SciPy (BSD 3-Clause)
 
 The trust-region least-squares solver (`trust-region-least-squares`)
-reimplements algorithms equivalent to SciPy's least-squares routines.
-
-  Copyright (c) 2001-2024, SciPy Developers. All rights reserved.
-  Licensed under the BSD 3-Clause License.
+reimplements algorithms equivalent to SciPy's least-squares routines. The
+complete BSD 3-Clause license is distributed as
+`LICENSES/SciPy-BSD-3-Clause.txt`, copied byte-for-byte from the official
+[SciPy 1.18.0 license](https://raw.githubusercontent.com/scipy/scipy/v1.18.0/LICENSE.txt)
+(accessed 2026-07-20).
 
 --------------------------------------------------------------------------------
 ## newtua-lzw-z (MIT OR Apache-2.0)
@@ -79,11 +81,39 @@ This derived code is used under the MIT license option:
   SOFTWARE.
 
 --------------------------------------------------------------------------------
+## Compiled Rust dependencies (Apache-2.0 and ISC)
+
+The source-build and precompiled NIF distributions include the following
+locked Rust dependencies:
+
+- approx 0.5.1 — Apache-2.0; Copyright 2015 Brendan Zabarauskas.
+- nalgebra 0.33.3 — Apache-2.0; Copyright 2020 Sébastien Crozet.
+- nalgebra-macros 0.2.2 — Apache-2.0; authors Andreas Longva and Sébastien
+  Crozet.
+- simba 0.9.1 — Apache-2.0; author Sébastien Crozet.
+- libloading 0.8.9 and 0.9.0 — ISC; Copyright © 2015 Simonas Kazlauskas.
+
+The full Apache License 2.0 is distributed as `LICENSES/Apache-2.0.txt`. The
+complete libloading ISC copyright and permission notice is distributed as
+`LICENSES/ISC-libloading.txt`.
+
+--------------------------------------------------------------------------------
 ## IERS Conventions Software
 
 The solid-earth / ocean / pole tide displacement follows the IERS Conventions
 reference routines (e.g. DEHANTTIDEINEL), used under the IERS Conventions
-Software License. The IERS acknowledgment is retained in the relevant source.
+Software License. This is Sidereon-derived Rust code, not software distributed
+or endorsed by the IERS Conventions Center. The routines were renamed, and the
+source describes how the derived implementation differs from the original.
+
+The full official notice is reproduced in
+`LICENSES/IERS-Conventions-Software-License.txt` from the official
+[`DEHANTTIDEINEL.F`](https://iers-conventions.obspm.fr/content/chapter7/software/dehanttideinel/DEHANTTIDEINEL.F)
+source (accessed 2026-07-20). The exact public non-test tide sources from
+[sidereon-core 0.33.1](https://github.com/neilberkman/sidereon/tree/v0.33.1/crates/sidereon-core/src/tides)
+are distributed under `third_party_source/sidereon-core-0.33.1/tides/`.
+Published results obtained with these routines should acknowledge use of the
+IERS Conventions software.
 
 --------------------------------------------------------------------------------
 ## Reference algorithms (no code copied)

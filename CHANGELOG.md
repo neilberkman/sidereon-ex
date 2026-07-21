@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-07-20
+
+### Changed
+
+- Multi-distributor fallback now continues after ordinary publication absence,
+  retired endpoints, and exhausted source-local transport availability while
+  keeping integrity and configuration failures terminal. Retryable HTTP status
+  is limited to 408, 429, and 500 through 599.
+- Unix-compress acquisition now locks the current ncompress maxbits-9 behavior
+  and rejects detectable partial terminal codes and invalid terminal padding
+  before product parsing. Because `.Z` has no end marker, exact product
+  validation and an optional caller digest remain authoritative.
+- Acquisition byte limits now require positive integers at the public boundary.
+- Multi-center SP3 acquisition now records a generally supported center outside
+  its verified catalog era as `catalog_unavailable`; unrelated configuration
+  and integrity errors remain terminal.
+- Invalid or failing caller-supplied HTTP callbacks now return a typed terminal
+  client failure instead of being retried or authorizing distributor fallback.
+- Precompiled NIF archives now carry the project license and third-party
+  attribution notice alongside the native library. Hex source packages and NIF
+  archives also include the full Apache-2.0, ERFA BSD-3-Clause, IERS
+  Conventions, libloading ISC, and SciPy BSD-3-Clause license texts required by
+  the source and locked Rust dependency graph, plus exact public 0.33.1
+  tide-derived sources.
+- Precompiled-NIF release builds now pin action revisions, Elixir/OTP/Hex,
+  Rust 1.92.0, the architecture-specific rustup bootstrap checksums, the
+  source-build container digest, and the cross build tool revision; they require
+  locked Cargo resolution and grant write permission only to the release-asset
+  publication job.
+- Updated the native backend to `sidereon` and `sidereon-core` 0.33.1.
+
 ## [0.33.0] - 2026-07-20
 
 ### Added

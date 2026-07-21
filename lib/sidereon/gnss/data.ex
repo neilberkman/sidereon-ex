@@ -897,10 +897,34 @@ defmodule Sidereon.GNSS.Data do
       {:ok, candidates} ->
         fetch_first_center_sp3(center, candidates, opts, {nil, []})
 
+      {:error, {:unsupported_product, reason} = error} ->
+        if catalog_era_unavailable?(center, target, reason) do
+          {:absent, %AbsentCenter{center: center, reason: "catalog_unavailable"}}
+        else
+          {:error, error}
+        end
+
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # A center that supports SP3 generally but has no publicly verified catalog
+  # convention for this date is a non-contributor to a multi-center request.
+  # Keep all other unsupported-product errors terminal: an unsupported family,
+  # bad issue, sample, or target remains a caller configuration failure.
+  defp catalog_era_unavailable?(center, target, reason) when is_binary(reason) do
+    case normalize_date(target) do
+      {:ok, date} ->
+        reason ==
+          "#{center}/sp3 has no cataloged naming convention for #{Date.to_iso8601(date)}"
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp catalog_era_unavailable?(_center, _target, _reason), do: false
 
   defp fetch_first_center_sp3(center, [], _opts, {nil, []}),
     do: {:absent, %AbsentCenter{center: center, reason: "no_candidate"}}

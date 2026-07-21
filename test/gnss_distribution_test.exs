@@ -14,6 +14,9 @@ defmodule Sidereon.GNSS.DistributionTest do
   @ionex_fixture Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
   # Deterministic ncompress output for the synthetic ExactSp3Fixture used below.
   @unix_compress_sp3_fixture Path.join(__DIR__, "fixtures/gnss_data/igs22376.sp3.Z.b64")
+  # ncompress 5.1 main (c576364) `compress -b 9` output for 4,095 bytes of
+  # repeated `ABCDEFGHIJ`.
+  @unix_compress_b9_fixture Path.join(__DIR__, "fixtures/gnss_data/ncompress-b9.txt.Z.b64")
 
   setup do
     root = Path.join(System.tmp_dir!(), "sidereon-distribution-test-#{System.unique_integer([:positive])}")
@@ -419,6 +422,19 @@ defmodule Sidereon.GNSS.DistributionTest do
              Data.acquire(request, cache_dir: root)
   end
 
+  test "Unix compress maxbits 9 archives retain the reference nine-bit limit" do
+    archive =
+      @unix_compress_b9_fixture
+      |> File.read!()
+      |> String.replace(~r/\s+/, "")
+      |> Base.decode64!()
+
+    expected = String.duplicate("ABCDEFGHIJ", 410) |> binary_part(0, 4_095)
+
+    assert <<0x1F, 0x9D, 0x89, _rest::binary>> = archive
+    assert {:ok, ^expected} = Sidereon.NIF.data_unix_compress_decompress(archive, byte_size(expected))
+  end
+
   test "a valid Unix compress SP3 is acquired and records exact provenance", %{root: root} do
     archive =
       @unix_compress_sp3_fixture
@@ -450,6 +466,33 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert result.provenance.archive_sha256 == sha256(archive)
   end
 
+  test "a real Unix compress SP3 truncated during its final code is rejected", %{root: root} do
+    archive =
+      @unix_compress_sp3_fixture
+      |> File.read!()
+      |> String.replace(~r/\s+/, "")
+      |> Base.decode64!()
+
+    truncated = binary_part(archive, 0, byte_size(archive) - 1)
+
+    # The removed byte completes the trailing newline code. Treating the
+    # remaining nonzero bits as ordinary padding used to return a plausible SP3
+    # prefix ending in a bare EOF record, so the compression layer must reject
+    # the incomplete code before product parsing.
+    assert {:error, {:decompress, :invalid_unix_compress}} =
+             Sidereon.NIF.data_unix_compress_decompress(truncated, 20_000)
+
+    assert {:ok, product} = Data.mgex_sp3(:igs, ~D[2022-11-26])
+
+    assert {:ok, request} =
+             Data.request(product, [
+               Distribution.in_memory(truncated, compression: :unix_compress)
+             ])
+
+    assert {:error, {:decompression_failed, :invalid_unix_compress}} =
+             Data.acquire(request, cache_dir: Path.join(root, "truncated-unix-compress"))
+  end
+
   test "decompression is bounded before product parsing", %{root: root} do
     client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(sp3_body(@date))} end
 
@@ -462,6 +505,37 @@ defmodule Sidereon.GNSS.DistributionTest do
              )
 
     refute Enum.any?(regular_files(root), &String.ends_with?(&1, "current.json"))
+  end
+
+  test "invalid acquisition byte limits fail at the public boundary", %{root: root} do
+    parent = self()
+
+    client = fn url, _opts ->
+      send(parent, {:requested, url})
+      {:ok, 200, [], sp3_body(@date)}
+    end
+
+    request = request!([Distribution.direct()])
+
+    for {option, value} <- [
+          {:max_product_bytes, 0},
+          {:max_product_bytes, -1},
+          {:max_product_bytes, 1.5},
+          {:max_product_bytes, :infinity},
+          {:max_archive_bytes, 0},
+          {:max_archive_bytes, -1},
+          {:max_archive_bytes, "1024"}
+        ] do
+      opts = [
+        cache_dir: Path.join(root, "invalid-#{option}-#{inspect(value)}"),
+        http_client: client
+      ]
+
+      assert {:error, {:invalid_option, ^option}} =
+               Data.acquire(request, Keyword.put(opts, option, value))
+    end
+
+    refute_receive {:requested, _url}
   end
 
   test "a requested public format version must match parsed content", %{root: root} do
@@ -787,6 +861,224 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert failure.status == 404
   end
 
+  test "retired endpoints fall through to another exact distributor", %{root: root} do
+    body = sp3_body(@date)
+    client = fn _url, _opts -> {:ok, 410, [], ""} end
+
+    request =
+      request!([
+        Distribution.nasa_cddis(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+    assert result.provenance.distribution_source == :in_memory
+
+    assert [%{source: :nasa_cddis, error_type: :retired_endpoint, status: 410}] =
+             result.provenance.attempts
+  end
+
+  test "offline cache absence falls through to a later source cache", %{root: root} do
+    body = sp3_body(@date)
+    in_memory = Distribution.in_memory(body, compression: :none)
+
+    assert {:ok, _seeded} =
+             Data.acquire(request!([in_memory]), cache_dir: root)
+
+    request =
+      request!([
+        Distribution.direct(),
+        in_memory
+      ])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root, offline: true)
+    assert result.provenance.distribution_source == :in_memory
+
+    assert [%{source: :direct, error_type: :offline_cache_miss}] =
+             result.provenance.attempts
+  end
+
+  test "exhausted retryable transport falls through and retains its attempts", %{root: root} do
+    body = sp3_body(@date)
+    parent = self()
+
+    client = fn url, _opts ->
+      send(parent, {:requested, url})
+      {:error, :timeout}
+    end
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root, http_client: client, retries: 2)
+    assert result.provenance.distribution_source == :in_memory
+    assert [%{source: :direct, error_type: :transport}] = result.provenance.attempts
+    assert_receive {:requested, first_url}
+    assert_receive {:requested, ^first_url}
+    refute_receive {:requested, _url}
+  end
+
+  test "an invalid custom HTTP response is terminal before a valid later source", %{root: root} do
+    parent = self()
+    body = sp3_body(@date)
+
+    client = fn url, _opts ->
+      send(parent, {:requested, url})
+      :not_an_http_response
+    end
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:error, {:http_client_failure, :invalid_response, url}} =
+             Data.acquire(request, cache_dir: root, http_client: client, retries: 3)
+
+    assert String.contains?(url, "www.aiub.unibe.ch")
+    assert_receive {:requested, ^url}
+    refute_receive {:requested, _url}
+  end
+
+  test "a bare unknown custom HTTP error is a terminal reported client failure", %{root: root} do
+    body = sp3_body(@date)
+    client = fn _url, _opts -> {:error, :closed} end
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:error, {:http_client_failure, :reported_failure, url}} =
+             Data.acquire(request, cache_dir: root, http_client: client, retries: 3)
+
+    assert String.contains?(url, "www.aiub.unibe.ch")
+  end
+
+  test "a typed Req transport error remains retryable availability", %{root: root} do
+    body = sp3_body(@date)
+    client = fn _url, _opts -> {:error, %Req.TransportError{reason: :closed}} end
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+    assert result.provenance.distribution_source == :in_memory
+
+    assert [%{source: :direct, error_type: :transport, message: "transport:other"}] =
+             result.provenance.attempts
+  end
+
+  test "an exhausted custom HTTP server status remains retryable availability", %{root: root} do
+    body = sp3_body(@date)
+    client = fn _url, _opts -> {:ok, 503, [], ""} end
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:ok, result} = Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+    assert result.provenance.distribution_source == :in_memory
+
+    assert [%{source: :direct, error_type: :http_status, status: 503}] =
+             result.provenance.attempts
+  end
+
+  test "out-of-range HTTP statuses are neither retried nor distributor-fallback availability", %{root: root} do
+    body = sp3_body(@date)
+
+    for status <- [600, 99_999] do
+      parent = self()
+
+      client = fn url, _opts ->
+        send(parent, {:requested, status, url})
+        {:ok, status, [], ""}
+      end
+
+      request =
+        request!([
+          Distribution.direct(),
+          Distribution.in_memory(body, compression: :none)
+        ])
+
+      assert {:error, {:http_status, ^status, url}} =
+               Data.acquire(request,
+                 cache_dir: Path.join(root, "status-#{status}"),
+                 http_client: client,
+                 retries: 3
+               )
+
+      assert_receive {:requested, ^status, ^url}
+      refute_receive {:requested, ^status, _url}
+    end
+  end
+
+  test "a raising or throwing custom HTTP client is terminal before a valid later source", %{root: root} do
+    body = sp3_body(@date)
+
+    clients = [
+      {:raised, fn _url, _opts -> raise ArgumentError, "client failed" end},
+      {:thrown, fn _url, _opts -> throw(:client_failed) end}
+    ]
+
+    for {expected_kind, client} <- clients do
+      request =
+        request!([
+          Distribution.direct(),
+          Distribution.in_memory(body, compression: :none)
+        ])
+
+      assert {:error, {:http_client_failure, ^expected_kind, url}} =
+               Data.acquire(request,
+                 cache_dir: Path.join(root, Atom.to_string(expected_kind)),
+                 http_client: client,
+                 retries: 3
+               )
+
+      assert String.contains?(url, "www.aiub.unibe.ch")
+    end
+  end
+
+  test "an invalid custom HTTP client option is typed and terminal", %{root: root} do
+    body = sp3_body(@date)
+
+    request =
+      request!([
+        Distribution.direct(),
+        Distribution.in_memory(body, compression: :none)
+      ])
+
+    assert {:error, {:http_client_failure, :invalid_option, url}} =
+             Data.acquire(request, cache_dir: root, http_client: :invalid, retries: 3)
+
+    assert String.contains?(url, "www.aiub.unibe.ch")
+  end
+
+  test "the first exhausted availability failure is preserved when no source succeeds", %{root: root} do
+    client = fn url, _opts ->
+      if String.contains?(url, "cddis.nasa.gov"),
+        do: {:ok, 404, [], ""},
+        else: {:error, :timeout}
+    end
+
+    request = request!([Distribution.direct(), Distribution.nasa_cddis()])
+
+    assert {:error, {:transport, :timeout, url}} =
+             Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
+
+    assert String.contains?(url, "www.aiub.unibe.ch")
+  end
+
   test "malformed or parse-invalid candidates are terminal before a valid later source", %{root: root} do
     valid = sp3_body(@date)
 
@@ -895,17 +1187,20 @@ defmodule Sidereon.GNSS.DistributionTest do
     refute_receive {:requested, _url}
   end
 
-  test "a terminal source failure is not hidden in an aggregate", %{root: root} do
+  test "ordinary absence across every source returns a sanitized aggregate", %{root: root} do
     client = fn url, _opts ->
       if String.contains?(url, "cddis.nasa.gov"), do: {:ok, 404, [], ""}, else: {:ok, 410, [], ""}
     end
 
     request = request!([Distribution.nasa_cddis(), Distribution.direct()])
 
-    assert {:error, {:retired_endpoint, 410, url}} =
+    assert {:error, {:all_distributors_failed, failures}} =
              Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
 
-    assert String.contains?(url, "www.aiub.unibe.ch")
+    assert Enum.map(failures, &{&1.source, &1.error_type, &1.status}) == [
+             {:nasa_cddis, :product_not_published, 404},
+             {:direct, :retired_endpoint, 410}
+           ]
   end
 
   test "different exact identities never share cache entries", %{root: root} do
