@@ -732,6 +732,10 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Mechanically repair RINEX OBS or CRINEX text.
+
+  Content-changing repairs other than record sorting are opt-in. Set
+  `:set_interval` to `true` to replace an unavailable or mismatched `INTERVAL`
+  from the observed epoch cadence, for example.
   """
   @spec repair_obs_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def repair_obs_text(text, opts \\ []) when is_binary(text) do
@@ -745,6 +749,8 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Mechanically repair RINEX NAV text.
+
+  Content-changing repairs other than record sorting are opt-in.
   """
   @spec repair_nav_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def repair_nav_text(text, opts \\ []) when is_binary(text) do
@@ -1051,12 +1057,12 @@ defmodule Sidereon.GNSS.QC do
   defp repair_options(opts) do
     %{
       file_stamp: file_stamp(Keyword.get(opts, :file_stamp)),
-      set_interval: Keyword.get(opts, :set_interval, true),
-      set_time_of_last_obs: Keyword.get(opts, :set_time_of_last_obs, true),
-      set_obs_counts: Keyword.get(opts, :set_obs_counts, true),
-      drop_empty_records: Keyword.get(opts, :drop_empty_records, true),
+      set_interval: Keyword.get(opts, :set_interval, false),
+      set_time_of_last_obs: Keyword.get(opts, :set_time_of_last_obs, false),
+      set_obs_counts: Keyword.get(opts, :set_obs_counts, false),
+      drop_empty_records: Keyword.get(opts, :drop_empty_records, false),
       sort_records: Keyword.get(opts, :sort_records, true),
-      drop_unsupported: Keyword.get(opts, :drop_unsupported, true)
+      drop_unsupported: Keyword.get(opts, :drop_unsupported, false)
     }
   end
 

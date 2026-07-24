@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-07-24
+
+### Fixed
+
+- Observation QC now treats a RINEX `INTERVAL` of zero as the
+  standards-defined unavailable value, reports `OBS-H19` at informational
+  severity, and infers cadence from body epochs when possible. Negative parsed
+  values, and non-finite values in programmatically constructed core headers,
+  report `OBS-H20` as invalid metadata. Neither kind is used for calculations;
+  an unresolved cadence remains explicit when the body cannot supply one.
+  Explicit caller interval overrides must still be finite and positive.
+- Opt-in interval repair replaces unavailable or invalid source metadata when
+  cadence can be inferred and removes it when cadence is unresolved. Default
+  repair preserves source `INTERVAL` metadata.
+
+### Changed
+
+- RINEX repair option defaults now match the canonical Rust interface and the
+  Python, C, and WASM bindings: interval, last-epoch, observation-count,
+  empty-record, and unsupported-record repairs are opt-in; record sorting
+  remains enabled by default.
+- Updated the native backend to `sidereon` and `sidereon-core` 0.35.0.
+
+### Compatibility
+
+- Observation QC call signatures are unchanged, and positioning, orbit, and
+  other solver numerical kernels are unaffected. Elixir callers that relied on
+  the former eager repair defaults must now pass the corresponding repair
+  options explicitly.
+
 ## [0.34.0] - 2026-07-21
 
 ### Added

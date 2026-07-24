@@ -240,7 +240,14 @@ defmodule Sidereon.Round2ParityTest do
     {:ok, lint_obs_text} = QC.lint_obs_text(obs_text)
     assert lint_obs_text.counts == lint_obs.counts
 
-    {:ok, repair_obs} = QC.repair_obs_text(obs_text)
+    {:ok, repair_obs} =
+      QC.repair_obs_text(obs_text,
+        set_interval: true,
+        set_time_of_last_obs: true,
+        set_obs_counts: true,
+        drop_empty_records: true,
+        drop_unsupported: true
+      )
 
     assert {length(repair_obs.actions), repair_obs.remaining.clean?, byte_size(repair_obs.rinex),
             byte_size(repair_obs.crinex)} ==
@@ -250,7 +257,14 @@ defmodule Sidereon.Round2ParityTest do
     {:ok, lint_nav} = QC.lint_nav_text(nav_text)
     assert lint_nav.counts == %{fatal: 0, error: 4, warning: 0, info: 4}
 
-    {:ok, repair_nav} = QC.repair_nav_text(nav_text)
+    {:ok, repair_nav} =
+      QC.repair_nav_text(nav_text,
+        set_time_of_last_obs: true,
+        set_obs_counts: true,
+        drop_empty_records: true,
+        drop_unsupported: true
+      )
+
     assert {length(repair_nav.actions), repair_nav.remaining.clean?, repair_nav.leap_seconds} == {4, true, 18.0}
   end
 

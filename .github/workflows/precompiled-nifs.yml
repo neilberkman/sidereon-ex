@@ -140,9 +140,9 @@ jobs:
           test -f LICENSES/ISC-libloading.txt
           test -f LICENSES/SciPy-BSD-3-Clause.txt
           test -f THIRD-PARTY-NOTICES.md
-          test -f third_party_source/sidereon-core-0.34.0/tides/mod.rs
-          test -f third_party_source/sidereon-core-0.34.0/tides/ocean.rs
-          test -f third_party_source/sidereon-core-0.34.0/tides/pole.rs
+          test -f third_party_source/sidereon-core-0.35.0/tides/mod.rs
+          test -f third_party_source/sidereon-core-0.35.0/tides/ocean.rs
+          test -f third_party_source/sidereon-core-0.35.0/tides/pole.rs
           rm -f "$final_lib" "$archive"
           cp "$source_lib" "$final_lib"
           tar -czf "$archive" \
@@ -154,9 +154,9 @@ jobs:
             LICENSES/ISC-libloading.txt \
             LICENSES/SciPy-BSD-3-Clause.txt \
             THIRD-PARTY-NOTICES.md \
-            third_party_source/sidereon-core-0.34.0/tides/mod.rs \
-            third_party_source/sidereon-core-0.34.0/tides/ocean.rs \
-            third_party_source/sidereon-core-0.34.0/tides/pole.rs
+            third_party_source/sidereon-core-0.35.0/tides/mod.rs \
+            third_party_source/sidereon-core-0.35.0/tides/ocean.rs \
+            third_party_source/sidereon-core-0.35.0/tides/pole.rs
 
           archive_listing="$(tar -tzf "$archive")"
           grep -Fxq "$final_lib" <<<"$archive_listing"
@@ -167,9 +167,9 @@ jobs:
           grep -Fxq "LICENSES/ISC-libloading.txt" <<<"$archive_listing"
           grep -Fxq "LICENSES/SciPy-BSD-3-Clause.txt" <<<"$archive_listing"
           grep -Fxq "THIRD-PARTY-NOTICES.md" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-0.34.0/tides/mod.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-0.34.0/tides/ocean.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-0.34.0/tides/pole.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-0.35.0/tides/mod.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-0.35.0/tides/ocean.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-0.35.0/tides/pole.rs" <<<"$archive_listing"
           test "$(wc -l <<<"$archive_listing" | tr -d ' ')" -eq 11
 
           if command -v sha256sum >/dev/null 2>&1; then
