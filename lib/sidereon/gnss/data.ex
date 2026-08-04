@@ -583,6 +583,11 @@ defmodule Sidereon.GNSS.Data do
     immediately: when the newer directory's state is unknown, an answer from
     the older directory is indistinguishable from real lag.
 
+  The built-in fetch follows redirects with the acquisition transport's
+  bounded, host-allowlisted policy (AIUB's whole-tree listing URL
+  302-redirects to its object store); a 3xx is neither an authoritative 404
+  nor a transport failure.
+
   Returns `{:published, %{date: date, issue: issue, filename: filename,
   observed_at: observed_at, listing_url: url, behind_nominal_minutes: m}}`,
   `{:nothing_published, urls}`, or `{:unreachable, url, reason}`. Options:
@@ -631,18 +636,26 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
+  # The built-in listing fetch goes through the same bounded transport the
+  # acquisition path uses: at most `@max_redirects` validated redirects on the
+  # cataloged host allowlist, streamed byte caps, and the same `:http_client`
+  # injection point. Following a redirect does not bend the asymmetric
+  # publication-status rules - a 3xx is neither an authoritative 404 (no
+  # walk-back change) nor a transport failure; it is the archive saying where
+  # the listing is, exactly as it does for product downloads (AIUB's
+  # whole-tree CSV 302-redirects to its object store).
   defp fetch_listing_body(url, opts) do
     case Keyword.get(opts, :listing_fetcher) do
       nil ->
-        case req_download(url, opts) do
-          {:ok, status, _headers, body} when status in 200..299 ->
+        case download_once(url, opts) do
+          {:ok, body} ->
             {:ok, IO.iodata_to_binary(body)}
 
-          {:ok, status, _headers, _body} when status in [404, 410] ->
-            {:not_posted, status}
+          {:error, {:not_found_on_archive, _url}} ->
+            {:not_posted, 404}
 
-          {:ok, status, _headers, _body} ->
-            {:error, {:http_status, status}}
+          {:error, {:http_status, 410, _url}} ->
+            {:not_posted, 410}
 
           {:error, reason} ->
             {:error, reason}
@@ -3572,7 +3585,99 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
+  defp download_once("ftp://" <> _ = url, opts), do: ftp_download(url, opts)
   defp download_once(url, opts), do: do_download_once(url, opts, 0)
+
+  # Anonymous-FTP transport for cataloged `ftp://` archives (WHU's IGS data
+  # center serves its open archive over FTP only; there is no HTTP surface).
+  # Bounded exactly like the HTTP path: connect timeout, a streamed chunk cap
+  # at `max_compressed_bytes`, and the `:ftp_client` injection point so tests
+  # run without a network. A URL ending in `/` fetches the directory `LIST`
+  # text (the core's closed-dialect listing parser owns interpretation); an
+  # FTP 550 path error is archive absence, mapped like an HTTP 404.
+  defp ftp_download(url, opts) do
+    case Keyword.get(opts, :ftp_client) do
+      fun when is_function(fun, 2) -> fun.(url, opts)
+      nil -> ftp_download_via_otp(url, opts)
+    end
+  rescue
+    e -> {:error, {:network, Exception.message(e)}}
+  catch
+    kind, reason -> {:error, {:network, {kind, reason}}}
+  end
+
+  defp ftp_download_via_otp(url, opts) do
+    uri = URI.parse(url)
+
+    timeout_ms =
+      opts |> Keyword.get(:timeout, Keyword.get(opts, :timeout_s, @default_timeout_s)) |> seconds_to_ms()
+
+    limit = max_compressed_bytes(opts)
+
+    case :ftp.open(String.to_charlist(uri.host), timeout: timeout_ms, mode: :passive) do
+      {:ok, pid} ->
+        try do
+          with :ok <- ftp_step(:ftp.user(pid, ~c"anonymous", ~c"sidereon@"), url),
+               :ok <- ftp_step(:ftp.type(pid, :binary), url) do
+            ftp_fetch_path(pid, uri.path || "/", url, limit)
+          end
+        after
+          :ftp.close(pid)
+        end
+
+      {:error, reason} ->
+        {:error, {:network, {:ftp, reason}}}
+    end
+  end
+
+  defp ftp_step(:ok, _url), do: :ok
+  defp ftp_step({:error, :epath}, url), do: {:error, {:not_found_on_archive, url}}
+  defp ftp_step({:error, reason}, _url), do: {:error, {:network, {:ftp, reason}}}
+
+  defp ftp_fetch_path(pid, path, url, limit) do
+    if String.ends_with?(path, "/") do
+      case :ftp.ls(pid, String.to_charlist(path)) do
+        {:ok, listing} ->
+          body = IO.iodata_to_binary(listing)
+
+          if byte_size(body) > limit,
+            do: {:error, {:download_size_exceeded, limit}},
+            else: {:ok, body}
+
+        {:error, :epath} ->
+          {:error, {:not_found_on_archive, url}}
+
+        {:error, reason} ->
+          {:error, {:network, {:ftp, reason}}}
+      end
+    else
+      case :ftp.recv_chunk_start(pid, String.to_charlist(path)) do
+        :ok -> ftp_recv_chunks(pid, url, limit, [], 0)
+        {:error, :epath} -> {:error, {:not_found_on_archive, url}}
+        {:error, reason} -> {:error, {:network, {:ftp, reason}}}
+      end
+    end
+  end
+
+  defp ftp_recv_chunks(pid, url, limit, acc, size) do
+    case :ftp.recv_chunk(pid) do
+      :ok ->
+        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+
+      {:ok, chunk} ->
+        size = size + byte_size(chunk)
+
+        if size > limit,
+          do: {:error, {:download_size_exceeded, limit}},
+          else: ftp_recv_chunks(pid, url, limit, [chunk | acc], size)
+
+      {:error, :epath} ->
+        {:error, {:not_found_on_archive, url}}
+
+      {:error, reason} ->
+        {:error, {:network, {:ftp, reason}}}
+    end
+  end
 
   defp do_download_once(url, opts, redirect_count) do
     case Keyword.get(opts, :http_client) do

@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-08-04
+
+### Fixed
+
+- `Data.publication_status/3`'s built-in listing fetch now goes through the
+  acquisition transport's bounded, host-allowlisted redirect policy. AIUB's
+  whole-tree listing URL - the single bounded URL for every CODE product
+  line - 302-redirects to its object store, so 0.36.0 reported
+  `{:unreachable, url, {:http_status, 302}}` for all CODE publication-status
+  queries, including the predicted-GIM lines the publication-lag work was
+  motivated by. A 3xx is neither an authoritative 404 (walk-back semantics
+  are unchanged) nor a transport failure.
+
+### Added
+
+- Anonymous-FTP transport (OTP `:ftp`, no new dependency) for cataloged
+  `ftp://` archives, bounded exactly like the HTTP path: connect timeout,
+  streamed chunk cap, `:ftp_client` injection for network-free tests, and
+  FTP 550 mapped to archive absence like an HTTP 404. This makes the Wuhan
+  `wum_nrt` hourly line - the only additional 02D/05M ultra source, i.e. the
+  only new grid-defining alternative - acquirable from Elixir, including
+  `publication_status/3` over its FTP directory listings.
+
+### Notes
+
+- Elixir 0.36.0 already accepts the `WUM` publisher and `near_real_time`
+  solution-class tokens in caller-supplied identities (the fix the Python
+  and WASM 0.36.1 releases shipped separately landed here before the Hex
+  publish); a regression test now pins that. Engine crates stay at their
+  0.36 series; this release pins 0.36.1 for lockstep with the other
+  interfaces.
+
 ## [0.36.0] - 2026-08-04
 
 ### Added

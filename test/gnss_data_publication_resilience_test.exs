@@ -156,5 +156,110 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
                  listing_fetcher: fetcher
                )
     end
+
+    test "the built-in fetch follows AIUB's bounded 302 to the object store" do
+      parent = self()
+
+      http_client = fn url, _opts ->
+        send(parent, {:http, url})
+
+        case url do
+          "https://www.aiub.unibe.ch/download/full_listing.csv" ->
+            {:ok, 302, [{"location", "https://download.aiub.unibe.ch/full_listing.csv"}], ""}
+
+          "https://download.aiub.unibe.ch/full_listing.csv" ->
+            {:ok, 200, [],
+             "CODE/IONO/P2/2026/COD0OPSPRD_20262170000_01D_01H_GIM.INX.gz;1;" <>
+               "2026-08-04T06:51:15Z;00\n"}
+        end
+      end
+
+      assert {:published, published} =
+               Data.publication_status(:cod_prd2, :ionex,
+                 now: ~U[2026-08-04 07:08:00Z],
+                 http_client: http_client
+               )
+
+      assert published.date == ~D[2026-08-05]
+      assert published.observed_at == "2026-08-04T06:51:15Z"
+      assert_received {:http, "https://www.aiub.unibe.ch/download/full_listing.csv"}
+      assert_received {:http, "https://download.aiub.unibe.ch/full_listing.csv"}
+    end
+
+    test "a redirect off the cataloged allowlist stays unreachable" do
+      http_client = fn _url, _opts ->
+        {:ok, 302, [{"location", "https://evil.example.com/full_listing.csv"}], ""}
+      end
+
+      assert {:unreachable, _url, {:redirect_not_allowed, 302, _}} =
+               Data.publication_status(:cod_prd2, :ionex,
+                 now: ~U[2026-08-04 07:08:00Z],
+                 http_client: http_client
+               )
+    end
+
+    test "wum_nrt identities cross the caller-built NIF boundary (0.36.0 carries the token arms)" do
+      {:ok, product} = Data.ops_ultra_sp3(:wum_nrt, ~D[2026-08-03], issue: "0500")
+      # `identity/1` marshals the WUM publisher and near_real_time solution
+      # tokens through the same NIF string parsing that rejects unknown
+      # tokens for caller-supplied identities; 0.36.0 accepts them.
+      assert {:ok, identity} = Data.identity(product)
+      assert identity.publisher == "WUM"
+      assert identity.solution_class == "near_real_time"
+      assert identity.official_filename == "WUM0MGXNRT_20262150500_02D_05M_ORB.SP3"
+    end
+
+    test "wum_nrt publication status routes ftp:// listings through the FTP transport" do
+      parent = self()
+
+      ftp_client = fn url, _opts ->
+        send(parent, {:ftp, url})
+
+        case url do
+          "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2430/" ->
+            {:ok, fixture("whu-mgex-2430-20260804.txt")}
+        end
+      end
+
+      assert {:published, published} =
+               Data.publication_status(:wum_nrt, :sp3,
+                 now: ~U[2026-08-04 07:08:00Z],
+                 ftp_client: ftp_client
+               )
+
+      assert published.date == ~D[2026-08-03]
+      assert published.issue == "0500"
+      assert published.filename == "WUM0MGXNRT_20262150500_02D_05M_ORB.SP3"
+      assert published.observed_at == "Aug 04 06:30"
+      assert_received {:ftp, "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2430/"}
+    end
+
+    test "an FTP absence walks back like an authoritative 404" do
+      ftp_client = fn url, _opts ->
+        case url do
+          "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2430/" ->
+            {:error, {:not_found_on_archive, url}}
+
+          "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2429/" ->
+            {:ok, fixture("whu-mgex-2430-20260804.txt")}
+        end
+      end
+
+      assert {:published, published} =
+               Data.publication_status(:wum_nrt, :sp3,
+                 now: ~U[2026-08-04 07:08:00Z],
+                 ftp_client: ftp_client
+               )
+
+      assert published.issue == "0500"
+      assert published.listing_url == "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2429/"
+    end
+
+    @tag :network
+    test "live: WHU publication status over real anonymous FTP" do
+      assert {:published, published} = Data.publication_status(:wum_nrt, :sp3)
+      assert %Date{} = published.date
+      assert published.filename =~ ~r/^WUM0MGXNRT_\d{11}_02D_05M_ORB\.SP3$/
+    end
   end
 end
