@@ -422,6 +422,258 @@ defmodule Sidereon.GNSS.Data do
   end
 
   @doc """
+  Ordered cross-line candidates for one predicted IONEX map date.
+
+  CODE publishes two predicted lines for every map date; both carry the same
+  official filename, but the two-day line is produced a day earlier, so
+  `cod_prd2`'s artifact for a map date is routinely published while
+  `cod_prd1`'s is still absent whenever CODE runs behind. Candidates are
+  ordered `cod_prd1` first, all cover the SAME map date (the walk never
+  substitutes a neighboring day's map), and each keeps its own line identity
+  so resolved provenance names the line actually served.
+
+  The walk is opt-in: `predicted_ionex/3` and a plain `fetch_ionex/3` keep
+  their fail-closed single-line behavior; pass `cross_line: true` to
+  `fetch_ionex/3` to acquire through this walk in one call.
+  """
+  def predicted_ionex_line_candidates(map_date, opts \\ []) do
+    sample = Keyword.get(opts, :sample)
+
+    with {:ok, date} <- normalize_date(map_date),
+         {:ok, rows} <-
+           core(NIF.data_predicted_ionex_line_candidates(date.year, date.month, date.day, sample)) do
+      candidates =
+        for {center, {year, month, day}, row_sample, issue, filename, url} <- rows do
+          {:ok, candidate_date} = Date.new(year, month, day)
+
+          %Product{
+            center: center,
+            product_type: "ionex",
+            date: candidate_date,
+            sample: row_sample,
+            issue: blank_to_nil(issue),
+            filename: filename,
+            url: url
+          }
+        end
+
+      {:ok, candidates}
+    end
+  end
+
+  @doc """
+  Parse the object entries out of an archive listing body.
+
+  Dialect detection is closed: a body that fits none of the recognized
+  listing surfaces (Apache/XHTML autoindex, AIUB whole-tree CSV, FTP `LIST`)
+  is `{:error, {:unrecognized_archive_listing, reason}}`, never a
+  best-effort empty result - a silent empty parse would be indistinguishable
+  from "nothing published". `observed_at` is the archive-reported
+  modification text, verbatim; archives disagree on format and time zone, so
+  it is never reinterpreted.
+  """
+  def parse_archive_listing(body) when is_binary(body) do
+    with {:ok, rows} <- core(NIF.data_parse_archive_listing(body)) do
+      {:ok, Enum.map(rows, fn {path, observed_at} -> %{path: path, observed_at: observed_at} end)}
+    end
+  end
+
+  @doc """
+  Newest published issue for a center + product line among listed objects.
+
+  `{:ok, nil}` means the listing was readable but held no object of this
+  line - deliberately distinct from an unreachable archive, which
+  `publication_status/3` reports as `:unreachable`.
+  """
+  def newest_published_product(center, product_type, objects) when is_list(objects) do
+    center = normalize_code(center)
+    product_type = normalize_code(product_type)
+
+    case core(
+           NIF.data_newest_published_product(center, product_type, listing_object_rows(objects))
+         ) do
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, {year, month, day, issue, filename, observed_at}} ->
+        {:ok, date} = Date.new(year, month, day)
+        {:ok, %{date: date, issue: issue, filename: filename, observed_at: observed_at}}
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
+  Bounded archive listing URLs answering "newest published issue".
+
+  At most two URLs, newest directory first (or one whole-tree listing);
+  never a polling loop.
+  """
+  def publication_listing_urls(center, product_type, around) do
+    center = normalize_code(center)
+    product_type = normalize_code(product_type)
+
+    with {:ok, date} <- normalize_date(around) do
+      core(
+        NIF.data_publication_listing_urls(center, product_type, date.year, date.month, date.day)
+      )
+    end
+  end
+
+  @doc """
+  Whole minutes from a published issue's nominal epoch to `now`.
+
+  The "N hours behind nominal" lag number: the newest published issue's
+  filename epoch against the caller's clock. The verbatim `observed_at` text
+  carries the archive's own modification claim where one exists.
+  """
+  def published_issue_age_minutes(%{date: %Date{} = date, issue: issue, filename: filename}, now) do
+    %DateTime{} = now = normalize_datetime(now)
+
+    core(
+      NIF.data_published_issue_age_minutes(
+        date.year,
+        date.month,
+        date.day,
+        issue,
+        filename,
+        now.year,
+        now.month,
+        now.day,
+        now.hour,
+        now.minute,
+        now.second
+      )
+    )
+  end
+
+  @doc """
+  Index of the first candidate whose exact archive object is listed.
+
+  Candidates stay in preference order and keep their own identities, so the
+  resolved index preserves the line actually served in provenance.
+  """
+  def resolve_first_published(candidates, objects)
+      when is_list(candidates) and is_list(objects) do
+    specs =
+      for %Product{} = candidate <- candidates do
+        {
+          candidate.center,
+          candidate.product_type,
+          candidate.date.year,
+          candidate.date.month,
+          candidate.date.day,
+          candidate.sample,
+          candidate.issue
+        }
+      end
+
+    core(NIF.data_resolve_first_published(specs, listing_object_rows(objects)))
+  end
+
+  @doc """
+  One bounded query: the newest published issue for a center + product line,
+  and how far behind nominal it runs.
+
+  Fetches at most the bounded listing URLs from `publication_listing_urls/3`
+  - never any product bytes - and never loops or polls. Two asymmetric rules
+  are deliberate; do not "fix" them:
+
+  - An authoritative HTTP 404/410 on the newer directory WALKS BACK to the
+    older one: a 404 is the archive answering "this directory does not
+    exist", which is exactly what a late archive looks like.
+  - A transport failure (or a reachable archive serving an unrecognizable
+    listing body) NEVER walks back and returns `{:unreachable, url, reason}`
+    immediately: when the newer directory's state is unknown, an answer from
+    the older directory is indistinguishable from real lag.
+
+  Returns `{:published, %{date: date, issue: issue, filename: filename,
+  observed_at: observed_at, listing_url: url, behind_nominal_minutes: m}}`,
+  `{:nothing_published, urls}`, or `{:unreachable, url, reason}`. Options:
+  `:now` (UTC `DateTime`, defaults to `DateTime.utc_now/0`), `:timeout`, and
+  `:listing_fetcher` (a `fun(url, opts)` returning `{:ok, body}`,
+  `{:not_posted, status}`, or `{:error, reason}`; tests inject recorded
+  bodies here).
+  """
+  def publication_status(center, product_type, opts \\ []) do
+    center = normalize_code(center)
+    product_type = normalize_code(product_type)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, urls} <- publication_listing_urls(center, product_type, DateTime.to_date(now)) do
+      walk_publication_listings(urls, urls, center, product_type, now, opts)
+    end
+  end
+
+  defp walk_publication_listings([], all_urls, _center, _product_type, _now, _opts),
+    do: {:nothing_published, all_urls}
+
+  defp walk_publication_listings([url | rest], all_urls, center, product_type, now, opts) do
+    case fetch_listing_body(url, opts) do
+      {:ok, body} ->
+        with {:ok, objects} <- parse_archive_listing(body),
+             {:ok, newest} <- newest_published_product(center, product_type, objects) do
+          case newest do
+            nil ->
+              walk_publication_listings(rest, all_urls, center, product_type, now, opts)
+
+            newest ->
+              {:ok, behind} = published_issue_age_minutes(newest, now)
+
+              {:published,
+               newest |> Map.put(:listing_url, url) |> Map.put(:behind_nominal_minutes, behind)}
+          end
+        else
+          # A reachable archive serving a body this library cannot read
+          # cannot answer the publication question.
+          {:error, reason} -> {:unreachable, url, reason}
+        end
+
+      {:not_posted, _status} ->
+        walk_publication_listings(rest, all_urls, center, product_type, now, opts)
+
+      {:error, reason} ->
+        {:unreachable, url, reason}
+    end
+  end
+
+  defp fetch_listing_body(url, opts) do
+    case Keyword.get(opts, :listing_fetcher) do
+      nil ->
+        case req_download(url, opts) do
+          {:ok, status, _headers, body} when status in 200..299 ->
+            {:ok, IO.iodata_to_binary(body)}
+
+          {:ok, status, _headers, _body} when status in [404, 410] ->
+            {:not_posted, status}
+
+          {:ok, status, _headers, _body} ->
+            {:error, {:http_status, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      fetcher when is_function(fetcher, 2) ->
+        fetcher.(url, opts)
+    end
+  end
+
+  defp listing_object_rows(objects) do
+    Enum.map(objects, fn
+      %{path: path} = object -> {path, Map.get(object, :observed_at)}
+      {path, observed_at} -> {path, observed_at}
+    end)
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp normalize_datetime(%DateTime{} = now), do: now
+  defp normalize_datetime(%NaiveDateTime{} = now), do: DateTime.from_naive!(now, "Etc/UTC")
+
+  @doc """
   Build an ultra-rapid OPS SP3 product.
 
   When `:sample` is omitted, the core catalog selects the published cadence for
@@ -638,11 +890,32 @@ defmodule Sidereon.GNSS.Data do
   def fetch_ionex(center, target, opts \\ []) do
     center = normalize_code(center)
     lookback = Keyword.get(opts, :lookback, 2)
+    cross_line = Keyword.get(opts, :cross_line, false)
 
-    with {:ok, date} <- normalize_date(target),
+    with :ok <- validate_cross_line(center, cross_line),
+         {:ok, date} <- normalize_date(target),
          {:ok, dates} <- core(NIF.data_gim_date_candidates(center, date.year, date.month, date.day, lookback)) do
-      fetch_first_ionex(center, dates, opts, nil)
+      candidates = ionex_candidate_walk(center, dates, cross_line)
+      fetch_first_ionex(candidates, opts, nil)
     end
+  end
+
+  defp validate_cross_line(_center, false), do: :ok
+  defp validate_cross_line(center, true) when center in ["cod_prd1", "cod_prd2"], do: :ok
+
+  defp validate_cross_line(center, true),
+    do: {:error, {:unsupported_product, {:cross_line, center}}}
+
+  # The dated candidates are file/map dates for the requested line. The
+  # cross-line walk enumerates BOTH predicted lines for each map date,
+  # preferred line first, before falling back a day - each line keeps its own
+  # exact identity, so provenance and the cache never blur which artifact was
+  # served, and the map date itself is never substituted by this step.
+  defp ionex_candidate_walk(center, dates, false), do: for(date <- dates, do: {center, date})
+
+  defp ionex_candidate_walk(center, dates, true) do
+    lines = if center == "cod_prd2", do: ["cod_prd2", "cod_prd1"], else: ["cod_prd1", "cod_prd2"]
+    for date <- dates, line <- lines, do: {line, date}
   end
 
   @doc """
@@ -932,10 +1205,10 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp fetch_first_ionex(_center, [], _opts, nil), do: {:error, :offline_cache_miss}
-  defp fetch_first_ionex(_center, [], _opts, last_error), do: {:error, last_error}
+  defp fetch_first_ionex([], _opts, nil), do: {:error, :offline_cache_miss}
+  defp fetch_first_ionex([], _opts, last_error), do: {:error, last_error}
 
-  defp fetch_first_ionex(center, [{year, month, day} | rest], opts, _last_error) do
+  defp fetch_first_ionex([{center, {year, month, day}} | rest], opts, _last_error) do
     sample = Keyword.get(opts, :sample)
 
     with {:ok, date} <- Date.new(year, month, day),
@@ -946,10 +1219,10 @@ defmodule Sidereon.GNSS.Data do
           {:ok, result.path}
 
         {:error, :offline_cache_miss} ->
-          fetch_first_ionex(center, rest, opts, :offline_cache_miss)
+          fetch_first_ionex(rest, opts, :offline_cache_miss)
 
         {:error, {:product_not_published, 404, _} = reason} ->
-          fetch_first_ionex(center, rest, opts, reason)
+          fetch_first_ionex(rest, opts, reason)
 
         {:error, reason} ->
           {:error, reason}

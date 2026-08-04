@@ -17,6 +17,7 @@ mod atoms {
         error,
         unknown_center,
         unsupported_product,
+        unrecognized_archive_listing,
         invalid_coordinate,
         invalid_tile_index,
         invalid_tile_id,
@@ -242,6 +243,14 @@ fn encode_catalog_error<'a>(env: Env<'a>, err: DataCatalogError) -> Term<'a> {
         DataCatalogError::InvalidTileId(id) => {
             (atoms::error(), (atoms::invalid_tile_id(), id)).encode(env)
         }
+        // Closed dialect detection: an unreadable listing must stay
+        // distinguishable from every other catalog failure, because callers
+        // map it to "unreachable", never "nothing published".
+        DataCatalogError::UnrecognizedArchiveListing { reason } => (
+            atoms::error(),
+            (atoms::unrecognized_archive_listing(), reason),
+        )
+            .encode(env),
         other => (
             atoms::error(),
             (atoms::unsupported_product(), other.to_string()),
@@ -687,6 +696,155 @@ fn data_ultra_issue_candidates<'a>(
             .collect::<Vec<_>>()
             .encode(env)
     })
+}
+
+#[rustler::nif]
+fn data_predicted_ionex_line_candidates<'a>(
+    env: Env<'a>,
+    year: i32,
+    month: i32,
+    day: i32,
+    sample: Option<String>,
+) -> Term<'a> {
+    let result = product_date(year, month, day)
+        .and_then(|date| data::predicted_ionex_line_candidates(date, sample.as_deref()))
+        .and_then(|candidates| {
+            candidates
+                .into_iter()
+                .map(|candidate| {
+                    let filename = candidate.canonical_filename()?;
+                    let url = candidate.archive_url()?;
+                    Ok((
+                        candidate.center.code().to_string(),
+                        (
+                            candidate.date.year,
+                            i32::from(candidate.date.month),
+                            i32::from(candidate.date.day),
+                        ),
+                        candidate.sample.clone(),
+                        candidate.issue.clone().unwrap_or_default(),
+                        filename,
+                        url,
+                    ))
+                })
+                .collect::<Result<Vec<_>, DataCatalogError>>()
+        });
+    encode_result(env, result, |env, rows| rows.encode(env))
+}
+
+#[rustler::nif]
+fn data_publication_listing_urls<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_date(year, month, day)
+                .and_then(|date| data::publication_listing_urls(center, kind, date))
+        })
+    });
+    encode_result(env, result, |env, urls| urls.encode(env))
+}
+
+#[rustler::nif]
+fn data_parse_archive_listing<'a>(env: Env<'a>, body: String) -> Term<'a> {
+    let result = data::parse_archive_listing(&body).map(|objects| {
+        objects
+            .into_iter()
+            .map(|object| (object.path, object.observed_at))
+            .collect::<Vec<_>>()
+    });
+    encode_result(env, result, |env, rows| rows.encode(env))
+}
+
+fn published_objects(rows: Vec<(String, Option<String>)>) -> Vec<data::PublishedObject> {
+    rows.into_iter()
+        .map(|(path, observed_at)| data::PublishedObject { path, observed_at })
+        .collect()
+}
+
+#[rustler::nif]
+fn data_newest_published_product<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    objects: Vec<(String, Option<String>)>,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            data::newest_published_product(center, kind, &published_objects(objects))
+        })
+    });
+    encode_result(env, result, |env, newest| {
+        newest
+            .map(|product| {
+                (
+                    product.date.year,
+                    product.date.month,
+                    product.date.day,
+                    product.issue,
+                    product.filename,
+                    product.observed_at,
+                )
+            })
+            .encode(env)
+    })
+}
+
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_published_issue_age_minutes<'a>(
+    env: Env<'a>,
+    year: i32,
+    month: i32,
+    day: i32,
+    issue: String,
+    filename: String,
+    now_year: i32,
+    now_month: i32,
+    now_day: i32,
+    now_hour: i32,
+    now_minute: i32,
+    now_second: i32,
+) -> Term<'a> {
+    let result = product_date(year, month, day).and_then(|date| {
+        let published = data::PublishedProduct {
+            date,
+            issue,
+            filename,
+            observed_at: None,
+        };
+        product_datetime(now_year, now_month, now_day, now_hour, now_minute, now_second)
+            .and_then(|now| data::published_issue_age_minutes(&published, now))
+    });
+    encode_result(env, result, |env, minutes| minutes.encode(env))
+}
+
+type CandidateSpecTuple = (String, String, i32, i32, i32, Option<String>, Option<String>);
+
+#[rustler::nif]
+fn data_resolve_first_published<'a>(
+    env: Env<'a>,
+    candidates: Vec<CandidateSpecTuple>,
+    objects: Vec<(String, Option<String>)>,
+) -> Term<'a> {
+    let result = candidates
+        .into_iter()
+        .map(
+            |(center_code, product_code, year, month, day, sample, issue)| {
+                let center = center(&center_code)?;
+                let kind = product_type(&product_code)?;
+                let date = product_date(year, month, day)?;
+                data::product(center, kind, date, sample.as_deref(), issue.as_deref())
+            },
+        )
+        .collect::<Result<Vec<_>, DataCatalogError>>()
+        .and_then(|specs| data::resolve_first_published(&specs, &published_objects(objects)));
+    encode_result(env, result, |env, index| index.encode(env))
 }
 
 #[rustler::nif]

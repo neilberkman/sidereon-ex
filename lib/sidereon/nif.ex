@@ -2047,6 +2047,35 @@ defmodule Sidereon.NIF do
   def data_ultra_issue_candidates(_center, _year, _month, _day, _hour, _minute, _second),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_predicted_ionex_line_candidates(_year, _month, _day, _sample),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_publication_listing_urls(_center, _product, _year, _month, _day),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_parse_archive_listing(_body), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_newest_published_product(_center, _product, _objects),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_published_issue_age_minutes(
+        _year,
+        _month,
+        _day,
+        _issue,
+        _filename,
+        _now_year,
+        _now_month,
+        _now_day,
+        _now_hour,
+        _now_minute,
+        _now_second
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_resolve_first_published(_candidates, _objects),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def data_skadi_source_entry, do: :erlang.nif_error(:nif_not_loaded)
   def data_space_weather_source_entry, do: :erlang.nif_error(:nif_not_loaded)
   def data_space_weather_filename(_product), do: :erlang.nif_error(:nif_not_loaded)

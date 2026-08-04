@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-04
+
+### Added
+
+- Publication-lag resilience surface over core 0.36.0:
+  `Data.predicted_ionex_line_candidates/2` (the opt-in CODE `P1`/`P2`
+  cross-line walk for one map date - never a neighboring day's map, each
+  candidate keeping its own line identity), `Data.parse_archive_listing/1`
+  (closed dialect detection: an unrecognizable listing body is
+  `{:error, {:unrecognized_archive_listing, reason}}`, never a best-effort
+  empty result), `Data.newest_published_product/3`,
+  `Data.publication_listing_urls/3`, `Data.published_issue_age_minutes/2`,
+  and `Data.resolve_first_published/2`.
+- `Data.publication_status/3`: one bounded networked query reporting the
+  newest published issue for a center and product line and its lag behind
+  nominal, without fetching product bytes. An authoritative 404 walks back
+  one directory; a transport failure or unreadable listing is
+  `{:unreachable, url, reason}` and never walks back - "nothing published"
+  and "archive did not answer" are distinct outcomes. `observed_at` is the
+  archive-reported modification text, verbatim.
+- `Data.fetch_ionex/3` accepts `cross_line: true` (CODE predicted centers)
+  to walk the sibling predicted line for the same map date before falling
+  back a day, cache-first, with provenance naming the line actually served.
+  Off by default: the single-line request stays fail-closed.
+- The Wuhan MGEX near-real-time orbit line (`:wum_nrt`, hourly `WUM0MGXNRT`
+  02D/05M over anonymous FTP, archive-verified from 2024-07-03) flows
+  through the catalog surface, with the `near_real_time` solution class.
+
+### Changed
+
+- Updated `sidereon` and `sidereon-core` to 0.36.0.
+
 ## [0.35.0] - 2026-07-24
 
 ### Fixed
