@@ -72,6 +72,7 @@ pub(crate) fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, D
         "COD" => ProductPublisher::Code,
         "ESA" => ProductPublisher::Esa,
         "GFZ" => ProductPublisher::Gfz,
+        "WUM" => ProductPublisher::Whu,
         _ => return Err(identity_field_error("publisher")),
     };
     let solution = match fields[3].as_str() {
@@ -80,6 +81,7 @@ pub(crate) fn product_identity(fields: Vec<String>) -> Result<ProductIdentity, D
         "ultra_rapid" => SolutionClass::UltraRapid,
         "predicted" => SolutionClass::Predicted,
         "broadcast" => SolutionClass::Broadcast,
+        "near_real_time" => SolutionClass::NearRealTime,
         _ => return Err(identity_field_error("solution_class")),
     };
     let campaign = match fields[4].as_str() {
@@ -818,13 +820,23 @@ fn data_published_issue_age_minutes<'a>(
             filename,
             observed_at: None,
         };
-        product_datetime(now_year, now_month, now_day, now_hour, now_minute, now_second)
-            .and_then(|now| data::published_issue_age_minutes(&published, now))
+        product_datetime(
+            now_year, now_month, now_day, now_hour, now_minute, now_second,
+        )
+        .and_then(|now| data::published_issue_age_minutes(&published, now))
     });
     encode_result(env, result, |env, minutes| minutes.encode(env))
 }
 
-type CandidateSpecTuple = (String, String, i32, i32, i32, Option<String>, Option<String>);
+type CandidateSpecTuple = (
+    String,
+    String,
+    i32,
+    i32,
+    i32,
+    Option<String>,
+    Option<String>,
+);
 
 #[rustler::nif]
 fn data_resolve_first_published<'a>(

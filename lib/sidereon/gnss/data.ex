@@ -489,9 +489,7 @@ defmodule Sidereon.GNSS.Data do
     center = normalize_code(center)
     product_type = normalize_code(product_type)
 
-    case core(
-           NIF.data_newest_published_product(center, product_type, listing_object_rows(objects))
-         ) do
+    case core(NIF.data_newest_published_product(center, product_type, listing_object_rows(objects))) do
       {:ok, nil} ->
         {:ok, nil}
 
@@ -515,9 +513,7 @@ defmodule Sidereon.GNSS.Data do
     product_type = normalize_code(product_type)
 
     with {:ok, date} <- normalize_date(around) do
-      core(
-        NIF.data_publication_listing_urls(center, product_type, date.year, date.month, date.day)
-      )
+      core(NIF.data_publication_listing_urls(center, product_type, date.year, date.month, date.day))
     end
   end
 
@@ -554,8 +550,7 @@ defmodule Sidereon.GNSS.Data do
   Candidates stay in preference order and keep their own identities, so the
   resolved index preserves the line actually served in provenance.
   """
-  def resolve_first_published(candidates, objects)
-      when is_list(candidates) and is_list(objects) do
+  def resolve_first_published(candidates, objects) when is_list(candidates) and is_list(objects) do
     specs =
       for %Product{} = candidate <- candidates do
         {
@@ -606,8 +601,7 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp walk_publication_listings([], all_urls, _center, _product_type, _now, _opts),
-    do: {:nothing_published, all_urls}
+  defp walk_publication_listings([], all_urls, _center, _product_type, _now, _opts), do: {:nothing_published, all_urls}
 
   defp walk_publication_listings([url | rest], all_urls, center, product_type, now, opts) do
     case fetch_listing_body(url, opts) do
@@ -621,8 +615,7 @@ defmodule Sidereon.GNSS.Data do
             newest ->
               {:ok, behind} = published_issue_age_minutes(newest, now)
 
-              {:published,
-               newest |> Map.put(:listing_url, url) |> Map.put(:behind_nominal_minutes, behind)}
+              {:published, newest |> Map.put(:listing_url, url) |> Map.put(:behind_nominal_minutes, behind)}
           end
         else
           # A reachable archive serving a body this library cannot read
@@ -903,8 +896,7 @@ defmodule Sidereon.GNSS.Data do
   defp validate_cross_line(_center, false), do: :ok
   defp validate_cross_line(center, true) when center in ["cod_prd1", "cod_prd2"], do: :ok
 
-  defp validate_cross_line(center, true),
-    do: {:error, {:unsupported_product, {:cross_line, center}}}
+  defp validate_cross_line(center, true), do: {:error, {:unsupported_product, {:cross_line, center}}}
 
   # The dated candidates are file/map dates for the requested line. The
   # cross-line walk enumerates BOTH predicted lines for each map date,
