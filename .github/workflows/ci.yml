@@ -27,6 +27,12 @@ jobs:
           - elixir: "1.19"
             otp: "28"
             os: macos-latest
+          # Newest-OTP leg: mix.exs declares no OTP ceiling, so CI must test
+          # the newest OTP that claim covers (OTP 29 deprecation behavior was
+          # first caught locally, never here). Add an OTP 30 leg at first RC.
+          - elixir: "1.20"
+            otp: "29"
+            os: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4

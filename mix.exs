@@ -96,7 +96,7 @@ defmodule Sidereon.MixProject do
   def application do
     [
       mod: {Sidereon.Application, []},
-      extra_applications: [:logger, :ssl, :ftp]
+      extra_applications: [:logger, :ssl]
     ]
   end
 

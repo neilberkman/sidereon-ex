@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The FTP transport's default client is now `Sidereon.GNSS.FtpClient`, a
+  minimal passive-mode anonymous-FTP client over `:gen_tcp` (RETR/LIST,
+  TYPE I, RFC 959 multiline replies, FTP 550 as `:epath`), removing this
+  library's dependency on OTP's `:ftp` application ahead of its OTP 30
+  removal. Live-verified against the WHU archive for listings, exact
+  acquisition, and merge. The `:ftp_module` application-env seam remains
+  for callers preferring OTP's client (OTP <= 29) or their own.
+
 ## [0.36.3] - 2026-08-04
 
 ### Fixed

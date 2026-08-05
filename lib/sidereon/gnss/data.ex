@@ -35,6 +35,7 @@ defmodule Sidereon.GNSS.Data do
   alias Sidereon.GNSS.ArchiveCompression
   alias Sidereon.GNSS.ArchiveIngress
   alias Sidereon.GNSS.Distribution
+  alias Sidereon.GNSS.FtpClient
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
   alias Sidereon.SpaceWeather
@@ -3607,13 +3608,12 @@ defmodule Sidereon.GNSS.Data do
   defp download_once("ftp://" <> _ = url, opts), do: ftp_download(url, opts)
   defp download_once(url, opts), do: do_download_once(url, opts, 0)
 
-  # OTP deprecates `:ftp` for removal in OTP 30, recommending SFTP - advice
-  # that cannot apply to a public anonymous-FTP archive we do not operate
-  # (WHU serves FTP only). The dynamic dispatch below keeps
-  # `--warnings-as-errors` truthful about warnings we can act on; before
-  # OTP 30, this transport must either vendor an FTP client or the catalog
-  # must gain an HTTPS surface for the WHU line.
-  defp ftp_module, do: Application.get_env(:sidereon, :ftp_module, :ftp)
+  # OTP 30 removes the `:ftp` application. The default transport is our own
+  # minimal passive-mode client (`Sidereon.GNSS.FtpClient`, live-verified
+  # against the WHU archive), so this library carries no dependency on the
+  # removed application. The `:ftp_module` seam remains for callers who
+  # prefer OTP's client on OTP <= 29 or their own implementation.
+  defp ftp_module, do: Application.get_env(:sidereon, :ftp_module, FtpClient)
 
   # Anonymous-FTP transport for cataloged `ftp://` archives (WHU's IGS data
   # center serves its open archive over FTP only; there is no HTTP surface).
