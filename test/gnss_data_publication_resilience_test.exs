@@ -261,5 +261,25 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
       assert %Date{} = published.date
       assert published.filename =~ ~r/^WUM0MGXNRT_\d{11}_02D_05M_ORB\.SP3$/
     end
+
+    test "filename-bearing wum_nrt candidates derive identity from the core catalog" do
+      # Ultra candidates carry filenames; identity/1 must derive fields from
+      # the one core catalog and only VERIFY the declared filename - the
+      # removed interface-side filename grammar silently dropped every WHU
+      # NRT candidate before download.
+      {:ok, bare} = Data.ops_ultra_sp3(:wum_nrt, ~D[2026-08-03], issue: "0500")
+      {:ok, canonical} = Data.canonical_filename(bare)
+      product = %{bare | filename: canonical}
+
+      assert {:ok, identity} = Data.identity(product)
+      assert identity.solution_class == "near_real_time"
+      assert identity.official_filename == canonical
+
+      # A candidate lying about its filename fails closed.
+      lying = %{product | filename: "WUM0MGXNRT_20262150500_02D_15M_ORB.SP3"}
+
+      assert {:error, {:product_validation_failed, :official_filename}} =
+               Data.identity(lying)
+    end
   end
 end

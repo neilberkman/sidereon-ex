@@ -276,30 +276,20 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  def identity(%Data.Product{} = product) do
-    with {:ok, filename} <- Data.canonical_filename(product),
-         :ok <- validate_filename(filename),
-         {:ok, fields} <- parse_long_filename(filename),
-         true <- fields.family == product.product_type do
-      {:ok,
-       %ProductIdentity{
-         family: product.product_type,
-         analysis_center: product.center,
-         publisher: fields.publisher,
-         solution_class: fields.solution_class,
-         campaign: fields.campaign,
-         filename_version: fields.filename_version,
-         date: product.date,
-         issue: fields.issue,
-         span: fields.span,
-         sample: fields.sample,
-         official_filename: filename,
-         format: if(product.product_type == "sp3", do: "SP3", else: "IONEX"),
-         prediction_horizon_days: prediction_horizon(product.center)
-       }}
-    else
-      false -> {:error, {:unsupported_product, product.product_type}}
-      {:error, _} = error -> error
+  def identity(%Data.Product{filename: declared} = product) do
+    # One catalog: the core derives every identity field exactly as it does
+    # for a filename-less product. A declared filename (ultra candidates
+    # carry one) is VERIFIED against the core-derived official filename,
+    # never parsed into identity fields by a second interface-side grammar -
+    # a duplicated parser is how the 0.36.0 WHU NRT candidates died at
+    # identity parsing while the core knew the line perfectly well.
+    with :ok <- validate_filename(declared),
+         {:ok, identity} <- identity(%{product | filename: nil}) do
+      if declared == identity.official_filename do
+        {:ok, identity}
+      else
+        {:error, {:product_validation_failed, :official_filename}}
+      end
     end
   end
 
@@ -1649,37 +1639,6 @@ defmodule Sidereon.GNSS.Distribution do
   defp normalize_source(:direct), do: {:ok, direct()}
   defp normalize_source(:nasa_cddis), do: {:ok, nasa_cddis()}
   defp normalize_source(type), do: {:error, {:unsupported_distribution, type, "unknown source"}}
-
-  defp parse_long_filename(filename) do
-    regex = ~r/^([A-Z]{3})(\d)([A-Z]{3})(FIN|RAP|ULT|PRD)_(\d{7})(\d{4})_([^_]+)_([^_]+)_(ORB\.SP3|GIM\.INX)$/
-
-    case Regex.run(regex, filename) do
-      [_, publisher, version, campaign, solution, _date, issue, span, sample, suffix] ->
-        {:ok,
-         %{
-           publisher: publisher,
-           filename_version: String.to_integer(version),
-           campaign: campaign,
-           solution_class: solution_class(solution),
-           issue: issue,
-           span: span,
-           sample: sample,
-           family: if(suffix == "ORB.SP3", do: "sp3", else: "ionex")
-         }}
-
-      _ ->
-        {:error, {:product_validation_failed, :official_filename}}
-    end
-  end
-
-  defp solution_class("FIN"), do: "final"
-  defp solution_class("RAP"), do: "rapid"
-  defp solution_class("ULT"), do: "ultra_rapid"
-  defp solution_class("PRD"), do: "predicted"
-
-  defp prediction_horizon("cod_prd1"), do: 1
-  defp prediction_horizon("cod_prd2"), do: 2
-  defp prediction_horizon(_center), do: nil
 
   defp decode_core_product_identity([
          family,

@@ -3588,6 +3588,14 @@ defmodule Sidereon.GNSS.Data do
   defp download_once("ftp://" <> _ = url, opts), do: ftp_download(url, opts)
   defp download_once(url, opts), do: do_download_once(url, opts, 0)
 
+  # OTP deprecates `:ftp` for removal in OTP 30, recommending SFTP - advice
+  # that cannot apply to a public anonymous-FTP archive we do not operate
+  # (WHU serves FTP only). The dynamic dispatch below keeps
+  # `--warnings-as-errors` truthful about warnings we can act on; before
+  # OTP 30, this transport must either vendor an FTP client or the catalog
+  # must gain an HTTPS surface for the WHU line.
+  defp ftp_module, do: Application.get_env(:sidereon, :ftp_module, :ftp)
+
   # Anonymous-FTP transport for cataloged `ftp://` archives (WHU's IGS data
   # center serves its open archive over FTP only; there is no HTTP surface).
   # Bounded exactly like the HTTP path: connect timeout, a streamed chunk cap
@@ -3614,15 +3622,15 @@ defmodule Sidereon.GNSS.Data do
 
     limit = max_compressed_bytes(opts)
 
-    case :ftp.open(String.to_charlist(uri.host), timeout: timeout_ms, mode: :passive) do
+    case ftp_module().open(String.to_charlist(uri.host), timeout: timeout_ms, mode: :passive) do
       {:ok, pid} ->
         try do
-          with :ok <- ftp_step(:ftp.user(pid, ~c"anonymous", ~c"sidereon@"), url),
-               :ok <- ftp_step(:ftp.type(pid, :binary), url) do
+          with :ok <- ftp_step(ftp_module().user(pid, ~c"anonymous", ~c"sidereon@"), url),
+               :ok <- ftp_step(ftp_module().type(pid, :binary), url) do
             ftp_fetch_path(pid, uri.path || "/", url, limit)
           end
         after
-          :ftp.close(pid)
+          ftp_module().close(pid)
         end
 
       {:error, reason} ->
@@ -3636,7 +3644,7 @@ defmodule Sidereon.GNSS.Data do
 
   defp ftp_fetch_path(pid, path, url, limit) do
     if String.ends_with?(path, "/") do
-      case :ftp.ls(pid, String.to_charlist(path)) do
+      case ftp_module().ls(pid, String.to_charlist(path)) do
         {:ok, listing} ->
           body = IO.iodata_to_binary(listing)
 
@@ -3651,7 +3659,7 @@ defmodule Sidereon.GNSS.Data do
           {:error, {:network, {:ftp, reason}}}
       end
     else
-      case :ftp.recv_chunk_start(pid, String.to_charlist(path)) do
+      case ftp_module().recv_chunk_start(pid, String.to_charlist(path)) do
         :ok -> ftp_recv_chunks(pid, url, limit, [], 0)
         {:error, :epath} -> {:error, {:not_found_on_archive, url}}
         {:error, reason} -> {:error, {:network, {:ftp, reason}}}
@@ -3660,7 +3668,7 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp ftp_recv_chunks(pid, url, limit, acc, size) do
-    case :ftp.recv_chunk(pid) do
+    case ftp_module().recv_chunk(pid) do
       :ok ->
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 

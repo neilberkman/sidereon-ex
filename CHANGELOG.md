@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-08-04
+
+### Fixed
+
+- `Distribution.identity/1` no longer parses a filename-bearing product's
+  identity through an interface-side filename grammar. That duplicated
+  parser missed the `NRT` solution token the core learned in 0.36.0, so
+  every cataloged WHU `wum_nrt` ultra candidate - which always carries a
+  filename - died at identity parsing before any download, even with FTP
+  transport working. Identity fields now always come from the one core
+  catalog; a declared filename is verified against the core-derived
+  official filename and a mismatch fails closed. The duplicated grammar and
+  its token table are deleted, so the next core token addition cannot
+  diverge here again. Found by downstream 0.36.1 verification.
+- Engine crates updated to 0.36.3, whose `parse_archive_listing` accepts
+  AIUB whole-tree CSV rows with spaces in unrelated object paths; 0.36.1's
+  `publication_status/3` for CODE lines followed the redirect and then
+  rejected the entire live 426k-row listing over one such row.
+
 ## [0.36.1] - 2026-08-04
 
 ### Fixed
