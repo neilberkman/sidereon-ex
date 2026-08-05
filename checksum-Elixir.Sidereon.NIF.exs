@@ -1,7 +1,7 @@
 %{
-  "libsidereon_nif-v0.36.2-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:06736abd178a104058431f85bc7eb0c2b1cd7fcc9224553b7b213d7042bb2fc4",
-  "libsidereon_nif-v0.36.2-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:7c9150085cf7c9479342844b214d2164b453c579b8df1fa7e681f35cb231b0e5",
-  "libsidereon_nif-v0.36.2-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:cb7635646284065bbcbabc9e9680e7e61098b48f8e751719abbd1f9ce2d9c9e4",
-  "libsidereon_nif-v0.36.2-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:1842c75a9dcb5fd938a3008149a3b2d7df11a9c3804d5ede1b997f06cbdbbfd9",
-  "sidereon_nif-v0.36.2-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:3cc020de763436d3b3610e5e40715c0094621978fa6f195a5674ed76ea81f0d0",
+  "libsidereon_nif-v0.36.3-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:b6f1690d1dffe103f3578824c85b0055ab7206fa8632f6e0852557cac98e9507",
+  "libsidereon_nif-v0.36.3-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:201ba5d71d621863aa6a20597db7ddfe24dc162a90820f2e600e0eca869cebca",
+  "libsidereon_nif-v0.36.3-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:a20c07e29c86fc880988ca2d9bfb0df9336ca8792f7af4c3d959b044f0fe28f4",
+  "libsidereon_nif-v0.36.3-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:2d7f89409b8619d7404d92e0f4870f95791264a623cab74f2f4d55e5be9abf30",
+  "sidereon_nif-v0.36.3-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:dd27dcf885b15151a5f98848d0b94cf1f44a9abe1abb578f0b09fdf08d45aafb",
 }
