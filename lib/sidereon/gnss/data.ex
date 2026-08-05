@@ -3585,6 +3585,25 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
+  @doc false
+  # Narrow cross-layer surface for `Sidereon.GNSS.Distribution`: the exact
+  # acquisition path routes cataloged `ftp://` product URLs through this one
+  # bounded anonymous-FTP transport instead of growing a second one. Returns
+  # `{:ok, binary}` or the transport's typed errors
+  # (`{:not_found_on_archive, url}` for FTP 550, `{:network, reason}`,
+  # `{:download_size_exceeded, limit}`).
+  def ftp_fetch("ftp://" <> _ = url, opts), do: ftp_download(url, opts)
+
+  @doc false
+  # Hosts the core catalog serves over anonymous FTP; the exact acquisition
+  # path accepts the `ftp` scheme only for these.
+  def ftp_hosts do
+    for center <- centers(),
+        {:ok, entry} <- [core(NIF.data_center_entry(center))],
+        "ftp" == elem(entry, 0),
+        do: elem(entry, 1)
+  end
+
   defp download_once("ftp://" <> _ = url, opts), do: ftp_download(url, opts)
   defp download_once(url, opts), do: do_download_once(url, opts, 0)
 

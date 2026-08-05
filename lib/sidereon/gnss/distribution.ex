@@ -675,9 +675,48 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
+  # Cataloged-FTP exact acquisition: same bounded `:ftp` transport the Data
+  # layer gained in 0.36.1, host-allowlisted through the catalog, with FTP
+  # 550 mapped to the same typed absence as an HTTP 404 - a missing issue
+  # must degrade a merge batch, never halt it. FTP has no redirects, so the
+  # redirect policy is untouched.
+  defp download_once("ftp://" <> _ = current, source, _auth, opts) do
+    with :ok <- validate_url(current, source) do
+      case Data.ftp_fetch(current, opts) do
+        {:ok, archive} ->
+          with :ok <- enforce_size(archive, max_archive_bytes(opts)) do
+            {:ok,
+             %{
+               archive: archive,
+               original_url: sanitize_url(current),
+               final_url: sanitize_url(current),
+               headers: [],
+               compression: :auto
+             }}
+          end
+
+        {:error, {:not_found_on_archive, _url}} ->
+          {:error, {:product_not_published, 404, sanitize_url(current)}}
+
+        {:error, {:download_size_exceeded, limit}} ->
+          {:error, {:download_size_exceeded, limit}}
+
+        {:error, {:network, reason}} ->
+          {:error, {:transport, ftp_transport_kind(reason), sanitize_url(current)}}
+
+        {:error, _other} ->
+          {:error, {:transport, :other, sanitize_url(current)}}
+      end
+    end
+  end
+
   defp download_once(url, source, auth, opts) do
     do_download_once(url, url, source, auth, opts, 0, %{})
   end
+
+  defp ftp_transport_kind({:ftp, :ehost}), do: :connection
+  defp ftp_transport_kind({:ftp, :etimedout}), do: :timeout
+  defp ftp_transport_kind(_reason), do: :other
 
   defp do_download_once(current, original, source, auth, opts, redirect_count, cookies) do
     with :ok <- validate_url(current, source),
@@ -836,8 +875,20 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp validate_url(url, source) do
     uri = URI.parse(url)
-    scheme_ok? = if source == :nasa_cddis, do: uri.scheme == "https", else: uri.scheme in ["http", "https"]
     host = uri.host && String.downcase(uri.host)
+
+    scheme_ok? =
+      case source do
+        :nasa_cddis ->
+          uri.scheme == "https"
+
+        :direct ->
+          # `ftp` is accepted only for hosts the core catalog itself serves
+          # over anonymous FTP (WHU's IGS data center); everything else stays
+          # http/https.
+          uri.scheme in ["http", "https"] or
+            (uri.scheme == "ftp" and host in Data.ftp_hosts())
+      end
 
     host_ok? =
       case source do

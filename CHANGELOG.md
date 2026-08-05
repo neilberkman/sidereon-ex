@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.3] - 2026-08-04
+
+### Fixed
+
+- Exact acquisition (`Distribution.acquire/2` and everything built on it,
+  including `fetch_merged_sp3/3`) now acquires cataloged `ftp://` products.
+  0.36.1's FTP transport lived only in the `Data` layer, so a WHU `wum_nrt`
+  candidate - whose identity 0.36.2 fixed - was still rejected as
+  `{:malformed_url, ...}` by the exact path's URL validation, and because
+  that is an error rather than an absence, wiring the center into a merge
+  set halted the whole batch. The `ftp` scheme is now accepted for hosts the
+  core catalog itself serves over FTP (everything else stays http/https,
+  redirect policy untouched), downloads route through the same bounded
+  `:ftp` transport with its `:ftp_client` injection, and FTP 550 maps to
+  the same typed `:product_not_published` absence as an HTTP 404 - a
+  missing hourly issue degrades a merge batch instead of killing it.
+  Verified live end to end: `fetch_merged_sp3` acquiring and merging
+  `gfz_ult` (HTTPS) with `wum_nrt` (FTP), the candidate walk degrading
+  through genuinely absent hourly issues on the way. Found by downstream
+  0.36.2 verification; regression tests now sit at exactly this seam.
+
+### Notes
+
+- Merging `wum_nrt` with the IGS/ESA/GFZ operational ultras is the
+  catalog's first mixed frame-label pair (`IGS20` vs `IGc20`). The merge's
+  frame reconciliation fails closed on mismatched labels by design; assert
+  the equivalence explicitly via
+  `asserted_frame_label_sets: [["IGS20", "IGc20"]]` when your policy
+  accepts it.
+
 ## [0.36.2] - 2026-08-04
 
 ### Fixed

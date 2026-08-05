@@ -12,6 +12,8 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
 
   alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.Data.Product
+  alias Sidereon.GNSS.Distribution
+  alias Sidereon.TestSupport.ExactSp3Fixture
 
   @fixtures Path.join(__DIR__, "fixtures/listings")
 
@@ -280,6 +282,57 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
 
       assert {:error, {:product_validation_failed, :official_filename}} =
                Data.identity(lying)
+    end
+  end
+
+  describe "cataloged-FTP exact acquisition (Distribution layer)" do
+    test "wum_nrt acquires through Distribution.acquire with provenance", %{} do
+      tmp = Path.join(System.tmp_dir!(), "wum-ftp-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(tmp) end)
+
+      content =
+        ExactSp3Fixture.build(~D[2026-08-03],
+          agency: "WHU",
+          issue: "0500",
+          span_s: 172_800
+        )
+
+      archive = :zlib.gzip(content)
+      parent = self()
+
+      ftp_client = fn url, _opts ->
+        send(parent, {:ftp, url})
+        assert String.starts_with?(url, "ftp://igs.gnsswhu.cn/pub/gps/products/mgex/2430/")
+        {:ok, archive}
+      end
+
+      {:ok, product} = Data.ops_ultra_sp3(:wum_nrt, ~D[2026-08-03], issue: "0500")
+      {:ok, request} = Data.request(product, [Distribution.direct()])
+
+      assert {:ok, result} = Data.acquire(request, cache_dir: tmp, ftp_client: ftp_client)
+      assert result.provenance.resolved_identity.analysis_center == "wum_nrt"
+      assert result.provenance.resolved_identity.solution_class == "near_real_time"
+      assert_received {:ftp, _}
+
+      # Cache-first: the second acquisition never touches FTP.
+      assert {:ok, _again} = Data.acquire(request, cache_dir: tmp, ftp_client: ftp_client)
+      refute_received {:ftp, _}
+    end
+
+    test "an absent FTP issue degrades a merge batch as a typed absence, never a halt" do
+      tmp = Path.join(System.tmp_dir!(), "wum-ftp-absent-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(tmp) end)
+
+      ftp_client = fn url, _opts -> {:error, {:not_found_on_archive, url}} end
+
+      assert {:error, {:no_products, absences}} =
+               Data.fetch_merged_sp3(~N[2026-08-03 06:00:00], [:wum_nrt],
+                 cache_dir: tmp,
+                 ftp_client: ftp_client
+               )
+
+      assert Enum.all?(absences, &(&1.center == "wum_nrt"))
+      assert Enum.all?(absences, &(&1.http_status == 404))
     end
   end
 end
