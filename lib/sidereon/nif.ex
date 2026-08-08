@@ -15,6 +15,18 @@ force_build =
 rustler_features =
   if Mix.env() == :test, do: ["exact-cache-test-failpoints"], else: []
 
+# The :portable variant of the glibc Linux targets is zig-linked against a
+# glibc 2.17 floor, so the artifact is self-contained on old-glibc hosts and
+# in zig-based packaging pipelines (e.g. Burrito). Opt in at compile time
+# with SIDEREON_PORTABLE_NIF=1 or `config :sidereon, portable_nif: true`.
+# The musl targets are already self-contained and have no variant.
+portable? = fn _config ->
+  System.get_env("SIDEREON_PORTABLE_NIF") in ["1", "true"] or
+    Application.get_env(:sidereon, :portable_nif, false) == true
+end
+
+linux_gnu_variants = [portable: portable?]
+
 defmodule Sidereon.NIF do
   @moduledoc false
 
@@ -34,6 +46,10 @@ defmodule Sidereon.NIF do
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl"
     ],
+    variants: %{
+      "x86_64-unknown-linux-gnu" => linux_gnu_variants,
+      "aarch64-unknown-linux-gnu" => linux_gnu_variants
+    },
     version: version
 
   def propagate_with_elements(_tle_map, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)

@@ -30,7 +30,13 @@ end
 ```
 
 Releases ship precompiled NIFs for common Linux, macOS, and Windows targets and
-download automatically, so no Rust build is needed. To force a source build,
+download automatically, so no Rust build is needed. On glibc Linux, a
+`portable` artifact variant zig-linked against a glibc 2.17 floor is
+available for old-glibc hosts and zig-based packaging pipelines (e.g.
+Burrito): opt in at compile time with `SIDEREON_PORTABLE_NIF=1` or
+`config :sidereon, portable_nif: true`. The musl (Alpine) artifacts are
+already self-contained; in a bare `FROM alpine` runtime stage, `apk add
+libgcc` is the only system dependency. To force a source build,
 install a Rust toolchain, set `SIDEREON_BUILD=1`, and activate Sidereon's
 optional Rustler dependency in the consuming application:
 

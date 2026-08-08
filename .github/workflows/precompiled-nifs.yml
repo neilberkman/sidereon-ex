@@ -50,7 +50,7 @@ jobs:
           fi
 
   precompile:
-    name: ${{ matrix.nif }} / ${{ matrix.job.target }}
+    name: ${{ matrix.nif }} / ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }}
     needs: [asset-check, packaged-source-build]
     if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
@@ -75,6 +75,18 @@ jobs:
             os: ubuntu-22.04
             use-cross: true
             rustflags: "-C target-feature=-crt-static"
+          # :portable variant rows: zig-linked with a glibc 2.17 floor so
+          # the artifact is self-contained on old-glibc hosts and in
+          # zig-based packaging pipelines. Consumers opt in at compile time
+          # (SIDEREON_PORTABLE_NIF=1 / config :sidereon, portable_nif: true).
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            variant: portable
+            zig-glibc: "2.17"
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            variant: portable
+            zig-glibc: "2.17"
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -92,6 +104,11 @@ jobs:
           toolchain: 1.92.0
           target: ${{ matrix.job.target }}
 
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.job.zig-glibc }}
+        shell: bash
+        run: pip3 install cargo-zigbuild==0.23.0
+
       - name: Install cross
         if: ${{ matrix.job.use-cross }}
         shell: bash
@@ -108,13 +125,20 @@ jobs:
           RUSTFLAGS: ${{ matrix.job.rustflags }}
         run: |
           tool=cargo
+          subcommand=build
+          target_arg="${{ matrix.job.target }}"
           if [[ "${{ matrix.job.use-cross || false }}" == "true" ]]; then
             tool=cross
           fi
+          if [[ -n "${{ matrix.job.zig-glibc || '' }}" ]]; then
+            tool=cargo-zigbuild
+            subcommand=zigbuild
+            target_arg="${{ matrix.job.target }}.${{ matrix.job.zig-glibc }}"
+          fi
 
-          "$tool" build \
+          "$tool" "$subcommand" \
             --manifest-path native/sidereon_nif/Cargo.toml \
-            --target "${{ matrix.job.target }}" \
+            --target "$target_arg" \
             --release \
             --locked
 
@@ -140,8 +164,13 @@ jobs:
               ;;
           esac
 
+          variant_suffix=""
+          if [[ -n "${{ matrix.job.variant || '' }}" ]]; then
+            variant_suffix="--${{ matrix.job.variant }}"
+          fi
+
           source_lib="target/${target}/release/${lib_prefix}sidereon_nif.${source_ext}"
-          final_lib="${lib_prefix}sidereon_nif-v${PROJECT_VERSION}-nif-${nif}-${target}.${final_ext}"
+          final_lib="${lib_prefix}sidereon_nif-v${PROJECT_VERSION}-nif-${nif}-${target}${variant_suffix}.${final_ext}"
           archive="${final_lib}.tar.gz"
 
           test -f "$source_lib"
@@ -222,15 +251,16 @@ jobs:
         with:
           files: artifacts/**/*.tar.gz
 
-  alpine-load-smoke:
-    name: Alpine load smoke / ${{ matrix.target }}
+  load-smoke:
+    name: Load smoke / ${{ matrix.target }}${{ matrix.variant && format(' ({0})', matrix.variant) || '' }}
     needs: [asset-check, packaged-source-build, publish-release-assets]
     # Runs on the initial tag push (after assets publish) AND on the moved
-    # tag after the checksum commit, when builds are skipped: a musl NIF
-    # with the wrong crt linkage builds and checksums fine and only fails
-    # at :erlang.load_nif/2, so checksummed assets are not evidence of a
-    # loadable NIF. Boot the artifact in the standard Alpine image and
-    # dispatch one call through it.
+    # tag after the checksum commit, when builds are skipped: an artifact
+    # with the wrong linkage (static crt on musl, too-new glibc floor on the
+    # portable variant) builds and checksums fine and only fails at
+    # :erlang.load_nif/2, so checksummed assets are not evidence of a
+    # loadable NIF. Boot each artifact in a stock image via the consumer
+    # install path and dispatch one call through it.
     if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
     permissions:
       contents: read
@@ -238,8 +268,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            image: hexpm/elixir:1.20.3-erlang-28.4.3-alpine-3.23.5
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            image: hexpm/elixir:1.20.3-erlang-28.4.3-alpine-3.23.5
+          - target: x86_64-unknown-linux-gnu
+            variant: portable
+            os: ubuntu-22.04
+            image: hexpm/elixir:1.20.3-erlang-28.4.3-debian-bullseye-20260803
+            max-glibc: "2.17"
+          - target: aarch64-unknown-linux-gnu
+            variant: portable
+            os: ubuntu-24.04-arm
+            image: hexpm/elixir:1.20.3-erlang-28.4.3-debian-bullseye-20260803
+            max-glibc: "2.17"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -249,26 +293,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ matrix.target }}
+          VARIANT: ${{ matrix.variant }}
+          MAX_GLIBC: ${{ matrix.max-glibc }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
           test -n "$version"
-          asset="libsidereon_nif-v${version}-nif-2.15-${TARGET}.so.tar.gz"
+          flavor="${TARGET}${VARIANT:+--$VARIANT}"
+          asset="libsidereon_nif-v${version}-nif-2.15-${flavor}.so.tar.gz"
           gh release download "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --pattern "$asset" --dir /tmp/asset
           sha="$(sha256sum "/tmp/asset/$asset" | cut -d ' ' -f 1)"
           printf '%%{\n  "%s" => "sha256:%s"\n}\n' "$asset" "$sha" \
             > checksum-Elixir.Sidereon.NIF.exs
+
+          if [[ -n "$MAX_GLIBC" ]]; then
+            mkdir -p /tmp/asset/ext
+            tar -xzf "/tmp/asset/$asset" -C /tmp/asset/ext
+            ceiling="$(readelf --dyn-syms "/tmp/asset/ext/libsidereon_nif-v${version}-nif-2.15-${flavor}.so" \
+              | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+            echo "glibc symbol ceiling: $ceiling (floor promise: $MAX_GLIBC)"
+            test "$ceiling" = "GLIBC_${MAX_GLIBC}"
+          fi
+
           # Consumers install from a hex tarball: no .git, current checksum
           # file. A .git dir or a stale checksum flips the NIF to
           # force_build, which would smoke-test a source build instead of
           # the published artifact.
           rm -rf .git
 
-      - name: Load the precompiled NIF in Alpine and call it
+      - name: Load the precompiled NIF and call it
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           cat > /tmp/smoke.sh <<'SMOKE'
           set -e
@@ -278,7 +336,7 @@ jobs:
           cd /work
           mix deps.get
           mix compile
-          ls _build/prod/lib/sidereon/priv/native/ | grep -F "$TARGET"
+          ls _build/prod/lib/sidereon/priv/native/ | grep -F "$FLAVOR"
           mix run -e '
           case Sidereon.CCSDS.CDM.parse_kvn("") do
             {:error, _} ->
@@ -289,7 +347,9 @@ jobs:
               System.halt(1)
           end'
           SMOKE
-          docker run --rm -e TARGET="$TARGET" \
+          docker run --rm \
+            -e FLAVOR="${TARGET}${VARIANT:+--$VARIANT}" \
+            -e SIDEREON_PORTABLE_NIF="${VARIANT:+1}" \
             -v "$PWD":/work -v /tmp/smoke.sh:/smoke.sh \
-            hexpm/elixir:1.20.3-erlang-28.4.3-alpine-3.23.5 \
+            "${{ matrix.image }}" \
             sh /smoke.sh

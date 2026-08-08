@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.5] - 2026-08-08
+
+### Added
+
+- A `:portable` variant of the glibc Linux precompiled NIFs
+  (`x86_64-unknown-linux-gnu--portable`, `aarch64-unknown-linux-gnu--portable`),
+  zig-linked against a glibc 2.17 floor so the artifact is self-contained on
+  old-glibc hosts and in zig-based packaging pipelines such as Burrito. Opt
+  in at compile time with `SIDEREON_PORTABLE_NIF=1` or
+  `config :sidereon, portable_nif: true`; without the opt-in, artifact
+  selection is unchanged. The musl artifacts are already self-contained and
+  have no variant. CI verifies the variant's glibc symbol ceiling and
+  load-smokes it alongside the musl artifacts.
+
 ## [0.36.4] - 2026-08-07
 
 ### Added
