@@ -61,9 +61,20 @@ jobs:
         job:
           - { target: aarch64-apple-darwin, os: macos-latest }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, use-cross: true }
+          # musl NIFs must link the C runtime dynamically: Rust defaults to
+          # +crt-static on musl, and a static-crt object cannot be dlopen'd
+          # as a NIF (loads would fail at :erlang.load_nif/2).
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04
+            use-cross: true
+            rustflags: "-C target-feature=-crt-static"
           - { target: x86_64-apple-darwin, os: macos-15-intel }
           - { target: x86_64-pc-windows-msvc, os: windows-2022 }
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            use-cross: true
+            rustflags: "-C target-feature=-crt-static"
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -94,6 +105,7 @@ jobs:
         shell: bash
         env:
           RUSTLER_NIF_VERSION: ${{ matrix.nif }}
+          RUSTFLAGS: ${{ matrix.job.rustflags }}
         run: |
           tool=cargo
           if [[ "${{ matrix.job.use-cross || false }}" == "true" ]]; then

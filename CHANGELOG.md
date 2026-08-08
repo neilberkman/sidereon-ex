@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.4] - 2026-08-07
+
+### Added
+
+- Precompiled NIFs for `x86_64-unknown-linux-musl` and
+  `aarch64-unknown-linux-musl`, so musl-based deployments (Alpine container
+  images, including the standard `hexpm/elixir:*-alpine-*` bases) install
+  without a Rust toolchain. The musl NIFs link the C runtime dynamically
+  (`-crt-static`), as a static-crt object cannot be loaded as a NIF.
+
 ### Changed
 
 - The FTP transport's default client is now `Sidereon.GNSS.FtpClient`, a
