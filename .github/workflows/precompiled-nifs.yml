@@ -221,3 +221,75 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: artifacts/**/*.tar.gz
+
+  alpine-load-smoke:
+    name: Alpine load smoke / ${{ matrix.target }}
+    needs: [asset-check, packaged-source-build, publish-release-assets]
+    # Runs on the initial tag push (after assets publish) AND on the moved
+    # tag after the checksum commit, when builds are skipped: a musl NIF
+    # with the wrong crt linkage builds and checksums fine and only fails
+    # at :erlang.load_nif/2, so checksummed assets are not evidence of a
+    # loadable NIF. Boot the artifact in the standard Alpine image and
+    # dispatch one call through it.
+    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Stage a consumer-shaped checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          test -n "$version"
+          asset="libsidereon_nif-v${version}-nif-2.15-${TARGET}.so.tar.gz"
+          gh release download "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$asset" --dir /tmp/asset
+          sha="$(sha256sum "/tmp/asset/$asset" | cut -d ' ' -f 1)"
+          printf '%%{\n  "%s" => "sha256:%s"\n}\n' "$asset" "$sha" \
+            > checksum-Elixir.Sidereon.NIF.exs
+          # Consumers install from a hex tarball: no .git, current checksum
+          # file. A .git dir or a stale checksum flips the NIF to
+          # force_build, which would smoke-test a source build instead of
+          # the published artifact.
+          rm -rf .git
+
+      - name: Load the precompiled NIF in Alpine and call it
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cat > /tmp/smoke.sh <<'SMOKE'
+          set -e
+          export HOME=/root MIX_ENV=prod
+          mix local.hex --force
+          mix local.rebar --force
+          cd /work
+          mix deps.get
+          mix compile
+          ls _build/prod/lib/sidereon/priv/native/ | grep -F "$TARGET"
+          mix run -e '
+          case Sidereon.CCSDS.CDM.parse_kvn("") do
+            {:error, _} ->
+              IO.puts("SMOKE OK: precompiled NIF loaded, call dispatched into Rust and back")
+
+            other ->
+              IO.puts("SMOKE UNEXPECTED: #{inspect(other)}")
+              System.halt(1)
+          end'
+          SMOKE
+          docker run --rm -e TARGET="$TARGET" \
+            -v "$PWD":/work -v /tmp/smoke.sh:/smoke.sh \
+            hexpm/elixir:1.20.3-erlang-28.4.3-alpine-3.23.5 \
+            sh /smoke.sh
