@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   # Callable so the release workflow gates on this exact bar rather than a
   # weaker copy of it. Two lists drift, and the weaker one ends up guarding
   # the irreversible action.
   workflow_call:
-    branches: [main]
 
 jobs:
   packaged-source-build:
