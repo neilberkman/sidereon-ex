@@ -19,12 +19,12 @@ use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
 use sidereon_core::data::{ArchiveCompression, DistributionSource, ProductDate};
 use sidereon_core::ephemeris::{
-    align_clock_reference, clock_reference_offset, merge as crate_merge, parse_exact_sp3,
-    validate_exact_sp3, AgreementMetric, EpochAgreement, ExactSp3Coverage, ExactSp3Request,
-    check_continuity, ContinuityDefect, ContinuityOptions, MergeCombine, MergeFlag, MergeOptions,
-    MergePrecedenceScope, MergeReport, OrbitClass, OutlierRejectOptions, SpeedBound,
-    Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet, Sp3FrameReconciliation,
-    Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State,
+    align_clock_reference, check_continuity, clock_reference_offset, merge as crate_merge,
+    parse_exact_sp3, validate_exact_sp3, AgreementMetric, ContinuityDefect, ContinuityOptions,
+    EpochAgreement, ExactSp3Coverage, ExactSp3Request, MergeCombine, MergeFlag, MergeOptions,
+    MergePrecedenceScope, MergeReport, OrbitClass, OutlierRejectOptions, Sp3, Sp3ArtifactIdentity,
+    Sp3FrameLabelSet, Sp3FrameReconciliation, Sp3FrameReconciliationMethod,
+    Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State, SpeedBound,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -306,7 +306,11 @@ fn sp3_check_continuity(
     };
     let report = check_continuity(&handle.sp3.precise_ephemeris_samples(), &options);
     Ok((
-        report.defects.iter().map(continuity_defect_to_tuple).collect(),
+        report
+            .defects
+            .iter()
+            .map(continuity_defect_to_tuple)
+            .collect(),
         (
             report.pairs_checked as u64,
             report.residuals_checked as u64,
