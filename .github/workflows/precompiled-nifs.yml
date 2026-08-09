@@ -16,6 +16,13 @@ permissions:
   contents: read
 
 jobs:
+  # The full CI bar (format, credo, the Elixir suite across the OTP matrix),
+  # run against the tagged commit. The release path previously ran only the
+  # packaged-source-build gate, so a tag could ship assets from a commit that
+  # had never passed the rest.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
   packaged-source-build:
     name: Packaged source-build release gate
     uses: ./.github/workflows/packaged-source-build.yml
@@ -51,7 +58,7 @@ jobs:
 
   precompile:
     name: ${{ matrix.nif }} / ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }}
-    needs: [asset-check, packaged-source-build]
+    needs: [asset-check, packaged-source-build, gate]
     if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -233,7 +240,7 @@ jobs:
 
   publish-release-assets:
     name: Publish release assets
-    needs: [asset-check, packaged-source-build, precompile]
+    needs: [asset-check, packaged-source-build, gate, precompile]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/') && needs.asset-check.outputs.should-build == 'true'
     permissions:
@@ -253,7 +260,7 @@ jobs:
 
   load-smoke:
     name: Load smoke / ${{ matrix.target }}${{ matrix.variant && format(' ({0})', matrix.variant) || '' }}
-    needs: [asset-check, packaged-source-build, publish-release-assets]
+    needs: [asset-check, packaged-source-build, gate, publish-release-assets]
     # Runs on the initial tag push (after assets publish) AND on the moved
     # tag after the checksum commit, when builds are skipped: an artifact
     # with the wrong linkage (static crt on musl, too-new glibc floor on the
