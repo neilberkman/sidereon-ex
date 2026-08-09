@@ -73,7 +73,7 @@ defmodule Sidereon.MixProject do
   alias Sidereon.SourceLocalization.Solution
   alias Sidereon.Terrain.MmapTerrain
 
-  @version "0.36.5"
+  @version "0.37.0"
   @source_url "https://github.com/neilberkman/sidereon-ex"
 
   def project do

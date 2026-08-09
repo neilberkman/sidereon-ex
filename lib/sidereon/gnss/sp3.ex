@@ -412,6 +412,93 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Attest that this product is physically continuous, or report each violation.
+
+  A merged product is assembled per satellite and epoch from several analysis
+  centers, which is exactly the operation that can splice two physically
+  inconsistent arcs together while every input stays individually well-formed.
+  This runs two checks with different jobs:
+
+    * a physical earth-fixed speed gate, whose bound is a true upper bound for
+      the orbit class, so it cannot false-positive. It catches gross corruption
+      (a record from the wrong satellite or the wrong day) and is insensitive by
+      construction: adjacent GNSS MEO epochs are hundreds of kilometres apart,
+      so a metre-scale splice moves the implied speed by a fraction of a percent.
+
+    * a hold-out interpolation residual, which supplies the sensitivity. Each
+      interior sample is predicted from its neighbours through the product's own
+      interpolator and compared against the stored record, resolving a splice of
+      a few metres.
+
+  Options:
+
+    * `:orbit_class` - `:meo_gnss` (default), `:geosynchronous`, `:leo`, or
+      `nil` to disable the speed gate.
+    * `:residual_tolerance_m` - tolerance for the residual check, default
+      `1.0`; `nil` disables it.
+
+  Returns `{:ok, report}` where `report` has `:defects`, `:attested?`, and the
+  counts of what was examined, so "checked and clean" stays distinguishable from
+  "not checked". This reports rather than refuses: whether a product with
+  defects is acceptable is the caller's decision.
+
+  ## Example
+
+      {:ok, report} = Sidereon.GNSS.SP3.check_continuity(sp3)
+      report.attested?
+  """
+  @spec check_continuity(t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def check_continuity(%__MODULE__{handle: handle}, opts \\ []) do
+    orbit_class =
+      case Keyword.get(opts, :orbit_class, :meo_gnss) do
+        nil -> nil
+        atom when atom in [:meo_gnss, :geosynchronous, :leo] -> Atom.to_string(atom)
+        other -> {:bad_orbit_class, other}
+      end
+
+    tolerance = Keyword.get(opts, :residual_tolerance_m, 1.0)
+
+    case orbit_class do
+      {:bad_orbit_class, other} ->
+        {:error, {:bad_orbit_class, other}}
+
+      class ->
+        case NIF.sp3_check_continuity(handle, class, tolerance) do
+          {:ok, {defects, {pairs, residuals, skipped}}} ->
+            decoded = Enum.map(defects, &decode_continuity_defect/1)
+
+            {:ok,
+             %{
+               defects: decoded,
+               attested?: decoded == [],
+               pairs_checked: pairs,
+               residuals_checked: residuals,
+               residuals_skipped: skipped
+             }}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp decode_continuity_defect({kind, satellite, {from_s, to_s}, {magnitude, bound}}) do
+    %{
+      kind: continuity_defect_kind(kind),
+      satellite: satellite,
+      from_j2000_s: from_s,
+      to_j2000_s: to_s,
+      magnitude: magnitude,
+      bound: bound
+    }
+  end
+
+  defp continuity_defect_kind("duplicate_epoch"), do: :duplicate_epoch
+  defp continuity_defect_kind("single_sample_series"), do: :single_sample_series
+  defp continuity_defect_kind("speed_bound"), do: :speed_bound
+  defp continuity_defect_kind("hold_out_residual"), do: :hold_out_residual
+
+  @doc """
   Return observed/predicted status derived from the SP3 record flags.
 
   `:epochs` contains one entry per parsed epoch with `:observed`,

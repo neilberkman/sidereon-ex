@@ -622,6 +622,8 @@ defmodule Sidereon.NIF do
 
   def sp3_epochs_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_check_continuity(_handle, _orbit_class, _residual_tolerance_m), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_exact_request_new(_year, _month, _day, _issue, _span, _sample, _expected_agency),
     do: :erlang.nif_error(:nif_not_loaded)
 

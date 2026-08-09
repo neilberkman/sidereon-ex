@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-08-09
+
+### Added
+
+- `Sidereon.GNSS.SP3.check_continuity/2` attests that a parsed or merged
+  product is physically continuous, or reports each violation with its
+  epochs and magnitude. Two checks with different jobs: a physical
+  earth-fixed speed gate that cannot false-positive and catches gross
+  corruption, and a hold-out interpolation residual that supplies the
+  sensitivity a speed gate structurally cannot (adjacent GNSS MEO epochs
+  are hundreds of kilometres apart, so a metre-scale splice is invisible
+  to any physical bound). Reports rather than refuses.
+
+### Changed
+
+- Engine pinned to `sidereon-core` 0.37.0.
+
 ## [0.36.5] - 2026-08-08
 
 ### Added

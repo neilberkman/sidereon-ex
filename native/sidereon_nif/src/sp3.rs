@@ -21,7 +21,8 @@ use sidereon_core::data::{ArchiveCompression, DistributionSource, ProductDate};
 use sidereon_core::ephemeris::{
     align_clock_reference, clock_reference_offset, merge as crate_merge, parse_exact_sp3,
     validate_exact_sp3, AgreementMetric, EpochAgreement, ExactSp3Coverage, ExactSp3Request,
-    MergeCombine, MergeFlag, MergeOptions, MergePrecedenceScope, MergeReport, OutlierRejectOptions,
+    check_continuity, ContinuityDefect, ContinuityOptions, MergeCombine, MergeFlag, MergeOptions,
+    MergePrecedenceScope, MergeReport, OrbitClass, OutlierRejectOptions, SpeedBound,
     Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet, Sp3FrameReconciliation,
     Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State,
 };
@@ -57,6 +58,15 @@ pub struct ExactSp3RequestResource {
 }
 
 type Vec3Tuple = (f64, f64, f64);
+/// `{kind, satellite, {from_j2000_s | nil, to_j2000_s | nil}, {magnitude | nil, bound | nil}}`
+type ContinuityDefectTuple = (
+    String,
+    String,
+    (Option<f64>, Option<f64>),
+    (Option<f64>, Option<f64>),
+);
+/// `{defects, {pairs_checked, residuals_checked, residuals_skipped}}`
+type ContinuityReportTuple = (Vec<ContinuityDefectTuple>, (u64, u64, u64));
 type FlagsTuple = (bool, bool, bool, bool);
 type ExactRequestFields = (
     (i32, u8, u8),
@@ -194,6 +204,11 @@ fn merge_options_from_terms(
             asserted_equivalent_label_sets,
             helmert: helmert_frame_reconciliation,
         },
+        // Per-epoch provenance and the continuity post-condition are not yet
+        // surfaced on the Elixir merge options; both default to off, which is
+        // exactly the behavior this binding had before they existed.
+        provenance: None,
+        verify_continuity: None,
     })
 }
 
@@ -262,6 +277,92 @@ fn sp3_declared_epoch_count(handle: ResourceArc<Sp3Resource>) -> u64 {
 #[rustler::nif]
 fn sp3_declared_start_j2000_seconds(handle: ResourceArc<Sp3Resource>) -> Option<f64> {
     handle.sp3.declared_start_j2000_s()
+}
+
+/// Attest that a parsed or merged product is physically continuous.
+///
+/// `orbit_class` selects the physical earth-fixed speed bound
+/// (`"meo_gnss" | "geosynchronous" | "leo"`); passing `nil` disables that gate.
+/// `residual_tolerance_m` enables the sensitive hold-out interpolation residual
+/// check; passing `nil` disables it. Returns the defects with their epochs and
+/// magnitudes plus the counts of what was actually examined, so a caller can
+/// tell "checked and clean" from "not checked".
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_check_continuity(
+    handle: ResourceArc<Sp3Resource>,
+    orbit_class: Option<String>,
+    residual_tolerance_m: Option<f64>,
+) -> Result<ContinuityReportTuple, String> {
+    let speed_bound = match orbit_class.as_deref() {
+        None => None,
+        Some("meo_gnss") => Some(SpeedBound::OrbitClass(OrbitClass::MeoGnss)),
+        Some("geosynchronous") => Some(SpeedBound::OrbitClass(OrbitClass::Geosynchronous)),
+        Some("leo") => Some(SpeedBound::OrbitClass(OrbitClass::Leo)),
+        Some(other) => return Err(format!("unknown orbit class: {other}")),
+    };
+    let options = ContinuityOptions {
+        speed_bound,
+        residual_tolerance_m,
+    };
+    let report = check_continuity(&handle.sp3.precise_ephemeris_samples(), &options);
+    Ok((
+        report.defects.iter().map(continuity_defect_to_tuple).collect(),
+        (
+            report.pairs_checked as u64,
+            report.residuals_checked as u64,
+            report.residuals_skipped as u64,
+        ),
+    ))
+}
+
+/// One continuity defect: `{kind, satellite, {from_j2000_s, to_j2000_s},
+/// {magnitude, bound}}`. `magnitude` and `bound` carry the implied speed and its
+/// bound for a speed-bound defect, and the residual and its tolerance for a
+/// hold-out residual defect; both are `nil` for the input-shape defects.
+fn continuity_defect_to_tuple(defect: &ContinuityDefect) -> ContinuityDefectTuple {
+    match defect {
+        ContinuityDefect::DuplicateEpoch {
+            sat,
+            epoch_j2000_s,
+            occurrences,
+        } => (
+            "duplicate_epoch".to_string(),
+            sat.to_string(),
+            (Some(*epoch_j2000_s), Some(*epoch_j2000_s)),
+            (Some(*occurrences as f64), None),
+        ),
+        ContinuityDefect::SingleSampleSeries { sat } => (
+            "single_sample_series".to_string(),
+            sat.to_string(),
+            (None, None),
+            (None, None),
+        ),
+        ContinuityDefect::SpeedBound {
+            sat,
+            from_j2000_s,
+            to_j2000_s,
+            implied_speed_m_s,
+            bound_m_s,
+            ..
+        } => (
+            "speed_bound".to_string(),
+            sat.to_string(),
+            (Some(*from_j2000_s), Some(*to_j2000_s)),
+            (Some(*implied_speed_m_s), Some(*bound_m_s)),
+        ),
+        ContinuityDefect::HoldOutResidual {
+            sat,
+            preceding_j2000_s,
+            epoch_j2000_s,
+            residual_m,
+            tolerance_m,
+        } => (
+            "hold_out_residual".to_string(),
+            sat.to_string(),
+            (Some(*preceding_j2000_s), Some(*epoch_j2000_s)),
+            (Some(*residual_m), Some(*tolerance_m)),
+        ),
+    }
 }
 
 /// Parsed SP3 epoch grid as seconds since J2000 in the product's own time scale.
