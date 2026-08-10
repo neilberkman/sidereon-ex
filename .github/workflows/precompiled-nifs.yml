@@ -381,6 +381,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          # Two-stage release: the first tag push builds and publishes the
+          # assets, and the checksum file is only committed afterwards, with the
+          # tag moved onto that commit. So on the first pass the checksum file
+          # still describes the previous version and cannot match - the pairing
+          # is only meaningful once the file names this version.
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          if ! grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs; then
+            echo "checksum file does not describe ${version} yet; this is the " \
+                 "asset-publishing pass of the two-stage release. The pairing " \
+                 "is enforced on the moved tag."
+            exit 0
+          fi
+
           gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[].name' | sort > /tmp/assets.txt
           grep -oE '"[^"]+\.tar\.gz"' checksum-Elixir.Sidereon.NIF.exs \
