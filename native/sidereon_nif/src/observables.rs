@@ -315,7 +315,7 @@ pub fn predict_ranges_batch<'a>(
     } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
         core_predict_ranges(&handle.interpolant, &resolved, options, &mut out)
     } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
-        core_predict_ranges(&handle.interpolant, &resolved, options, &mut out)
+        core_predict_ranges(&*handle.read(), &resolved, options, &mut out)
     } else {
         return Err(Error::Term(Box::new(
             "expected an SP3, precise-sample, or precise-interpolant source handle",
@@ -445,7 +445,7 @@ where
     } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
         Ok(f(&handle.interpolant))
     } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
-        Ok(f(&handle.interpolant))
+        Ok(f(&*handle.read()))
     } else {
         Err(Error::Term(Box::new(
             "expected an SP3, precise-sample, or precise-interpolant source handle",

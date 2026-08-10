@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-08-10
+
+### Added
+
+- Attested opens for both mapped artifact readers:
+  `Sidereon.Terrain.MmapTerrain.from_path_attested/2` and the
+  precise-interpolant equivalent, recording a caller-attested content
+  checksum instead of hashing the payload at open. `digest_provenance/1`
+  returns `:verified` or `:attested`, and `verify/1` escalates to the
+  full hash pass on demand. Malformed claims are typed errors, never a
+  silent fallback to hashing.
+
+### Changed
+
+- Engine pinned to `sidereon-core` 0.39.0.
+
 ## [0.38.0] - 2026-08-09
 
 ### Changed

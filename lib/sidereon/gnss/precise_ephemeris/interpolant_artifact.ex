@@ -17,6 +17,8 @@ defmodule Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact do
 
   @type source :: SP3.t() | Interpolant.t() | t() | binary()
 
+  @type digest_provenance :: Interpolant.digest_provenance()
+
   @typedoc "Opened precise-interpolant artifact handle."
   @type t :: %__MODULE__{interpolant: Interpolant.t()}
 
@@ -54,6 +56,19 @@ defmodule Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact do
   end
 
   @doc """
+  Open an artifact using a caller-attested checksum.
+
+  The claim must equal the checksum declared by the header. Payload hashes are
+  deferred until `verify/1` is called.
+  """
+  @spec from_path_attested(String.t(), non_neg_integer()) :: {:ok, t()} | {:error, term()}
+  def from_path_attested(path, claimed_checksum64) when is_binary(path) do
+    with {:ok, interpolant} <- Interpolant.from_path_attested(path, claimed_checksum64) do
+      {:ok, %__MODULE__{interpolant: interpolant}}
+    end
+  end
+
+  @doc """
   Return the artifact checksum for bytes, an interpolant, or an opened artifact.
   """
   @spec checksum(source()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -65,6 +80,20 @@ defmodule Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact do
   """
   @spec checksum64(source()) :: {:ok, non_neg_integer()} | {:error, term()}
   def checksum64(source), do: checksum(source)
+
+  @doc """
+  Return who computed the checksum carried by this artifact handle.
+  """
+  @spec digest_provenance(t()) :: digest_provenance()
+  def digest_provenance(%__MODULE__{interpolant: interpolant}) do
+    Interpolant.digest_provenance(interpolant)
+  end
+
+  @doc """
+  Verify the file-level and per-satellite payload checksums.
+  """
+  @spec verify(t()) :: :ok | {:error, term()}
+  def verify(%__MODULE__{interpolant: interpolant}), do: Interpolant.verify(interpolant)
 
   @doc """
   Return the artifact bytes backing this opened handle.

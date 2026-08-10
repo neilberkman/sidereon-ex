@@ -24,6 +24,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
   alias Sidereon.NIF
   alias Sidereon.Terrain.MmapTerrain
 
+  @max_checksum64 0xFFFF_FFFF_FFFF_FFFF
+
   @enforce_keys [:handle]
   defstruct [:handle]
 
@@ -36,6 +38,9 @@ defmodule Sidereon.Terrain.MmapTerrain do
   Terrain interpolation method.
   """
   @type interpolation :: :bilinear | :nearest_posting
+
+  @typedoc "Who computed the checksum carried by a terrain handle."
+  @type digest_provenance :: :verified | :attested
 
   @typedoc """
   Terrain store conversion or parse error.
@@ -373,7 +378,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
               | :unsupported_version
               | :unsupported_datum
               | :duplicate_tile
-              | :checksum,
+              | :checksum
+              | :attested_checksum_mismatch,
             path: String.t() | nil,
             message: String.t() | nil,
             reason: String.t() | nil,
@@ -404,6 +410,10 @@ defmodule Sidereon.Terrain.MmapTerrain do
         expected: expected,
         found: found
       }
+    end
+
+    def from_nif({:attested_checksum_mismatch, expected, found}) do
+      %__MODULE__{kind: :attested_checksum_mismatch, expected: expected, found: found}
     end
 
     def from_nif(other), do: other
@@ -509,6 +519,28 @@ defmodule Sidereon.Terrain.MmapTerrain do
     |> store_handle_result()
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Open a terrain store file using a caller-attested full-store checksum.
+
+  The file is memory-mapped read-only. Construction validates its header,
+  datum tag, tile index, dimensions, and payload bounds without hashing tile
+  payloads. The claim is returned by `checksum64/1` until `verify/1` succeeds.
+  """
+  @spec from_path_attested(String.t(), non_neg_integer()) ::
+          {:ok, t()} | {:error, terrain_store_error() | {:invalid_checksum64, term()} | term()}
+  def from_path_attested(path, claimed_checksum64)
+      when is_binary(path) and is_integer(claimed_checksum64) and claimed_checksum64 >= 0 and
+             claimed_checksum64 <= @max_checksum64 do
+    NIF.terrain_store_mmap_from_path_attested(path, claimed_checksum64)
+    |> store_handle_result()
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def from_path_attested(path, claimed_checksum64) when is_binary(path) do
+    {:error, {:invalid_checksum64, claimed_checksum64}}
   end
 
   @doc """
@@ -663,11 +695,33 @@ defmodule Sidereon.Terrain.MmapTerrain do
   end
 
   @doc """
+  Return who computed the checksum carried by this terrain handle.
+  """
+  @spec digest_provenance(t()) :: digest_provenance()
+  def digest_provenance(%__MODULE__{handle: handle}), do: NIF.terrain_store_digest_provenance(handle)
+
+  @doc """
   Return a checksum for a parsed store handle or terrain store bytes.
   """
   @spec checksum64(t() | binary()) :: non_neg_integer()
   def checksum64(%__MODULE__{handle: handle}), do: NIF.terrain_store_mmap_checksum64(handle)
   def checksum64(bytes) when is_binary(bytes), do: terrain_store_checksum64(bytes)
+
+  @doc """
+  Verify tile payloads and any caller-attested full-store checksum.
+
+  On success, `digest_provenance/1` returns `:verified`.
+  """
+  @spec verify(t()) :: :ok | {:error, terrain_store_error() | term()}
+  def verify(%__MODULE__{handle: handle}) do
+    case NIF.terrain_store_mmap_verify(handle) do
+      :ok -> :ok
+      {:error, reason} -> {:error, TerrainStoreError.from_nif(reason)}
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
 
   @doc """
   Return canonical terrain store bytes from a parsed handle.

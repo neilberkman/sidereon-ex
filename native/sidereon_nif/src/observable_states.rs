@@ -4,6 +4,8 @@
 //! interpolation, gap classification, and batch contracts stay in
 //! `sidereon-core`.
 
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 use rustler::{Binary, Encoder, Env, Error, NifResult, OwnedBinary, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit};
 use sidereon_core::ephemeris::{
@@ -14,6 +16,7 @@ use sidereon_core::ephemeris::{
     ObservablesError, PreciseEphemerisInterpolant, PreciseEphemerisSample, PreciseInterpolantError,
     PreciseInterpolantStoreError, PreciseSamplesError, OBSERVABLE_STATE_MISSING_POSITION_ECEF_M,
 };
+use sidereon_core::DigestProvenance;
 use sidereon_core::{Error as CoreError, GnssSatelliteId};
 
 use crate::precise_samples::SampleSourceResource;
@@ -50,7 +53,10 @@ mod atoms {
         unsupported_satellite_system,
         duplicate_satellite,
         checksum,
-        satellite_checksum
+        satellite_checksum,
+        attested_checksum_mismatch,
+        verified,
+        attested
     }
 }
 
@@ -64,7 +70,27 @@ impl rustler::Resource for PreciseInterpolantResource {}
 
 /// Resource handle holding an opened memory-mappable precise-interpolant store.
 pub struct MappedPreciseInterpolantResource {
-    pub interpolant: MmapPreciseEphemerisInterpolant<'static>,
+    interpolant: RwLock<MmapPreciseEphemerisInterpolant<'static>>,
+}
+
+impl MappedPreciseInterpolantResource {
+    fn new(interpolant: MmapPreciseEphemerisInterpolant<'static>) -> Self {
+        Self {
+            interpolant: RwLock::new(interpolant),
+        }
+    }
+
+    pub(crate) fn read(&self) -> RwLockReadGuard<'_, MmapPreciseEphemerisInterpolant<'static>> {
+        self.interpolant
+            .read()
+            .expect("mapped precise interpolant resource lock poisoned")
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, MmapPreciseEphemerisInterpolant<'static>> {
+        self.interpolant
+            .write()
+            .expect("mapped precise interpolant resource lock poisoned")
+    }
 }
 
 #[rustler::resource_impl]
@@ -125,7 +151,7 @@ pub fn precise_interpolant_time_scale(source: Term<'_>) -> NifResult<String> {
     if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
         Ok(handle.interpolant.time_scale().abbrev().to_string())
     } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
-        Ok(handle.interpolant.time_scale().abbrev().to_string())
+        Ok(handle.read().time_scale().abbrev().to_string())
     } else {
         Err(Error::Term(Box::new(
             "expected a precise-interpolant handle",
@@ -144,7 +170,7 @@ pub fn precise_interpolant_satellite_ids(source: Term<'_>) -> NifResult<Vec<Stri
             .collect())
     } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
         Ok(handle
-            .interpolant
+            .read()
             .satellites()
             .iter()
             .map(|sat| sat.to_string())
@@ -186,7 +212,24 @@ pub fn precise_interpolant_store_open<'a>(env: Env<'a>, bytes: Binary<'a>) -> Te
     match MmapPreciseEphemerisInterpolant::from_vec(bytes.as_slice().to_vec()) {
         Ok(interpolant) => (
             atoms::ok(),
-            ResourceArc::new(MappedPreciseInterpolantResource { interpolant }),
+            ResourceArc::new(MappedPreciseInterpolantResource::new(interpolant)),
+        )
+            .encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Open a precise-interpolant artifact using a caller-attested checksum.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_from_path_attested<'a>(
+    env: Env<'a>,
+    path: String,
+    claimed_checksum64: u64,
+) -> Term<'a> {
+    match MmapPreciseEphemerisInterpolant::from_path_attested(path, claimed_checksum64) {
+        Ok(interpolant) => (
+            atoms::ok(),
+            ResourceArc::new(MappedPreciseInterpolantResource::new(interpolant)),
         )
             .encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
@@ -204,7 +247,47 @@ pub fn precise_interpolant_store_checksum64_bytes(bytes: Binary<'_>) -> u64 {
 pub fn precise_interpolant_store_checksum64_handle(
     handle: ResourceArc<MappedPreciseInterpolantResource>,
 ) -> u64 {
-    handle.interpolant.checksum64()
+    handle.read().checksum64()
+}
+
+/// Return who computed the checksum carried by an opened artifact handle.
+#[rustler::nif]
+pub fn precise_interpolant_store_digest_provenance(
+    handle: ResourceArc<MappedPreciseInterpolantResource>,
+) -> rustler::Atom {
+    match handle.read().digest_provenance() {
+        DigestProvenance::Verified => atoms::verified(),
+        DigestProvenance::Attested => atoms::attested(),
+    }
+}
+
+/// Verify the file-level and per-satellite payload checksums.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_verify<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<MappedPreciseInterpolantResource>,
+) -> Term<'a> {
+    match handle.write().verify() {
+        Ok(()) => atoms::ok().encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Return the bytes backing an opened artifact handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_interpolant_store_bytes_handle<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<MappedPreciseInterpolantResource>,
+) -> Term<'a> {
+    bytes_to_binary(env, handle.read().as_bytes())
+}
+
+/// Return the byte length of an opened artifact handle.
+#[rustler::nif]
+pub fn precise_interpolant_store_byte_len_handle(
+    handle: ResourceArc<MappedPreciseInterpolantResource>,
+) -> u64 {
+    handle.read().as_bytes().len() as u64
 }
 
 /// Position sentinel used by failed observable-state batch rows.
@@ -258,7 +341,7 @@ where
     } else if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
         Ok(f(&handle.interpolant))
     } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
-        Ok(f(&handle.interpolant))
+        Ok(f(&*handle.read()))
     } else {
         Err(Error::Term(Box::new(
             "expected an SP3, precise-sample, or precise-interpolant handle",
@@ -425,6 +508,9 @@ fn store_error_term<'a>(env: Env<'a>, error: PreciseInterpolantStoreError) -> Te
             ),
         )
             .encode(env),
+        PreciseInterpolantStoreError::AttestedChecksumMismatch { claimed, declared } => {
+            (atoms::attested_checksum_mismatch(), claimed, declared).encode(env)
+        }
     }
 }
 

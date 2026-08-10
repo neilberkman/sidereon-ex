@@ -14,6 +14,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact do
 
   @type t :: InterpolantArtifact.t()
   @type source :: InterpolantArtifact.source()
+  @type digest_provenance :: InterpolantArtifact.digest_provenance()
 
   @doc "Build canonical artifact bytes from an SP3 product, an interpolant, or an opened artifact."
   @spec artifact_bytes(SP3.t() | Interpolant.t() | t()) :: {:ok, binary()} | {:error, term()}
@@ -31,6 +32,10 @@ defmodule Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact do
   @spec from_path(String.t()) :: {:ok, t()} | {:error, term()}
   defdelegate from_path(path), to: InterpolantArtifact
 
+  @doc "Open an artifact using a caller-attested checksum."
+  @spec from_path_attested(String.t(), non_neg_integer()) :: {:ok, t()} | {:error, term()}
+  defdelegate from_path_attested(path, claimed_checksum64), to: InterpolantArtifact
+
   @doc "Return the artifact checksum."
   @spec checksum(source()) :: {:ok, non_neg_integer()} | {:error, term()}
   defdelegate checksum(source), to: InterpolantArtifact
@@ -38,6 +43,14 @@ defmodule Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact do
   @doc "Alias for `checksum/1`."
   @spec checksum64(source()) :: {:ok, non_neg_integer()} | {:error, term()}
   defdelegate checksum64(source), to: InterpolantArtifact
+
+  @doc "Return who computed the checksum carried by this artifact handle."
+  @spec digest_provenance(t()) :: digest_provenance()
+  defdelegate digest_provenance(artifact), to: InterpolantArtifact
+
+  @doc "Verify the file-level and per-satellite payload checksums."
+  @spec verify(t()) :: :ok | {:error, term()}
+  defdelegate verify(artifact), to: InterpolantArtifact
 
   @doc "Return the artifact bytes backing an opened handle."
   @spec as_bytes(t()) :: {:ok, binary()} | {:error, term()}

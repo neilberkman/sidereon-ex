@@ -726,9 +726,19 @@ defmodule Sidereon.NIF do
 
   def precise_interpolant_store_open(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
+  def precise_interpolant_store_from_path_attested(_path, _claimed_checksum64), do: :erlang.nif_error(:nif_not_loaded)
+
   def precise_interpolant_store_checksum64_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_store_checksum64_handle(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_digest_provenance(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_verify(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_bytes_handle(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_store_byte_len_handle(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def observable_state_missing_position_ecef_m, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2021,6 +2031,8 @@ defmodule Sidereon.NIF do
 
   def terrain_store_mmap_from_path(_path), do: :erlang.nif_error(:nif_not_loaded)
 
+  def terrain_store_mmap_from_path_attested(_path, _claimed_checksum64), do: :erlang.nif_error(:nif_not_loaded)
+
   def terrain_store_height_m(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_store_height_m_with_options(_handle, _longitude_deg, _latitude_deg, _interpolation),
@@ -2053,7 +2065,11 @@ defmodule Sidereon.NIF do
 
   def terrain_store_vertical_datum(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def terrain_store_digest_provenance(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def terrain_store_mmap_checksum64(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_mmap_verify(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_store_to_bytes(_handle), do: :erlang.nif_error(:nif_not_loaded)
 

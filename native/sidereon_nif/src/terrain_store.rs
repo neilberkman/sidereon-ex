@@ -5,6 +5,8 @@
 //! behind read-only resource handles. Terrain coordinates cross the boundary as
 //! `(longitude_deg, latitude_deg)` pairs, matching the core terrain API.
 
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 use rustler::{Binary, Encoder, Env, Error, NifResult, OwnedBinary, ResourceArc, Term};
 use sidereon_core::terrain::{DtedInterpolation, DtedLookupOptions};
 use sidereon_core::terrain_store::{
@@ -12,6 +14,7 @@ use sidereon_core::terrain_store::{
     Egm96FifteenMinuteGeoid, EllipsoidalHeightM, MmapTerrain, OrthometricHeightM,
     TerrainDatumError, TerrainGeoidModel, TerrainStoreError, TerrainStoreTileIndex, VerticalDatum,
 };
+use sidereon_core::DigestProvenance;
 
 mod atoms {
     rustler::atoms! {
@@ -26,6 +29,9 @@ mod atoms {
         duplicate_tile,
         tile_id_mismatch,
         checksum,
+        attested_checksum_mismatch,
+        verified,
+        attested,
         terrain,
         geoid,
         missing_egm96_dac
@@ -34,7 +40,25 @@ mod atoms {
 
 /// Parsed memory-mappable terrain store held across calls.
 pub struct MmapTerrainResource {
-    pub terrain: MmapTerrain<'static>,
+    terrain: RwLock<MmapTerrain<'static>>,
+}
+
+impl MmapTerrainResource {
+    fn new(terrain: MmapTerrain<'static>) -> Self {
+        Self {
+            terrain: RwLock::new(terrain),
+        }
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, MmapTerrain<'static>> {
+        self.terrain.read().expect("terrain resource lock poisoned")
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, MmapTerrain<'static>> {
+        self.terrain
+            .write()
+            .expect("terrain resource lock poisoned")
+    }
 }
 
 /// Loaded EGM96 15-minute geoid grid for explicit datum conversion.
@@ -117,7 +141,7 @@ fn mmap_from_bytes_term<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
     match MmapTerrain::from_vec(bytes.to_vec()) {
         Ok(terrain) => (
             atoms::ok(),
-            ResourceArc::new(MmapTerrainResource { terrain }),
+            ResourceArc::new(MmapTerrainResource::new(terrain)),
         )
             .encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
@@ -156,6 +180,16 @@ fn store_error_term<'a>(env: Env<'a>, error: TerrainStoreError) -> Term<'a> {
             expected,
             found,
         } => (atoms::checksum(), lat_index, lon_index, expected, found).encode(env),
+        TerrainStoreError::AttestedChecksumMismatch { expected, found } => {
+            (atoms::attested_checksum_mismatch(), expected, found).encode(env)
+        }
+    }
+}
+
+fn digest_provenance_atom(provenance: DigestProvenance) -> rustler::Atom {
+    match provenance {
+        DigestProvenance::Verified => atoms::verified(),
+        DigestProvenance::Attested => atoms::attested(),
     }
 }
 
@@ -212,14 +246,14 @@ fn ellipsoidal_with_model<'a>(
     geoid: Option<ResourceArc<Egm96FifteenMinuteGeoidResource>>,
 ) -> Term<'a> {
     let result = match model.as_str() {
-        "egm96_one_degree" => handle.terrain.ellipsoidal_height_m_with_model(
+        "egm96_one_degree" => handle.read().ellipsoidal_height_m_with_model(
             longitude_deg,
             latitude_deg,
             options,
             TerrainGeoidModel::Egm96OneDegree,
         ),
         "egm96_fifteen_minute" => match geoid {
-            Some(geoid) => handle.terrain.ellipsoidal_height_m_with_model(
+            Some(geoid) => handle.read().ellipsoidal_height_m_with_model(
                 longitude_deg,
                 latitude_deg,
                 options,
@@ -320,7 +354,24 @@ fn terrain_store_mmap_from_path<'a>(env: Env<'a>, path: String) -> Term<'a> {
     match MmapTerrain::from_path(path) {
         Ok(terrain) => (
             atoms::ok(),
-            ResourceArc::new(MmapTerrainResource { terrain }),
+            ResourceArc::new(MmapTerrainResource::new(terrain)),
+        )
+            .encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Open a terrain store using a caller-attested full-store checksum.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn terrain_store_mmap_from_path_attested<'a>(
+    env: Env<'a>,
+    path: String,
+    claimed_checksum64: u64,
+) -> Term<'a> {
+    match MmapTerrain::from_path_attested(path, claimed_checksum64) {
+        Ok(terrain) => (
+            atoms::ok(),
+            ResourceArc::new(MmapTerrainResource::new(terrain)),
         )
             .encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
@@ -338,7 +389,7 @@ fn terrain_store_height_m<'a>(
     terrain_result_term(
         env,
         handle
-            .terrain
+            .read()
             .orthometric_height_m_with_options(
                 longitude_deg,
                 latitude_deg,
@@ -363,7 +414,7 @@ fn terrain_store_height_m_with_options<'a>(
         Ok(options) => terrain_result_term(
             env,
             handle
-                .terrain
+                .read()
                 .orthometric_height_m_with_options(longitude_deg, latitude_deg, options)
                 .map(OrthometricHeightM::metres),
         ),
@@ -381,7 +432,7 @@ fn terrain_store_orthometric_height_m<'a>(
 ) -> Term<'a> {
     orthometric_result_term(
         env,
-        handle.terrain.orthometric_height_m_with_options(
+        handle.read().orthometric_height_m_with_options(
             longitude_deg,
             latitude_deg,
             DtedLookupOptions {
@@ -404,7 +455,7 @@ fn terrain_store_orthometric_height_m_with_options<'a>(
         Ok(options) => orthometric_result_term(
             env,
             handle
-                .terrain
+                .read()
                 .orthometric_height_m_with_options(longitude_deg, latitude_deg, options),
         ),
         Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
@@ -421,7 +472,7 @@ fn terrain_store_height_batch<'a>(
 ) -> Vec<Term<'a>> {
     match lookup_options(interpolation) {
         Ok(options) => handle
-            .terrain
+            .read()
             .orthometric_height_batch(&points, options)
             .into_iter()
             .map(|result| terrain_result_term(env, result.map(OrthometricHeightM::metres)))
@@ -443,7 +494,7 @@ fn terrain_store_orthometric_height_batch<'a>(
 ) -> Vec<Term<'a>> {
     match lookup_options(interpolation) {
         Ok(options) => handle
-            .terrain
+            .read()
             .orthometric_height_batch(&points, options)
             .into_iter()
             .map(|result| orthometric_result_term(env, result))
@@ -465,7 +516,7 @@ fn terrain_store_ellipsoidal_height_m<'a>(
 ) -> Term<'a> {
     ellipsoidal_result_term(
         env,
-        handle.terrain.ellipsoidal_height_m_with_options(
+        handle.read().ellipsoidal_height_m_with_options(
             longitude_deg,
             latitude_deg,
             DtedLookupOptions {
@@ -488,7 +539,7 @@ fn terrain_store_ellipsoidal_height_m_with_options<'a>(
         Ok(options) => ellipsoidal_result_term(
             env,
             handle
-                .terrain
+                .read()
                 .ellipsoidal_height_m_with_options(longitude_deg, latitude_deg, options),
         ),
         Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
@@ -526,7 +577,7 @@ fn terrain_store_tile_index(
     handle: ResourceArc<MmapTerrainResource>,
 ) -> Vec<TerrainStoreTileIndexTerm> {
     handle
-        .terrain
+        .read()
         .tile_index()
         .iter()
         .copied()
@@ -537,19 +588,37 @@ fn terrain_store_tile_index(
 /// Return the store's file-level vertical datum.
 #[rustler::nif]
 fn terrain_store_vertical_datum(handle: ResourceArc<MmapTerrainResource>) -> rustler::Atom {
-    vertical_datum_atom(handle.terrain.vertical_datum())
+    vertical_datum_atom(handle.read().vertical_datum())
+}
+
+/// Return who computed the checksum carried by this terrain handle.
+#[rustler::nif]
+fn terrain_store_digest_provenance(handle: ResourceArc<MmapTerrainResource>) -> rustler::Atom {
+    digest_provenance_atom(handle.read().digest_provenance())
 }
 
 /// Return the parsed store byte checksum.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn terrain_store_mmap_checksum64(handle: ResourceArc<MmapTerrainResource>) -> u64 {
-    handle.terrain.checksum64()
+    handle.read().checksum64()
+}
+
+/// Verify tile payloads and any caller-attested full-store checksum.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn terrain_store_mmap_verify<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<MmapTerrainResource>,
+) -> Term<'a> {
+    match handle.write().verify() {
+        Ok(()) => atoms::ok().encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
 }
 
 /// Re-serialize the parsed terrain store into canonical bytes.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn terrain_store_to_bytes<'a>(env: Env<'a>, handle: ResourceArc<MmapTerrainResource>) -> Term<'a> {
-    bytes_to_binary(env, &handle.terrain.to_bytes())
+    bytes_to_binary(env, &handle.read().to_bytes())
 }
 
 /// Load an EGM96 15-minute geoid grid from bytes.

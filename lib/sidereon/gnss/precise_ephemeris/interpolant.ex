@@ -20,6 +20,8 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
 
+  @max_checksum64 0xFFFF_FFFF_FFFF_FFFF
+
   @enforce_keys [:handle, :time_scale]
   defstruct [:handle, :time_scale, artifact?: false, byte_len: nil, bytes: nil]
 
@@ -34,6 +36,9 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
           byte_len: non_neg_integer() | nil,
           bytes: binary() | nil
         }
+
+  @typedoc "Who computed the checksum carried by an opened artifact handle."
+  @type digest_provenance :: :verified | :attested
 
   @doc """
   Build a cached interpolant from a parsed SP3 product.
@@ -183,6 +188,43 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   @doc """
+  Open a precise-interpolant artifact using a caller-attested checksum.
+
+  The file is memory-mapped read-only. Construction validates its header,
+  index, dimensions, lengths, and payload layout without hashing payloads. The
+  claim must equal the checksum declared by the header; a mismatch fails
+  immediately and never falls back to hashing.
+  """
+  @spec from_path_attested(String.t(), non_neg_integer()) ::
+          {:ok, t()} | {:error, {:invalid_checksum64, term()} | term()}
+  def from_path_attested(path, claimed_checksum64)
+      when is_binary(path) and is_integer(claimed_checksum64) and claimed_checksum64 >= 0 and
+             claimed_checksum64 <= @max_checksum64 do
+    case NIF.precise_interpolant_store_from_path_attested(path, claimed_checksum64) do
+      {:ok, resource} when is_reference(resource) ->
+        {:ok,
+         %__MODULE__{
+           handle: resource,
+           time_scale: NIF.precise_interpolant_time_scale(resource),
+           artifact?: true,
+           byte_len: NIF.precise_interpolant_store_byte_len_handle(resource)
+         }}
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, other}
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  def from_path_attested(path, claimed_checksum64) when is_binary(path) do
+    {:error, {:invalid_checksum64, claimed_checksum64}}
+  end
+
+  @doc """
   Return the artifact checksum.
 
   Pass artifact bytes to compute their checksum directly. Passing an opened
@@ -211,6 +253,30 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   def checksum64(source), do: checksum(source)
 
   @doc """
+  Return who computed the checksum carried by an opened artifact handle.
+  """
+  @spec digest_provenance(t()) :: digest_provenance()
+  def digest_provenance(%__MODULE__{artifact?: true, handle: handle}) do
+    NIF.precise_interpolant_store_digest_provenance(handle)
+  end
+
+  @doc """
+  Verify the file-level and per-satellite payload checksums.
+
+  On success, `digest_provenance/1` returns `:verified`.
+  """
+  @spec verify(t()) :: :ok | {:error, term()}
+  def verify(%__MODULE__{artifact?: true, handle: handle}) do
+    case NIF.precise_interpolant_store_verify(handle) do
+      :ok -> :ok
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc """
   Return canonical artifact bytes for this handle.
 
   Opened artifacts return the same bytes supplied to `open/1` or `from_bytes/1`;
@@ -218,6 +284,13 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   """
   @spec as_bytes(t()) :: {:ok, binary()} | {:error, term()}
   def as_bytes(%__MODULE__{bytes: bytes}) when is_binary(bytes), do: {:ok, bytes}
+
+  def as_bytes(%__MODULE__{artifact?: true, handle: handle}) do
+    {:ok, NIF.precise_interpolant_store_bytes_handle(handle)}
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
   def as_bytes(%__MODULE__{} = interpolant), do: artifact_bytes(interpolant)
 
   @doc """
