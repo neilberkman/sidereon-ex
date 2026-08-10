@@ -70,6 +70,14 @@ jobs:
           otp-version: ${{ matrix.otp }}
           elixir-version: ${{ matrix.elixir }}
 
+      # The NIF is a full Rust workspace build; without a cache every CI run
+      # and every release-gate invocation compiles it cold. shared-key lets
+      # the tag-triggered release workflow_call reuse push CI's cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/sidereon_nif
+          shared-key: ci-nif
+
       - name: Cache deps
         uses: actions/cache@v4
         with:

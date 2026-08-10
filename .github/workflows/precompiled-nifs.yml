@@ -111,6 +111,15 @@ jobs:
           toolchain: 1.92.0
           target: ${{ matrix.job.target }}
 
+      # Per-target cache: the dependency graph rarely changes between
+      # releases, so release N+1's legs restore N's compilation. The key
+      # includes target and variant because artifacts are not interchangeable
+      # across them.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/sidereon_nif
+          shared-key: nif-${{ matrix.job.target }}${{ matrix.job.variant && format('-{0}', matrix.job.variant) || '' }}
+
       - name: Install cargo-zigbuild
         if: ${{ matrix.job.zig-glibc }}
         shell: bash
