@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-08-09
+
+### Changed
+
+- Terrain stores and precise-interpolant artifacts opened from a path are
+  now memory-mapped rather than read into memory. `terrain_store_mmap_from_path`
+  previously read the whole file, so a 30+ GB store cost its size in
+  process memory before the first lookup; it now maps the file read-only
+  and the reader owns the mapping. No API change - existing callers get
+  this by upgrading.
+
+  The mapping is demand-paged, so a reader querying a geographically local
+  region faults in only the pages covering those tiles. Construction parses
+  the header, datum tag, and tile index and nothing else.
+
+- Engine pinned to `sidereon-core` 0.38.0 with its `mmap` feature enabled.
+
 ## [0.37.0] - 2026-08-09
 
 ### Added

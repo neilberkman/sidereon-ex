@@ -49,6 +49,40 @@ def deps do
 end
 ```
 
+
+### musl and cross-libc packaging
+
+`rustler_precompiled` selects its artifact from the **build host's** target
+triple, not from the artifact you are ultimately producing. Publishing musl
+builds does not protect against this, because selection happens before the
+published set is consulted.
+
+The trap: a glibc build host (Debian/Ubuntu CI, or the builder stage of a
+multi-stage Dockerfile) producing a musl output - an Alpine image, a
+self-extracting release, Nerves firmware - resolves to
+`x86_64-unknown-linux-gnu`, downloads that `.so`, and packages it. **The build
+succeeds.** The failure appears later, on the target machine, as an opaque
+`load_nif` error that reads like a broken library rather than a build-host libc
+mismatch.
+
+If you package for a libc other than your build host's, build the NIF from
+source on a host matching the target:
+
+```elixir
+def deps do
+  [
+    {:sidereon, "~> 0.38"},
+    {:rustler, ">= 0.0.0", optional: true}
+  ]
+end
+```
+
+with `SIDEREON_BUILD=1` set for that build. Sidereon logs an explicit
+diagnosis at application start when it detects that the packaged artifact's
+libc does not match the running system, naming this section - but it can only
+report the mismatch, not prevent it, because by then the wrong artifact is
+already packaged.
+
 ## Example: track a satellite
 
 Parse a two-line element set, run SGP4, and take a look angle from a ground

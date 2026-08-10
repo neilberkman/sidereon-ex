@@ -15,6 +15,13 @@ force_build =
 rustler_features =
   if Mix.env() == :test, do: ["exact-cache-test-failpoints"], else: []
 
+artifact_triple =
+  :erlang.system_info(:system_architecture)
+  |> to_string()
+  |> case do
+    arch -> arch
+  end
+
 # The :portable variant of the glibc Linux targets is zig-linked against a
 # glibc 2.17 floor, so the artifact is self-contained on old-glibc hosts and
 # in zig-based packaging pipelines (e.g. Burrito). Opt in at compile time
@@ -51,6 +58,60 @@ defmodule Sidereon.NIF do
       "aarch64-unknown-linux-gnu" => linux_gnu_variants
     },
     version: version
+
+  @sidereon_artifact_triple artifact_triple
+
+  # RustlerPrecompiled selects its artifact from the *build host's* target
+  # triple, not from the artifact the user is ultimately producing. A glibc
+  # build host that packages a musl output - an Alpine image, a self-extracting
+  # release, Nerves firmware - resolves to the gnu triple, downloads that .so,
+  # and packages it. Nothing fails during the build. It fails later, on the
+  # target machine, as an opaque `load_nif` error that reads like "this library
+  # is broken" rather than "my build host had the wrong libc".
+  #
+  # Override the generated on_load so that failure names its own cause and the
+  # fix. This cannot prevent the mismatch - by the time the module loads, the
+  # wrong artifact is already packaged - but it converts an unexplained crash
+  # into a one-line remedy.
+  @doc false
+  def __sidereon_load_diagnosis__(reason \\ :nif_not_loaded) do
+    artifact_libc = if String.contains?(@sidereon_artifact_triple, "musl"), do: :musl, else: :gnu
+    system_libc = __sidereon_system_libc__()
+
+    if system_libc != :unknown and system_libc != artifact_libc do
+      Enum.join(
+        [
+          "sidereon's precompiled NIF does not match this system's C library.",
+          "The artifact packaged for this build targets #{artifact_libc} " <>
+            "(#{@sidereon_artifact_triple}), but this machine runs #{system_libc}.",
+          "This normally means the machine that COMPILED the project used a " <>
+            "different C library than the machine RUNNING it - for example a " <>
+            "Debian/Ubuntu build host producing an Alpine image, a " <>
+            "self-extracting release, or Nerves firmware. RustlerPrecompiled " <>
+            "selects its artifact from the build host, so the mismatch produces " <>
+            "no error at build time.",
+          "Fix: build the NIF from source on a host matching the target by " <>
+            "setting SIDEREON_BUILD=1 and adding " <>
+            "{:rustler, \">= 0.0.0\", optional: true} to your deps. See the " <>
+            "\"musl and cross-libc packaging\" section of the README.",
+          "Underlying load error: #{inspect(reason)}"
+        ],
+        "\n\n"
+      )
+    else
+      reason
+    end
+  end
+
+  @doc false
+  def __sidereon_system_libc__ do
+    cond do
+      Path.wildcard("/lib/ld-musl-*.so.1") != [] -> :musl
+      Path.wildcard("/lib*/libc.so.6") != [] -> :gnu
+      Path.wildcard("/lib/*-linux-gnu/libc.so.6") != [] -> :gnu
+      true -> :unknown
+    end
+  end
 
   def propagate_with_elements(_tle_map, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
 

@@ -360,3 +360,36 @@ jobs:
             -v "$PWD":/work -v /tmp/smoke.sh:/smoke.sh \
             "${{ matrix.image }}" \
             sh /smoke.sh
+
+  checksum-asset-parity:
+    name: Checksum / asset parity
+    needs: [asset-check, load-smoke]
+    # A checksum entry with no matching release asset fails at the *user's*
+    # compile time with a download error, which is a worse experience than
+    # compiling from source. Verify the two sets agree before anyone consumes
+    # the tag.
+    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Every checksum triple has a published asset, and vice versa
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' | sort > /tmp/assets.txt
+          grep -oE '"[^"]+\.tar\.gz"' checksum-Elixir.Sidereon.NIF.exs \
+            | tr -d '"' | sort > /tmp/checksums.txt
+
+          echo "assets:    $(wc -l < /tmp/assets.txt)"
+          echo "checksums: $(wc -l < /tmp/checksums.txt)"
+
+          if ! diff -u /tmp/checksums.txt /tmp/assets.txt; then
+            echo "::error::checksum file and published assets disagree" >&2
+            exit 1
+          fi

@@ -495,7 +495,13 @@ defmodule Sidereon.Terrain.MmapTerrain do
   end
 
   @doc """
-  Read a terrain store file into a reader handle.
+  Open a terrain store file as a reader handle.
+
+  The file is memory-mapped read-only and the reader owns the mapping, so
+  opening a store does not cost its size in process memory. The mapping is
+  demand-paged: a reader querying a geographically local region faults in only
+  the pages covering those tiles, and construction parses the header, datum
+  tag, and tile index and nothing else.
   """
   @spec from_path(String.t()) :: {:ok, t()} | {:error, terrain_store_error() | term()}
   def from_path(path) when is_binary(path) do
