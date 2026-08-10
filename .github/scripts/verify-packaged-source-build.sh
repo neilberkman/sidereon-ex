@@ -22,8 +22,20 @@ for dependency in sidereon-core sidereon; do
   fi
 
   pin="$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"${pin_lines[0]}")"
-  if [[ ! "$pin" =~ ^${dependency}[[:space:]]*=[[:space:]]*\"=[0-9]+\.[0-9]+\.[0-9]+\"$ ]]; then
-    echo "packaged NIF must use an exact registry-only pin: ${dependency} = \"=X.Y.Z\"" >&2
+
+  # What this guard is actually for: the packaged NIF must build from the
+  # registry at one exact version, never from a path or git checkout that the
+  # published tarball cannot reach. Both the bare-string form
+  # (`dep = "=X.Y.Z"`) and the table form (`dep = { version = "=X.Y.Z", ... }`)
+  # satisfy that; a table form is required to enable a dependency feature. Test
+  # the property, not one spelling of it.
+  if [[ "$pin" =~ path[[:space:]]*= || "$pin" =~ git[[:space:]]*= ]]; then
+    echo "packaged NIF must not depend on ${dependency} by path or git: $pin" >&2
+    exit 1
+  fi
+
+  if [[ ! "$pin" =~ \"=[0-9]+\.[0-9]+\.[0-9]+\" ]]; then
+    echo "packaged NIF must use an exact registry pin: ${dependency} = \"=X.Y.Z\"" >&2
     echo "found: $pin" >&2
     exit 1
   fi
