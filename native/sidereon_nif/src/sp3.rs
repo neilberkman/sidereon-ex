@@ -127,6 +127,11 @@ fn systems_from_letters(letters: Vec<String>) -> NifResult<BTreeSet<GnssSystem>>
 }
 
 #[allow(clippy::too_many_arguments)]
+// clippy suggests replacing the mutate-a-default below with the exhaustive
+// struct literal that MergeOptions's #[non_exhaustive] (core > 0.39.1)
+// forbids downstream. clippy exempts non-exhaustive structs, so this allow is
+// transitional: remove once the engine pin advances past 0.39.1.
+#[allow(clippy::field_reassign_with_default)]
 fn merge_options_from_terms(
     position_tolerance_m: f64,
     clock_tolerance_s: f64,
@@ -181,35 +186,35 @@ fn merge_options_from_terms(
         })
         .collect::<NifResult<Vec<_>>>()?;
 
-    Ok(MergeOptions {
-        position_tolerance_m,
-        clock_tolerance_s,
-        min_agree,
-        clock_min_common,
-        combine,
-        precedence_scope,
-        outlier_reject: outlier_reject.map(|(position_tolerance_m, clock_tolerance_s)| {
-            OutlierRejectOptions {
+    // Mutate-a-default rather than a struct literal: MergeOptions is
+    // non-exhaustive, so per-epoch provenance, the continuity post-condition,
+    // and any future option the core learns stay at their defaults (off)
+    // without this conversion having to name them.
+    let mut options = MergeOptions::default();
+    options.position_tolerance_m = position_tolerance_m;
+    options.clock_tolerance_s = clock_tolerance_s;
+    options.min_agree = min_agree;
+    options.clock_min_common = clock_min_common;
+    options.combine = combine;
+    options.precedence_scope = precedence_scope;
+    options.outlier_reject =
+        outlier_reject.map(
+            |(position_tolerance_m, clock_tolerance_s)| OutlierRejectOptions {
                 position_tolerance_m,
                 clock_tolerance_s,
-            }
-        }),
-        target_epoch_interval_s,
-        systems: if system_letters.is_empty() {
-            None
-        } else {
-            Some(systems_from_letters(system_letters)?)
-        },
-        frame_reconciliation: Sp3FrameReconciliationOptions {
-            asserted_equivalent_label_sets,
-            helmert: helmert_frame_reconciliation,
-        },
-        // Per-epoch provenance and the continuity post-condition are not yet
-        // surfaced on the Elixir merge options; both default to off, which is
-        // exactly the behavior this binding had before they existed.
-        provenance: None,
-        verify_continuity: None,
-    })
+            },
+        );
+    options.target_epoch_interval_s = target_epoch_interval_s;
+    options.systems = if system_letters.is_empty() {
+        None
+    } else {
+        Some(systems_from_letters(system_letters)?)
+    };
+    options.frame_reconciliation = Sp3FrameReconciliationOptions {
+        asserted_equivalent_label_sets,
+        helmert: helmert_frame_reconciliation,
+    };
+    Ok(options)
 }
 
 /// Map a time-scale abbreviation onto the core [`TimeScale`]. Pure translation;
