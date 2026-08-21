@@ -3,7 +3,10 @@
 use crate::data::product_identity;
 use rustler::{Binary, Encoder, Env, OwnedBinary, ResourceArc, Term};
 use sidereon_core::data::DistributionSource;
-use sidereon_core::exact_cache::{ExactCacheGuard, ExactProductCache};
+use sidereon_core::exact_cache::{
+    CommittedExactCacheEntry, ExactCacheError, ExactCacheGuard, ExactCacheOpen, ExactCacheOwner,
+    ExactCacheSingleFlightOptions, ExactProductCache,
+};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -12,6 +15,11 @@ mod atoms {
         ok,
         error,
         miss,
+        hit,
+        owner,
+        single_flight_timeout,
+        single_flight_ownership_lost,
+        invalid_single_flight_options,
     }
 }
 
@@ -22,6 +30,13 @@ pub struct ExactCacheResource {
 
 #[rustler::resource_impl]
 impl rustler::Resource for ExactCacheResource {}
+
+pub struct ExactCacheOwnerResource {
+    owner: Mutex<Option<ExactCacheOwner>>,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ExactCacheOwnerResource {}
 
 fn source(value: &str) -> Option<DistributionSource> {
     match value {
@@ -43,6 +58,48 @@ fn encode_error<'a>(env: Env<'a>, error: impl std::fmt::Display) -> Term<'a> {
     (atoms::error(), error.to_string()).encode(env)
 }
 
+fn encode_single_flight_error<'a>(env: Env<'a>, error: ExactCacheError) -> Term<'a> {
+    let reason = match error {
+        ExactCacheError::SingleFlightTimeout => atoms::single_flight_timeout().encode(env),
+        ExactCacheError::SingleFlightOwnershipLost => {
+            atoms::single_flight_ownership_lost().encode(env)
+        }
+        ExactCacheError::InvalidSingleFlightOptions => {
+            atoms::invalid_single_flight_options().encode(env)
+        }
+        other => other.to_string().encode(env),
+    };
+    (atoms::error(), reason).encode(env)
+}
+
+fn encode_entry<'a>(env: Env<'a>, tag: rustler::Atom, entry: CommittedExactCacheEntry) -> Term<'a> {
+    rustler::types::tuple::make_tuple(
+        env,
+        &[
+            tag.encode(env),
+            entry
+                .product_path
+                .to_string_lossy()
+                .into_owned()
+                .encode(env),
+            entry
+                .archive_path
+                .to_string_lossy()
+                .into_owned()
+                .encode(env),
+            entry
+                .provenance_path
+                .to_string_lossy()
+                .into_owned()
+                .encode(env),
+            entry.entry_id.encode(env),
+            binary(env, &entry.product),
+            binary(env, &entry.archive),
+            binary(env, &entry.provenance),
+        ],
+    )
+}
+
 fn encode_read<'a>(
     env: Env<'a>,
     result: Result<
@@ -52,31 +109,7 @@ fn encode_read<'a>(
 ) -> Term<'a> {
     match result {
         Ok(None) => atoms::miss().encode(env),
-        Ok(Some(entry)) => rustler::types::tuple::make_tuple(
-            env,
-            &[
-                atoms::ok().encode(env),
-                entry
-                    .product_path
-                    .to_string_lossy()
-                    .into_owned()
-                    .encode(env),
-                entry
-                    .archive_path
-                    .to_string_lossy()
-                    .into_owned()
-                    .encode(env),
-                entry
-                    .provenance_path
-                    .to_string_lossy()
-                    .into_owned()
-                    .encode(env),
-                entry.entry_id.encode(env),
-                binary(env, &entry.product),
-                binary(env, &entry.archive),
-                binary(env, &entry.provenance),
-            ],
-        ),
+        Ok(Some(entry)) => encode_entry(env, atoms::ok(), entry),
         Err(error) => encode_error(env, error),
     }
 }
@@ -109,6 +142,100 @@ pub fn data_exact_cache_open<'a>(
         Ok(cache) => (atoms::ok(), ResourceArc::new(cache)).encode(env),
         Err(error) => encode_error(env, error),
     }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+#[allow(clippy::too_many_arguments)]
+pub fn data_exact_cache_open_single_flight<'a>(
+    env: Env<'a>,
+    path: String,
+    identity_fields: Vec<String>,
+    source_code: String,
+    poll_interval_ms: u64,
+    heartbeat_interval_ms: u64,
+    liveness_timeout_ms: u64,
+    wait_timeout_ms: u64,
+) -> Term<'a> {
+    let result = product_identity(identity_fields)
+        .map_err(|error| error.to_string())
+        .and_then(|identity| {
+            let source =
+                source(&source_code).ok_or_else(|| "unknown distribution source".to_string())?;
+            ExactProductCache::new(path, identity, source).map_err(|error| error.to_string())
+        });
+    let cache = match result {
+        Ok(cache) => cache,
+        Err(error) => return encode_error(env, error),
+    };
+    let options = ExactCacheSingleFlightOptions {
+        poll_interval: Duration::from_millis(poll_interval_ms),
+        heartbeat_interval: Duration::from_millis(heartbeat_interval_ms),
+        liveness_timeout: Duration::from_millis(liveness_timeout_ms),
+        wait_timeout: Duration::from_millis(wait_timeout_ms),
+    };
+    match cache.open_single_flight(options) {
+        Ok(ExactCacheOpen::Hit(entry)) => encode_entry(env, atoms::hit(), entry),
+        Ok(ExactCacheOpen::Owner(owner)) => (
+            atoms::owner(),
+            ResourceArc::new(ExactCacheOwnerResource {
+                owner: Mutex::new(Some(owner)),
+            }),
+        )
+            .encode(env),
+        Err(error) => encode_single_flight_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_owner_heartbeat<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<ExactCacheOwnerResource>,
+) -> Term<'a> {
+    let owner = match resource.owner.lock() {
+        Ok(owner) => owner,
+        Err(_) => return encode_error(env, "exact-cache single-flight owner was poisoned"),
+    };
+    let Some(owner) = owner.as_ref() else {
+        return encode_error(env, "exact-cache single-flight owner is closed");
+    };
+    match owner.heartbeat() {
+        Ok(()) => atoms::ok().encode(env),
+        Err(error) => encode_single_flight_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_owner_publish<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<ExactCacheOwnerResource>,
+    product: Binary<'a>,
+    archive: Binary<'a>,
+    provenance: Binary<'a>,
+) -> Term<'a> {
+    let owner = match resource.owner.lock() {
+        Ok(mut owner) => owner.take(),
+        Err(_) => return encode_error(env, "exact-cache single-flight owner was poisoned"),
+    };
+    let Some(owner) = owner else {
+        return encode_error(env, "exact-cache single-flight owner is closed");
+    };
+    match owner.publish(&product, &archive, &provenance) {
+        Ok(entry) => encode_entry(env, atoms::ok(), entry),
+        Err(error) => encode_single_flight_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyIo")]
+pub fn data_exact_cache_owner_abandon<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<ExactCacheOwnerResource>,
+) -> Term<'a> {
+    let owner = match resource.owner.lock() {
+        Ok(mut owner) => owner.take(),
+        Err(_) => return encode_error(env, "exact-cache single-flight owner was poisoned"),
+    };
+    drop(owner);
+    atoms::ok().encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyIo")]

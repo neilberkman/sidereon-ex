@@ -2099,6 +2099,16 @@ defmodule Sidereon.NIF do
   def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
   def data_exact_cache_open(_path, _identity_fields, _source, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_exact_cache_open_single_flight(
+        _path,
+        _identity_fields,
+        _source,
+        _poll_interval_ms,
+        _heartbeat_interval_ms,
+        _liveness_timeout_ms,
+        _wait_timeout_ms
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_exact_cache_read(_cache), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_exact_cache_read_unlocked(_path, _identity_fields, _source), do: :erlang.nif_error(:nif_not_loaded)
@@ -2107,6 +2117,11 @@ defmodule Sidereon.NIF do
 
   def data_exact_cache_cleanup(_cache), do: :erlang.nif_error(:nif_not_loaded)
   def data_exact_cache_close(_cache), do: :erlang.nif_error(:nif_not_loaded)
+  def data_exact_cache_owner_heartbeat(_owner), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_owner_publish(_owner, _product, _archive, _provenance), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_exact_cache_owner_abandon(_owner), do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_product_solution_class(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)

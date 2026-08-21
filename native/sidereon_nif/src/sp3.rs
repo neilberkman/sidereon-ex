@@ -127,11 +127,6 @@ fn systems_from_letters(letters: Vec<String>) -> NifResult<BTreeSet<GnssSystem>>
 }
 
 #[allow(clippy::too_many_arguments)]
-// clippy suggests replacing the mutate-a-default below with the exhaustive
-// struct literal that MergeOptions's #[non_exhaustive] (core > 0.39.1)
-// forbids downstream. clippy exempts non-exhaustive structs, so this allow is
-// transitional: remove once the engine pin advances past 0.39.1.
-#[allow(clippy::field_reassign_with_default)]
 fn merge_options_from_terms(
     position_tolerance_m: f64,
     clock_tolerance_s: f64,

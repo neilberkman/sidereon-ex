@@ -16,6 +16,33 @@ defmodule Sidereon.GNSS.ExactCache do
   alias Sidereon.NIF
 
   @control_directory ".sidereon-cache-v3"
+  @default_poll_interval_ms 50
+  @default_heartbeat_interval_ms 5_000
+  @default_liveness_timeout_ms 30_000
+  @default_wait_timeout_ms 1_800_000
+  @max_duration_ms 18_446_744_073_709_551_615
+  @single_flight_option_keys [
+    :poll_interval_ms,
+    :heartbeat_interval_ms,
+    :liveness_timeout_ms,
+    :wait_timeout_ms
+  ]
+
+  defmodule Owner do
+    @moduledoc """
+    Exclusive single-flight acquisition ownership for one exact cache miss.
+
+    The native resource refreshes its lease automatically. Publish validated
+    bytes through `Sidereon.GNSS.ExactCache.publish/4`, or explicitly release
+    the acquisition with `Sidereon.GNSS.ExactCache.abandon/1`.
+    """
+
+    @derive {Inspect, except: [:handle]}
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @opaque t :: %__MODULE__{handle: reference()}
+  end
 
   @type entry :: %{
           product: String.t(),
@@ -26,6 +53,21 @@ defmodule Sidereon.GNSS.ExactCache do
           archive_bytes: binary(),
           provenance_bytes: binary()
         }
+
+  @type single_flight_option ::
+          {:poll_interval_ms, pos_integer()}
+          | {:heartbeat_interval_ms, pos_integer()}
+          | {:liveness_timeout_ms, pos_integer()}
+          | {:wait_timeout_ms, pos_integer()}
+
+  @type single_flight_open :: {:hit, entry()} | {:owner, Owner.t()}
+
+  @type single_flight_error ::
+          :single_flight_timeout
+          | :single_flight_ownership_lost
+          | {:invalid_option, atom()}
+          | {:cache_read_failed, term()}
+          | {:cache_write_failed, term()}
 
   @doc "Returns the shared cache protocol's control-directory name."
   @spec control_directory() :: String.t()
@@ -57,6 +99,36 @@ defmodule Sidereon.GNSS.ExactCache do
     end
   end
 
+  @doc """
+  Opens an exact cache with bounded single-flight acquisition.
+
+  A `{:hit, entry}` result contains a complete digest-verified transaction and
+  the caller must not fetch. A `{:owner, owner}` result grants this caller the
+  exclusive right to fetch, validate, and publish through `publish/4`.
+
+  Timing options are positive integer milliseconds. Defaults are 50 ms for
+  `:poll_interval_ms`, 5 seconds for `:heartbeat_interval_ms`, 30 seconds for
+  `:liveness_timeout_ms`, and 30 minutes for `:wait_timeout_ms`. The heartbeat
+  interval must be shorter than the liveness timeout.
+  """
+  @spec open_single_flight(String.t(), ProductIdentity.t(), atom(), [single_flight_option()]) ::
+          single_flight_open() | {:error, single_flight_error()}
+  def open_single_flight(path, identity, source, opts \\ []) do
+    with {:ok, {poll_interval_ms, heartbeat_interval_ms, liveness_timeout_ms, wait_timeout_ms}} <-
+           single_flight_options(opts) do
+      path
+      |> NIF.data_exact_cache_open_single_flight(
+        identity_fields(identity),
+        Atom.to_string(source),
+        poll_interval_ms,
+        heartbeat_interval_ms,
+        liveness_timeout_ms,
+        wait_timeout_ms
+      )
+      |> decode_single_flight_open()
+    end
+  end
+
   @doc "Reads a complete digest-verified entry through a lock-owning handle."
   @spec committed_files(term()) :: {:ok, entry()} | :miss | {:error, term()}
   def committed_files(cache) do
@@ -77,11 +149,37 @@ defmodule Sidereon.GNSS.ExactCache do
   end
 
   @doc "Publishes validated bytes as one immutable transaction."
-  @spec publish(term(), binary(), binary(), binary()) :: {:ok, entry()} | {:error, term()}
+  @spec publish(term() | Owner.t(), binary(), binary(), binary()) :: {:ok, entry()} | {:error, term()}
+  def publish(%Owner{handle: owner}, content, archive, provenance) do
+    case decode_read(NIF.data_exact_cache_owner_publish(owner, content, archive, provenance)) do
+      {:ok, files} -> {:ok, files}
+      {:error, {:cache_read_failed, reason}} -> decode_single_flight_write_error(reason)
+    end
+  end
+
   def publish(cache, content, archive, provenance) do
     case decode_read(NIF.data_exact_cache_publish(cache, content, archive, provenance)) do
       {:ok, files} -> {:ok, files}
       {:error, {:cache_read_failed, reason}} -> {:error, {:cache_write_failed, reason}}
+    end
+  end
+
+  @doc "Requests an immediate liveness heartbeat from a single-flight owner."
+  @spec heartbeat(Owner.t()) :: :ok | {:error, single_flight_error()}
+  def heartbeat(%Owner{handle: owner}) do
+    case NIF.data_exact_cache_owner_heartbeat(owner) do
+      :ok -> :ok
+      {:error, :single_flight_ownership_lost} = error -> error
+      {:error, reason} -> {:error, {:cache_write_failed, reason}}
+    end
+  end
+
+  @doc "Abandons a single-flight acquisition without publishing."
+  @spec abandon(Owner.t()) :: :ok | {:error, term()}
+  def abandon(%Owner{handle: owner}) do
+    case NIF.data_exact_cache_owner_abandon(owner) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:cache_write_failed, reason}}
     end
   end
 
@@ -123,17 +221,77 @@ defmodule Sidereon.GNSS.ExactCache do
   defp decode_read(:miss), do: :miss
 
   defp decode_read({:ok, product, archive, provenance, entry_id, product_bytes, archive_bytes, provenance_bytes}) do
-    {:ok,
-     %{
-       product: product,
-       archive: archive,
-       provenance: provenance,
-       entry_id: entry_id,
-       product_bytes: product_bytes,
-       archive_bytes: archive_bytes,
-       provenance_bytes: provenance_bytes
-     }}
+    {:ok, entry(product, archive, provenance, entry_id, product_bytes, archive_bytes, provenance_bytes)}
   end
 
   defp decode_read({:error, reason}), do: {:error, {:cache_read_failed, reason}}
+
+  defp decode_single_flight_open(
+         {:hit, product, archive, provenance, entry_id, product_bytes, archive_bytes, provenance_bytes}
+       ) do
+    {:hit, entry(product, archive, provenance, entry_id, product_bytes, archive_bytes, provenance_bytes)}
+  end
+
+  defp decode_single_flight_open({:owner, owner}), do: {:owner, %Owner{handle: owner}}
+  defp decode_single_flight_open({:error, :single_flight_timeout} = error), do: error
+
+  defp decode_single_flight_open({:error, :invalid_single_flight_options}), do: {:error, {:invalid_option, :opts}}
+
+  defp decode_single_flight_open({:error, reason}), do: {:error, {:cache_read_failed, reason}}
+
+  defp decode_single_flight_write_error(:single_flight_ownership_lost), do: {:error, :single_flight_ownership_lost}
+
+  defp decode_single_flight_write_error(reason), do: {:error, {:cache_write_failed, reason}}
+
+  defp entry(product, archive, provenance, entry_id, product_bytes, archive_bytes, provenance_bytes) do
+    %{
+      product: product,
+      archive: archive,
+      provenance: provenance,
+      entry_id: entry_id,
+      product_bytes: product_bytes,
+      archive_bytes: archive_bytes,
+      provenance_bytes: provenance_bytes
+    }
+  end
+
+  defp single_flight_options(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case Enum.find(Keyword.keys(opts), &(&1 not in @single_flight_option_keys)) do
+        nil -> duration_options(opts)
+        key -> {:error, {:invalid_option, key}}
+      end
+    else
+      {:error, {:invalid_option, :opts}}
+    end
+  end
+
+  defp single_flight_options(_opts), do: {:error, {:invalid_option, :opts}}
+
+  defp duration_options(opts) do
+    with {:ok, poll_interval_ms} <-
+           duration_option(opts, :poll_interval_ms, @default_poll_interval_ms),
+         {:ok, heartbeat_interval_ms} <-
+           duration_option(opts, :heartbeat_interval_ms, @default_heartbeat_interval_ms),
+         {:ok, liveness_timeout_ms} <-
+           duration_option(opts, :liveness_timeout_ms, @default_liveness_timeout_ms),
+         {:ok, wait_timeout_ms} <-
+           duration_option(opts, :wait_timeout_ms, @default_wait_timeout_ms),
+         :ok <- validate_liveness(heartbeat_interval_ms, liveness_timeout_ms) do
+      {:ok, {poll_interval_ms, heartbeat_interval_ms, liveness_timeout_ms, wait_timeout_ms}}
+    end
+  end
+
+  defp duration_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 and value <= @max_duration_ms -> {:ok, value}
+      _value -> {:error, {:invalid_option, key}}
+    end
+  end
+
+  defp validate_liveness(heartbeat_interval_ms, liveness_timeout_ms) when heartbeat_interval_ms < liveness_timeout_ms,
+    do: :ok
+
+  defp validate_liveness(_heartbeat_interval_ms, _liveness_timeout_ms),
+    do: {:error, {:invalid_option, :heartbeat_interval_ms}}
 end
