@@ -1,11 +1,11 @@
 %{
-  "libsidereon_nif-v0.39.1-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:7962f47e74c2774e0a3e284fe728f2fcc9d1988ed36387996d052972dc06aa37",
-  "libsidereon_nif-v0.39.1-nif-2.15-aarch64-unknown-linux-gnu--portable.so.tar.gz" => "sha256:2d2af8f270f1ff63a5f8eb38c07160ed848dcfb27dfb3642278c2367d371c095",
-  "libsidereon_nif-v0.39.1-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:eadc08fa48a4b01b871b12b5aa812c382a7b3b337b3ca4dc9894bf8d677dfb31",
-  "libsidereon_nif-v0.39.1-nif-2.15-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:d10439112faeec26c245e1cc1c0402bb83b78217dc6414f8a7f23089aa99ede5",
-  "libsidereon_nif-v0.39.1-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:1997d9f78703f69a503bdd287c7972a5cb4b802fb93e6d9014f606033467dd99",
-  "libsidereon_nif-v0.39.1-nif-2.15-x86_64-unknown-linux-gnu--portable.so.tar.gz" => "sha256:77aa000dfded5315e4462b8e7333cb90a8988170f5cb80eabe0495c00beb3c64",
-  "libsidereon_nif-v0.39.1-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:0b9359c55aa55275f09cdbec54ea9832472669c7be6cf3d18afc9a51a3031d83",
-  "libsidereon_nif-v0.39.1-nif-2.15-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:c2c8fee5ed42939e964ebdb3aee8fa831833dbc203f0ed57053cc004657d3c3e",
-  "sidereon_nif-v0.39.1-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:6048433e7174b68c5af63d93872e76d80fb81d569f39ab205b5491ae21a89221"
+  "libsidereon_nif-v1.0.0-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:09681f2b6d784a72ea4ffee2a2d343d552f1f69f9779e112bf1569625fd2ad0e",
+  "libsidereon_nif-v1.0.0-nif-2.15-aarch64-unknown-linux-gnu--portable.so.tar.gz" => "sha256:ba4834920f89efddd6bd8d77f9c69f40882c0f47b9fa27adfe69ad36636a8c39",
+  "libsidereon_nif-v1.0.0-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:7970e804cd214745a92cc690f13071a95f5757105adcc30f18d1314098bd8ff7",
+  "libsidereon_nif-v1.0.0-nif-2.15-aarch64-unknown-linux-musl.so.tar.gz" => "sha256:b8fb7c24d10b6b73551784613ab97f08a8056c3244f7827b67ec0fad9c3ea90d",
+  "libsidereon_nif-v1.0.0-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:8ffc6857932fb29bfe75b4d7f8162885695fcff96c087d6b0287043cd9860e5e",
+  "libsidereon_nif-v1.0.0-nif-2.15-x86_64-unknown-linux-gnu--portable.so.tar.gz" => "sha256:c41ac6015feabe1a38868ca6920a6e9d8eadf80b7e954305b632c9b49cbe44d4",
+  "libsidereon_nif-v1.0.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:7517909dfd811f547c7dc6b96b820ec4f5d49664ce115477fb3e0db72db7d050",
+  "libsidereon_nif-v1.0.0-nif-2.15-x86_64-unknown-linux-musl.so.tar.gz" => "sha256:24401cca91fd9b693b8c88d985b5db53c7623b1f8bc2035af2bcfc7228340a58",
+  "sidereon_nif-v1.0.0-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:7c9c8a42badea97d8186d15719c880a3ab99e30d207fc2f55ff5e88fd86524fc"
 }
