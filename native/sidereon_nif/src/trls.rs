@@ -24,7 +24,7 @@ use trust_region_least_squares::data::{
 };
 use trust_region_least_squares::hostlapack::LapackSvd;
 use trust_region_least_squares::loss::Loss;
-use trust_region_least_squares::trf::{ThinSvd, TrfError, TrfResult, XScale};
+use trust_region_least_squares::trf::{HostNumerics, TrfError, TrfResult, XScale};
 
 mod atoms {
     rustler::atoms! {
@@ -223,7 +223,7 @@ fn trf_error_atom(err: &TrfError) -> rustler::types::atom::Atom {
         TrfError::InvalidResidualLength { .. } => atoms::invalid_residual_length(),
         TrfError::InvalidSliceLength { .. } => atoms::invalid_slice_length(),
         TrfError::InvalidSvdOutput(_) => atoms::invalid_svd_output(),
-        TrfError::Svd(_) => atoms::svd_backend_error(),
+        TrfError::Backend(_) => atoms::svd_backend_error(),
     }
 }
 
