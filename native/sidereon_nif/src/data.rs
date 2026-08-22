@@ -187,6 +187,33 @@ fn product_datetime(
     ProductDateTime::new(date, hour, minute, second)
 }
 
+type ProductDateTimeTuple = ((i32, u8, u8), (u8, u8, u8));
+type NominalCoverageIntervalTuple = (ProductDateTimeTuple, ProductDateTimeTuple);
+type NominalIssueTuple = (
+    Vec<String>,
+    ProductDateTimeTuple,
+    (
+        Option<NominalCoverageIntervalTuple>,
+        Option<NominalCoverageIntervalTuple>,
+    ),
+);
+
+fn product_datetime_tuple(datetime: ProductDateTime) -> ProductDateTimeTuple {
+    (
+        (datetime.date.year, datetime.date.month, datetime.date.day),
+        (datetime.hour, datetime.minute, datetime.second),
+    )
+}
+
+fn nominal_coverage_interval_tuple(
+    interval: data::NominalCoverageInterval,
+) -> NominalCoverageIntervalTuple {
+    (
+        product_datetime_tuple(interval.from),
+        product_datetime_tuple(interval.until),
+    )
+}
+
 fn encode_catalog_error<'a>(env: Env<'a>, err: DataCatalogError) -> Term<'a> {
     match err {
         DataCatalogError::UnknownCenter(code) => {
@@ -826,6 +853,40 @@ fn data_published_issue_age_minutes<'a>(
         .and_then(|now| data::published_issue_age_minutes(&published, now))
     });
     encode_result(env, result, |env, minutes| minutes.encode(env))
+}
+
+/// Return the first catalog issue nominally due at or after the UTC query
+/// instant. This is pure catalog translation and performs no archive access.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn data_next_issue_due<'a>(
+    env: Env<'a>,
+    center_code: String,
+    product_code: String,
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+) -> Term<'a> {
+    let result = center(&center_code).and_then(|center| {
+        product_type(&product_code).and_then(|kind| {
+            product_datetime(year, month, day, hour, minute, second)
+                .and_then(|now| data::next_issue_due(center, kind, now))
+        })
+    });
+    encode_result(env, result, |env, issue| {
+        let tuple: NominalIssueTuple = (
+            product_identity_fields(&issue.identity),
+            product_datetime_tuple(issue.due_at),
+            (
+                issue.covers.observed.map(nominal_coverage_interval_tuple),
+                issue.covers.predicted.map(nominal_coverage_interval_tuple),
+            ),
+        );
+        tuple.encode(env)
+    })
 }
 
 type CandidateSpecTuple = (

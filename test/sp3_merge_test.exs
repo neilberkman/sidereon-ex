@@ -3,6 +3,8 @@ defmodule Sidereon.GNSS.SP3MergeTest do
 
   alias Sidereon.GNSS.SP3
 
+  @daily_sp3 Path.join(__DIR__, "fixtures/sp3/GBM_BDS_C21_C08_trim.sp3")
+
   # Build a single-epoch SP3-c buffer from explicit
   # `{satellite_token, [x_km, y_km, z_km], clock_us | nil}` records, so each test
   # controls which satellites a "center" reports and where. Mirrors the crate's
@@ -45,6 +47,28 @@ defmodule Sidereon.GNSS.SP3MergeTest do
 
   defp fmt(v), do: :io_lib.format(~c"~14.6f", [v]) |> IO.iodata_to_binary()
   defp interval(v), do: :io_lib.format(~c"~14.8f", [v]) |> IO.iodata_to_binary()
+
+  defp shifted_daily_product_with_x_offset(offset_km) do
+    shifted =
+      @daily_sp3
+      |> File.read!()
+      |> String.replace("2020  6 25", "2020  6 26")
+      |> String.replace("2111 345600.00000000", "2111 432000.00000000")
+      |> String.replace("59025 0.0000000000000", "59026 0.0000000000000")
+      |> String.split("\n", trim: false)
+      |> Enum.map_join("\n", fn
+        <<"P", satellite::binary-size(3), x_field::binary-size(14), rest::binary>> ->
+          x_km = x_field |> String.trim() |> String.to_float()
+          "P" <> satellite <> fmt(x_km + offset_km) <> rest
+
+        line ->
+          line
+      end)
+
+    {:ok, product} = SP3.parse(shifted)
+    {:ok, writer_derived} = product |> SP3.to_sp3_string() |> SP3.parse()
+    writer_derived
+  end
 
   describe "merge/2" do
     test "union coverage: merged product covers a satellite a center is missing" do
@@ -263,6 +287,65 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert SP3.satellite_ids(merged) == ["G01"]
 
       assert {:error, {:unsupported_system, :bad}} = SP3.merge([multi], systems: [:bad])
+    end
+
+    test "window verdict mapping follows the product-derived stencil at a daily seam" do
+      first = SP3.load!(@daily_sp3)
+      second = shifted_daily_product_with_x_offset(3_000.0)
+      seam = first |> SP3.epochs_j2000_seconds() |> List.last()
+
+      assert {:ok, merged, report} =
+               SP3.merge([first, second],
+                 combine: :precedence,
+                 min_agree: 1,
+                 verify_continuity: [orbit_class: :meo_gnss, residual_tolerance_m: nil]
+               )
+
+      assert %{attested?: false, defects: [_ | _], splices: [_ | _]} = report.continuity
+      assert {:ok, %{before_s: 1_500.0, after_s: 1_500.0}} = SP3.stencil_extent(merged)
+
+      inside_one_day = {seam - 18.0 * 3_600.0, seam - 6.0 * 3_600.0}
+
+      assert {:ok,
+              %{
+                decision: :accept,
+                accepted: true,
+                influencing_defects: [],
+                influencing_splices: [],
+                all_defects: [_ | _],
+                all_splices: [_ | _]
+              }} =
+               SP3.merge_continuity_verdict(report, merged, elem(inside_one_day, 0), elem(inside_one_day, 1))
+
+      assert {:ok,
+              %{
+                decision: :refuse,
+                accepted: false,
+                influencing_defects: [_ | _],
+                influencing_splices: [%{from_sources: [0], to_sources: [1], crosses_contributors: true} | _]
+              }} = SP3.merge_continuity_verdict(report, merged, seam - 600.0, seam + 600.0)
+
+      assert {:ok, %{decision: :refuse, accepted: false}} =
+               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 1_500.0)
+
+      assert {:ok, %{decision: :accept, accepted: true}} =
+               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 1_500.001)
+
+      assert {:ok, %{decision: :refuse, influencing_splices: [], all_splices: []}} =
+               SP3.continuity_verdict(merged, seam - 600.0, seam + 600.0,
+                 orbit_class: :meo_gnss,
+                 residual_tolerance_m: nil
+               )
+    end
+
+    test "merge verdict preserves nil when continuity verification was not requested" do
+      first = SP3.load!(@daily_sp3)
+      [from_j2000_s | _] = SP3.epochs_j2000_seconds(first)
+      assert {:ok, merged, report} = SP3.merge([first], min_agree: 1)
+      assert report.continuity == nil
+
+      assert {:ok, nil} =
+               SP3.merge_continuity_verdict(report, merged, from_j2000_s, from_j2000_s + 300.0)
     end
   end
 

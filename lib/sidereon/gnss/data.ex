@@ -35,6 +35,7 @@ defmodule Sidereon.GNSS.Data do
   alias Sidereon.GNSS.ArchiveCompression
   alias Sidereon.GNSS.ArchiveIngress
   alias Sidereon.GNSS.Distribution
+  alias Sidereon.GNSS.Distribution.ProductIdentity
   alias Sidereon.GNSS.FtpClient
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
@@ -101,6 +102,24 @@ defmodule Sidereon.GNSS.Data do
             cache_filename: String.t() | nil,
             url: String.t() | nil,
             compression: String.t() | nil
+          }
+  end
+
+  defmodule NominalIssue do
+    @moduledoc """
+    The next catalog issue nominally due, with its exact identity and nominal
+    observed/predicted coverage.
+
+    `due_at` and the half-open coverage interval endpoints are UTC datetimes.
+    """
+    @enforce_keys [:identity, :due_at, :covers]
+    defstruct [:identity, :due_at, :covers]
+
+    @type interval :: %{from: DateTime.t(), until: DateTime.t()}
+    @type t :: %__MODULE__{
+            identity: ProductIdentity.t(),
+            due_at: DateTime.t(),
+            covers: %{observed: interval() | nil, predicted: interval() | nil}
           }
   end
 
@@ -544,6 +563,38 @@ defmodule Sidereon.GNSS.Data do
       )
     )
   end
+
+  @doc """
+  Return the first catalog issue nominally due at or after `now`.
+
+  This is a network-free UTC schedule query. It returns the exact product
+  identity plus half-open observed and predicted coverage intervals; it does
+  not claim that an archive has published the issue.
+  """
+  # credo:disable-for-lines:2 Credo.Check.Warning.SpecWithStruct
+  @spec next_issue_due(String.t() | atom(), String.t() | atom(), DateTime.t()) ::
+          {:ok, %NominalIssue{}} | {:error, term()}
+  def next_issue_due(center, content, %DateTime{time_zone: "Etc/UTC"} = now) do
+    case NIF.data_next_issue_due(
+           normalize_code(center),
+           normalize_code(content),
+           now.year,
+           now.month,
+           now.day,
+           now.hour,
+           now.minute,
+           now.second
+         ) do
+      {:ok, issue} -> decode_nominal_issue(issue)
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def next_issue_due(_center, _content, %DateTime{}), do: {:error, {:invalid_datetime, :utc_required}}
+
+  def next_issue_due(_center, _content, now), do: {:error, {:invalid_datetime, now}}
 
   @doc """
   Index of the first candidate whose exact archive object is listed.
@@ -1360,6 +1411,7 @@ defmodule Sidereon.GNSS.Data do
       :outlier_reject,
       :asserted_frame_label_sets,
       :helmert,
+      :verify_continuity,
       :sample,
       :issue,
       :catalog_variants,
@@ -1411,7 +1463,8 @@ defmodule Sidereon.GNSS.Data do
         :precedence_scope,
         :outlier_reject,
         :asserted_frame_label_sets,
-        :helmert
+        :helmert,
+        :verify_continuity
       ])
 
     case SP3.merge(sources, merge_opts) do
@@ -1519,7 +1572,9 @@ defmodule Sidereon.GNSS.Data do
   defp merge_result_to_map(nil), do: nil
 
   defp merge_result_to_map(report) when is_map(report) do
-    Map.update!(report, :frame_reconciliations, fn reconciliations ->
+    report
+    |> Map.drop([:handle, :continuity])
+    |> Map.update!(:frame_reconciliations, fn reconciliations ->
       Enum.map(reconciliations, fn reconciliation ->
         Map.update!(reconciliation, :epoch_year_span, fn
           nil -> nil
@@ -4100,6 +4155,105 @@ defmodule Sidereon.GNSS.Data do
       {:error, {:unsupported_product, {:duplicate_centers, normalized}}}
     end
   end
+
+  defp decode_nominal_issue({identity_fields, due_at, {observed, predicted}}) do
+    with {:ok, identity} <- decode_core_product_identity(identity_fields),
+         {:ok, due_at} <- decode_product_datetime(due_at),
+         {:ok, observed} <- decode_nominal_coverage_interval(observed),
+         {:ok, predicted} <- decode_nominal_coverage_interval(predicted) do
+      {:ok,
+       %NominalIssue{
+         identity: identity,
+         due_at: due_at,
+         covers: %{observed: observed, predicted: predicted}
+       }}
+    end
+  end
+
+  defp decode_nominal_issue(_issue), do: {:error, :invalid_nominal_issue}
+
+  defp decode_nominal_coverage_interval(nil), do: {:ok, nil}
+
+  defp decode_nominal_coverage_interval({from, until}) do
+    with {:ok, from} <- decode_product_datetime(from),
+         {:ok, until} <- decode_product_datetime(until) do
+      {:ok, %{from: from, until: until}}
+    end
+  end
+
+  defp decode_nominal_coverage_interval(_interval), do: {:error, :invalid_nominal_coverage}
+
+  defp decode_product_datetime({{year, month, day}, {hour, minute, second}}) do
+    with {:ok, date} <- Date.new(year, month, day),
+         {:ok, time} <- Time.new(hour, minute, second),
+         {:ok, datetime} <- DateTime.new(date, time, "Etc/UTC") do
+      {:ok, datetime}
+    else
+      _ -> {:error, :invalid_nominal_datetime}
+    end
+  end
+
+  defp decode_product_datetime(_datetime), do: {:error, :invalid_nominal_datetime}
+
+  defp decode_core_product_identity([
+         family,
+         analysis_center,
+         publisher,
+         solution_class,
+         campaign,
+         filename_version,
+         year,
+         month,
+         day,
+         issue,
+         span,
+         sample,
+         official_filename,
+         format,
+         format_version,
+         prediction_horizon_days
+       ]) do
+    with {filename_version, ""} <- Integer.parse(filename_version),
+         {year, ""} <- Integer.parse(year),
+         {month, ""} <- Integer.parse(month),
+         {day, ""} <- Integer.parse(day),
+         {:ok, date} <- Date.new(year, month, day),
+         {:ok, prediction_horizon_days} <- decode_optional_integer(prediction_horizon_days) do
+      {:ok,
+       %ProductIdentity{
+         family: family,
+         analysis_center: analysis_center,
+         publisher: publisher,
+         solution_class: solution_class,
+         campaign: campaign,
+         filename_version: filename_version,
+         date: date,
+         issue: empty_to_nil(issue),
+         span: span,
+         sample: sample,
+         official_filename: official_filename,
+         format: format,
+         format_version: empty_to_nil(format_version),
+         prediction_horizon_days: prediction_horizon_days
+       }}
+    else
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp decode_core_product_identity(_fields), do: {:error, :invalid_core_product_identity}
+
+  defp decode_optional_integer(""), do: {:ok, nil}
+
+  defp decode_optional_integer(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> {:ok, integer}
+      _ -> {:error, :invalid_core_product_identity}
+    end
+  end
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
 
   defp normalize_date(%Date{} = date), do: {:ok, date}
   defp normalize_date(%NaiveDateTime{} = datetime), do: {:ok, NaiveDateTime.to_date(datetime)}

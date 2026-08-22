@@ -33,6 +33,30 @@ defmodule Sidereon.GNSS.DataTest do
     assert {:ok, "n30_w100/n36_w107_1arc_v3.dt2"} = Data.dted_cache_relpath(36, -107)
   end
 
+  test "next issue due maps identity, UTC deadline, and nominal coverage" do
+    assert {:ok,
+            %Data.NominalIssue{
+              identity: %{analysis_center: "igs_ult", family: "sp3", issue: "0000"},
+              due_at: ~U[2026-08-04 03:00:00Z],
+              covers: %{
+                observed: %{from: ~U[2026-08-03 00:00:00Z], until: ~U[2026-08-04 00:00:00Z]},
+                predicted: %{from: ~U[2026-08-04 00:00:00Z], until: ~U[2026-08-05 00:00:00Z]}
+              }
+            }} = Data.next_issue_due(:igs_ult, :sp3, ~U[2026-08-04 02:59:59Z])
+
+    assert {:ok, %Data.NominalIssue{identity: %{issue: "0600"}, due_at: ~U[2026-08-04 09:00:00Z]}} =
+             Data.next_issue_due("igs_ult", "sp3", ~U[2026-08-04 03:00:01Z])
+
+    non_utc = %{
+      ~U[2026-08-04 03:00:00Z]
+      | time_zone: "America/Los_Angeles",
+        zone_abbr: "PDT",
+        utc_offset: -25_200
+    }
+
+    assert {:error, {:invalid_datetime, :utc_required}} = Data.next_issue_due(:igs_ult, :sp3, non_utc)
+  end
+
   test "verified cache hit and offline hit return with no network", %{root: root} do
     {:ok, product} = Data.mgex_sp3(:esa, ~D[2020-06-24])
     {:ok, filename} = Data.canonical_filename(product)

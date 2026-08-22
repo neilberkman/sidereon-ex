@@ -412,6 +412,23 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Return the time reach of the product's position-interpolation stencil.
+
+  The core derives both extents from the parsed epoch interval and the same
+  node count used by the interpolator. Callers never supply a stencil width.
+  """
+  @spec stencil_extent(t()) ::
+          {:ok, %{before_s: float(), after_s: float()}} | {:error, term()}
+  def stencil_extent(%__MODULE__{handle: handle}) do
+    case NIF.sp3_stencil_extent(handle) do
+      {:ok, {before_s, after_s}} -> {:ok, %{before_s: before_s, after_s: after_s}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
   Attest that this product is physically continuous, or report each violation.
 
   A merged product is assembled per satellite and epoch from several analysis
@@ -449,37 +466,57 @@ defmodule Sidereon.GNSS.SP3 do
   """
   @spec check_continuity(t(), keyword()) :: {:ok, map()} | {:error, term()}
   def check_continuity(%__MODULE__{handle: handle}, opts \\ []) do
-    orbit_class =
-      case Keyword.get(opts, :orbit_class, :meo_gnss) do
-        nil -> nil
-        atom when atom in [:meo_gnss, :geosynchronous, :leo] -> Atom.to_string(atom)
-        other -> {:bad_orbit_class, other}
+    with {:ok, class, tolerance} <- normalize_continuity_options(opts) do
+      case NIF.sp3_check_continuity(handle, class, tolerance) do
+        {:ok, report} -> {:ok, decode_continuity_report(report)}
+        {:error, reason} -> {:error, reason}
       end
-
-    tolerance = Keyword.get(opts, :residual_tolerance_m, 1.0)
-
-    case orbit_class do
-      {:bad_orbit_class, other} ->
-        {:error, {:bad_orbit_class, other}}
-
-      class ->
-        case NIF.sp3_check_continuity(handle, class, tolerance) do
-          {:ok, {defects, {pairs, residuals, skipped}}} ->
-            decoded = Enum.map(defects, &decode_continuity_defect/1)
-
-            {:ok,
-             %{
-               defects: decoded,
-               attested?: decoded == [],
-               pairs_checked: pairs,
-               residuals_checked: residuals,
-               residuals_skipped: skipped
-             }}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
     end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Decide whether recorded defects can influence an inclusive product-scale
+  J2000-seconds evaluation window.
+
+  The existing product-wide checks and options are unchanged. The core filters
+  their report using the interpolation reach returned by `stencil_extent/1`,
+  retaining both the influencing subset and every product-wide finding.
+  """
+  @spec continuity_verdict(t(), number(), number(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def continuity_verdict(sp3, from_j2000_s, through_j2000_s, opts \\ [])
+
+  def continuity_verdict(%__MODULE__{handle: handle}, from_j2000_s, through_j2000_s, opts)
+      when is_number(from_j2000_s) and is_number(through_j2000_s) do
+    with {:ok, class, tolerance} <- normalize_continuity_options(opts),
+         {:ok, verdict} <-
+           NIF.sp3_continuity_verdict(
+             handle,
+             from_j2000_s / 1.0,
+             through_j2000_s / 1.0,
+             class,
+             tolerance
+           ) do
+      {:ok, decode_window_continuity_verdict(verdict)}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def continuity_verdict(_sp3, _from_j2000_s, _through_j2000_s, _opts), do: {:error, :invalid_continuity_window}
+
+  defp decode_continuity_report({defects, {pairs, residuals, skipped}}) do
+    decoded = Enum.map(defects, &decode_continuity_defect/1)
+
+    %{
+      defects: decoded,
+      attested?: decoded == [],
+      pairs_checked: pairs,
+      residuals_checked: residuals,
+      residuals_skipped: skipped
+    }
   end
 
   defp decode_continuity_defect({kind, satellite, {from_s, to_s}, {magnitude, bound}}) do
@@ -497,6 +534,70 @@ defmodule Sidereon.GNSS.SP3 do
   defp continuity_defect_kind("single_sample_series"), do: :single_sample_series
   defp continuity_defect_kind("speed_bound"), do: :speed_bound
   defp continuity_defect_kind("hold_out_residual"), do: :hold_out_residual
+
+  defp decode_merge_continuity_violation({defect, from_sources, to_sources, crosses_contributors}) do
+    %{
+      defect: decode_continuity_defect(defect),
+      from_sources: from_sources,
+      to_sources: to_sources,
+      crosses_contributors: crosses_contributors
+    }
+  end
+
+  defp decode_merge_continuity_report(nil), do: nil
+
+  defp decode_merge_continuity_report({report, violations}) do
+    decoded_violations = Enum.map(violations, &decode_merge_continuity_violation/1)
+
+    report
+    |> decode_continuity_report()
+    |> Map.put(:violations, decoded_violations)
+    |> Map.put(:splices, Enum.filter(decoded_violations, & &1.crosses_contributors))
+  end
+
+  defp decode_window_continuity_verdict(
+         {decision, accepted, influencing_defects, influencing_splices, all_defects, all_splices}
+       ) do
+    %{
+      decision: continuity_decision(decision),
+      accepted: accepted,
+      influencing_defects: Enum.map(influencing_defects, &decode_continuity_defect/1),
+      influencing_splices: Enum.map(influencing_splices, &decode_merge_continuity_violation/1),
+      all_defects: Enum.map(all_defects, &decode_continuity_defect/1),
+      all_splices: Enum.map(all_splices, &decode_merge_continuity_violation/1)
+    }
+  end
+
+  defp continuity_decision("accept"), do: :accept
+  defp continuity_decision("refuse"), do: :refuse
+
+  defp normalize_continuity_options(opts) when is_list(opts) do
+    orbit_class =
+      case Keyword.get(opts, :orbit_class, :meo_gnss) do
+        nil -> nil
+        atom when atom in [:meo_gnss, :geosynchronous, :leo] -> Atom.to_string(atom)
+        other -> {:bad_orbit_class, other}
+      end
+
+    tolerance = Keyword.get(opts, :residual_tolerance_m, 1.0)
+
+    cond do
+      match?({:bad_orbit_class, _}, orbit_class) ->
+        {:bad_orbit_class, other} = orbit_class
+        {:error, {:bad_orbit_class, other}}
+
+      is_nil(tolerance) ->
+        {:ok, orbit_class, nil}
+
+      is_number(tolerance) ->
+        {:ok, orbit_class, tolerance / 1.0}
+
+      true ->
+        {:error, {:bad_residual_tolerance_m, tolerance}}
+    end
+  end
+
+  defp normalize_continuity_options(opts), do: {:error, {:bad_continuity_options, opts}}
 
   @doc """
   Return observed/predicted status derived from the SP3 record flags.
@@ -778,6 +879,8 @@ defmodule Sidereon.GNSS.SP3 do
       are equivalent without frame math
     * `:helmert`: enable catalog Helmert reconciliation for known ITRF/IGS
       labels
+    * `:verify_continuity`: `false` (default), `true` for the standard options,
+      or continuity options with `:orbit_class` and `:residual_tolerance_m`
   """
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
@@ -796,17 +899,22 @@ defmodule Sidereon.GNSS.SP3 do
              policy.epoch_interval_s,
              policy.systems,
              policy.asserted_frame_label_sets,
-             policy.helmert
+             policy.helmert,
+             policy.verify_continuity
            ) do
-        {handle, {quarantined, single_source, position_outliers, clock_outliers, {frame_reconciliations, agreement}}}
+        {handle,
+         {quarantined, single_source, position_outliers, clock_outliers,
+          {frame_reconciliations, agreement, continuity, report_handle}}}
         when is_reference(handle) ->
           report = %{
+            handle: report_handle,
             frame_reconciliations: Enum.map(frame_reconciliations, &to_frame_reconciliation/1),
             quarantined: Enum.map(quarantined, &to_flag/1),
             single_source: Enum.map(single_source, &to_flag/1),
             position_outliers: Enum.map(position_outliers, &to_flag/1),
             clock_outliers: Enum.map(clock_outliers, &to_flag/1),
-            agreement: to_agreement(agreement)
+            agreement: to_agreement(agreement),
+            continuity: decode_merge_continuity_report(continuity)
           }
 
           {:ok,
@@ -828,6 +936,38 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Decide whether an opt-in merge continuity report can influence an inclusive
+  evaluation window on the merged product's J2000-seconds axis.
+
+  Returns `{:ok, nil}` when merge continuity verification was not requested.
+  """
+  @spec merge_continuity_verdict(map(), t(), number(), number()) ::
+          {:ok, map() | nil} | {:error, term()}
+  def merge_continuity_verdict(
+        %{handle: report_handle},
+        %__MODULE__{handle: merged_handle},
+        from_j2000_s,
+        through_j2000_s
+      )
+      when is_number(from_j2000_s) and is_number(through_j2000_s) do
+    case NIF.sp3_merge_continuity_verdict(
+           report_handle,
+           merged_handle,
+           from_j2000_s / 1.0,
+           through_j2000_s / 1.0
+         ) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, verdict} -> {:ok, decode_window_continuity_verdict(verdict)}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def merge_continuity_verdict(_report, _merged, _from_j2000_s, _through_j2000_s),
+    do: {:error, :invalid_merge_continuity_query}
 
   @doc """
   Build the versioned stable identity for exact SP3 artifacts and merge policy.
@@ -1267,7 +1407,8 @@ defmodule Sidereon.GNSS.SP3 do
     :epoch_interval_s,
     :systems,
     :asserted_frame_label_sets,
-    :helmert
+    :helmert,
+    :verify_continuity
   ]
 
   defp normalize_merge_policy(opts) when is_list(opts) do
@@ -1291,7 +1432,9 @@ defmodule Sidereon.GNSS.SP3 do
          {:ok, systems} <- normalize_policy_systems(opts),
          {:ok, asserted_frame_label_sets} <-
            normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])),
-         {:ok, helmert} <- normalize_boolean(Keyword.get(opts, :helmert, false), :helmert) do
+         {:ok, helmert} <- normalize_boolean(Keyword.get(opts, :helmert, false), :helmert),
+         {:ok, verify_continuity} <-
+           normalize_verify_continuity(Keyword.get(opts, :verify_continuity, false)) do
       {:ok,
        %{
          position_tolerance_m: position_tolerance_m,
@@ -1304,7 +1447,8 @@ defmodule Sidereon.GNSS.SP3 do
          epoch_interval_s: epoch_interval_s,
          systems: systems,
          asserted_frame_label_sets: asserted_frame_label_sets,
-         helmert: helmert
+         helmert: helmert,
+         verify_continuity: verify_continuity
        }}
     else
       false -> {:error, {:invalid_merge_policy, :invalid}}
@@ -1358,6 +1502,21 @@ defmodule Sidereon.GNSS.SP3 do
 
   defp normalize_boolean(value, _field) when is_boolean(value), do: {:ok, value}
   defp normalize_boolean(_value, field), do: {:error, {:invalid_merge_policy, field}}
+
+  defp normalize_verify_continuity(value) when value in [nil, false], do: {:ok, nil}
+  defp normalize_verify_continuity(true), do: normalize_verify_continuity([])
+
+  defp normalize_verify_continuity(opts) when is_list(opts) do
+    case normalize_continuity_options(opts) do
+      {:ok, orbit_class, residual_tolerance_m} ->
+        {:ok, {orbit_class, residual_tolerance_m}}
+
+      {:error, reason} ->
+        {:error, {:invalid_verify_continuity, reason}}
+    end
+  end
+
+  defp normalize_verify_continuity(value), do: {:error, {:invalid_verify_continuity, value}}
 
   defp outlier_reject_map(nil), do: nil
 

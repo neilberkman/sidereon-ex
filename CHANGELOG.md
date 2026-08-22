@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-21
+
+Sidereon 1.0.0 across every interface. The engine's stability commitment
+applies here too: additions arrive without breaking existing callers.
+
+### Added
+
+- Exact-cache single-flight coalescing: `Sidereon.GNSS.ExactCache` gains
+  `:single_flight` options and `{:hit, entry} | {:owner, owner}` outcomes
+  with typed timeout and ownership-loss errors; concurrent requesters for
+  one product identity coalesce onto a single download.
+- Window-scoped continuity verdicts: `SP3.stencil_extent/1`,
+  `SP3.continuity_verdict/4`, and the merge-report equivalent answer
+  whether any recorded defect influences a bounded evaluation window,
+  with the stencil reach derived from the interpolator itself.
+- `Data.next_issue_due/3`: network-free next nominal issue for cataloged
+  product lines, naming the ultra lines' observed and predicted halves.
+
+### Changed
+
+- Engine pinned to `sidereon-core` 1.0.0.
+
 ## [0.39.1] - 2026-08-11
 
 ### Fixed

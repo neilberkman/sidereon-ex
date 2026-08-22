@@ -683,7 +683,15 @@ defmodule Sidereon.NIF do
 
   def sp3_epochs_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_stencil_extent(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_check_continuity(_handle, _orbit_class, _residual_tolerance_m), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_continuity_verdict(_handle, _from_j2000_s, _through_j2000_s, _orbit_class, _residual_tolerance_m),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_merge_continuity_verdict(_report, _merged, _from_j2000_s, _through_j2000_s),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_exact_request_new(_year, _month, _day, _issue, _span, _sample, _expected_agency),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -1068,7 +1076,8 @@ defmodule Sidereon.NIF do
         _target_epoch_interval_s,
         _system_letters,
         _asserted_frame_label_sets,
-        _helmert_frame_reconciliation
+        _helmert_frame_reconciliation,
+        _verify_continuity
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_merge_input_identity(
@@ -2180,6 +2189,9 @@ defmodule Sidereon.NIF do
         _now_minute,
         _now_second
       ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_next_issue_due(_center, _product, _year, _month, _day, _hour, _minute, _second),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def data_resolve_first_published(_candidates, _objects), do: :erlang.nif_error(:nif_not_loaded)
 

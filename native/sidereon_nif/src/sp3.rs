@@ -21,10 +21,12 @@ use sidereon_core::data::{ArchiveCompression, DistributionSource, ProductDate};
 use sidereon_core::ephemeris::{
     align_clock_reference, check_continuity, clock_reference_offset, merge as crate_merge,
     parse_exact_sp3, validate_exact_sp3, AgreementMetric, ContinuityDefect, ContinuityOptions,
-    EpochAgreement, ExactSp3Coverage, ExactSp3Request, MergeCombine, MergeFlag, MergeOptions,
-    MergePrecedenceScope, MergeReport, OrbitClass, OutlierRejectOptions, Sp3, Sp3ArtifactIdentity,
-    Sp3FrameLabelSet, Sp3FrameReconciliation, Sp3FrameReconciliationMethod,
-    Sp3FrameReconciliationOptions, Sp3MergeInputIdentity, Sp3State, SpeedBound,
+    EpochAgreement, EpochWindow, ExactSp3Coverage, ExactSp3Request, MergeCombine,
+    MergeContinuityReport, MergeContinuityViolation, MergeFlag, MergeOptions, MergePrecedenceScope,
+    MergeReport, OrbitClass, OutlierRejectOptions, Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet,
+    Sp3FrameReconciliation, Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions,
+    Sp3MergeInputIdentity, Sp3State, SpeedBound, StencilExtent, WindowContinuityDecision,
+    WindowContinuityVerdict,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -57,6 +59,11 @@ pub struct ExactSp3RequestResource {
     request: ExactSp3Request,
 }
 
+/// Opaque core merge report retained for later window-scoped queries.
+pub struct Sp3MergeReportResource {
+    report: MergeReport,
+}
+
 type Vec3Tuple = (f64, f64, f64);
 /// `{kind, satellite, {from_j2000_s | nil, to_j2000_s | nil}, {magnitude | nil, bound | nil}}`
 type ContinuityDefectTuple = (
@@ -67,6 +74,16 @@ type ContinuityDefectTuple = (
 );
 /// `{defects, {pairs_checked, residuals_checked, residuals_skipped}}`
 type ContinuityReportTuple = (Vec<ContinuityDefectTuple>, (u64, u64, u64));
+type MergeContinuityViolationTuple = (ContinuityDefectTuple, Vec<u64>, Vec<u64>, bool);
+type MergeContinuityReportTuple = (ContinuityReportTuple, Vec<MergeContinuityViolationTuple>);
+type WindowContinuityVerdictTuple = (
+    String,
+    bool,
+    Vec<ContinuityDefectTuple>,
+    Vec<MergeContinuityViolationTuple>,
+    Vec<ContinuityDefectTuple>,
+    Vec<MergeContinuityViolationTuple>,
+);
 type FlagsTuple = (bool, bool, bool, bool);
 type ExactRequestFields = (
     (i32, u8, u8),
@@ -91,6 +108,9 @@ impl rustler::Resource for Sp3Resource {}
 
 #[rustler::resource_impl]
 impl rustler::Resource for ExactSp3RequestResource {}
+
+#[rustler::resource_impl]
+impl rustler::Resource for Sp3MergeReportResource {}
 
 fn exact_coverage<'a>(env: Env<'a>, coverage: ExactSp3Coverage) -> Term<'a> {
     match coverage {
@@ -139,6 +159,7 @@ fn merge_options_from_terms(
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
+    verify_continuity: Option<(Option<String>, Option<f64>)>,
 ) -> NifResult<MergeOptions> {
     let combine = match combine.as_str() {
         "mean" => MergeCombine::Mean,
@@ -182,9 +203,9 @@ fn merge_options_from_terms(
         .collect::<NifResult<Vec<_>>>()?;
 
     // Mutate-a-default rather than a struct literal: MergeOptions is
-    // non-exhaustive, so per-epoch provenance, the continuity post-condition,
-    // and any future option the core learns stay at their defaults (off)
-    // without this conversion having to name them.
+    // non-exhaustive, so per-epoch provenance and any future option the core
+    // learns stay at their defaults (off) without this conversion having to
+    // name them.
     let mut options = MergeOptions::default();
     options.position_tolerance_m = position_tolerance_m;
     options.clock_tolerance_s = clock_tolerance_s;
@@ -209,6 +230,12 @@ fn merge_options_from_terms(
         asserted_equivalent_label_sets,
         helmert: helmert_frame_reconciliation,
     };
+    options.verify_continuity = verify_continuity
+        .map(|(orbit_class, residual_tolerance_m)| {
+            continuity_options_from_terms(orbit_class, residual_tolerance_m)
+        })
+        .transpose()
+        .map_err(|error| Error::Term(Box::new(error)))?;
     Ok(options)
 }
 
@@ -279,6 +306,30 @@ fn sp3_declared_start_j2000_seconds(handle: ResourceArc<Sp3Resource>) -> Option<
     handle.sp3.declared_start_j2000_s()
 }
 
+/// Derive the position interpolator's reach from the parsed product interval.
+#[rustler::nif]
+fn sp3_stencil_extent(handle: ResourceArc<Sp3Resource>) -> Result<(f64, f64), String> {
+    let stencil = StencilExtent::for_sp3(&handle.sp3).map_err(|error| error.to_string())?;
+    Ok((stencil.before_s(), stencil.after_s()))
+}
+
+fn continuity_options_from_terms(
+    orbit_class: Option<String>,
+    residual_tolerance_m: Option<f64>,
+) -> Result<ContinuityOptions, String> {
+    let speed_bound = match orbit_class.as_deref() {
+        None => None,
+        Some("meo_gnss") => Some(SpeedBound::OrbitClass(OrbitClass::MeoGnss)),
+        Some("geosynchronous") => Some(SpeedBound::OrbitClass(OrbitClass::Geosynchronous)),
+        Some("leo") => Some(SpeedBound::OrbitClass(OrbitClass::Leo)),
+        Some(other) => return Err(format!("unknown orbit class: {other}")),
+    };
+    Ok(ContinuityOptions {
+        speed_bound,
+        residual_tolerance_m,
+    })
+}
+
 /// Attest that a parsed or merged product is physically continuous.
 ///
 /// `orbit_class` selects the physical earth-fixed speed bound
@@ -293,19 +344,15 @@ fn sp3_check_continuity(
     orbit_class: Option<String>,
     residual_tolerance_m: Option<f64>,
 ) -> Result<ContinuityReportTuple, String> {
-    let speed_bound = match orbit_class.as_deref() {
-        None => None,
-        Some("meo_gnss") => Some(SpeedBound::OrbitClass(OrbitClass::MeoGnss)),
-        Some("geosynchronous") => Some(SpeedBound::OrbitClass(OrbitClass::Geosynchronous)),
-        Some("leo") => Some(SpeedBound::OrbitClass(OrbitClass::Leo)),
-        Some(other) => return Err(format!("unknown orbit class: {other}")),
-    };
-    let options = ContinuityOptions {
-        speed_bound,
-        residual_tolerance_m,
-    };
+    let options = continuity_options_from_terms(orbit_class, residual_tolerance_m)?;
     let report = check_continuity(&handle.sp3.precise_ephemeris_samples(), &options);
-    Ok((
+    Ok(continuity_report_to_tuple(&report))
+}
+
+fn continuity_report_to_tuple(
+    report: &sidereon_core::ephemeris::ContinuityReport,
+) -> ContinuityReportTuple {
+    (
         report
             .defects
             .iter()
@@ -316,7 +363,7 @@ fn sp3_check_continuity(
             report.residuals_checked as u64,
             report.residuals_skipped as u64,
         ),
-    ))
+    )
 }
 
 /// One continuity defect: `{kind, satellite, {from_j2000_s, to_j2000_s},
@@ -367,6 +414,106 @@ fn continuity_defect_to_tuple(defect: &ContinuityDefect) -> ContinuityDefectTupl
             (Some(*residual_m), Some(*tolerance_m)),
         ),
     }
+}
+
+fn merge_continuity_violation_to_tuple(
+    violation: &MergeContinuityViolation,
+) -> MergeContinuityViolationTuple {
+    (
+        continuity_defect_to_tuple(&violation.defect),
+        violation
+            .from_sources
+            .iter()
+            .map(|source| *source as u64)
+            .collect(),
+        violation
+            .to_sources
+            .iter()
+            .map(|source| *source as u64)
+            .collect(),
+        violation.crosses_contributors,
+    )
+}
+
+fn merge_continuity_report_to_tuple(report: &MergeContinuityReport) -> MergeContinuityReportTuple {
+    (
+        continuity_report_to_tuple(&report.report),
+        report
+            .violations
+            .iter()
+            .map(merge_continuity_violation_to_tuple)
+            .collect(),
+    )
+}
+
+fn window_continuity_verdict_to_tuple(
+    verdict: WindowContinuityVerdict<'_>,
+) -> WindowContinuityVerdictTuple {
+    let decision = match verdict.decision {
+        WindowContinuityDecision::Accept => "accept",
+        WindowContinuityDecision::Refuse => "refuse",
+    };
+    (
+        decision.to_string(),
+        verdict.accepted(),
+        verdict
+            .influencing_defects
+            .into_iter()
+            .map(continuity_defect_to_tuple)
+            .collect(),
+        verdict
+            .influencing_splices
+            .into_iter()
+            .map(merge_continuity_violation_to_tuple)
+            .collect(),
+        verdict
+            .all_defects
+            .iter()
+            .map(continuity_defect_to_tuple)
+            .collect(),
+        verdict
+            .all_splices
+            .into_iter()
+            .map(merge_continuity_violation_to_tuple)
+            .collect(),
+    )
+}
+
+/// Run the product-wide checker and filter its report for one evaluation
+/// window using the product-derived stencil.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_continuity_verdict(
+    handle: ResourceArc<Sp3Resource>,
+    from_j2000_s: f64,
+    through_j2000_s: f64,
+    orbit_class: Option<String>,
+    residual_tolerance_m: Option<f64>,
+) -> Result<WindowContinuityVerdictTuple, String> {
+    let options = continuity_options_from_terms(orbit_class, residual_tolerance_m)?;
+    let window =
+        EpochWindow::new(from_j2000_s, through_j2000_s).map_err(|error| error.to_string())?;
+    let stencil = StencilExtent::for_sp3(&handle.sp3).map_err(|error| error.to_string())?;
+    let report = check_continuity(&handle.sp3.precise_ephemeris_samples(), &options);
+    Ok(window_continuity_verdict_to_tuple(
+        report.verdict_for_window(window, stencil),
+    ))
+}
+
+/// Ask the retained core merge report for its optional continuity verdict.
+#[rustler::nif]
+fn sp3_merge_continuity_verdict(
+    report: ResourceArc<Sp3MergeReportResource>,
+    merged: ResourceArc<Sp3Resource>,
+    from_j2000_s: f64,
+    through_j2000_s: f64,
+) -> Result<Option<WindowContinuityVerdictTuple>, String> {
+    let window =
+        EpochWindow::new(from_j2000_s, through_j2000_s).map_err(|error| error.to_string())?;
+    let stencil = StencilExtent::for_sp3(&merged.sp3).map_err(|error| error.to_string())?;
+    Ok(report
+        .report
+        .continuity_verdict_for_window(window, stencil)
+        .map(window_continuity_verdict_to_tuple))
 }
 
 /// Parsed SP3 epoch grid as seconds since J2000 in the product's own time scale.
@@ -866,6 +1013,7 @@ fn sp3_merge<'a>(
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
+    verify_continuity: Option<(Option<String>, Option<f64>)>,
 ) -> NifResult<Term<'a>> {
     let opts = merge_options_from_terms(
         position_tolerance_m,
@@ -879,6 +1027,7 @@ fn sp3_merge<'a>(
         system_letters,
         asserted_frame_label_sets,
         helmert_frame_reconciliation,
+        verify_continuity,
     )?;
 
     // The crate merge takes owned products; the handles are shared/immutable, so
@@ -908,6 +1057,11 @@ fn sp3_merge<'a>(
         .map(epoch_agreement_to_tuple)
         .collect();
     let aggregate = agreement_aggregate(&report);
+    let continuity = report
+        .continuity
+        .as_ref()
+        .map(merge_continuity_report_to_tuple);
+    let report_handle = ResourceArc::new(Sp3MergeReportResource { report });
 
     Ok((
         handle,
@@ -919,6 +1073,8 @@ fn sp3_merge<'a>(
             (
                 frame_reconciliations,
                 (aggregate, agreement, per_epoch_agreement),
+                continuity,
+                report_handle,
             ),
         ),
     )
@@ -1023,6 +1179,7 @@ fn sp3_merge_input_identity(
         system_letters,
         asserted_frame_label_sets,
         helmert_frame_reconciliation,
+        None,
     )?;
     let identity = Sp3MergeInputIdentity::new(&contributors, &policy)
         .map_err(|error| Error::Term(Box::new(error.to_string())))?;
