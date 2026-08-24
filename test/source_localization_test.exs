@@ -25,7 +25,7 @@ defmodule Sidereon.SourceLocalizationTest do
     |> Enum.each(fn {a, e} -> assert_in_delta a, e, tol end)
   end
 
-  test "Chan-Ho seed and ToA solve recover a clean 3D source" do
+  test "closed-form seed and ToA solve recover a clean 3D source" do
     sensors = [
       SourceLocalization.sensor([0.0, 0.0, 0.0]),
       SourceLocalization.sensor([1200.0, 0.0, 0.0]),
@@ -39,7 +39,7 @@ defmodule Sidereon.SourceLocalizationTest do
     speed = 343.0
     times = arrivals(sensors, source, origin, speed)
 
-    assert {:ok, seed} = SourceLocalization.chan_ho_initial_guess(sensors, times, speed)
+    assert {:ok, seed} = SourceLocalization.closed_form_initial_guess(sensors, times, speed)
     assert_vec_close(seed.position_m, source, 1.0e-8)
     assert_in_delta seed.origin_time_s, origin, 1.0e-10
     assert seed.residual_rms_s < 1.0e-11
@@ -52,6 +52,26 @@ defmodule Sidereon.SourceLocalizationTest do
     assert solution.covariance != nil
     assert Enum.all?(solution.residuals, &(abs(&1.residual_s) < 1.0e-10))
     assert %GeometryQuality{} = solution.geometry_quality
+  end
+
+  test "closed-form seed recovers a clean 2D ToA source and the deprecated alias agrees" do
+    sensors = [
+      SourceLocalization.sensor([0.0, 0.0]),
+      SourceLocalization.sensor([1000.0, 0.0]),
+      SourceLocalization.sensor([0.0, 800.0]),
+      SourceLocalization.sensor([900.0, 900.0])
+    ]
+
+    source = [300.0, 260.0]
+    origin = 4.0
+    speed = 340.0
+    times = arrivals(sensors, source, origin, speed)
+
+    assert {:ok, seed} = SourceLocalization.closed_form_initial_guess(sensors, times, speed)
+    assert_vec_close(seed.position_m, source, 1.0e-8)
+    assert_in_delta seed.origin_time_s, origin, 1.0e-10
+
+    assert :erlang.apply(SourceLocalization, :chan_ho_initial_guess, [sensors, times, speed, :toa]) == {:ok, seed}
   end
 
   test "source solution surfaces nominal geometry quality for a balanced fixture" do
@@ -69,6 +89,13 @@ defmodule Sidereon.SourceLocalizationTest do
     times = arrivals(sensors, source, origin, speed)
 
     assert {:ok, solution} = SourceLocalization.locate_source(sensors, times, speed)
+
+    assert {:ok, solution_without_influence} =
+             SourceLocalization.locate_source(sensors, times, speed, include_influence: false)
+
+    assert solution_without_influence.per_sensor_influence == []
+    assert solution_without_influence.position_m === solution.position_m
+    assert solution_without_influence.origin_time_s === solution.origin_time_s
 
     assert %GeometryQuality{
              tier: :nominal,

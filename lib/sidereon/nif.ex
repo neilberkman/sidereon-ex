@@ -2513,7 +2513,7 @@ defmodule Sidereon.NIF do
   def source_localization_locate(_sensors, _arrival_times_s, _propagation_speed_m_s, _options),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def source_localization_chan_ho_initial_guess(_sensors, _arrival_times_s, _propagation_speed_m_s, _mode),
+  def source_localization_closed_form_initial_guess(_sensors, _arrival_times_s, _propagation_speed_m_s, _mode),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def source_localization_dop(_sensors, _source_position_m, _propagation_speed_m_s),

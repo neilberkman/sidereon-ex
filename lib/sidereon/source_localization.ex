@@ -34,11 +34,17 @@ defmodule Sidereon.SourceLocalization.Options do
   @moduledoc """
   Options for ToA or TDOA source localization.
 
-  `mode` is `:toa` or `{:tdoa, reference_sensor_index}`. Timing sigma is seconds
-  and controls covariance, CRLB, and influence-score scaling. `loss` is one of
-  `:linear`, `:huber`, `:soft_l1`, `:cauchy`, or `:arctan`; `f_scale_s` is the
-  residual scale in seconds for non-linear losses. Tolerances and `max_nfev`
-  are passed through to the trust-region solver when set.
+  | Option | Default | Description |
+  | --- | --- | --- |
+  | `mode` | `:toa` | `:toa` or `{:tdoa, reference_sensor_index}`. |
+  | `timing_sigma_s` | `1.0` | Timing standard deviation in seconds for covariance, CRLB, and influence-score scaling. |
+  | `loss` | `:linear` | `:linear`, `:huber`, `:soft_l1`, `:cauchy`, or `:arctan`. |
+  | `f_scale_s` | `1.0` | Residual scale in seconds for non-linear losses. |
+  | `ftol` | `nil` | Optional solver function tolerance. |
+  | `xtol` | `nil` | Optional solver step tolerance. |
+  | `gtol` | `nil` | Optional solver gradient tolerance. |
+  | `max_nfev` | `nil` | Optional maximum residual evaluations. |
+  | `include_influence` | `true` | Compute per-sensor leave-one-out influence diagnostics. Set to `false` to skip one full nonlinear re-solve per sensor and return an empty influence list. |
   """
 
   defstruct mode: :toa,
@@ -48,7 +54,8 @@ defmodule Sidereon.SourceLocalization.Options do
             ftol: nil,
             xtol: nil,
             gtol: nil,
-            max_nfev: nil
+            max_nfev: nil,
+            include_influence: true
 
   @type solve_mode :: :toa | {:tdoa, non_neg_integer()}
   @type loss :: :linear | :huber | :soft_l1 | :cauchy | :arctan
@@ -61,7 +68,8 @@ defmodule Sidereon.SourceLocalization.Options do
           ftol: float() | nil,
           xtol: float() | nil,
           gtol: float() | nil,
-          max_nfev: pos_integer() | nil
+          max_nfev: pos_integer() | nil,
+          include_influence: boolean()
         }
 end
 
@@ -125,8 +133,10 @@ defmodule Sidereon.SourceLocalization.SensorInfluence do
   @moduledoc """
   Per-sensor leave-one-out diagnostic.
 
-  Residual and origin-time fields are seconds. Position delta is metres. Larger
-  score means a poorer fit under the selected timing sigma and loss.
+  Residual and origin-time fields are seconds. Position delta is metres. `score`
+  is `max(abs(residual_s), abs(leave_one_out_residual_s)) / timing_sigma_s`, or
+  `abs(residual_s) / timing_sigma_s` when the leave-one-out solve is unavailable.
+  Robust downweighting is reported only in `loss_weight`.
   """
 
   @enforce_keys [
@@ -315,17 +325,18 @@ defmodule Sidereon.SourceLocalization do
   end
 
   @doc """
-  Compute the closed-form Chan-Ho seed used by `locate_source/4`.
+  Compute the closed-form seed used by `locate_source/4`.
 
-  `mode` is `:toa` or `{:tdoa, reference_sensor_index}`.
+  This is the Schau–Robinson spherical-intersection initializer. `mode` is
+  `:toa` or `{:tdoa, reference_sensor_index}`.
   """
-  @spec chan_ho_initial_guess([Sensor.t()], [number()], number(), Options.solve_mode()) ::
+  @spec closed_form_initial_guess([Sensor.t()], [number()], number(), Options.solve_mode()) ::
           {:ok, InitialGuess.t()} | {:error, source_error() | :invalid_sensor | :invalid_mode}
-  def chan_ho_initial_guess(sensors, arrival_times_s, propagation_speed_m_s, mode \\ :toa)
+  def closed_form_initial_guess(sensors, arrival_times_s, propagation_speed_m_s, mode \\ :toa)
       when is_list(sensors) and is_list(arrival_times_s) do
     with {:ok, sensor_terms} <- sensor_terms(sensors),
          {:ok, mode_term} <- mode_term(mode) do
-      case NIF.source_localization_chan_ho_initial_guess(
+      case NIF.source_localization_closed_form_initial_guess(
              sensor_terms,
              Enum.map(arrival_times_s, &(&1 / 1.0)),
              propagation_speed_m_s / 1.0,
@@ -335,6 +346,19 @@ defmodule Sidereon.SourceLocalization do
         {:error, _} = err -> err
       end
     end
+  end
+
+  @doc """
+  Deprecated alias for `closed_form_initial_guess/4`.
+
+  `mode` is `:toa` or `{:tdoa, reference_sensor_index}`.
+  """
+  @deprecated "Use closed_form_initial_guess/4"
+  @spec chan_ho_initial_guess([Sensor.t()], [number()], number(), Options.solve_mode()) ::
+          {:ok, InitialGuess.t()} | {:error, source_error() | :invalid_sensor | :invalid_mode}
+  def chan_ho_initial_guess(sensors, arrival_times_s, propagation_speed_m_s, mode \\ :toa)
+      when is_list(sensors) and is_list(arrival_times_s) do
+    closed_form_initial_guess(sensors, arrival_times_s, propagation_speed_m_s, mode)
   end
 
   @doc """
@@ -414,7 +438,7 @@ defmodule Sidereon.SourceLocalization do
     with {:ok, mode} <- mode_term(options.mode),
          {:ok, loss} <- loss_string(options.loss) do
       {:ok,
-       {{mode, options.timing_sigma_s / 1.0, loss, options.f_scale_s / 1.0},
+       {{mode, options.timing_sigma_s / 1.0, loss, options.f_scale_s / 1.0, options.include_influence},
         {maybe_float(options.ftol), maybe_float(options.xtol), maybe_float(options.gtol), options.max_nfev}}}
     end
   end
@@ -428,7 +452,8 @@ defmodule Sidereon.SourceLocalization do
       ftol: Keyword.get(opts, :ftol),
       xtol: Keyword.get(opts, :xtol),
       gtol: Keyword.get(opts, :gtol),
-      max_nfev: Keyword.get(opts, :max_nfev)
+      max_nfev: Keyword.get(opts, :max_nfev),
+      include_influence: Keyword.get(opts, :include_influence, true)
     })
   end
 

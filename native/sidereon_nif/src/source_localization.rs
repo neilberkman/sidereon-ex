@@ -1,6 +1,6 @@
 //! Rustler boundary for source localization.
 //!
-//! The ToA/TDOA solve, Chan-Ho seed, DOP, and CRLB are all delegated to
+//! The ToA/TDOA solve, closed-form seed, DOP, and CRLB are all delegated to
 //! `sidereon-core::source_localization`. This module only decodes Elixir terms
 //! and encodes core result structs.
 
@@ -8,15 +8,15 @@ use crate::geometry_quality::geometry_quality_to_term;
 use rustler::{Encoder, Env, Term};
 use sidereon_core::dop::{Dop, DopError};
 use sidereon_core::source_localization::{
-    chan_ho_initial_guess, locate_source, source_crlb, source_dop, Loss, Sensor, SourceCovariance,
-    SourceCrlb, SourceInitialGuess, SourceLocalizationError, SourceLocateOptions, SourceResidual,
-    SourceSensorInfluence, SourceSolution, SourceSolveMode,
+    closed_form_initial_guess, locate_source_with, source_crlb, source_dop, Loss, Sensor,
+    SourceCovariance, SourceCrlb, SourceInitialGuess, SourceLocalizationError, SourceLocateConfig,
+    SourceLocateOptions, SourceResidual, SourceSensorInfluence, SourceSolution, SourceSolveMode,
 };
 
 type SensorTerm = (Vec<f64>, Option<f64>);
 type ModeTerm = (String, usize);
 type OptionsTerm = (
-    (ModeTerm, f64, String, f64),
+    (ModeTerm, f64, String, f64, bool),
     (Option<f64>, Option<f64>, Option<f64>, Option<usize>),
 );
 type DopTerm = (f64, f64, f64, f64, f64);
@@ -63,20 +63,24 @@ pub fn source_localization_locate<'a>(
 ) -> Term<'a> {
     let options = decode_options(options);
     let result = match options {
-        Ok(options) => locate_source(
-            &decode_sensors(sensors),
-            &arrival_times_s,
-            propagation_speed_m_s,
-            &options,
-        )
-        .map(|solution| solution_to_term(env, solution)),
+        Ok((options, include_influence)) => {
+            let mut config = SourceLocateConfig::from(options);
+            config.include_influence = include_influence;
+            locate_source_with(
+                &decode_sensors(sensors),
+                &arrival_times_s,
+                propagation_speed_m_s,
+                &config,
+            )
+            .map(|solution| solution_to_term(env, solution))
+        }
         Err(error) => Err(error),
     };
     encode_result(env, result)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-pub fn source_localization_chan_ho_initial_guess<'a>(
+pub fn source_localization_closed_form_initial_guess<'a>(
     env: Env<'a>,
     sensors: Vec<SensorTerm>,
     arrival_times_s: Vec<f64>,
@@ -85,7 +89,7 @@ pub fn source_localization_chan_ho_initial_guess<'a>(
 ) -> Term<'a> {
     let mode = decode_mode(mode);
     let result = match mode {
-        Ok(mode) => chan_ho_initial_guess(
+        Ok(mode) => closed_form_initial_guess(
             &decode_sensors(sensors),
             &arrival_times_s,
             propagation_speed_m_s,
@@ -152,18 +156,24 @@ fn decode_sensors(sensors: Vec<SensorTerm>) -> Vec<Sensor> {
 }
 
 fn decode_options(
-    ((mode, timing_sigma_s, loss, f_scale_s), (ftol, xtol, gtol, max_nfev)): OptionsTerm,
-) -> Result<SourceLocateOptions, SourceLocalizationError> {
-    Ok(SourceLocateOptions {
-        mode: decode_mode(mode)?,
-        timing_sigma_s,
-        loss: decode_loss(&loss)?,
-        f_scale_s,
-        ftol,
-        xtol,
-        gtol,
-        max_nfev,
-    })
+    (
+        (mode, timing_sigma_s, loss, f_scale_s, include_influence),
+        (ftol, xtol, gtol, max_nfev),
+    ): OptionsTerm,
+) -> Result<(SourceLocateOptions, bool), SourceLocalizationError> {
+    Ok((
+        SourceLocateOptions {
+            mode: decode_mode(mode)?,
+            timing_sigma_s,
+            loss: decode_loss(&loss)?,
+            f_scale_s,
+            ftol,
+            xtol,
+            gtol,
+            max_nfev,
+        },
+        include_influence,
+    ))
 }
 
 fn decode_mode(

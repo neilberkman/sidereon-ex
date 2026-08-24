@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Source localization accepts `include_influence: false` to skip per-sensor
+  leave-one-out re-solves, and exposes the Schau–Robinson
+  `closed_form_initial_guess/4` initializer. `chan_ho_initial_guess/4` remains
+  as a deprecated alias.
+
+### Changed
+
+- Source sensor influence scores are now
+  `max(abs(residual_s), abs(leave_one_out_residual_s)) / timing_sigma_s`;
+  robust-loss downweighting is reported separately in `loss_weight`.
+
 ## [1.0.1] - 2026-08-22
 
 ### Changed
