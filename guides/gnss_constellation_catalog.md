@@ -8,21 +8,32 @@ the current NORAD catalog id and a PRN in `OBJECT_NAME`. NAVCEN's GPS
 constellation page can be merged as a status overlay for SVN and active NANU
 usability.
 
+The library is sans-I/O: it never performs the HTTP fetch itself. The caller
+retrieves the feed bytes (with `Req`, a required dependency, or any client)
+and hands them to the parsers, which keeps every run reproducible from the
+captured bytes.
+
 ```elixir
-# Live fetch: CelesTrak gps-ops plus NAVCEN status overlay.
-{:ok, records} = Sidereon.GNSS.Constellation.fetch_gps()
+# Caller-owned fetch: CelesTrak gps-ops OMM/JSON plus the NAVCEN status page.
+celestrak_json =
+  Req.get!("https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=json").body
+
+# NAVCEN's GPS constellation status page (HTML).
+navcen_html = Req.get!(navcen_constellation_url).body
+
+{:ok, records} = Sidereon.GNSS.Constellation.from_celestrak_json(celestrak_json, :gps)
+{:ok, navcen} = Sidereon.GNSS.Constellation.parse_navcen_html(navcen_html)
+records = Sidereon.GNSS.Constellation.merge_navcen(records, navcen)
 
 record = hd(records)
 {record.system, record.prn, record.svn, record.norad_id, record.sp3_id}
 # {:gps, prn, svn_or_nil, norad_cat_id, "Gxx"}
 ```
 
-For reproducible workflows, fetch bytes elsewhere and parse explicitly:
+With already-decoded OMM maps, use the list form instead:
 
 ```elixir
-{:ok, records} = Sidereon.GNSS.Constellation.from_celestrak_omm(celestrak_omms)
-{:ok, navcen} = Sidereon.GNSS.Constellation.parse_navcen_html(navcen_html)
-records = Sidereon.GNSS.Constellation.merge_navcen(records, navcen)
+{:ok, records} = Sidereon.GNSS.Constellation.from_celestrak_omm(:gps, celestrak_omms)
 ```
 
 For a reproducible operational assessment, pass the evaluation instant
