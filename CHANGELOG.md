@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-24
+
 ### Added
 
 - Source localization accepts `include_influence: false` to skip per-sensor
