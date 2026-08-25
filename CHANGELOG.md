@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The install snippets in the README, the NIF README, and the Livebooks still
+  pinned `~> 0.35`, `~> 0.38`, and `~> 0.9`; they now pin `~> 1.1`, and the
+  suite fails if they lag `mix.exs` again. No API changes.
+
 ## [1.1.0] - 2026-08-24
 
 ### Added

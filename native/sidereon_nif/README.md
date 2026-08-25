@@ -12,7 +12,7 @@ Sidereon's optional Rustler dependency:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 0.35"},
+    {:sidereon, "~> 1.1"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
