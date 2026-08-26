@@ -805,7 +805,7 @@ defmodule Sidereon.GNSS.Distribution do
            redirect: false,
            retry: false,
            receive_timeout: timeout_ms,
-           finch: :"Elixir.Sidereon.GNSS.Data.Finch",
+           finch: [name: :"Elixir.Sidereon.GNSS.Data.Finch"],
            decode_body: false,
            into: ArchiveIngress.req_into(max_archive_bytes(opts))
          ) do

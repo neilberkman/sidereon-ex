@@ -264,7 +264,7 @@ defmodule Sidereon.GNSS.Ntrip do
            redirect: false,
            retry: false,
            receive_timeout: timeout_ms,
-           finch: :"Elixir.Sidereon.GNSS.Ntrip.Finch",
+           finch: [name: :"Elixir.Sidereon.GNSS.Ntrip.Finch"],
            decode_body: false
          ) do
       {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
