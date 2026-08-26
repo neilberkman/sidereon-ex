@@ -6,8 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-26
+
 ### Fixed
 
+- Req 0.7 no longer warns when Sidereon selects its supervised Finch pools;
+  all three HTTP paths now use Req's current named-pool option. No API changes.
 - The install snippets in the README, the NIF README, and the Livebooks still
   pinned `~> 0.35`, `~> 0.38`, and `~> 0.9`; they now pin `~> 1.1`, and the
   suite fails if they lag `mix.exs` again. No API changes.
