@@ -39,14 +39,15 @@ defmodule Sidereon.GNSS.RTK do
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
   alias Sidereon.GNSS.RTK
-  alias Sidereon.GNSS.RTK.ArcConfig
+  alias Sidereon.GNSS.RTK.{ArcConfig, DualFrequencyRinexArc, RinexArc}
   alias Sidereon.GNSS.SP3
-  alias Sidereon.NIF
 
   # Sourced from the canonical core defaults (`sidereon_core::rtk_filter::defaults`,
   # mirrored by `Sidereon.NIF.core_defaults/0`). `test/constants_test.exs` pins the
   # core values and `test/gnss_rtk_test.exs` checks the default flows through the
   # solve metadata, so the binding default cannot drift from the core.
+  alias Sidereon.NIF
+
   @default_code_sigma_m 0.3
   @default_phase_sigma_m 0.003
   @default_max_iterations 10
@@ -56,9 +57,207 @@ defmodule Sidereon.GNSS.RTK do
   @default_partial_min_ambiguities 4
   @default_max_residual_exclusions 1
   @default_prior_sigma_m 30.0
+  @max_native_usize Integer.pow(2, :erlang.system_info(:wordsize) * 8) - 1
   @gap_reference ~N[2000-01-01 00:00:00]
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
+
+  defmodule RinexArc do
+    @moduledoc """
+    A single-frequency RTK arc built from paired RINEX observation handles and
+    an SP3 ephemeris handle.
+
+    The resource retains the core-generated arc. Accessors expose the core
+    epoch ordering and observation lists without re-reading either input file.
+    """
+
+    alias Sidereon.NIF
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @typedoc "Single-frequency RINEX RTK arc resource handle."
+    @type t :: %__MODULE__{handle: reference()}
+
+    @typedoc "Core-generated single-frequency RTK epoch."
+    @type epoch :: %{
+            required(:base) => [map()],
+            required(:rover) => [map()],
+            required(:satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            required(:base_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            required(:rover_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            optional(:velocity_mps) => {float(), float(), float()} | nil,
+            optional(:prediction_time_s) => float() | nil
+          }
+
+    @doc false
+    @spec from_handle(reference()) :: t()
+    def from_handle(handle), do: %__MODULE__{handle: handle}
+
+    @doc "Return core-generated epochs in engine order."
+    @spec epochs(t()) :: [epoch()]
+    def epochs(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.rtk_rinex_arc_epochs()
+      |> Enum.map(&decode_epoch/1)
+    end
+
+    @doc "Alias for `epochs/1`, useful when passing the arc to a solver."
+    @spec to_epochs(t()) :: [epoch()]
+    def to_epochs(arc), do: epochs(arc)
+
+    @doc "Return the retained epoch count."
+    @spec epoch_count(t()) :: non_neg_integer()
+    def epoch_count(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_arc_epoch_count(handle)
+
+    @doc "Return the base-epoch count skipped by the core builder."
+    @spec skipped_epoch_count(t()) :: non_neg_integer()
+    def skipped_epoch_count(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_arc_skipped_epoch_count(handle)
+
+    @doc "Return ambiguity wavelengths as a map keyed by core ambiguity id."
+    @spec wavelengths_m(t()) :: %{String.t() => float()}
+    def wavelengths_m(%__MODULE__{handle: handle}), do: handle |> NIF.rtk_rinex_arc_wavelengths_m() |> Map.new()
+
+    @doc "Return ambiguity wavelengths in the core's deterministic map order."
+    @spec wavelength_pairs(t()) :: [{String.t(), float()}]
+    def wavelength_pairs(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_arc_wavelengths_m(handle)
+
+    @doc "Return code-to-phase offsets as a map keyed by core ambiguity id."
+    @spec offsets_m(t()) :: %{String.t() => float()}
+    def offsets_m(%__MODULE__{handle: handle}), do: handle |> NIF.rtk_rinex_arc_offsets_m() |> Map.new()
+
+    @doc "Return code-to-phase offsets in the core's deterministic map order."
+    @spec offset_pairs(t()) :: [{String.t(), float()}]
+    def offset_pairs(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_arc_offsets_m(handle)
+
+    defp decode_epoch(%{satellite_positions_m: positions} = epoch) do
+      %{
+        epoch
+        | satellite_positions_m: Map.new(positions),
+          base_satellite_positions_m: Map.new(epoch.base_satellite_positions_m),
+          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m)
+      }
+    end
+  end
+
+  defmodule DualFrequencyRinexArc do
+    @moduledoc """
+    A dual-frequency RTK arc built from paired RINEX observation handles and
+    an SP3 ephemeris handle.
+
+    `epochs/1` exposes the exact core records, including ordered paired
+    observations and Julian/sort metadata. `baseline_epochs/1` adapts those
+    records to the existing dual-frequency RTK preparation helpers.
+    """
+
+    alias Sidereon.NIF
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @typedoc "Dual-frequency RINEX RTK arc resource handle."
+    @type t :: %__MODULE__{handle: reference()}
+
+    @typedoc "One ordered dual-frequency observation pair for a satellite."
+    @type satellite_observation :: %{
+            required(:satellite_id) => String.t(),
+            required(:base) => map(),
+            required(:rover) => map()
+          }
+
+    @typedoc "Core-generated dual-frequency RTK epoch."
+    @type epoch :: %{
+            required(:jd_whole) => float(),
+            required(:jd_fraction) => float(),
+            required(:epoch_sort_key) => String.t() | nil,
+            required(:gap_time_s) => float() | nil,
+            required(:observations) => [satellite_observation()],
+            required(:satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            required(:base_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            required(:rover_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
+            required(:velocity_mps) => {float(), float(), float()} | nil,
+            required(:prediction_time_s) => float() | nil
+          }
+
+    @doc false
+    @spec from_handle(reference()) :: t()
+    def from_handle(handle), do: %__MODULE__{handle: handle}
+
+    @doc "Return exact core-generated dual-frequency epochs in engine order."
+    @spec epochs(t()) :: [epoch()]
+    def epochs(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.rtk_rinex_dual_frequency_arc_epochs()
+      |> Enum.map(&decode_epoch/1)
+    end
+
+    @doc "Alias for `epochs/1`."
+    @spec to_epochs(t()) :: [epoch()]
+    def to_epochs(arc), do: epochs(arc)
+
+    @doc "Return dual-frequency epochs in the shape accepted by RTK helpers."
+    @spec baseline_epochs(t()) :: [map()]
+    def baseline_epochs(arc) do
+      arc
+      |> epochs()
+      |> Enum.with_index()
+      |> Enum.map(&to_baseline_epoch/1)
+    end
+
+    @doc "Return the retained epoch count."
+    @spec epoch_count(t()) :: non_neg_integer()
+    def epoch_count(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_dual_frequency_arc_epoch_count(handle)
+
+    @doc "Return the base-epoch count skipped by the core builder."
+    @spec skipped_epoch_count(t()) :: non_neg_integer()
+    def skipped_epoch_count(%__MODULE__{handle: handle}),
+      do: NIF.rtk_rinex_dual_frequency_arc_skipped_epoch_count(handle)
+
+    defp decode_epoch(%{satellite_positions_m: positions} = epoch) do
+      %{
+        epoch
+        | satellite_positions_m: Map.new(positions),
+          base_satellite_positions_m: Map.new(epoch.base_satellite_positions_m),
+          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m)
+      }
+    end
+
+    defp to_baseline_epoch({epoch, index}) do
+      {base, rover} =
+        Enum.reduce(epoch.observations, {[], []}, fn observation, {base, rover} ->
+          base_observation = Map.put(observation.base, :satellite_id, observation.satellite_id)
+          rover_observation = Map.put(observation.rover, :satellite_id, observation.satellite_id)
+          {[base_observation | base], [rover_observation | rover]}
+        end)
+
+      %{
+        epoch: epoch.gap_time_s || index,
+        jd_whole: epoch.jd_whole,
+        jd_fraction: epoch.jd_fraction,
+        base_observations: Enum.reverse(base),
+        rover_observations: Enum.reverse(rover),
+        satellite_positions_m: epoch.satellite_positions_m,
+        base_satellite_positions_m: epoch.base_satellite_positions_m,
+        rover_satellite_positions_m: epoch.rover_satellite_positions_m
+      }
+      |> rename_phase_fields()
+    end
+
+    defp rename_phase_fields(epoch) do
+      update = fn observation ->
+        observation
+        |> Map.put(:phi1_cyc, Map.fetch!(observation, :phi1_cycles))
+        |> Map.put(:phi2_cyc, Map.fetch!(observation, :phi2_cycles))
+        |> Map.drop([:phi1_cycles, :phi2_cycles])
+      end
+
+      %{
+        epoch
+        | base_observations: Enum.map(epoch.base_observations, update),
+          rover_observations: Enum.map(epoch.rover_observations, update)
+      }
+    end
+  end
 
   defmodule MeasurementModel do
     @moduledoc """
@@ -1011,13 +1210,22 @@ defmodule Sidereon.GNSS.RTK do
           optional(:lli2) => integer() | nil
         }
 
-  @typedoc "One RTK epoch carrying raw dual-frequency base/rover observations."
+  @typedoc """
+  One RTK epoch carrying raw dual-frequency base/rover observations.
+
+  RINEX-derived epochs may include the optional numeric `:jd_whole` and
+  `:jd_fraction` split-Julian-date fields. The pair is used for troposphere
+  preparation when `:apply_troposphere` is true. Legacy caller-authored maps
+  using the civil `:epoch` field remain supported.
+  """
   @type dual_frequency_baseline_epoch :: %{
           required(:base_observations) => [dual_frequency_observation()],
           required(:rover_observations) => [dual_frequency_observation()],
           required(:satellite_positions_m) => satellite_positions(),
           optional(:base_satellite_positions_m) => satellite_positions(),
           optional(:rover_satellite_positions_m) => satellite_positions(),
+          optional(:jd_whole) => number(),
+          optional(:jd_fraction) => number(),
           optional(:epoch) => term()
         }
 
@@ -1195,7 +1403,10 @@ defmodule Sidereon.GNSS.RTK do
   carried `:final_state`, or `{:error, reason}`. Each epoch struct includes
   `:geometry_quality`.
   """
-  @spec solve_arc([map()], ArcConfig.t() | map()) :: {:ok, ArcSolution.t()} | {:error, term()}
+  @spec solve_arc([map()] | RinexArc.t(), ArcConfig.t() | map()) ::
+          {:ok, ArcSolution.t()} | {:error, term()}
+  def solve_arc(%RinexArc{} = arc, config) when is_map(config), do: solve_arc(RinexArc.to_epochs(arc), config)
+
   def solve_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_arc(Enum.map(epochs, &arc_epoch_term/1), arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_arc_solution(solution)}
@@ -1210,7 +1421,11 @@ defmodule Sidereon.GNSS.RTK do
 
   The returned struct includes `:geometry_quality` for the static batch design.
   """
-  @spec solve_static_arc([map()], StaticArcConfig.t() | map()) :: {:ok, StaticArcSolution.t()} | {:error, term()}
+  @spec solve_static_arc([map()] | RinexArc.t(), StaticArcConfig.t() | map()) ::
+          {:ok, StaticArcSolution.t()} | {:error, term()}
+  def solve_static_arc(%RinexArc{} = arc, config) when is_map(config),
+    do: solve_static_arc(RinexArc.to_epochs(arc), config)
+
   def solve_static_arc(epochs, config) when is_list(epochs) and is_map(config) do
     case NIF.rtk_solve_static_arc(Enum.map(epochs, &arc_epoch_term/1), static_arc_config_term(config)) do
       {:ok, solution} -> {:ok, decode_static_arc_solution(solution)}
@@ -1226,8 +1441,14 @@ defmodule Sidereon.GNSS.RTK do
   The returned struct includes `:geometry_quality` for the wide-lane ambiguity
   design.
   """
-  @spec fix_wide_lane_rtk_arc([dual_frequency_baseline_epoch()], WideLaneArcConfig.t() | map()) ::
+  @spec fix_wide_lane_rtk_arc(
+          [dual_frequency_baseline_epoch()] | DualFrequencyRinexArc.t(),
+          WideLaneArcConfig.t() | map()
+        ) ::
           {:ok, WideLaneArcSolution.t()} | {:error, term()}
+  def fix_wide_lane_rtk_arc(%DualFrequencyRinexArc{} = arc, config) when is_map(config),
+    do: fix_wide_lane_rtk_arc(DualFrequencyRinexArc.baseline_epochs(arc), config)
+
   def fix_wide_lane_rtk_arc(epochs, config) when is_list(epochs) and is_map(config) do
     with :ok <- ensure_nonempty_epochs(epochs),
          {:ok, normalized_epochs} <- normalize_dual_baseline_epochs(epochs) do
@@ -1249,17 +1470,30 @@ defmodule Sidereon.GNSS.RTK do
   Build ionosphere-free RTK arc epochs from dual-frequency epochs and fixed wide-lane integers.
   """
   @spec prepare_ionosphere_free_rtk_arc(
-          [dual_frequency_baseline_epoch()],
+          [dual_frequency_baseline_epoch()] | DualFrequencyRinexArc.t(),
           %{String.t() => integer()},
           IonosphereFreeArcConfig.t() | map()
         ) ::
           {:ok, IonosphereFreeArcSolution.t()} | {:error, term()}
+  def prepare_ionosphere_free_rtk_arc(%DualFrequencyRinexArc{} = arc, wide_lane_cycles, config)
+      when is_map(wide_lane_cycles) and is_map(config) do
+    with {:ok, _apply_troposphere} <-
+           boolean_option(Map.get(config, :apply_troposphere, false), :apply_troposphere) do
+      prepare_ionosphere_free_rtk_arc(
+        DualFrequencyRinexArc.baseline_epochs(arc),
+        wide_lane_cycles,
+        config
+      )
+    end
+  end
+
   def prepare_ionosphere_free_rtk_arc(epochs, wide_lane_cycles, config)
       when is_list(epochs) and is_map(wide_lane_cycles) and is_map(config) do
-    with :ok <- ensure_nonempty_epochs(epochs),
+    with {:ok, apply_troposphere?} <-
+           boolean_option(Map.get(config, :apply_troposphere, false), :apply_troposphere),
+         :ok <- ensure_nonempty_epochs(epochs),
          {:ok, normalized_epochs} <- normalize_dual_baseline_epochs(epochs) do
       wide_lane_terms = wide_lane_cycles |> Map.to_list() |> Enum.sort()
-      apply_troposphere? = Map.get(config, :apply_troposphere, false)
 
       case NIF.rtk_prepare_ionosphere_free_arc(
              dual_frequency_arc_epoch_terms(normalized_epochs, apply_troposphere?),
@@ -1287,6 +1521,82 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   def prepare_ionosphere_free_rtk_arc(_epochs, _wide_lane_cycles, _config), do: {:error, :invalid_epochs}
+
+  @doc """
+  Build a single-frequency RTK arc from parsed RINEX observation and SP3 handles.
+
+  The returned `%RinexArc{}` retains the core-generated intermediate arc, including
+  engine epoch/observation order, ambiguity wavelengths and offsets, and skipped
+  epoch accounting. Options may be supplied directly or under `:arc_options` and
+  accept `:signal_pairs`, `:max_epochs`, `:min_common_satellites`, and
+  `:include_prediction_time`.
+  """
+  @spec build_rinex_rtk_arc(
+          SP3.t(),
+          RinexObservations.t(),
+          RinexObservations.t(),
+          keyword() | map()
+        ) :: {:ok, RinexArc.t()} | {:error, term()}
+  def build_rinex_rtk_arc(sp3, base_obs, rover_obs, opts \\ [])
+
+  def build_rinex_rtk_arc(
+        %SP3{handle: sp3_handle},
+        %RinexObservations{handle: base_handle},
+        %RinexObservations{handle: rover_handle},
+        opts
+      ) do
+    with {:ok, opts} <- rinex_opts_map(opts),
+         {:ok, options_term} <- rinex_builder_options(opts, :single) do
+      case NIF.rtk_build_rinex_rtk_arc(sp3_handle, base_handle, rover_handle, options_term) do
+        {:ok, handle} -> {:ok, RinexArc.from_handle(handle)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def build_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _opts), do: {:error, :invalid_input}
+
+  @doc """
+  Build a dual-frequency RTK arc from parsed RINEX observation and SP3 handles.
+
+  The returned `%DualFrequencyRinexArc{}` retains the core-generated ordered
+  epochs and paired observations, carrier frequencies, positions, prediction
+  metadata, and skipped epoch accounting. Options mirror `build_rinex_rtk_arc/4`
+  and use dual-frequency signal-pair terms.
+  """
+  @spec build_dual_frequency_rinex_rtk_arc(
+          SP3.t(),
+          RinexObservations.t(),
+          RinexObservations.t(),
+          keyword() | map()
+        ) :: {:ok, DualFrequencyRinexArc.t()} | {:error, term()}
+  def build_dual_frequency_rinex_rtk_arc(sp3, base_obs, rover_obs, opts \\ [])
+
+  def build_dual_frequency_rinex_rtk_arc(
+        %SP3{handle: sp3_handle},
+        %RinexObservations{handle: base_handle},
+        %RinexObservations{handle: rover_handle},
+        opts
+      ) do
+    with {:ok, opts} <- rinex_opts_map(opts),
+         {:ok, options_term} <- rinex_builder_options(opts, :dual) do
+      case NIF.rtk_build_dual_frequency_rinex_rtk_arc(
+             sp3_handle,
+             base_handle,
+             rover_handle,
+             options_term
+           ) do
+        {:ok, handle} -> {:ok, DualFrequencyRinexArc.from_handle(handle)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def build_dual_frequency_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _opts), do: {:error, :invalid_input}
 
   @doc """
   Solve a static RTK baseline directly from parsed RINEX OBS handles and SP3.
@@ -1483,6 +1793,27 @@ defmodule Sidereon.GNSS.RTK do
 
   defp rinex_opts_map(_opts), do: {:error, {:invalid_option, :opts}}
 
+  defp rinex_builder_options(opts, kind) when kind in [:single, :dual] do
+    with {:ok, arc_options} <- rinex_builder_arc_options(opts),
+         :ok <- validate_rinex_builder_option_values(opts, arc_options),
+         {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), kind) do
+      {:ok,
+       %{
+         signal_pairs: signal_pairs,
+         max_epochs: Map.get(arc_options, :max_epochs, Map.get(opts, :max_epochs)),
+         min_common_satellites: Map.get(arc_options, :min_common_satellites, 4),
+         include_prediction_time: Map.get(arc_options, :include_prediction_time, true)
+       }}
+    end
+  end
+
+  defp rinex_builder_arc_options(opts) do
+    case Map.fetch(opts, :arc_options) do
+      {:ok, _value} -> rinex_nested_options(opts, :arc_options)
+      :error -> {:ok, opts}
+    end
+  end
+
   defp rinex_static_config_term(base, opts) do
     with {:ok, reference} <- rinex_reference(opts),
          {:ok, arc_options} <- rinex_single_arc_options_term(opts),
@@ -1538,7 +1869,9 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp rinex_wide_lane_fixed_config_term(base, opts) do
-    with {:ok, reference} <- rinex_reference(opts),
+    with {:ok, apply_troposphere} <-
+           boolean_option(Map.get(opts, :apply_troposphere, true), :apply_troposphere),
+         {:ok, reference} <- rinex_reference(opts),
          {:ok, arc_options} <- rinex_dual_arc_options_term(opts),
          {:ok, _model, model_term, weights} <- rinex_model(opts),
          {:ok, initial_baseline} <- rinex_initial_baseline(opts),
@@ -1566,7 +1899,7 @@ defmodule Sidereon.GNSS.RTK do
            fixed_opts: fixed_opts,
            residual_opts: residual_opts,
            receiver_antenna_corrections: rust_receiver_antenna_corrections_term(receiver_antenna_corrections),
-           apply_troposphere: Map.get(opts, :apply_troposphere, true)
+           apply_troposphere: apply_troposphere
          },
          weights: weights,
          preprocessing: %{}
@@ -1625,6 +1958,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp rinex_single_arc_options_term(opts) do
     with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
+         :ok <- validate_rinex_builder_option_values(opts, arc_options),
          {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :single) do
       {:ok,
        %{
@@ -1638,6 +1972,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp rinex_dual_arc_options_term(opts) do
     with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
+         :ok <- validate_rinex_builder_option_values(opts, arc_options),
          {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :dual) do
       {:ok,
        %{
@@ -1664,6 +1999,39 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp rinex_signal_pair_terms(_pairs, _kind), do: {:error, {:invalid_option, :signal_pairs}}
+
+  defp validate_rinex_builder_option_values(opts, arc_options) do
+    with :ok <- validate_rinex_builder_option_values(opts) do
+      validate_rinex_builder_option_values(arc_options)
+    end
+  end
+
+  defp validate_rinex_builder_option_values(options) do
+    Enum.reduce_while([:max_epochs, :min_common_satellites, :include_prediction_time], :ok, fn key, :ok ->
+      case Map.fetch(options, key) do
+        :error ->
+          {:cont, :ok}
+
+        {:ok, value} ->
+          case validate_rinex_builder_option_value(key, value) do
+            :ok -> {:cont, :ok}
+            {:error, _reason} = error -> {:halt, error}
+          end
+      end
+    end)
+  end
+
+  defp validate_rinex_builder_option_value(:max_epochs, nil), do: :ok
+
+  defp validate_rinex_builder_option_value(:max_epochs, value)
+       when is_integer(value) and value >= 0 and value <= @max_native_usize, do: :ok
+
+  defp validate_rinex_builder_option_value(:min_common_satellites, value)
+       when is_integer(value) and value > 0 and value <= @max_native_usize, do: :ok
+
+  defp validate_rinex_builder_option_value(:include_prediction_time, value) when is_boolean(value), do: :ok
+
+  defp validate_rinex_builder_option_value(key, _value), do: {:error, {:invalid_option, key}}
 
   defp rinex_signal_pair_term(%{system: system, code_observable: code, phase_observable: phase}, :single)
        when is_binary(code) and is_binary(phase) do
@@ -2588,6 +2956,8 @@ defmodule Sidereon.GNSS.RTK do
        %{
          idx: idx,
          epoch: Map.get(epoch, :epoch, idx),
+         jd_whole: Map.get(epoch, :jd_whole),
+         jd_fraction: Map.get(epoch, :jd_fraction),
          base: base,
          rover: rover,
          positions: positions,
@@ -2662,7 +3032,7 @@ defmodule Sidereon.GNSS.RTK do
   defp dual_frequency_arc_epoch_term(epoch, idx, apply_troposphere?) do
     {jd_whole, jd_fraction} =
       if apply_troposphere? do
-        Sidereon.GNSS.Time.epoch_to_split_jd(epoch.epoch)
+        dual_frequency_epoch_split_jd(epoch)
       else
         {0.0, 0.0}
       end
@@ -2689,6 +3059,11 @@ defmodule Sidereon.GNSS.RTK do
       prediction_time_s: idx / 1.0
     }
   end
+
+  defp dual_frequency_epoch_split_jd(%{jd_whole: jd_whole, jd_fraction: jd_fraction})
+       when is_number(jd_whole) and is_number(jd_fraction), do: {jd_whole / 1.0, jd_fraction / 1.0}
+
+  defp dual_frequency_epoch_split_jd(epoch), do: Sidereon.GNSS.Time.epoch_to_split_jd(epoch.epoch)
 
   defp dual_frequency_observation_term(obs) do
     %{

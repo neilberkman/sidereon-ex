@@ -16,7 +16,8 @@ mod atoms {
         unknown_band,
         no_default_pair,
         missing_glonass_channel,
-        invalid_channel
+        invalid_channel,
+        unknown_observation_code
     }
 }
 
@@ -86,6 +87,44 @@ fn frequencies_rinex_band_wavelength_m<'a>(
     )
 }
 
+/// RINEX observation-code frequency in hertz, including version-specific policy.
+#[rustler::nif]
+fn frequencies_rinex_observation_frequency_hz<'a>(
+    env: Env<'a>,
+    system: String,
+    code: String,
+    rinex_version: f64,
+    glonass_channel: Option<i64>,
+) -> Term<'a> {
+    rinex_observation_lookup(
+        env,
+        system,
+        code,
+        rinex_version,
+        glonass_channel,
+        frequencies::rinex_observation_frequency_hz,
+    )
+}
+
+/// RINEX observation-code wavelength in metres, including version-specific policy.
+#[rustler::nif]
+fn frequencies_rinex_observation_wavelength_m<'a>(
+    env: Env<'a>,
+    system: String,
+    code: String,
+    rinex_version: f64,
+    glonass_channel: Option<i64>,
+) -> Term<'a> {
+    rinex_observation_lookup(
+        env,
+        system,
+        code,
+        rinex_version,
+        glonass_channel,
+        frequencies::rinex_observation_wavelength_m,
+    )
+}
+
 /// Standard dual-frequency ionosphere-free carrier pair for a constellation.
 #[rustler::nif]
 fn frequencies_default_pair<'a>(env: Env<'a>, system: String) -> Term<'a> {
@@ -135,6 +174,37 @@ fn rinex_band_lookup<'a>(
     match lookup(system_id, band_char, channel) {
         Some(value) => (atoms::ok(), value).encode(env),
         None => error(env, atoms::unknown_band()),
+    }
+}
+
+fn rinex_observation_lookup<'a>(
+    env: Env<'a>,
+    system: String,
+    code: String,
+    rinex_version: f64,
+    glonass_channel: Option<i64>,
+    lookup: fn(GnssSystem, &str, f64, Option<i8>) -> Option<f64>,
+) -> Term<'a> {
+    let Some(system_id) = parse_system(&system) else {
+        return error(env, atoms::unknown_system());
+    };
+
+    let channel = match glonass_channel {
+        Some(value) => match i8::try_from(value) {
+            Ok(value) => Some(value),
+            Err(_) => return error(env, atoms::invalid_channel()),
+        },
+        None => None,
+    };
+
+    let band = code.chars().nth(1);
+    if system_id == GnssSystem::Glonass && matches!(band, Some('1' | '2')) && channel.is_none() {
+        return error(env, atoms::missing_glonass_channel());
+    }
+
+    match lookup(system_id, &code, rinex_version, channel) {
+        Some(value) => (atoms::ok(), value).encode(env),
+        None => error(env, atoms::unknown_observation_code()),
     }
 }
 
