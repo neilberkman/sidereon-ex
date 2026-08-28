@@ -10,9 +10,11 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rustler::{Binary, Encoder, Env, Error, NifResult, OwnedBinary, ResourceArc, Term};
 use sidereon_core::terrain::{DtedInterpolation, DtedLookupOptions};
 use sidereon_core::terrain_store::{
-    dted_tree_to_mmap_store, terrain_store_checksum64, write_dted_tree_to_mmap_store,
+    dted_tile_list_to_mmap_store, dted_tree_to_mmap_store, terrain_store_checksum64,
+    write_dted_tile_list_to_mmap_store, write_dted_tree_to_mmap_store, DtedTileListEntry,
     Egm96FifteenMinuteGeoid, EllipsoidalHeightM, MmapTerrain, OrthometricHeightM,
-    TerrainDatumError, TerrainGeoidModel, TerrainStoreError, TerrainStoreTileIndex, VerticalDatum,
+    TerrainDatumError, TerrainGeoidModel, TerrainStoreError, TerrainStoreTileIndex, TerrainTileId,
+    VerticalDatum,
 };
 use sidereon_core::DigestProvenance;
 
@@ -86,6 +88,12 @@ struct TerrainStoreTileIndexTerm {
     data_len: u64,
     checksum64: u64,
     vertical_datum: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct DtedTileListEntryTerm {
+    tile_id: (i32, i32),
+    path: String,
 }
 
 fn bytes_to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
@@ -167,7 +175,8 @@ fn store_error_term<'a>(env: Env<'a>, error: TerrainStoreError) -> Term<'a> {
         } => (
             atoms::tile_id_mismatch(),
             path.display().to_string(),
-            format!("expected tile {expected:?}, parsed {found:?}"),
+            (expected.lat_index, expected.lon_index),
+            (found.lat_index, found.lon_index),
         )
             .encode(env),
         TerrainStoreError::DuplicateTile {
@@ -325,6 +334,50 @@ fn terrain_store_write_dted_tree_to_mmap_store<'a>(
     out_path: String,
 ) -> Term<'a> {
     match write_dted_tree_to_mmap_store(root, out_path) {
+        Ok(()) => atoms::ok().encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Convert an explicit DTED tile list into canonical terrain store bytes.
+///
+/// The list entry ids and paths are decoded here; DTED parsing, id validation,
+/// ordering, alignment, and checksums remain owned by the public core builder.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn terrain_store_dted_tile_list_to_mmap_store<'a>(
+    env: Env<'a>,
+    entries: Vec<DtedTileListEntryTerm>,
+) -> Term<'a> {
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            let (lat_index, lon_index) = entry.tile_id;
+            DtedTileListEntry::new(TerrainTileId::new(lat_index, lon_index), entry.path)
+        })
+        .collect::<Vec<_>>();
+
+    match dted_tile_list_to_mmap_store(&entries) {
+        Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
+        Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
+    }
+}
+
+/// Convert an explicit DTED tile list and write canonical terrain store bytes.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn terrain_store_write_dted_tile_list_to_mmap_store<'a>(
+    env: Env<'a>,
+    entries: Vec<DtedTileListEntryTerm>,
+    out_path: String,
+) -> Term<'a> {
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            let (lat_index, lon_index) = entry.tile_id;
+            DtedTileListEntry::new(TerrainTileId::new(lat_index, lon_index), entry.path)
+        })
+        .collect::<Vec<_>>();
+
+    match write_dted_tile_list_to_mmap_store(&entries, out_path) {
         Ok(()) => atoms::ok().encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
     }

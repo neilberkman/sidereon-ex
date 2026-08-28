@@ -778,6 +778,16 @@ defmodule Sidereon.NIF do
 
   def broadcast_encode_nav(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rinex_nav_parse_records(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_nav_parse_lenient(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_nav_encode(_records), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_nav_parse_glonass_records(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_nav_parse_glonass_lenient(_text), do: :erlang.nif_error(:nif_not_loaded)
+
   def broadcast_cnav_ura_nominal(_index), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_cnav_ura_ned(_cnav, _system, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
@@ -1162,6 +1172,12 @@ defmodule Sidereon.NIF do
 
   def frequencies_rinex_band_wavelength_m(_system, _band, _glonass_channel), do: :erlang.nif_error(:nif_not_loaded)
 
+  def frequencies_rinex_observation_frequency_hz(_system, _code, _rinex_version, _glonass_channel),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def frequencies_rinex_observation_wavelength_m(_system, _code, _rinex_version, _glonass_channel),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def frequencies_default_pair(_system), do: :erlang.nif_error(:nif_not_loaded)
 
   def lnav_word_length, do: :erlang.nif_error(:nif_not_loaded)
@@ -1393,6 +1409,27 @@ defmodule Sidereon.NIF do
 
   def rtk_solve_wide_lane_fixed_rinex_baseline(_sp3, _base_obs, _rover_obs, _config),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_build_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_build_dual_frequency_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_arc_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_arc_wavelengths_m(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_arc_offsets_m(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_arc_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_arc_skipped_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_dual_frequency_arc_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_dual_frequency_arc_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_dual_frequency_arc_skipped_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_position(_epoch, _scale, _elements, _query, _frame), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2031,6 +2068,10 @@ defmodule Sidereon.NIF do
   def terrain_store_dted_tree_to_mmap_store(_root), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_store_write_dted_tree_to_mmap_store(_root, _out_path), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_dted_tile_list_to_mmap_store(_entries), do: :erlang.nif_error(:nif_not_loaded)
+
+  def terrain_store_write_dted_tile_list_to_mmap_store(_entries, _out_path), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_store_checksum64_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 

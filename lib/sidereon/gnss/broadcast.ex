@@ -19,6 +19,12 @@ defmodule Sidereon.GNSS.Broadcast do
   (I/NAV + F/NAV), and the BeiDou BDS-SIS-ICD (D1/D2), parsed from RINEX 3.x/4.xx
   navigation records.
 
+  The handle API applies the core store's default usability policy. The direct
+  `parse_rinex_nav_records/1`, `parse_rinex_nav_lenient/1`,
+  `parse_rinex_glonass_records/1`, `parse_rinex_glonass_lenient/1`, and
+  `encode_rinex_nav/1` routes expose the caller-owned raw record-list contracts
+  without that filtering.
+
   ## Epochs
 
   `position/3` interprets the query epoch in GPS time (GPST). A `NaiveDateTime` or
@@ -41,6 +47,7 @@ defmodule Sidereon.GNSS.Broadcast do
           :gps_lnav
           | :gps_cnav
           | :gps_cnav2
+          | :qzss_lnav
           | :qzss_cnav
           | :qzss_cnav2
           | :galileo_inav
@@ -287,6 +294,15 @@ defmodule Sidereon.GNSS.Broadcast do
     @moduledoc """
     One broadcast record with issue, time tags, group delays, and CNAV fields.
     """
+    alias Broadcast.{
+      ClockPolynomial,
+      CnavCorrections,
+      CnavParameters,
+      GroupDelays,
+      Issue,
+      KeplerianElements
+    }
+
     @enforce_keys [
       :satellite_id,
       :message,
@@ -320,7 +336,57 @@ defmodule Sidereon.GNSS.Broadcast do
       :fit_interval_s
     ]
 
-    @type t :: %__MODULE__{}
+    @type t :: %__MODULE__{
+            satellite_id: String.t(),
+            message: Broadcast.nav_message(),
+            issue_of_data: Issue.t(),
+            week: non_neg_integer(),
+            toe: WeekTow.t(),
+            toc: WeekTow.t(),
+            elements: KeplerianElements.t(),
+            clock: ClockPolynomial.t(),
+            group_delays: GroupDelays.t(),
+            cnav: CnavParameters.t() | nil,
+            cnav_corrections: CnavCorrections.t(),
+            group_delay_s: float(),
+            sv_health: float(),
+            sv_accuracy_m: float(),
+            fit_interval_s: float() | nil
+          }
+  end
+
+  defmodule SkippedNavBlock do
+    @moduledoc """
+    Identity of a supported RINEX NAV body block skipped by lenient parsing.
+
+    Header failures remain errors; this struct only reports malformed body
+    blocks that the core parser could identify and skip.
+    """
+
+    @enforce_keys [:satellite, :message]
+    defstruct [:satellite, :message]
+
+    @type t :: %__MODULE__{satellite: String.t(), message: String.t()}
+  end
+
+  defmodule RinexNavParse do
+    @moduledoc """
+    Result of lenient RINEX NAV parsing.
+
+    `records` preserves the raw supported records in file order. `skipped`
+    carries the satellite and message identity of malformed body blocks that
+    were dropped by the core parser.
+    """
+
+    alias Broadcast.{DetailedRecord, SkippedNavBlock}
+
+    @enforce_keys [:records, :skipped]
+    defstruct [:records, :skipped]
+
+    @type t :: %__MODULE__{
+            records: [DetailedRecord.t()],
+            skipped: [SkippedNavBlock.t()]
+          }
   end
 
   defmodule GlonassRecord do
@@ -366,6 +432,40 @@ defmodule Sidereon.GNSS.Broadcast do
             gamma_n: float(),
             sv_health: float(),
             freq_channel: integer()
+          }
+  end
+
+  defmodule SkippedGlonass do
+    @moduledoc """
+    Identity of a GLONASS RINEX record skipped because its satellite slot cannot
+    be represented by the core's GLONASS record type.
+    """
+
+    @enforce_keys [:token]
+    defstruct [:token]
+
+    @typedoc "A skipped GLONASS satellite token as it appeared in the RINEX file."
+    @type t :: %__MODULE__{token: String.t()}
+  end
+
+  defmodule GlonassParse do
+    @moduledoc """
+    Result of lenient raw GLONASS RINEX navigation parsing.
+
+    `records` preserves representable records in source order. `skipped` reports
+    the source tokens for records that the core could not represent, such as an
+    extended slot `R28`.
+    """
+
+    alias Broadcast.{GlonassRecord, SkippedGlonass}
+
+    @enforce_keys [:records, :skipped]
+    defstruct [:records, :skipped]
+
+    @typedoc "Representable GLONASS records plus skipped source identities."
+    @type t :: %__MODULE__{
+            records: [GlonassRecord.t()],
+            skipped: [SkippedGlonass.t()]
           }
   end
 
@@ -446,6 +546,122 @@ defmodule Sidereon.GNSS.Broadcast do
     case result do
       handle when is_reference(handle) -> {:ok, %__MODULE__{handle: handle}}
       {:error, _} = err -> err
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Parse all supported RINEX NAV records in file order without the broadcast
+  store's health, message-family, or CNAV usability filters.
+
+  The returned `DetailedRecord` values retain the full core record needed by
+  `encode_rinex_nav/1`, including issue/time tags, group delays, and CNAV
+  parameters.
+  """
+  @spec parse_rinex_nav_records(String.t()) ::
+          {:ok, [DetailedRecord.t()]} | {:error, term()}
+  def parse_rinex_nav_records(text) when is_binary(text) do
+    case NIF.rinex_nav_parse_records(text) do
+      {:ok, records} -> {:ok, Enum.map(records, &decode_detailed_record/1)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Parse supported RINEX NAV records leniently.
+
+  Header errors remain `{:error, reason}`. Malformed supported body blocks are
+  omitted from `records` and reported in `skipped`; valid records remain in
+  file order.
+  """
+  @spec parse_rinex_nav_lenient(String.t()) ::
+          {:ok, RinexNavParse.t()} | {:error, term()}
+  def parse_rinex_nav_lenient(text) when is_binary(text) do
+    case NIF.rinex_nav_parse_lenient(text) do
+      {:ok, %{records: records, skipped: skipped}} ->
+        {:ok,
+         %RinexNavParse{
+           records: Enum.map(records, &decode_detailed_record/1),
+           skipped: Enum.map(skipped, &struct(SkippedNavBlock, &1))
+         }}
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Encode a caller-supplied list of full broadcast records to canonical RINEX
+  NAV text.
+
+  This is independent of a parsed `Broadcast` handle and does not apply the
+  store's default filtering policy. Pass `DetailedRecord` values such as those
+  returned by `parse_rinex_nav_records/1`; the list may be reordered or
+  reduced by the caller.
+  """
+  @spec encode_rinex_nav([DetailedRecord.t()]) :: {:ok, String.t()} | {:error, term()}
+  def encode_rinex_nav(records) when is_list(records) do
+    case NIF.rinex_nav_encode(Enum.map(records, &encode_detailed_record/1)) do
+      {:ok, text} when is_binary(text) -> {:ok, text}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in [ErlangError, FunctionClauseError, KeyError] -> {:error, Exception.message(e)}
+  end
+
+  def encode_rinex_nav(records), do: {:error, {:invalid_records, records}}
+
+  @doc """
+  Parse every representable GLONASS state-vector record from RINEX NAV text.
+
+  Unlike `glonass_records/1`, this direct parser returns records before the
+  broadcast store's healthy-satellite filter, in file order.
+  """
+  @spec parse_rinex_glonass_records(String.t()) ::
+          {:ok, [GlonassRecord.t()]} | {:error, term()}
+  def parse_rinex_glonass_records(text) when is_binary(text) do
+    case NIF.rinex_nav_parse_glonass_records(text) do
+      {:ok, records} -> {:ok, Enum.map(records, &decode_glonass_record/1)}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Parse raw GLONASS RINEX NAV records while retaining skipped slot identities.
+
+  The core parser returns representable records and the source token of every
+  unrepresentable GLONASS slot. Both lists preserve source order. Malformed
+  representable records remain errors.
+  """
+  @spec parse_rinex_glonass_lenient(String.t()) ::
+          {:ok, GlonassParse.t()} | {:error, term()}
+  def parse_rinex_glonass_lenient(text) when is_binary(text) do
+    case NIF.rinex_nav_parse_glonass_lenient(text) do
+      {:ok, %{records: records, skipped: skipped}} ->
+        {:ok,
+         %GlonassParse{
+           records: Enum.map(records, &decode_glonass_record/1),
+           skipped: Enum.map(skipped, &struct(SkippedGlonass, &1))
+         }}
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, other}
     end
   rescue
     e in ErlangError -> {:error, e.original}
@@ -758,12 +974,72 @@ defmodule Sidereon.GNSS.Broadcast do
   defp decode_message("gps_lnav"), do: :gps_lnav
   defp decode_message("gps_cnav"), do: :gps_cnav
   defp decode_message("gps_cnav2"), do: :gps_cnav2
+  defp decode_message("qzss_lnav"), do: :qzss_lnav
   defp decode_message("qzss_cnav"), do: :qzss_cnav
   defp decode_message("qzss_cnav2"), do: :qzss_cnav2
   defp decode_message("galileo_inav"), do: :galileo_inav
   defp decode_message("galileo_fnav"), do: :galileo_fnav
   defp decode_message("beidou_d1"), do: :beidou_d1
   defp decode_message("beidou_d2"), do: :beidou_d2
+
+  defp encode_message(:gps_lnav), do: "gps_lnav"
+  defp encode_message(:gps_cnav), do: "gps_cnav"
+  defp encode_message(:gps_cnav2), do: "gps_cnav2"
+  defp encode_message(:qzss_lnav), do: "qzss_lnav"
+  defp encode_message(:qzss_cnav), do: "qzss_cnav"
+  defp encode_message(:qzss_cnav2), do: "qzss_cnav2"
+  defp encode_message(:galileo_inav), do: "galileo_inav"
+  defp encode_message(:galileo_fnav), do: "galileo_fnav"
+  defp encode_message(:beidou_d1), do: "beidou_d1"
+  defp encode_message(:beidou_d2), do: "beidou_d2"
+
+  defp encode_detailed_record(%DetailedRecord{} = record) do
+    %{
+      satellite_id: record.satellite_id,
+      message: encode_message(record.message),
+      issue_of_data: %{
+        issue: record.issue_of_data.issue,
+        message: encode_message(record.issue_of_data.message)
+      },
+      week: record.week,
+      toe: %{system: record.toe.system, week: record.toe.week, tow_s: record.toe.tow_s},
+      toc: %{system: record.toc.system, week: record.toc.week, tow_s: record.toc.tow_s},
+      elements: encode_elements(record.elements),
+      clock: encode_clock(record.clock),
+      group_delays: Map.from_struct(record.group_delays),
+      cnav: encode_cnav(record.cnav),
+      cnav_corrections: Map.from_struct(record.cnav_corrections),
+      group_delay_s: record.group_delay_s,
+      sv_health: record.sv_health,
+      sv_accuracy_m: record.sv_accuracy_m,
+      fit_interval_s: record.fit_interval_s
+    }
+  end
+
+  defp encode_elements(%KeplerianElements{} = elements) do
+    [
+      elements.sqrt_a,
+      elements.e,
+      elements.m0,
+      elements.delta_n,
+      elements.omega0,
+      elements.i0,
+      elements.omega,
+      elements.omega_dot,
+      elements.idot,
+      elements.cuc,
+      elements.cus,
+      elements.crc,
+      elements.crs,
+      elements.cic,
+      elements.cis,
+      elements.toe_sow
+    ]
+  end
+
+  defp encode_clock(%ClockPolynomial{} = clock) do
+    {clock.af0, clock.af1, clock.af2, clock.toc_sow}
+  end
 
   defp encode_cnav(%CnavParameters{} = cnav) do
     %{
@@ -780,4 +1056,6 @@ defmodule Sidereon.GNSS.Broadcast do
       flags: cnav.flags
     }
   end
+
+  defp encode_cnav(nil), do: nil
 end

@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Sidereon.GNSS.Broadcast` now exposes raw RINEX NAV record-list parsing,
+  lenient skipped-block diagnostics, arbitrary-list encoding, and unfiltered
+  GLONASS record parsing through the pinned core parser.
+- `Sidereon.GNSS.Frequencies` now exposes version-aware full observation-code
+  frequency and wavelength mappings, including BeiDou version policy and
+  GLONASS FDMA channels.
+- Public single- and dual-frequency RINEX RTK arc builders with retained
+  intermediate handles and explicit DTED tile-list store builders.
+
 ## [1.1.1] - 2026-08-26
 
 ### Fixed

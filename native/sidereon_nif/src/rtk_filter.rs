@@ -41,12 +41,13 @@ use sidereon_core::rtk_filter::{
     RtkArcEpochSolution, RtkArcError, RtkArcObservation, RtkArcPreprocessing, RtkArcSolution,
     RtkDualCycleSlipConfig, RtkDualFrequencyArcEpoch, RtkDualFrequencyObservation,
     RtkDualFrequencySatelliteObservation, RtkIonosphereFreeArcConfig, RtkIonosphereFreeArcError,
-    RtkIonosphereFreeArcSolution, RtkRinexArcError, RtkRinexArcOptions, RtkRinexDualArcOptions,
-    RtkRinexDualSignalPair, RtkRinexSignalPair, RtkStaticArcConfig, RtkStaticArcError,
-    RtkStaticArcSolution, RtkWideLaneArcConfig, RtkWideLaneArcError, RtkWideLaneArcSolution,
-    RtkWideLaneFixedArcConfig, RtkWideLaneFixedArcError, RtkWideLaneFixedArcIntegerMethod,
-    RtkWideLaneFixedArcMetadata, RtkWideLaneFixedArcSolution, RtkWideLaneFixedArcSolveConfig,
-    SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
+    RtkIonosphereFreeArcSolution, RtkRinexArc, RtkRinexArcError, RtkRinexArcOptions,
+    RtkRinexDualArcOptions, RtkRinexDualFrequencyArc, RtkRinexDualSignalPair, RtkRinexSignalPair,
+    RtkStaticArcConfig, RtkStaticArcError, RtkStaticArcSolution, RtkWideLaneArcConfig,
+    RtkWideLaneArcError, RtkWideLaneArcSolution, RtkWideLaneFixedArcConfig,
+    RtkWideLaneFixedArcError, RtkWideLaneFixedArcIntegerMethod, RtkWideLaneFixedArcMetadata,
+    RtkWideLaneFixedArcSolution, RtkWideLaneFixedArcSolveConfig, SatMeas, SearchOpts,
+    StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
     ValidatedFixedSolveError, ValidatedFixedSolveOpts, WideLaneError, WideLaneOptions,
 };
 use sidereon_core::GnssSystem;
@@ -124,6 +125,22 @@ struct MbOwnedEpoch {
     offsets: BTreeMap<String, f64>,
     float_only_systems: Vec<String>,
 }
+
+/// Owned single-frequency RINEX RTK arc retained as a BEAM resource.
+pub struct RtkRinexArcResource {
+    pub(crate) arc: RtkRinexArc,
+}
+
+/// Owned dual-frequency RINEX RTK arc retained as a BEAM resource.
+pub struct RtkRinexDualFrequencyArcResource {
+    pub(crate) arc: RtkRinexDualFrequencyArc,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for RtkRinexArcResource {}
+
+#[rustler::resource_impl]
+impl rustler::Resource for RtkRinexDualFrequencyArcResource {}
 
 mod atoms {
     rustler::atoms! {
@@ -1245,6 +1262,215 @@ struct RtkRinexWideLaneFixedConfigTerm {
     residual_opts: ResidualValidationOptsTerm,
     receiver_antenna_corrections: Option<ReceiverAntennaCorrectionsTerm>,
     apply_troposphere: bool,
+}
+
+fn encode_rinex_arc_observation(observation: &RtkArcObservation) -> RtkArcObservationTerm {
+    RtkArcObservationTerm {
+        satellite_id: observation.satellite_id.clone(),
+        ambiguity_id: observation.ambiguity_id.clone(),
+        code_m: observation.code_m,
+        phase_m: observation.phase_m,
+        lli: observation.lli,
+    }
+}
+
+fn encode_rinex_arc_epoch(epoch: &RtkArcEpoch) -> RtkArcEpochTerm {
+    RtkArcEpochTerm {
+        base: epoch
+            .base
+            .iter()
+            .map(encode_rinex_arc_observation)
+            .collect(),
+        rover: epoch
+            .rover
+            .iter()
+            .map(encode_rinex_arc_observation)
+            .collect(),
+        satellite_positions_m: encode_position_map(epoch.satellite_positions_m.clone()),
+        base_satellite_positions_m: encode_position_map(epoch.base_satellite_positions_m.clone()),
+        rover_satellite_positions_m: encode_position_map(epoch.rover_satellite_positions_m.clone()),
+        velocity_mps: epoch.velocity_mps.map(tuple3),
+        prediction_time_s: epoch.prediction_time_s,
+    }
+}
+
+fn encode_rinex_dual_frequency_observation(
+    observation: &RtkDualFrequencyObservation,
+) -> RtkDualFrequencyObservationTerm {
+    RtkDualFrequencyObservationTerm {
+        ambiguity_id: observation.ambiguity_id.clone(),
+        p1_m: observation.p1_m,
+        p2_m: observation.p2_m,
+        phi1_cycles: observation.phi1_cycles,
+        phi2_cycles: observation.phi2_cycles,
+        f1_hz: observation.f1_hz,
+        f2_hz: observation.f2_hz,
+        lli1: observation.lli1,
+        lli2: observation.lli2,
+    }
+}
+
+fn encode_rinex_dual_frequency_satellite_observation(
+    observation: &RtkDualFrequencySatelliteObservation,
+) -> RtkDualFrequencySatelliteObservationTerm {
+    RtkDualFrequencySatelliteObservationTerm {
+        satellite_id: observation.satellite_id.clone(),
+        base: encode_rinex_dual_frequency_observation(&observation.base),
+        rover: encode_rinex_dual_frequency_observation(&observation.rover),
+    }
+}
+
+fn encode_rinex_dual_frequency_arc_epoch(
+    epoch: &RtkDualFrequencyArcEpoch,
+) -> RtkDualFrequencyArcEpochTerm {
+    RtkDualFrequencyArcEpochTerm {
+        jd_whole: epoch.jd_whole,
+        jd_fraction: epoch.jd_fraction,
+        epoch_sort_key: epoch.epoch_sort_key.clone(),
+        gap_time_s: epoch.gap_time_s,
+        observations: epoch
+            .observations
+            .iter()
+            .map(encode_rinex_dual_frequency_satellite_observation)
+            .collect(),
+        satellite_positions_m: encode_position_map(epoch.satellite_positions_m.clone()),
+        base_satellite_positions_m: encode_position_map(epoch.base_satellite_positions_m.clone()),
+        rover_satellite_positions_m: encode_position_map(epoch.rover_satellite_positions_m.clone()),
+        velocity_mps: epoch.velocity_mps.map(tuple3),
+        prediction_time_s: epoch.prediction_time_s,
+    }
+}
+
+/// Build and retain a single-frequency RINEX RTK arc as an intermediate handle.
+///
+/// The public core owns RINEX extraction, ephemeris lookups, deterministic
+/// ordering, wavelength construction, and skipped-epoch accounting.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_build_rinex_rtk_arc<'a>(
+    env: Env<'a>,
+    sp3: ResourceArc<Sp3Resource>,
+    base_obs: ResourceArc<RinexObsResource>,
+    rover_obs: ResourceArc<RinexObsResource>,
+    options_term: RtkRinexArcOptionsTerm,
+) -> NifResult<Term<'a>> {
+    let options = match decode_rinex_arc_options(&options_term) {
+        Some(options) => options,
+        None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
+    };
+
+    Ok(
+        match build_rinex_rtk_arc(&sp3.sp3, &base_obs.obs, &rover_obs.obs, &options) {
+            Ok(arc) => (atoms::ok(), ResourceArc::new(RtkRinexArcResource { arc })).encode(env),
+            Err(error) => (atoms::error(), encode_rinex_arc_error(env, error)).encode(env),
+        },
+    )
+}
+
+/// Build and retain a dual-frequency RINEX RTK arc as an intermediate handle.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_build_dual_frequency_rinex_rtk_arc<'a>(
+    env: Env<'a>,
+    sp3: ResourceArc<Sp3Resource>,
+    base_obs: ResourceArc<RinexObsResource>,
+    rover_obs: ResourceArc<RinexObsResource>,
+    options_term: RtkRinexDualArcOptionsTerm,
+) -> NifResult<Term<'a>> {
+    let options = match decode_rinex_dual_arc_options(&options_term) {
+        Some(options) => options,
+        None => return Ok((atoms::error(), atoms::invalid_option()).encode(env)),
+    };
+
+    Ok(
+        match build_dual_frequency_rinex_rtk_arc(&sp3.sp3, &base_obs.obs, &rover_obs.obs, &options)
+        {
+            Ok(arc) => (
+                atoms::ok(),
+                ResourceArc::new(RtkRinexDualFrequencyArcResource { arc }),
+            )
+                .encode(env),
+            Err(error) => (atoms::error(), encode_rinex_arc_error(env, error)).encode(env),
+        },
+    )
+}
+
+/// Return all core-generated single-frequency RINEX RTK arc epochs.
+#[rustler::nif]
+pub fn rtk_rinex_arc_epochs<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<RtkRinexArcResource>,
+) -> Term<'a> {
+    handle
+        .arc
+        .epochs
+        .iter()
+        .map(encode_rinex_arc_epoch)
+        .collect::<Vec<_>>()
+        .encode(env)
+}
+
+/// Return single-frequency ambiguity wavelengths in core map order.
+#[rustler::nif]
+pub fn rtk_rinex_arc_wavelengths_m(handle: ResourceArc<RtkRinexArcResource>) -> Vec<(String, f64)> {
+    handle
+        .arc
+        .wavelengths_m
+        .iter()
+        .map(|(id, value)| (id.clone(), *value))
+        .collect()
+}
+
+/// Return single-frequency code-to-phase offsets in core map order.
+#[rustler::nif]
+pub fn rtk_rinex_arc_offsets_m(handle: ResourceArc<RtkRinexArcResource>) -> Vec<(String, f64)> {
+    handle
+        .arc
+        .offsets_m
+        .iter()
+        .map(|(id, value)| (id.clone(), *value))
+        .collect()
+}
+
+/// Return the number of base epochs retained by the single-frequency builder.
+#[rustler::nif]
+pub fn rtk_rinex_arc_epoch_count(handle: ResourceArc<RtkRinexArcResource>) -> usize {
+    handle.arc.epochs.len()
+}
+
+/// Return the number of base epochs skipped by the single-frequency builder.
+#[rustler::nif]
+pub fn rtk_rinex_arc_skipped_epoch_count(handle: ResourceArc<RtkRinexArcResource>) -> usize {
+    handle.arc.skipped_epoch_count
+}
+
+/// Return all core-generated dual-frequency RINEX RTK arc epochs.
+#[rustler::nif]
+pub fn rtk_rinex_dual_frequency_arc_epochs<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<RtkRinexDualFrequencyArcResource>,
+) -> Term<'a> {
+    handle
+        .arc
+        .epochs
+        .iter()
+        .map(encode_rinex_dual_frequency_arc_epoch)
+        .collect::<Vec<_>>()
+        .encode(env)
+}
+
+/// Return the number of epochs retained by the dual-frequency builder.
+#[rustler::nif]
+pub fn rtk_rinex_dual_frequency_arc_epoch_count(
+    handle: ResourceArc<RtkRinexDualFrequencyArcResource>,
+) -> usize {
+    handle.arc.epochs.len()
+}
+
+/// Return the number of base epochs skipped by the dual-frequency builder.
+#[rustler::nif]
+pub fn rtk_rinex_dual_frequency_arc_skipped_epoch_count(
+    handle: ResourceArc<RtkRinexDualFrequencyArcResource>,
+) -> usize {
+    handle.arc.skipped_epoch_count
 }
 
 /// Solve a sequential RTK baseline arc from raw rover+base epochs.
@@ -3238,5 +3464,92 @@ fn encode_arc_cycle_slip_reason(reason: SlipReason) -> String {
         SlipReason::DataGap => "data_gap".to_string(),
         SlipReason::GeometryFree => "geometry_free".to_string(),
         SlipReason::MelbourneWubbena => "melbourne_wubbena".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    #[test]
+    fn single_frequency_arc_mapping_preserves_core_fields_and_order() {
+        let observation = RtkArcObservation {
+            satellite_id: "G05".to_string(),
+            ambiguity_id: "G05#2".to_string(),
+            code_m: 20_000_000.25,
+            phase_m: 20_000_001.5,
+            lli: Some(1),
+        };
+        let epoch = RtkArcEpoch {
+            base: vec![observation.clone()],
+            rover: vec![observation],
+            satellite_positions_m: BTreeMap::from([
+                ("G05".to_string(), [1.0, 2.0, 3.0]),
+                ("G02".to_string(), [4.0, 5.0, 6.0]),
+            ]),
+            base_satellite_positions_m: BTreeMap::new(),
+            rover_satellite_positions_m: BTreeMap::new(),
+            velocity_mps: Some([7.0, 8.0, 9.0]),
+            prediction_time_s: Some(10.0),
+        };
+
+        let term = encode_rinex_arc_epoch(&epoch);
+
+        assert_eq!(term.base[0].satellite_id, "G05");
+        assert_eq!(term.base[0].ambiguity_id, "G05#2");
+        assert_eq!(term.base[0].code_m, 20_000_000.25);
+        assert_eq!(term.base[0].phase_m, 20_000_001.5);
+        assert_eq!(term.base[0].lli, Some(1));
+        assert_eq!(term.satellite_positions_m[0].0, "G02");
+        assert_eq!(term.satellite_positions_m[1].0, "G05");
+        assert_eq!(term.velocity_mps, Some((7.0, 8.0, 9.0)));
+        assert_eq!(term.prediction_time_s, Some(10.0));
+    }
+
+    #[test]
+    fn dual_frequency_arc_mapping_preserves_pair_and_epoch_metadata() {
+        let observation = RtkDualFrequencyObservation {
+            ambiguity_id: "G05".to_string(),
+            p1_m: 20_000_000.25,
+            p2_m: 20_000_010.5,
+            phi1_cycles: 100_000.25,
+            phi2_cycles: 80_000.5,
+            f1_hz: 1_575_420_000.0,
+            f2_hz: 1_227_600_000.0,
+            lli1: Some(1),
+            lli2: None,
+        };
+        let epoch = RtkDualFrequencyArcEpoch {
+            jd_whole: 2_459_000.0,
+            jd_fraction: 0.25,
+            epoch_sort_key: Some("2020-06-25T00:00:00".to_string()),
+            gap_time_s: Some(10.0),
+            observations: vec![RtkDualFrequencySatelliteObservation {
+                satellite_id: "G05".to_string(),
+                base: observation.clone(),
+                rover: observation,
+            }],
+            satellite_positions_m: BTreeMap::new(),
+            base_satellite_positions_m: BTreeMap::new(),
+            rover_satellite_positions_m: BTreeMap::new(),
+            velocity_mps: None,
+            prediction_time_s: Some(10.0),
+        };
+
+        let term = encode_rinex_dual_frequency_arc_epoch(&epoch);
+        let pair = &term.observations[0];
+
+        assert_eq!(term.jd_whole, 2_459_000.0);
+        assert_eq!(term.jd_fraction, 0.25);
+        assert_eq!(term.epoch_sort_key.as_deref(), Some("2020-06-25T00:00:00"));
+        assert_eq!(term.gap_time_s, Some(10.0));
+        assert_eq!(pair.satellite_id, "G05");
+        assert_eq!(pair.base.ambiguity_id, "G05");
+        assert_eq!(pair.base.phi1_cycles, 100_000.25);
+        assert_eq!(pair.base.phi2_cycles, 80_000.5);
+        assert_eq!(pair.base.f1_hz, 1_575_420_000.0);
+        assert_eq!(pair.base.f2_hz, 1_227_600_000.0);
+        assert_eq!(pair.base.lli1, Some(1));
+        assert_eq!(pair.base.lli2, None);
     }
 }

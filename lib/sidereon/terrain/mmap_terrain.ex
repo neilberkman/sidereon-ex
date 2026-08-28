@@ -12,19 +12,23 @@ defmodule Sidereon.Terrain.MmapTerrain do
   """
 
   alias __MODULE__.{
+    DtedTileListEntry,
     Egm96FifteenMinuteGeoid,
     EllipsoidalHeightM,
     OrthometricHeightM,
     TerrainDatumError,
     TerrainGeoidModel,
     TerrainStoreError,
-    TerrainStoreTileIndex
+    TerrainStoreTileIndex,
+    TerrainTileId
   }
 
   alias Sidereon.NIF
   alias Sidereon.Terrain.MmapTerrain
 
   @max_checksum64 0xFFFF_FFFF_FFFF_FFFF
+  @min_signed_i32 -2_147_483_648
+  @max_signed_i32 2_147_483_647
 
   @enforce_keys [:handle]
   defstruct [:handle]
@@ -67,6 +71,60 @@ defmodule Sidereon.Terrain.MmapTerrain do
     def from_nif(:egm96_msl_orthometric), do: :egm96_msl_orthometric
     def from_nif("egm96_msl_orthometric"), do: :egm96_msl_orthometric
     def from_nif(other), do: other
+  end
+
+  defmodule TerrainTileId do
+    @moduledoc """
+    Canonical integer identifier for a DTED tile.
+
+    `lat_index` and `lon_index` are the one-degree tile origin indices used by
+    `sidereon-core`; longitude indices are signed, including west longitudes.
+    """
+
+    @enforce_keys [:lat_index, :lon_index]
+    defstruct [:lat_index, :lon_index]
+
+    @typedoc "DTED tile origin indices in degrees."
+    @type t :: %__MODULE__{lat_index: integer(), lon_index: integer()}
+
+    @doc "Build a DTED tile identifier from integer latitude/longitude indices."
+    @spec new(integer(), integer()) :: t()
+    def new(lat_index, lon_index) when is_integer(lat_index) and is_integer(lon_index) do
+      %__MODULE__{lat_index: lat_index, lon_index: lon_index}
+    end
+  end
+
+  defmodule DtedTileListEntry do
+    @moduledoc """
+    Caller-supplied DTED tile identity and source path for list-based stores.
+
+    The tile identifier is sent to the core alongside the path, allowing the
+    core to validate the caller's identity against the DTED file origin before
+    producing canonical store bytes.
+    """
+
+    alias Sidereon.Terrain.MmapTerrain.TerrainTileId
+
+    @enforce_keys [:tile_id, :path]
+    defstruct [:tile_id, :path]
+
+    @typedoc "One explicit DTED tile-list input."
+    @type t :: %__MODULE__{tile_id: TerrainTileId.t(), path: String.t()}
+
+    @doc "Build an explicit tile-list entry."
+    @spec new(TerrainTileId.t() | {integer(), integer()}, String.t()) :: t()
+    def new(%TerrainTileId{} = tile_id, path) when is_binary(path), do: %__MODULE__{tile_id: tile_id, path: path}
+
+    def new({lat_index, lon_index}, path) when is_integer(lat_index) and is_integer(lon_index) and is_binary(path) do
+      new(TerrainTileId.new(lat_index, lon_index), path)
+    end
+
+    @doc "Build an explicit tile-list entry from integer tile indices."
+    @spec from_indices(integer(), integer(), String.t()) :: t()
+    def from_indices(lat_index, lon_index, path)
+        when is_integer(lat_index) and is_integer(lon_index) and is_binary(path) do
+      new(TerrainTileId.new(lat_index, lon_index), path)
+    end
   end
 
   defmodule OrthometricHeightM do
@@ -364,6 +422,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
       :tag,
       :lat_index,
       :lon_index,
+      :expected_tile_id,
+      :found_tile_id,
       :expected,
       :found
     ]
@@ -378,6 +438,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
               | :unsupported_version
               | :unsupported_datum
               | :duplicate_tile
+              | :tile_id_mismatch
               | :checksum
               | :attested_checksum_mismatch,
             path: String.t() | nil,
@@ -387,6 +448,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
             tag: non_neg_integer() | nil,
             lat_index: integer() | nil,
             lon_index: integer() | nil,
+            expected_tile_id: {integer(), integer()} | nil,
+            found_tile_id: {integer(), integer()} | nil,
             expected: non_neg_integer() | nil,
             found: non_neg_integer() | nil
           }
@@ -400,6 +463,15 @@ defmodule Sidereon.Terrain.MmapTerrain do
 
     def from_nif({:duplicate_tile, lat_index, lon_index}) do
       %__MODULE__{kind: :duplicate_tile, lat_index: lat_index, lon_index: lon_index}
+    end
+
+    def from_nif({:tile_id_mismatch, path, expected, found}) do
+      %__MODULE__{
+        kind: :tile_id_mismatch,
+        path: path,
+        expected_tile_id: expected,
+        found_tile_id: found
+      }
     end
 
     def from_nif({:checksum, lat_index, lon_index, expected, found}) do
@@ -475,6 +547,47 @@ defmodule Sidereon.Terrain.MmapTerrain do
   rescue
     e in ErlangError -> {:error, e.original}
   end
+
+  @doc """
+  Convert caller-supplied DTED tile-id/path entries into canonical store bytes.
+
+  Each entry is sent to `sidereon-core` with its caller-supplied tile identity;
+  the core validates the DTED origin, sorts the records, and emits the canonical
+  store format.
+  """
+  @spec dted_tile_list_to_mmap_store([DtedTileListEntry.t() | map() | tuple()]) ::
+          {:ok, binary()} | {:error, terrain_store_error() | term()}
+  def dted_tile_list_to_mmap_store(entries) when is_list(entries) do
+    with {:ok, entries} <- dted_tile_list_terms(entries) do
+      NIF.terrain_store_dted_tile_list_to_mmap_store(entries)
+      |> store_binary_result()
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def dted_tile_list_to_mmap_store(_entries), do: {:error, :invalid_tile_list}
+
+  @doc """
+  Convert caller-supplied DTED tile-id/path entries and write canonical store bytes.
+  """
+  @spec write_dted_tile_list_to_mmap_store([DtedTileListEntry.t() | map() | tuple()], String.t()) ::
+          :ok | {:error, terrain_store_error() | term()}
+  def write_dted_tile_list_to_mmap_store(entries, out_path) when is_list(entries) and is_binary(out_path) do
+    with {:ok, entries} <- dted_tile_list_terms(entries) do
+      case NIF.terrain_store_write_dted_tile_list_to_mmap_store(entries, out_path) do
+        :ok -> :ok
+        {:error, reason} -> {:error, TerrainStoreError.from_nif(reason)}
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  def write_dted_tile_list_to_mmap_store(entries, _out_path) when is_list(entries), do: {:error, :invalid_output_path}
+
+  def write_dted_tile_list_to_mmap_store(_entries, _out_path), do: {:error, :invalid_tile_list}
 
   @doc """
   Return the FNV-1a checksum for terrain store bytes.
@@ -732,6 +845,49 @@ defmodule Sidereon.Terrain.MmapTerrain do
   defp store_binary_result({:ok, bytes}) when is_binary(bytes), do: {:ok, bytes}
   defp store_binary_result({:error, reason}), do: {:error, TerrainStoreError.from_nif(reason)}
   defp store_binary_result(other), do: {:error, other}
+
+  defp dted_tile_list_terms(entries) do
+    entries
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {entry, index}, {:ok, acc} ->
+      case dted_tile_list_entry_term(entry) do
+        {:ok, term} -> {:cont, {:ok, [term | acc]}}
+        :error -> {:halt, {:error, {:invalid_tile_list_entry, index}}}
+      end
+    end)
+    |> case do
+      {:ok, terms} -> {:ok, Enum.reverse(terms)}
+      error -> error
+    end
+  end
+
+  defp dted_tile_list_entry_term(%DtedTileListEntry{tile_id: tile_id, path: path}),
+    do: dted_tile_list_entry_term({tile_id, path})
+
+  defp dted_tile_list_entry_term(%{tile_id: tile_id, path: path}), do: dted_tile_list_entry_term({tile_id, path})
+
+  defp dted_tile_list_entry_term({tile_id, path}) when is_binary(path) do
+    case dted_tile_id_term(tile_id) do
+      {:ok, tile_id} -> {:ok, %{tile_id: tile_id, path: path}}
+      _error -> :error
+    end
+  end
+
+  defp dted_tile_list_entry_term(_entry), do: :error
+
+  defp dted_tile_id_term(%TerrainTileId{lat_index: lat_index, lon_index: lon_index}),
+    do: dted_tile_id_term({lat_index, lon_index})
+
+  defp dted_tile_id_term(%{lat_index: lat_index, lon_index: lon_index}), do: dted_tile_id_term({lat_index, lon_index})
+
+  defp dted_tile_id_term({lat_index, lon_index}) do
+    if signed_i32?(lat_index) and signed_i32?(lon_index), do: {:ok, {lat_index, lon_index}}, else: :error
+  end
+
+  defp dted_tile_id_term(_tile_id), do: :error
+
+  defp signed_i32?(value) when is_integer(value), do: value >= @min_signed_i32 and value <= @max_signed_i32
+  defp signed_i32?(_value), do: false
 
   defp store_handle_result({:ok, handle}) when is_reference(handle), do: {:ok, %__MODULE__{handle: handle}}
   defp store_handle_result({:error, reason}), do: {:error, TerrainStoreError.from_nif(reason)}

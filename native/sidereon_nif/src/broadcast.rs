@@ -9,12 +9,23 @@
 
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{GnssWeekTow, TimeScale};
-use sidereon_core::ephemeris::{BroadcastEphemeris, BroadcastIssue, EphemerisSource};
+use sidereon_core::ephemeris::{
+    BroadcastEphemeris, BroadcastIssue, BroadcastRecord, ClockPolynomial, EphemerisSource,
+    KeplerianElements,
+};
 use sidereon_core::rinex::nav::{
-    cnav_ura_ned_m, cnav_ura_nominal_m, encode_nav, parse_leap_seconds, BroadcastGroupDelays,
-    CnavParameters, CnavSignal, KlobucharAlphaBeta, NavMessage, NavMessagePreference,
+    cnav_ura_ned_m, cnav_ura_nominal_m, encode_nav, parse_glonass, parse_glonass_lenient,
+    parse_leap_seconds, parse_nav, parse_nav_lenient, BroadcastGroupDelays, CnavParameters,
+    CnavSignal, GlonassRecord, KlobucharAlphaBeta, NavMessage, NavMessagePreference,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
+
+mod atoms {
+    rustler::atoms! {
+        ok,
+        error
+    }
+}
 
 /// Resource handle holding a parsed broadcast-navigation product across calls.
 pub struct BroadcastResource {
@@ -115,6 +126,29 @@ struct BroadcastRecordDetailTerm {
     sv_health: f64,
     sv_accuracy_m: f64,
     fit_interval_s: Option<f64>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SkippedNavBlockTerm {
+    satellite: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct RinexNavParseTerm {
+    records: Vec<BroadcastRecordDetailTerm>,
+    skipped: Vec<SkippedNavBlockTerm>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SkippedGlonassTerm {
+    token: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct GlonassParseTerm {
+    records: Vec<GlonassRecordTuple>,
+    skipped: Vec<SkippedGlonassTerm>,
 }
 
 #[rustler::resource_impl]
@@ -252,9 +286,7 @@ fn clock_tuple(record: &sidereon_core::ephemeris::BroadcastRecord) -> ClockTuple
     (clock.af0, clock.af1, clock.af2, clock.toc_sow)
 }
 
-fn record_detail_term(
-    record: &sidereon_core::ephemeris::BroadcastRecord,
-) -> BroadcastRecordDetailTerm {
+fn record_detail_term(record: &BroadcastRecord) -> BroadcastRecordDetailTerm {
     BroadcastRecordDetailTerm {
         satellite_id: record.satellite_id.to_string(),
         message: nav_message_label(record.message).to_string(),
@@ -271,6 +303,244 @@ fn record_detail_term(
         sv_health: record.sv_health,
         sv_accuracy_m: record.sv_accuracy_m,
         fit_interval_s: record.fit_interval_s,
+    }
+}
+
+fn glonass_record_term(record: &GlonassRecord) -> GlonassRecordTuple {
+    (
+        record.satellite_id.to_string(),
+        record.toe_utc_j2000_s,
+        (record.pos_m[0], record.pos_m[1], record.pos_m[2]),
+        (record.vel_m_s[0], record.vel_m_s[1], record.vel_m_s[2]),
+        (record.acc_m_s2[0], record.acc_m_s2[1], record.acc_m_s2[2]),
+        (
+            record.clk_bias,
+            record.gamma_n,
+            record.sv_health,
+            record.freq_channel,
+        ),
+    )
+}
+
+fn message_from_label(label: &str) -> Result<NavMessage, String> {
+    match label {
+        "gps_lnav" => Ok(NavMessage::GpsLnav),
+        "gps_cnav" => Ok(NavMessage::GpsCnav),
+        "gps_cnav2" => Ok(NavMessage::GpsCnav2),
+        "qzss_lnav" => Ok(NavMessage::QzssLnav),
+        "qzss_cnav" => Ok(NavMessage::QzssCnav),
+        "qzss_cnav2" => Ok(NavMessage::QzssCnav2),
+        "galileo_inav" => Ok(NavMessage::GalileoInav),
+        "galileo_fnav" => Ok(NavMessage::GalileoFnav),
+        "beidou_d1" => Ok(NavMessage::BeidouD1),
+        "beidou_d2" => Ok(NavMessage::BeidouD2),
+        _ => Err(format!("unknown navigation message {label:?}")),
+    }
+}
+
+fn time_scale_from_label(label: &str) -> Result<TimeScale, String> {
+    match label {
+        "UTC" => Ok(TimeScale::Utc),
+        "TAI" => Ok(TimeScale::Tai),
+        "TT" => Ok(TimeScale::Tt),
+        "TCG" => Ok(TimeScale::Tcg),
+        "TDB" => Ok(TimeScale::Tdb),
+        "TCB" => Ok(TimeScale::Tcb),
+        "GPST" => Ok(TimeScale::Gpst),
+        "GST" => Ok(TimeScale::Gst),
+        "BDT" => Ok(TimeScale::Bdt),
+        "GLONASST" => Ok(TimeScale::Glonasst),
+        "QZSST" => Ok(TimeScale::Qzsst),
+        _ => Err(format!("unknown navigation time scale {label:?}")),
+    }
+}
+
+fn decode_week_tow(term: &WeekTowTerm) -> Result<GnssWeekTow, String> {
+    Ok(GnssWeekTow {
+        system: time_scale_from_label(&term.system)?,
+        week: term.week,
+        tow_s: term.tow_s,
+    })
+}
+
+fn decode_group_delays(term: &GroupDelaysTerm) -> BroadcastGroupDelays {
+    BroadcastGroupDelays {
+        gps_tgd_s: term.gps_tgd_s,
+        galileo_bgd_e5a_e1_s: term.galileo_bgd_e5a_e1_s,
+        galileo_bgd_e5b_e1_s: term.galileo_bgd_e5b_e1_s,
+        beidou_tgd1_s: term.beidou_tgd1_s,
+        beidou_tgd2_s: term.beidou_tgd2_s,
+        cnav_isc_l1ca_s: term.cnav_isc_l1ca_s,
+        cnav_isc_l2c_s: term.cnav_isc_l2c_s,
+        cnav_isc_l5i5_s: term.cnav_isc_l5i5_s,
+        cnav_isc_l5q5_s: term.cnav_isc_l5q5_s,
+        cnav_isc_l1cd_s: term.cnav_isc_l1cd_s,
+        cnav_isc_l1cp_s: term.cnav_isc_l1cp_s,
+    }
+}
+
+fn decode_elements(values: &[f64]) -> Result<KeplerianElements, String> {
+    if values.len() != 16 {
+        return Err(format!(
+            "broadcast record elements must contain 16 values, got {}",
+            values.len()
+        ));
+    }
+    Ok(KeplerianElements {
+        sqrt_a: values[0],
+        e: values[1],
+        m0: values[2],
+        delta_n: values[3],
+        omega0: values[4],
+        i0: values[5],
+        omega: values[6],
+        omega_dot: values[7],
+        idot: values[8],
+        cuc: values[9],
+        cus: values[10],
+        crc: values[11],
+        crs: values[12],
+        cic: values[13],
+        cis: values[14],
+        toe_sow: values[15],
+    })
+}
+
+fn decode_cnav(term: &CnavTerm) -> Result<CnavParameters, String> {
+    Ok(CnavParameters {
+        adot_m_s: term.adot_m_s,
+        delta_n0_dot_rad_s2: term.delta_n0_dot_rad_s2,
+        top: decode_week_tow(&term.top)?,
+        ura_ed_index: i8::try_from(term.ura_ed_index)
+            .map_err(|_| "cnav ura_ed_index is outside i8 range".to_string())?,
+        ura_ned0_index: i8::try_from(term.ura_ned0_index)
+            .map_err(|_| "cnav ura_ned0_index is outside i8 range".to_string())?,
+        ura_ned1_index: u8::try_from(term.ura_ned1_index)
+            .map_err(|_| "cnav ura_ned1_index is outside u8 range".to_string())?,
+        ura_ned2_index: u8::try_from(term.ura_ned2_index)
+            .map_err(|_| "cnav ura_ned2_index is outside u8 range".to_string())?,
+        transmission_time_sow: term.transmission_time_sow,
+        flags: term.flags,
+    })
+}
+
+fn decode_record_detail(term: BroadcastRecordDetailTerm) -> Result<BroadcastRecord, String> {
+    let satellite_id = term
+        .satellite_id
+        .parse::<GnssSatelliteId>()
+        .map_err(|_| format!("invalid GNSS satellite token {:?}", term.satellite_id))?;
+    let message = message_from_label(&term.message)?;
+    let issue_message = message_from_label(&term.issue_of_data.message)?;
+
+    Ok(BroadcastRecord {
+        satellite_id,
+        message,
+        issue_of_data: BroadcastIssue {
+            issue: term.issue_of_data.issue,
+            message: issue_message,
+        },
+        week: term.week,
+        toe: decode_week_tow(&term.toe)?,
+        toc: decode_week_tow(&term.toc)?,
+        elements: decode_elements(&term.elements)?,
+        clock: ClockPolynomial {
+            af0: term.clock.0,
+            af1: term.clock.1,
+            af2: term.clock.2,
+            toc_sow: term.clock.3,
+        },
+        group_delays: decode_group_delays(&term.group_delays),
+        cnav: term.cnav.as_ref().map(decode_cnav).transpose()?,
+        sv_health: term.sv_health,
+        sv_accuracy_m: term.sv_accuracy_m,
+        fit_interval_s: term.fit_interval_s,
+    })
+}
+
+/// Parse raw supported RINEX NAV records without the broadcast-store policy.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_nav_parse_records<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    match parse_nav(&text) {
+        Ok(records) => (
+            atoms::ok(),
+            records.iter().map(record_detail_term).collect::<Vec<_>>(),
+        )
+            .encode(env),
+        Err(err) => (atoms::error(), err.to_string()).encode(env),
+    }
+}
+
+/// Parse RINEX NAV records while retaining core skipped-block diagnostics.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_nav_parse_lenient<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    match parse_nav_lenient(&text) {
+        Ok(parsed) => (
+            atoms::ok(),
+            RinexNavParseTerm {
+                records: parsed.records.iter().map(record_detail_term).collect(),
+                skipped: parsed
+                    .skipped
+                    .into_iter()
+                    .map(|block| SkippedNavBlockTerm {
+                        satellite: block.satellite,
+                        message: block.message,
+                    })
+                    .collect(),
+            },
+        )
+            .encode(env),
+        Err(err) => (atoms::error(), err.to_string()).encode(env),
+    }
+}
+
+/// Encode a caller-supplied list of full broadcast records through core.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_nav_encode<'a>(env: Env<'a>, terms: Vec<BroadcastRecordDetailTerm>) -> Term<'a> {
+    let records = terms
+        .into_iter()
+        .map(decode_record_detail)
+        .collect::<Result<Vec<_>, _>>();
+
+    match records
+        .and_then(|records| BroadcastEphemeris::new(records).map_err(|err| err.to_string()))
+    {
+        Ok(store) => (atoms::ok(), encode_nav(store.records())).encode(env),
+        Err(err) => (atoms::error(), err).encode(env),
+    }
+}
+
+/// Parse all raw GLONASS state-vector records without the healthy-record filter.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_nav_parse_glonass_records<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    match parse_glonass(&text) {
+        Ok(records) => (
+            atoms::ok(),
+            records.iter().map(glonass_record_term).collect::<Vec<_>>(),
+        )
+            .encode(env),
+        Err(err) => (atoms::error(), err.to_string()).encode(env),
+    }
+}
+
+/// Parse raw GLONASS state-vector records while retaining skipped slot identities.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_nav_parse_glonass_lenient<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    match parse_glonass_lenient(&text) {
+        Ok(parsed) => (
+            atoms::ok(),
+            GlonassParseTerm {
+                records: parsed.records.iter().map(glonass_record_term).collect(),
+                skipped: parsed
+                    .skipped
+                    .into_iter()
+                    .map(|record| SkippedGlonassTerm {
+                        token: record.token,
+                    })
+                    .collect(),
+            },
+        )
+            .encode(env),
+        Err(err) => (atoms::error(), err.to_string()).encode(env),
     }
 }
 
@@ -384,21 +654,7 @@ fn broadcast_glonass_records(handle: ResourceArc<BroadcastResource>) -> Vec<Glon
         .store
         .glonass_records()
         .iter()
-        .map(|record| {
-            (
-                record.satellite_id.to_string(),
-                record.toe_utc_j2000_s,
-                (record.pos_m[0], record.pos_m[1], record.pos_m[2]),
-                (record.vel_m_s[0], record.vel_m_s[1], record.vel_m_s[2]),
-                (record.acc_m_s2[0], record.acc_m_s2[1], record.acc_m_s2[2]),
-                (
-                    record.clk_bias,
-                    record.gamma_n,
-                    record.sv_health,
-                    record.freq_channel,
-                ),
-            )
-        })
+        .map(glonass_record_term)
         .collect()
 }
 

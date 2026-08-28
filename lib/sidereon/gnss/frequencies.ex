@@ -5,7 +5,9 @@ defmodule Sidereon.GNSS.Frequencies do
   This module exposes the same carrier table used by the core GNSS algorithms.
   Fixed-frequency lookups use canonical band atoms such as `:l1`, `:e5a`, or
   `:b3i`. RINEX observation-band lookups use the one-character RINEX band digit
-  and accept a GLONASS FDMA channel for G1/G2.
+  and accept a GLONASS FDMA channel for G1/G2. Full observation-code lookups
+  additionally accept the RINEX version so version-sensitive signal labels are
+  resolved by the core policy.
 
   Frequencies are returned in hertz and wavelengths in metres. All public
   functions return `{:ok, value}` or `{:error, reason}` and never raise for
@@ -46,6 +48,9 @@ defmodule Sidereon.GNSS.Frequencies do
   @typedoc "One-character RINEX observation band digit, for example `\"1\"`."
   @type rinex_band :: String.t()
 
+  @typedoc ~s(Full RINEX observation code such as `"C1C"` or `"L1C"`.)
+  @type observation_code :: String.t()
+
   @typedoc "Frequency lookup error."
   @type error ::
           {:unknown_system, term()}
@@ -53,6 +58,7 @@ defmodule Sidereon.GNSS.Frequencies do
           | {:no_default_pair, term()}
           | {:missing_glonass_channel, term(), term()}
           | {:invalid_channel, term()}
+          | {:unknown_observation_code, term(), term(), term()}
 
   @doc """
   Return the fixed carrier frequency for `system` and canonical `band`.
@@ -130,6 +136,70 @@ defmodule Sidereon.GNSS.Frequencies do
   def rinex_band_wavelength_m(system, band, _glonass_channel), do: {:error, {:unknown_band, system, band}}
 
   @doc """
+  Return the frequency for a full RINEX observation code in hertz.
+
+  The core policy uses both the observation code and `rinex_version`, so this
+  preserves distinctions that a band-only lookup cannot represent (for
+  example BeiDou `C1I` in RINEX 3.02 versus later RINEX 3 versions). For
+  GLONASS G1/G2 codes, pass the satellite's FDMA channel.
+  """
+  @spec rinex_observation_frequency_hz(
+          system(),
+          observation_code(),
+          number(),
+          integer() | nil
+        ) :: {:ok, float()} | {:error, error()}
+  def rinex_observation_frequency_hz(system, code, rinex_version, glonass_channel \\ nil)
+
+  def rinex_observation_frequency_hz(system, code, rinex_version, glonass_channel)
+      when is_binary(system) and is_binary(code) and is_number(rinex_version) and
+             (is_integer(glonass_channel) or is_nil(glonass_channel)) do
+    result =
+      NIF.frequencies_rinex_observation_frequency_hz(
+        system,
+        code,
+        rinex_version / 1.0,
+        glonass_channel
+      )
+
+    decode_observation_result(result, system, code, rinex_version, glonass_channel)
+  end
+
+  def rinex_observation_frequency_hz(system, code, rinex_version, _glonass_channel),
+    do: {:error, {:unknown_observation_code, system, code, rinex_version}}
+
+  @doc """
+  Return the wavelength for a full RINEX observation code in metres.
+
+  This is the version-aware counterpart to `rinex_band_wavelength_m/3`; it
+  delegates the observation-code policy and wavelength calculation to core.
+  """
+  @spec rinex_observation_wavelength_m(
+          system(),
+          observation_code(),
+          number(),
+          integer() | nil
+        ) :: {:ok, float()} | {:error, error()}
+  def rinex_observation_wavelength_m(system, code, rinex_version, glonass_channel \\ nil)
+
+  def rinex_observation_wavelength_m(system, code, rinex_version, glonass_channel)
+      when is_binary(system) and is_binary(code) and is_number(rinex_version) and
+             (is_integer(glonass_channel) or is_nil(glonass_channel)) do
+    result =
+      NIF.frequencies_rinex_observation_wavelength_m(
+        system,
+        code,
+        rinex_version / 1.0,
+        glonass_channel
+      )
+
+    decode_observation_result(result, system, code, rinex_version, glonass_channel)
+  end
+
+  def rinex_observation_wavelength_m(system, code, rinex_version, _glonass_channel),
+    do: {:error, {:unknown_observation_code, system, code, rinex_version}}
+
+  @doc """
   Return the standard dual-frequency ionosphere-free pair for `system`.
 
   GPS, Galileo, and BeiDou have standard pairs. GLONASS FDMA frequencies are
@@ -145,4 +215,21 @@ defmodule Sidereon.GNSS.Frequencies do
   end
 
   def default_pair(system), do: {:error, {:unknown_system, system}}
+
+  defp decode_observation_result({:ok, value}, _system, _code, _rinex_version, _channel), do: {:ok, value}
+
+  defp decode_observation_result({:error, :unknown_system}, system, _code, _rinex_version, _channel),
+    do: {:error, {:unknown_system, system}}
+
+  defp decode_observation_result({:error, :missing_glonass_channel}, system, code, _rinex_version, _channel),
+    do: {:error, {:missing_glonass_channel, system, code}}
+
+  defp decode_observation_result({:error, :invalid_channel}, _system, _code, _rinex_version, channel),
+    do: {:error, {:invalid_channel, channel}}
+
+  defp decode_observation_result({:error, :unknown_observation_code}, system, code, rinex_version, _channel),
+    do: {:error, {:unknown_observation_code, system, code, rinex_version}}
+
+  defp decode_observation_result({:error, _reason}, system, code, rinex_version, _channel),
+    do: {:error, {:unknown_observation_code, system, code, rinex_version}}
 end
