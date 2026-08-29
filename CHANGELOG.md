@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-28
+
+### Added
+
+- Raw, lenient, and GLONASS NAV record lists with arbitrary-list encoding;
+  RINEX observation-code and version-aware frequency and wavelength lookups;
+  single- and dual-frequency RINEX RTK arc builders with intermediate handles;
+  and explicit DTED tile-list byte and file builders.
+
+### Fixed
+
+- The native pins now track the engine release. They were left at
+  `=1.1.0` when the package moved to 1.1.1, so that release built against the
+  previous engine version.
+
+### Changed
+
+- Engine update: sidereon 1.2.0 / sidereon-core 1.2.0, which corrects lenient
+  RINEX 4 CNAV decoding and RTKLIB SBAS wire-form preservation.
+
 ### Added
 
 - `Sidereon.GNSS.Broadcast` now exposes raw RINEX NAV record-list parsing,
