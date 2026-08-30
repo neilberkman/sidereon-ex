@@ -8,6 +8,8 @@ defmodule Sidereon.SchedulerProbe do
   environment, so the peer picks this module up from the shared code path.
   """
 
+  alias Sidereon.GNSS.Data
+
   @doc """
   Build a `rows`-row AIUB-format CSV body.
 
@@ -43,7 +45,7 @@ defmodule Sidereon.SchedulerProbe do
     heartbeat = spawn(fn -> loop(0, heartbeat_ms) end)
 
     started = System.monotonic_time()
-    {:ok, _objects} = Sidereon.GNSS.Data.parse_archive_listing(body)
+    {:ok, _objects} = Data.parse_archive_listing(body)
     parse_ms = System.convert_time_unit(System.monotonic_time() - started, :native, :microsecond) / 1000.0
 
     send(heartbeat, {:stop, parent})
