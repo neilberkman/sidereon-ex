@@ -281,7 +281,8 @@ maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
 sidereon is one validated engine with first-class interfaces in several
 languages: Rust ([sidereon](https://github.com/neilberkman/sidereon)), Python
 ([sidereon-python](https://github.com/neilberkman/sidereon-python)), C
-([sidereon-c](https://github.com/neilberkman/sidereon-c)), Elixir (this
+([sidereon-c](https://github.com/neilberkman/sidereon-c)), Go
+([sidereon-go](https://github.com/neilberkman/sidereon-go)), Elixir (this
 package), and WebAssembly
 ([sidereon-wasm](https://github.com/neilberkman/sidereon-wasm)). The same numbers
 come out everywhere. See the live demo and docs at
