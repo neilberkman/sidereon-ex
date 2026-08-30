@@ -781,14 +781,25 @@ fn data_publication_listing_urls<'a>(
 
 // Archive listings are unbounded caller input: AIUB's whole-tree CSV is ~34 MiB
 // over ~426k rows, far past the ~1 ms budget a regular scheduler slot allows.
+//
+// The body arrives as a binary and is borrowed as text for the duration of
+// the call rather than decoded into an owned `String`, so a multi-megabyte
+// listing is parsed in place instead of being copied first. A body that is
+// not UTF-8 cannot be a listing in any supported dialect, so it takes the same
+// typed, fail-closed error as any other unrecognized listing.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn data_parse_archive_listing<'a>(env: Env<'a>, body: String) -> Term<'a> {
-    let result = data::parse_archive_listing(&body).map(|objects| {
-        objects
-            .into_iter()
-            .map(|object| (object.path, object.observed_at))
-            .collect::<Vec<_>>()
-    });
+fn data_parse_archive_listing<'a>(env: Env<'a>, body: Binary<'a>) -> Term<'a> {
+    let result = std::str::from_utf8(body.as_slice())
+        .map_err(|error| DataCatalogError::UnrecognizedArchiveListing {
+            reason: format!("listing body is not UTF-8 text: {error}"),
+        })
+        .and_then(data::parse_archive_listing)
+        .map(|objects| {
+            objects
+                .into_iter()
+                .map(|object| (object.path, object.observed_at))
+                .collect::<Vec<_>>()
+        });
     encode_result(env, result, |env, rows| rows.encode(env))
 }
 
