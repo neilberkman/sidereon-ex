@@ -779,7 +779,9 @@ fn data_publication_listing_urls<'a>(
     encode_result(env, result, |env, urls| urls.encode(env))
 }
 
-#[rustler::nif]
+// Archive listings are unbounded caller input: AIUB's whole-tree CSV is ~34 MiB
+// over ~426k rows, far past the ~1 ms budget a regular scheduler slot allows.
+#[rustler::nif(schedule = "DirtyCpu")]
 fn data_parse_archive_listing<'a>(env: Env<'a>, body: String) -> Term<'a> {
     let result = data::parse_archive_listing(&body).map(|objects| {
         objects
