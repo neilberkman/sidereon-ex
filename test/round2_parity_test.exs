@@ -29,6 +29,8 @@ defmodule Sidereon.Round2ParityTest do
     |> Enum.each(fn {a, e} -> assert_close(a, e, delta) end)
   end
 
+  defp bits(value) when is_float(value), do: :binary.decode_unsigned(<<value::float-64>>)
+
   test "geoid batch lookup and loaded-grid height conversions are core-pinned" do
     points_deg = [{0.0, 0.0}, {48.1173, 11.5167}, {-33.9, 151.2}]
 
@@ -140,7 +142,7 @@ defmodule Sidereon.Round2ParityTest do
 
     assert_close(elem(second.state.position_km, 1), 903.0024564399226, 1.0e-9)
     assert_close(elem(second.state.velocity_km_s, 0), -0.9734440709722663, 1.0e-12)
-    Enum.at(second.covariance, 1) |> Enum.at(1) |> assert_close(2.8838820077365464e-4, 1.0e-16)
+    assert Enum.at(second.covariance, 1) |> Enum.at(1) |> bits() == 0x3F32E659E4062FCE
     Enum.at(second.covariance, 4) |> Enum.at(4) |> assert_close(1.9675566290541275e-8, 1.0e-20)
   end
 

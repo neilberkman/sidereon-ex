@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-31
+
+### Changed
+
+- Engine update: sidereon 1.4.1 / sidereon-core 1.4.1 with
+  trust-region-least-squares 0.11.0. Portable scalar numerics keep coordinate
+  transforms bit-identical across x86_64 and arm64 and align converged GNSS fit
+  diagnostics across architectures.
+
 ## [1.3.3] - 2026-08-30
 
 ### Fixed

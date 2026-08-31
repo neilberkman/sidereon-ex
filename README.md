@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 1.3"}]
+  [{:sidereon, "~> 1.4"}]
 end
 ```
 
@@ -43,7 +43,7 @@ optional Rustler dependency in the consuming application:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 1.3"},
+    {:sidereon, "~> 1.4"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
@@ -71,7 +71,7 @@ source on a host matching the target:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 1.3"},
+    {:sidereon, "~> 1.4"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
