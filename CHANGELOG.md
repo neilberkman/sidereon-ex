@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.3.2] - 2026-08-30
+## [1.3.3] - 2026-08-30
 
 ### Fixed
 
@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Engine update: sidereon 1.3.2 / sidereon-core 1.3.2. Archive-listing parsing
+- Engine update: sidereon 1.3.3 / sidereon-core 1.3.3. Archive-listing parsing
   is no longer quadratic (154 s to 0.23 s on AIUB's ~426k-row listing), and
   transcendental math is bit-identical across x86_64 and arm64.
 

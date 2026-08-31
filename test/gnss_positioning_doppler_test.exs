@@ -39,14 +39,17 @@ defmodule Sidereon.GNSS.PositioningDopplerTest do
 
     receiver = solution.receiver
 
-    assert_in_delta receiver.position.x_m, 4_500_000.000329243, 1.0e-9
-    assert_in_delta receiver.position.y_m, 500_000.00014028087, 1.0e-9
-    assert_in_delta receiver.position.z_m, 4_499_999.9999882355, 1.0e-9
-    assert_in_delta receiver.rx_clock_s, 7.6325410846169e-13, 1.0e-18
-    assert_in_delta receiver.rx_clock_drift_s_s, 1.0000000632745418e-9, 1.0e-16
+    # Position is pinned to the bit. A 1e-9 m delta on a 4.5e6 m coordinate is
+    # below one f64 ULP (0.93 nm), so the old assert_in_delta was a bit check
+    # written as a tolerance; say so explicitly.
+    assert bits(receiver.position.x_m) == 0x41512A88000564ED
+    assert bits(receiver.position.y_m) == 0x411E84800024C620
+    assert bits(receiver.position.z_m) == 0x41512A87FFFFCEA9
+    assert bits(receiver.rx_clock_s) == 0x3D6ADAC7E18F7721
+    assert bits(receiver.rx_clock_drift_s_s) == 0x3E112E0BFA639764
 
-    assert_in_delta hd(hd(receiver.position_covariance.ecef_m2)), 9.547624510565617, 1.0e-15
-    assert_in_delta hd(hd(receiver.position_covariance.enu_m2)), 1.762749075088421, 1.0e-15
+    assert bits(hd(hd(receiver.position_covariance.ecef_m2))) == 0x402318623D66BC17
+    assert bits(hd(hd(receiver.position_covariance.enu_m2))) == 0x3FFC34385FC8F1BE
     assert receiver.system_clocks_s == %{"G" => receiver.rx_clock_s}
     assert receiver.system_tdops == %{"G" => receiver.dop.tdop}
 
@@ -58,13 +61,15 @@ defmodule Sidereon.GNSS.PositioningDopplerTest do
     assert_in_delta vx, 11.999999990551714, 1.0e-9
     assert_in_delta vy, -6.999999944154055, 1.0e-9
     assert_in_delta vz, 3.0000000246636205, 1.0e-9
-    assert_in_delta solution.velocity.clock_drift_s_s, 1.0000000632745418e-9, 1.0e-16
+    assert bits(solution.velocity.clock_drift_s_s) == 0x3E112E0BFA639764
     assert_in_delta solution.velocity.speed_m_s, 14.212670373275376, 1.0e-12
 
     assert length(solution.velocity.state_covariance) == 4
     assert Enum.all?(solution.velocity.state_covariance, &(length(&1) == 4))
-    assert_in_delta hd(hd(solution.velocity.state_covariance)), 5.928888619607572, 1.0e-15
+    assert bits(hd(hd(solution.velocity.state_covariance))) == 0x4017B72E940B5D2C
   end
+
+  defp bits(value) when is_float(value), do: :binary.decode_unsigned(<<value::float-64>>)
 
   defp pseudoranges(sp3, satellites) do
     Enum.map(satellites, fn sat ->

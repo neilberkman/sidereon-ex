@@ -28,17 +28,20 @@ defmodule Sidereon.GNSS.StaticPositioningTest do
     assert {:ok, %StaticPositioning.Solution{} = sol} =
              StaticPositioning.solve(sp3, requests, initial_position: @initial)
 
-    assert_in_delta sol.position.x_m, 4_500_000.000219625, 1.0e-9
-    assert_in_delta sol.position.y_m, 500_000.00010008493, 1.0e-9
-    assert_in_delta sol.position.z_m, 4_500_000.000092482, 1.0e-9
+    # Position is pinned to the bit. A 1e-9 m delta on a 4.5e6 m coordinate is
+    # below one f64 ULP (0.93 nm), so the old assert_in_delta was a bit check
+    # written as a tolerance; say so explicitly.
+    assert bits(sol.position.x_m) == 0x41512A8800039933
+    assert bits(sol.position.y_m) == 0x411E8480001A3CAE
+    assert bits(sol.position.z_m) == 0x41512A88000183ED
 
-    assert_in_delta sol.geodetic.lat_rad, 0.7856806192544931, 1.0e-15
-    assert_in_delta sol.geodetic.lon_rad, 0.1106572211905088, 1.0e-15
-    assert_in_delta sol.geodetic.height_m, 16_089.25440867048, 1.0e-9
+    assert bits(sol.geodetic.lat_rad) == 0x3FE9244BAE999207
+    assert bits(sol.geodetic.lon_rad) == 0x3FBC54081A145860
+    assert bits(sol.geodetic.height_m) == 0x40CF6CA09076AD2F
 
     assert Enum.map(sol.per_epoch_clock, & &1.epoch_index) == [0, 1, 2]
     assert Enum.map(sol.per_epoch_clock, & &1.system) == ["G", "G", "G"]
-    assert_in_delta hd(sol.per_epoch_clock).clock_s, 7.116548471943955e-13, 1.0e-18
+    assert bits(hd(sol.per_epoch_clock).clock_s) == 0x3D690A522D845D45
 
     assert sol.metadata == %{
              status: :step_tolerance,
@@ -51,15 +54,15 @@ defmodule Sidereon.GNSS.StaticPositioningTest do
              redundancy: 15
            }
 
-    assert_in_delta sol.residual_rms_m, 1.3781657711962284e-4, 1.0e-16
+    assert bits(sol.residual_rms_m) == 0x3F22105D4D389DE1
     assert sol.geometry_quality.tier == :nominal
     assert sol.geometry_quality.redundancy == 15
     assert sol.geometry_quality.rank == 6
 
     assert [
-             [3.771621051555918, 1.0550145403545639, 2.830402538809005],
-             [1.0550145403545639, 0.874773231946568, 1.0169448207849012],
-             [2.830402538809005, 1.0169448207849012, 3.086126641838115]
+             [3.7716222085962943, 1.0550154706968555, 2.8304035387358075],
+             [1.0550154706968555, 0.8747739593447879, 1.0169457011984429],
+             [2.8304035387358075, 1.0169457011984429, 3.086127499280353]
            ] = sol.covariance.position_ecef_m2
 
     assert Enum.map(sol.per_epoch_influence, & &1.status) == [:solved, :solved, :solved]
@@ -81,6 +84,8 @@ defmodule Sidereon.GNSS.StaticPositioningTest do
                huber: :yes
              )
   end
+
+  defp bits(value) when is_float(value), do: :binary.decode_unsigned(<<value::float-64>>)
 
   defp epoch_request(sp3, epoch) do
     satellites =
