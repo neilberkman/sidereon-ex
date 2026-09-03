@@ -50,12 +50,12 @@ fn options(
     if prior_periods < 0 || min_coverage < 0 {
         return Err(Error::Term(Box::new("coverage counts must be nonnegative")));
     }
-    Ok(SiderealFilterOptions {
-        sample_interval: duration(sample_interval_s)?,
-        prior_periods: prior_periods as usize,
-        min_coverage: min_coverage as usize,
-        template_method: method(&method_kind, alpha)?,
-    })
+    let mut options = SiderealFilterOptions::default();
+    options.sample_interval = duration(sample_interval_s)?;
+    options.prior_periods = prior_periods as usize;
+    options.min_coverage = min_coverage as usize;
+    options.template_method = method(&method_kind, alpha)?;
+    Ok(options)
 }
 
 fn output_term(output: SiderealFilterOutput) -> SiderealFilterOutputTerm {

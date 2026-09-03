@@ -121,14 +121,11 @@ fn carrier_phase_detect_cycle_slips<'a>(
     mw_threshold_cycles: f64,
     min_arc_gap_s: f64,
 ) -> Term<'a> {
-    let results = match carrier_phase::detect_cycle_slips(
-        &decode_arc(arc),
-        CycleSlipOptions {
-            gf_threshold_m,
-            mw_threshold_cycles,
-            min_arc_gap_s,
-        },
-    ) {
+    let mut options = CycleSlipOptions::default();
+    options.gf_threshold_m = gf_threshold_m;
+    options.mw_threshold_cycles = mw_threshold_cycles;
+    options.min_arc_gap_s = min_arc_gap_s;
+    let results = match carrier_phase::detect_cycle_slips(&decode_arc(arc), options) {
         Ok(results) => results,
         Err(error) => return (atoms::error(), error_atom(error)).encode(env),
     };
@@ -163,18 +160,15 @@ fn carrier_phase_smooth_code<'a>(
     min_arc_gap_s: f64,
     hatch_window_cap: u64,
 ) -> Term<'a> {
-    let results = match carrier_phase::smooth_code(
-        &decode_arc(arc),
-        CycleSlipOptions {
-            gf_threshold_m,
-            mw_threshold_cycles,
-            min_arc_gap_s,
-        },
-        hatch_window_cap as usize,
-    ) {
-        Ok(results) => results,
-        Err(error) => return (atoms::error(), error_atom(error)).encode(env),
-    };
+    let mut options = CycleSlipOptions::default();
+    options.gf_threshold_m = gf_threshold_m;
+    options.mw_threshold_cycles = mw_threshold_cycles;
+    options.min_arc_gap_s = min_arc_gap_s;
+    let results =
+        match carrier_phase::smooth_code(&decode_arc(arc), options, hatch_window_cap as usize) {
+            Ok(results) => results,
+            Err(error) => return (atoms::error(), error_atom(error)).encode(env),
+        };
 
     results
         .into_iter()
@@ -192,13 +186,13 @@ fn carrier_phase_smooth_iono_free_code<'a>(
     min_arc_gap_s: f64,
     hatch_window_cap: u64,
 ) -> Term<'a> {
+    let mut options = CycleSlipOptions::default();
+    options.gf_threshold_m = gf_threshold_m;
+    options.mw_threshold_cycles = mw_threshold_cycles;
+    options.min_arc_gap_s = min_arc_gap_s;
     let results = match carrier_phase::smooth_iono_free_code(
         &decode_arc(arc),
-        CycleSlipOptions {
-            gf_threshold_m,
-            mw_threshold_cycles,
-            min_arc_gap_s,
-        },
+        options,
         hatch_window_cap as usize,
     ) {
         Ok(results) => results,

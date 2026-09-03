@@ -506,12 +506,12 @@ pub(crate) fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
         ))));
     }
     let (huber_k, scale_floor_m, max_outer): (f64, f64, u64) = term.decode()?;
-    Ok(Some(RobustConfig {
-        huber_k,
-        scale_floor_m,
-        max_outer: max_outer as usize,
-        outer_tol_m: DEFAULT_ROBUST_OUTER_TOL_M,
-    }))
+    let mut robust = RobustConfig::default();
+    robust.huber_k = huber_k;
+    robust.scale_floor_m = scale_floor_m;
+    robust.max_outer = max_outer as usize;
+    robust.outer_tol_m = DEFAULT_ROBUST_OUTER_TOL_M;
+    Ok(Some(robust))
 }
 
 /// Decode the GLONASS FDMA channel map. The Elixir wrapper passes the public
@@ -559,11 +559,10 @@ fn decode_optional_usize(term: Term<'_>, name: &'static str) -> NifResult<Option
 }
 
 fn decode_policy(max_pdop: Term<'_>, coarse_search_seeds: Term<'_>) -> NifResult<SolvePolicy> {
+    let mut validation = SolutionValidationOptions::default();
+    validation.max_pdop = decode_optional_f64(max_pdop, "max_pdop")?;
     Ok(SolvePolicy {
-        validation: SolutionValidationOptions {
-            max_pdop: decode_optional_f64(max_pdop, "max_pdop")?,
-            ..SolutionValidationOptions::default()
-        },
+        validation,
         coarse_search_seeds: decode_optional_usize(coarse_search_seeds, "coarse_search_seeds")?,
     })
 }

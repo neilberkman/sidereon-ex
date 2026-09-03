@@ -198,13 +198,13 @@ fn decode_params(t: &[Term]) -> LnavParams {
 
 /// Decode the 5 option terms (tow, alert, anti_spoof, integrity, tlm_message).
 fn decode_options(t: &[Term]) -> LnavOptions {
-    LnavOptions {
-        tow: decode_number(t[0]),
-        alert: decode_number(t[1]),
-        anti_spoof: decode_number(t[2]),
-        integrity: decode_number(t[3]),
-        tlm_message: decode_number(t[4]),
-    }
+    LnavOptions::new(
+        decode_number(t[0]),
+        decode_number(t[1]),
+        decode_number(t[2]),
+        decode_number(t[3]),
+        decode_number(t[4]),
+    )
 }
 
 fn encode_error<'a>(env: Env<'a>, err: LnavError) -> Term<'a> {

@@ -213,23 +213,19 @@ fn merge_options_from_terms(
     options.clock_min_common = clock_min_common;
     options.combine = combine;
     options.precedence_scope = precedence_scope;
-    options.outlier_reject =
-        outlier_reject.map(
-            |(position_tolerance_m, clock_tolerance_s)| OutlierRejectOptions {
-                position_tolerance_m,
-                clock_tolerance_s,
-            },
-        );
+    options.outlier_reject = outlier_reject.map(|(position_tolerance_m, clock_tolerance_s)| {
+        OutlierRejectOptions::new(position_tolerance_m, clock_tolerance_s)
+    });
     options.target_epoch_interval_s = target_epoch_interval_s;
     options.systems = if system_letters.is_empty() {
         None
     } else {
         Some(systems_from_letters(system_letters)?)
     };
-    options.frame_reconciliation = Sp3FrameReconciliationOptions {
-        asserted_equivalent_label_sets,
-        helmert: helmert_frame_reconciliation,
-    };
+    let mut frame_reconciliation = Sp3FrameReconciliationOptions::default();
+    frame_reconciliation.asserted_equivalent_label_sets = asserted_equivalent_label_sets;
+    frame_reconciliation.helmert = helmert_frame_reconciliation;
+    options.frame_reconciliation = frame_reconciliation;
     options.verify_continuity = verify_continuity
         .map(|(orbit_class, residual_tolerance_m)| {
             continuity_options_from_terms(orbit_class, residual_tolerance_m)
@@ -324,10 +320,7 @@ fn continuity_options_from_terms(
         Some("leo") => Some(SpeedBound::OrbitClass(OrbitClass::Leo)),
         Some(other) => return Err(format!("unknown orbit class: {other}")),
     };
-    Ok(ContinuityOptions {
-        speed_bound,
-        residual_tolerance_m,
-    })
+    Ok(ContinuityOptions::new(speed_bound, residual_tolerance_m))
 }
 
 /// Attest that a parsed or merged product is physically continuous.

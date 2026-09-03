@@ -112,10 +112,9 @@ pub fn sp3_geometry_visible(
     elevation_mask_deg: f64,
     systems: Vec<String>,
 ) -> Vec<VisibleTerm> {
-    let options = VisibilityOptions {
-        elevation_mask_deg,
-        systems: system_filter(systems),
-    };
+    let mut options = VisibilityOptions::default();
+    options.elevation_mask_deg = elevation_mask_deg;
+    options.systems = system_filter(systems);
     let Ok(t_rx_j2000_s) = j2000_seconds_from_split(jd_whole, jd_fraction) else {
         return Vec::new();
     };
@@ -157,14 +156,13 @@ pub fn sp3_geometry_dop<'a>(
     let Some(weighting) = dop_weighting(&weighting) else {
         return (atoms::error(), "invalid_weighting").encode(env);
     };
-    let options = DopOptions {
-        visibility: VisibilityOptions {
-            elevation_mask_deg,
-            systems: system_filter(systems),
-        },
-        weighting,
-        light_time,
-    };
+    let mut visibility = VisibilityOptions::default();
+    visibility.elevation_mask_deg = elevation_mask_deg;
+    visibility.systems = system_filter(systems);
+    let mut options = DopOptions::default();
+    options.visibility = visibility;
+    options.weighting = weighting;
+    options.light_time = light_time;
     let explicit_satellites = parse_satellite_tokens(satellites);
     let explicit = use_explicit_satellites.then_some(explicit_satellites.as_slice());
     let Ok(t_rx_j2000_s) = j2000_seconds_from_split(jd_whole, jd_fraction) else {
@@ -214,14 +212,13 @@ pub fn sp3_geometry_dop_series(
     let Some(weighting) = dop_weighting(&weighting) else {
         return Vec::new();
     };
-    let options = DopOptions {
-        visibility: VisibilityOptions {
-            elevation_mask_deg,
-            systems: system_filter(systems),
-        },
-        weighting,
-        light_time,
-    };
+    let mut visibility = VisibilityOptions::default();
+    visibility.elevation_mask_deg = elevation_mask_deg;
+    visibility.systems = system_filter(systems);
+    let mut options = DopOptions::default();
+    options.visibility = visibility;
+    options.weighting = weighting;
+    options.light_time = light_time;
     let explicit_satellites = parse_satellite_tokens(satellites);
     let explicit = use_explicit_satellites.then_some(explicit_satellites.as_slice());
     let (Ok(window_start), Ok(window_end)) = (
@@ -268,10 +265,9 @@ pub fn sp3_geometry_visibility_series(
     elevation_mask_deg: f64,
     systems: Vec<String>,
 ) -> Vec<VisibilitySeriesTerm> {
-    let options = VisibilityOptions {
-        elevation_mask_deg,
-        systems: system_filter(systems),
-    };
+    let mut options = VisibilityOptions::default();
+    options.elevation_mask_deg = elevation_mask_deg;
+    options.systems = system_filter(systems);
     let (Ok(window_start), Ok(window_end)) = (
         j2000_seconds_from_split(start_jd_whole, start_jd_fraction),
         j2000_seconds_from_split(end_jd_whole, end_jd_fraction),
@@ -309,10 +305,9 @@ pub fn sp3_geometry_passes(
     elevation_mask_deg: f64,
     systems: Vec<String>,
 ) -> Vec<PassTerm> {
-    let options = VisibilityOptions {
-        elevation_mask_deg,
-        systems: system_filter(systems),
-    };
+    let mut options = VisibilityOptions::default();
+    options.elevation_mask_deg = elevation_mask_deg;
+    options.systems = system_filter(systems);
     let (Ok(window_start), Ok(window_end)) = (
         j2000_seconds_from_split(start_jd_whole, start_jd_fraction),
         j2000_seconds_from_split(end_jd_whole, end_jd_fraction),

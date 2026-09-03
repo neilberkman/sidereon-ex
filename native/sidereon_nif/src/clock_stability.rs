@@ -247,13 +247,11 @@ fn power_law_options(
         measurement_bandwidth_hz,
     ): PowerLawOptionsTerm,
 ) -> PowerLawNoiseOptions {
-    PowerLawNoiseOptions {
-        min_points_per_octave,
-        slope_tolerance,
-        scatter_tolerance,
-        basic_tau_s,
-        measurement_bandwidth_hz,
-    }
+    let mut options = PowerLawNoiseOptions::new(basic_tau_s, measurement_bandwidth_hz);
+    options.min_points_per_octave = min_points_per_octave;
+    options.slope_tolerance = slope_tolerance;
+    options.scatter_tolerance = scatter_tolerance;
+    options
 }
 
 fn power_law_error_atom(error: PowerLawNoiseError) -> rustler::Atom {
@@ -362,14 +360,14 @@ fn clock_compute_allan_deviations<'a>(
 ) -> NifResult<Term<'a>> {
     let storage = series_owned(&series_kind, samples)?;
     let series = storage.as_series(&series_kind)?;
+    let mut allan_options = AllanOptions::default();
+    allan_options.estimators = estimator_set(estimators);
+    allan_options.tau_grid = tau_grid(&tau_grid_kind, tau_grid_factors)?;
+    allan_options.gap_policy = gap_policy(&gap_policy_kind)?;
     let input = AllanInput {
         series,
         tau0_s,
-        options: AllanOptions {
-            estimators: estimator_set(estimators),
-            tau_grid: tau_grid(&tau_grid_kind, tau_grid_factors)?,
-            gap_policy: gap_policy(&gap_policy_kind)?,
-        },
+        options: allan_options,
     };
     Ok(match compute_allan_deviations(&input) {
         Ok(curves) => (atoms::ok(), curves_term(curves)).encode(env),

@@ -1064,15 +1064,14 @@ fn sbas_spp_solve_broadcast<'a>(
     )?;
     inputs.sbas_iono = source.iono_grid().cloned();
     inputs.glonass_channels = spp::decode_glonass_channels(glonass_channels)?;
+    let mut validation = sidereon_core::quality::SolutionValidationOptions::default();
+    validation.max_pdop = if spp::is_nil(max_pdop) {
+        None
+    } else {
+        Some(max_pdop.decode::<f64>()?)
+    };
     let policy = sidereon_core::positioning::SolvePolicy {
-        validation: sidereon_core::quality::SolutionValidationOptions {
-            max_pdop: if spp::is_nil(max_pdop) {
-                None
-            } else {
-                Some(max_pdop.decode::<f64>()?)
-            },
-            ..sidereon_core::quality::SolutionValidationOptions::default()
-        },
+        validation,
         coarse_search_seeds: if spp::is_nil(coarse_search_seeds) {
             None
         } else {

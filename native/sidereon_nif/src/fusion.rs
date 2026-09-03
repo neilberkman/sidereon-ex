@@ -1010,9 +1010,7 @@ fn fusion_velocity_match_outage<'a>(
         Ok(measurement) => measurement,
         Err(error) => return fusion_error(env, error),
     };
-    let config = VelocityMatchingConfig {
-        max_outage_duration_s: config.max_outage_duration_s,
-    };
+    let config = VelocityMatchingConfig::new(config.max_outage_duration_s);
 
     match velocity_match_outage(&states, &first_good_fix, config) {
         Ok(matched) => (atoms::ok(), encode_velocity_matched_trajectory(matched)).encode(env),
@@ -1072,31 +1070,32 @@ fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionE
     config.imu_model = decode_imu_model(term.imu_model)?;
     config.imu_to_body_dcm = mat3(term.imu_to_body_dcm, "imu_to_body_dcm")?;
     config.mechanization = decode_mechanization(term.mechanization)?;
-    config.loose = LooseCouplingConfig {
-        lever_arm_body_m: vec3(term.loose.lever_arm_body_m, "loose.lever_arm_body_m")?,
-        update_options: decode_ekf_options(term.loose.update_options)?,
-        fix_status_weighting: decode_fix_status_weighting(term.loose.fix_status_weighting),
-        measurement_reweighting: term
-            .loose
-            .measurement_reweighting
-            .map(decode_igg_iii_reweighting),
-        prediction_adaptation: term
-            .loose
-            .prediction_adaptation
-            .map(decode_yang_prediction_adaptive_factor),
-        stationary_updates: term.loose.stationary_updates.map(decode_stationary_update),
-        non_holonomic: term.loose.non_holonomic.map(decode_non_holonomic),
-    };
-    config.tight = TightCouplingConfig {
-        lever_arm_body_m: vec3(term.tight.lever_arm_body_m, "tight.lever_arm_body_m")?,
-        light_time: term.tight.light_time,
-        sagnac: term.tight.sagnac,
-        initial_clock_bias_variance_m2: term.tight.initial_clock_bias_variance_m2,
-        initial_clock_drift_variance_m2_s2: term.tight.initial_clock_drift_variance_m2_s2,
-        clock_bias_random_walk_m2_s: term.tight.clock_bias_random_walk_m2_s,
-        clock_drift_random_walk_m2_s3: term.tight.clock_drift_random_walk_m2_s3,
-        update_options: decode_ekf_options(term.tight.update_options)?,
-    };
+    let mut loose = LooseCouplingConfig::default();
+    loose.lever_arm_body_m = vec3(term.loose.lever_arm_body_m, "loose.lever_arm_body_m")?;
+    loose.update_options = decode_ekf_options(term.loose.update_options)?;
+    loose.fix_status_weighting = decode_fix_status_weighting(term.loose.fix_status_weighting);
+    loose.measurement_reweighting = term
+        .loose
+        .measurement_reweighting
+        .map(decode_igg_iii_reweighting);
+    loose.prediction_adaptation = term
+        .loose
+        .prediction_adaptation
+        .map(decode_yang_prediction_adaptive_factor);
+    loose.stationary_updates = term.loose.stationary_updates.map(decode_stationary_update);
+    loose.non_holonomic = term.loose.non_holonomic.map(decode_non_holonomic);
+    config.loose = loose;
+
+    let mut tight = TightCouplingConfig::default();
+    tight.lever_arm_body_m = vec3(term.tight.lever_arm_body_m, "tight.lever_arm_body_m")?;
+    tight.light_time = term.tight.light_time;
+    tight.sagnac = term.tight.sagnac;
+    tight.initial_clock_bias_variance_m2 = term.tight.initial_clock_bias_variance_m2;
+    tight.initial_clock_drift_variance_m2_s2 = term.tight.initial_clock_drift_variance_m2_s2;
+    tight.clock_bias_random_walk_m2_s = term.tight.clock_bias_random_walk_m2_s;
+    tight.clock_drift_random_walk_m2_s3 = term.tight.clock_drift_random_walk_m2_s3;
+    tight.update_options = decode_ekf_options(term.tight.update_options)?;
+    config.tight = tight;
     config.ukf_update_options = decode_ukf_options(term.ukf_update_options)?;
     config.validate()?;
     Ok(config)
@@ -1141,9 +1140,11 @@ fn decode_imu_model(term: ImuModelTerm) -> Result<ImuErrorModel, FusionError> {
 
 fn decode_mechanization(term: MechanizationTerm) -> Result<MechanizationConfig, FusionError> {
     match term.coning_correction.as_str() {
-        "off" => Ok(MechanizationConfig {
-            coning_correction: ConingCorrection::Off,
-        }),
+        "off" => {
+            let mut config = MechanizationConfig::default();
+            config.coning_correction = ConingCorrection::Off;
+            Ok(config)
+        }
         _ => Err(FusionError::InvalidInput {
             field: "mechanization.coning_correction",
             reason: "must be off",
@@ -1152,12 +1153,12 @@ fn decode_mechanization(term: MechanizationTerm) -> Result<MechanizationConfig, 
 }
 
 fn decode_ekf_options(term: EkfOptionsTerm) -> Result<EkfUpdateOptions, FusionError> {
-    Ok(EkfUpdateOptions {
-        innovation_gate: term.innovation_gate.map(|gate| InnovationGate {
-            threshold_sigma: gate.threshold_sigma,
-            min_rows: gate.min_rows as usize,
-        }),
-    })
+    let mut options = EkfUpdateOptions::default();
+    options.innovation_gate = term.innovation_gate.map(|gate| InnovationGate {
+        threshold_sigma: gate.threshold_sigma,
+        min_rows: gate.min_rows as usize,
+    });
+    Ok(options)
 }
 
 fn decode_igg_iii_reweighting(
@@ -1187,38 +1188,39 @@ fn decode_fix_status_weighting(term: FixStatusWeightingTerm) -> GnssFixStatusWei
 }
 
 fn decode_stationary_update(term: StationaryUpdateTerm) -> StationaryUpdateConfig {
-    StationaryUpdateConfig {
-        detector: StationaryDetectorConfig {
-            window_len: term.detector.window_len as usize,
-            max_specific_force_norm_error_mps2: term.detector.max_specific_force_norm_error_mps2,
-            max_body_rate_wrt_ecef_norm_rps: term.detector.max_body_rate_wrt_ecef_norm_rps,
-        },
-        zero_velocity_sigma_mps: term.zero_velocity_sigma_mps,
-        zero_angular_rate_sigma_rps: term.zero_angular_rate_sigma_rps,
-    }
+    let detector = StationaryDetectorConfig::new(
+        term.detector.window_len as usize,
+        term.detector.max_specific_force_norm_error_mps2,
+        term.detector.max_body_rate_wrt_ecef_norm_rps,
+    );
+    StationaryUpdateConfig::new(
+        detector,
+        term.zero_velocity_sigma_mps,
+        term.zero_angular_rate_sigma_rps,
+    )
 }
 
 fn decode_non_holonomic(term: NonHolonomicTerm) -> NonHolonomicConstraintConfig {
-    NonHolonomicConstraintConfig {
-        lateral_velocity_sigma_mps: term.lateral_velocity_sigma_mps,
-        vertical_velocity_sigma_mps: term.vertical_velocity_sigma_mps,
-        min_speed_mps: term.min_speed_mps,
-        max_body_rate_wrt_ecef_norm_rps: term.max_body_rate_wrt_ecef_norm_rps,
-    }
+    NonHolonomicConstraintConfig::new(
+        term.lateral_velocity_sigma_mps,
+        term.vertical_velocity_sigma_mps,
+        term.min_speed_mps,
+        term.max_body_rate_wrt_ecef_norm_rps,
+    )
 }
 
 fn decode_ukf_options(term: UkfOptionsTerm) -> Result<UkfUpdateOptions, FusionError> {
-    let options = UkfUpdateOptions {
-        transform: UnscentedTransformOptions {
-            alpha: term.alpha,
-            beta: term.beta,
-            kappa: term.kappa,
-        },
-        innovation_gate: term.innovation_gate.map(|gate| InnovationGate {
-            threshold_sigma: gate.threshold_sigma,
-            min_rows: gate.min_rows as usize,
-        }),
-    };
+    let mut transform = UnscentedTransformOptions::default();
+    transform.alpha = term.alpha;
+    transform.beta = term.beta;
+    transform.kappa = term.kappa;
+
+    let mut options = UkfUpdateOptions::default();
+    options.transform = transform;
+    options.innovation_gate = term.innovation_gate.map(|gate| InnovationGate {
+        threshold_sigma: gate.threshold_sigma,
+        min_rows: gate.min_rows as usize,
+    });
     Ok(options)
 }
 

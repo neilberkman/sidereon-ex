@@ -167,20 +167,20 @@ pub fn precise_positioning_solve_float<'a>(
         &handle.sp3,
         epoch,
         initial,
-        core::FloatSolveConfig {
-            weights: decode_weights(weights),
-            tropo: decode_tropo(&tropo)?,
-            corrections: core::RangeCorrections {
+        core::FloatSolveConfig::new(
+            decode_weights(weights),
+            decode_tropo(&tropo)?,
+            core::RangeCorrections {
                 receiver_antenna: corrections.receiver_antenna,
                 sat_clock_relativity: corrections.sat_clock_relativity,
                 satellite_clock: corrections.satellite_clock,
                 ppp: core::PppCorrectionLookup::default(),
             },
-            opts: decode_solve_options(solve_options),
-            elevation_cutoff_deg: solve_options.5,
-            residual_screen: false,
-            estimate_residual_ionosphere: solve_options.6,
-        },
+            decode_solve_options(solve_options),
+            solve_options.5,
+            false,
+            solve_options.6,
+        ),
     );
     Ok(encode_result(env, result))
 }
@@ -201,15 +201,15 @@ pub fn precise_positioning_solve_ppp_float<'a>(
     let epochs = decode_epochs(epochs)?;
     let initial = decode_initial(initial);
     let corrections = decode_corrections(corrections)?;
-    let config = core::FloatSolveConfig {
-        weights: decode_weights(weights),
-        tropo: decode_tropo(&tropo)?,
-        corrections: direct_range_corrections(&handle, &epochs, initial.position_m, &corrections)?,
-        opts: decode_solve_options(solve_options),
-        elevation_cutoff_deg: solve_options.5,
+    let config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        direct_range_corrections(&handle, &epochs, initial.position_m, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
         residual_screen,
-        estimate_residual_ionosphere: solve_options.6,
-    };
+        solve_options.6,
+    );
     Ok(encode_result(
         env,
         core::solve_float_epochs(&handle.sp3, &epochs, initial, config),
@@ -232,20 +232,15 @@ pub fn precise_positioning_solve_ppp_fixed<'a>(
     let epochs = decode_epochs(epochs)?;
     let float_solution = decode_float_payload(float_solution)?;
     let corrections = decode_corrections(corrections)?;
-    let config = core::FixedSolveConfig {
-        weights: decode_weights(weights),
-        tropo: decode_tropo(&tropo)?,
-        corrections: direct_range_corrections(
-            &handle,
-            &epochs,
-            float_solution.position_m,
-            &corrections,
-        )?,
-        opts: decode_solve_options(solve_options),
-        elevation_cutoff_deg: solve_options.5,
-        ambiguity: decode_fixed_ambiguity(ambiguity),
-        estimate_residual_ionosphere: solve_options.6,
-    };
+    let config = core::FixedSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        direct_range_corrections(&handle, &epochs, float_solution.position_m, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        decode_fixed_ambiguity(ambiguity),
+        solve_options.6,
+    );
     Ok(encode_fixed_result(
         env,
         core::solve_fixed_from_float(&handle.sp3, &epochs, float_solution, config),
@@ -276,15 +271,15 @@ pub fn precise_positioning_solve_ppp_auto_init_float<'a>(
     let epochs = decode_epochs(epochs)?;
     let corrections = decode_corrections(corrections)?;
     let options = decode_auto_init(auto_init);
-    let config = core::FloatSolveConfig {
-        weights: decode_weights(weights),
-        tropo: decode_tropo(&tropo)?,
-        corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
-        opts: decode_solve_options(solve_options),
-        elevation_cutoff_deg: solve_options.5,
+    let config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
         residual_screen,
-        estimate_residual_ionosphere: solve_options.6,
-    };
+        solve_options.6,
+    );
     let result = solve_ppp_auto_init_float(&handle.sp3, &epochs, options, config);
     Ok(match result {
         Ok(solution) => encode_result(env, Ok(solution)),
@@ -316,24 +311,24 @@ pub fn precise_positioning_solve_ppp_auto_init_fixed<'a>(
     let epochs = decode_epochs(epochs)?;
     let corrections = decode_corrections(corrections)?;
     let options = decode_auto_init(auto_init);
-    let float_config = core::FloatSolveConfig {
-        weights: decode_weights(weights),
-        tropo: decode_tropo(&tropo)?,
-        corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
-        opts: decode_solve_options(solve_options),
-        elevation_cutoff_deg: solve_options.5,
+    let float_config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
         residual_screen,
-        estimate_residual_ionosphere: solve_options.6,
-    };
-    let fixed_config = core::FixedSolveConfig {
-        weights: decode_weights(weights),
-        tropo: decode_tropo(&tropo)?,
-        corrections: auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
-        opts: decode_solve_options(solve_options),
-        elevation_cutoff_deg: solve_options.5,
-        ambiguity: decode_fixed_ambiguity(ambiguity),
-        estimate_residual_ionosphere: solve_options.6,
-    };
+        solve_options.6,
+    );
+    let fixed_config = core::FixedSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        decode_fixed_ambiguity(ambiguity),
+        solve_options.6,
+    );
     let result =
         solve_ppp_auto_init_fixed(&handle.sp3, &epochs, options, float_config, fixed_config);
     Ok(match result {
@@ -349,24 +344,24 @@ pub fn precise_positioning_solve_ppp_auto_init_fixed<'a>(
 /// Decode the auto-init policy term into [`PppAutoInitOptions`].
 fn decode_auto_init(term: PppAutoInitTerm) -> PppAutoInitOptions {
     let (initial_guess, spp_initial_guess, spp_troposphere, met) = term;
-    PppAutoInitOptions {
-        initial_guess: initial_guess.map(|(position, clock_m)| PppInitialGuess {
-            position_m: vec3_to_array(position),
-            clock_m,
-        }),
-        spp_initial_guess: [
-            spp_initial_guess.0,
-            spp_initial_guess.1,
-            spp_initial_guess.2,
-            spp_initial_guess.3,
-        ],
-        spp_troposphere,
-        spp_met: SurfaceMet {
-            pressure_hpa: met.0,
-            temperature_k: met.1,
-            relative_humidity: met.2,
-        },
-    }
+    let mut options = PppAutoInitOptions::default();
+    options.initial_guess = initial_guess.map(|(position, clock_m)| PppInitialGuess {
+        position_m: vec3_to_array(position),
+        clock_m,
+    });
+    options.spp_initial_guess = [
+        spp_initial_guess.0,
+        spp_initial_guess.1,
+        spp_initial_guess.2,
+        spp_initial_guess.3,
+    ];
+    options.spp_troposphere = spp_troposphere;
+    options.spp_met = SurfaceMet {
+        pressure_hpa: met.0,
+        temperature_k: met.1,
+        relative_humidity: met.2,
+    };
+    options
 }
 
 /// Build the PPP range corrections for an auto-init solve.
@@ -656,24 +651,24 @@ fn decode_weights(weights: WeightsTerm) -> core::MeasurementWeights {
 }
 
 fn decode_solve_options(options: SolveOptionsTerm) -> core::FloatSolveOptions {
-    core::FloatSolveOptions {
-        max_iterations: options.0 as usize,
-        position_tolerance_m: options.1,
-        clock_tolerance_m: options.2,
-        ambiguity_tolerance_m: options.3,
-        ztd_tolerance_m: options.4,
-    }
+    let mut opts = core::FloatSolveOptions::default();
+    opts.max_iterations = options.0 as usize;
+    opts.position_tolerance_m = options.1;
+    opts.clock_tolerance_m = options.2;
+    opts.ambiguity_tolerance_m = options.3;
+    opts.ztd_tolerance_m = options.4;
+    opts
 }
 
 fn decode_tropo(tropo: &TropoTerm) -> NifResult<core::TroposphereOptions> {
-    Ok(core::TroposphereOptions {
-        enabled: tropo.0,
-        estimate_ztd: tropo.1,
-        estimate_tropo_gradients: tropo.2,
-        met: sidereon_core::atmosphere::troposphere::Met::new(tropo.3, tropo.4, tropo.5)
-            .map_err(crate::errors::invalid_input)?,
-        mapping: decode_tropo_mapping(tropo.6.clone())?,
-    })
+    let met = sidereon_core::atmosphere::troposphere::Met::new(tropo.3, tropo.4, tropo.5)
+        .map_err(crate::errors::invalid_input)?;
+    let mut options = core::TroposphereOptions::new(met);
+    options.enabled = tropo.0;
+    options.estimate_ztd = tropo.1;
+    options.estimate_tropo_gradients = tropo.2;
+    options.mapping = decode_tropo_mapping(tropo.6.clone())?;
+    Ok(options)
 }
 
 /// Decode the tropospheric mapping selection. `None` is the climatological
@@ -699,11 +694,10 @@ fn decode_tropo_mapping(
 
 fn decode_fixed_ambiguity(term: FixedAmbiguityTerm) -> core::FixedAmbiguityOptions {
     let (wavelengths_m, offsets_m, ratio_threshold) = term;
-    core::FixedAmbiguityOptions {
-        wavelengths_m: wavelengths_m.into_iter().collect(),
-        offsets_m: offsets_m.into_iter().collect(),
-        ratio_threshold,
-    }
+    let mut options = core::FixedAmbiguityOptions::new(ratio_threshold);
+    options.wavelengths_m = wavelengths_m.into_iter().collect();
+    options.offsets_m = offsets_m.into_iter().collect();
+    options
 }
 
 fn decode_corrections(term: CorrectionsTerm) -> NifResult<DecodedCorrections> {
@@ -716,18 +710,18 @@ fn decode_corrections(term: CorrectionsTerm) -> NifResult<DecodedCorrections> {
         satellite_antenna,
         (pole_tide, ocean_loading),
     ) = term;
+    let mut ppp_options = ppp::PppCorrectionsOptions::new();
+    ppp_options.solid_earth_tide = solid_earth_tide;
+    ppp_options.pole_tide = crate::ppp_corrections::decode_pole_tide(pole_tide);
+    ppp_options.ocean_loading = crate::ppp_corrections::decode_ocean_loading(ocean_loading)?;
+    ppp_options.phase_windup = phase_windup;
+    ppp_options.satellite_antenna = decode_satellite_antenna_options(satellite_antenna)?;
+    ppp_options.code_bias = None;
     Ok(DecodedCorrections {
         sat_clock_relativity,
         satellite_clock: decode_satellite_clock(satellite_clock)?,
         receiver_antenna: decode_receiver_antenna(receiver_antenna),
-        ppp_options: ppp::PppCorrectionsOptions {
-            solid_earth_tide,
-            pole_tide: crate::ppp_corrections::decode_pole_tide(pole_tide),
-            ocean_loading: crate::ppp_corrections::decode_ocean_loading(ocean_loading)?,
-            phase_windup,
-            satellite_antenna: decode_satellite_antenna_options(satellite_antenna)?,
-            code_bias: None,
-        },
+        ppp_options,
     })
 }
 
@@ -749,12 +743,12 @@ fn decode_receiver_antenna(
 ) -> Option<core::ReceiverAntennaOptions> {
     term.map(
         |(freq1_label, freq1_hz, freq2_label, freq2_hz, frequencies)| {
-            core::ReceiverAntennaOptions {
+            core::ReceiverAntennaOptions::new(
                 freq1_label,
                 freq1_hz,
                 freq2_label,
                 freq2_hz,
-                frequencies: frequencies
+                frequencies
                     .into_iter()
                     .map(|(label, pco, pcv_samples)| core::ReceiverAntennaFrequency {
                         label,
@@ -769,7 +763,7 @@ fn decode_receiver_antenna(
                             .collect(),
                     })
                     .collect(),
-            }
+            )
         },
     )
 }
@@ -799,13 +793,13 @@ fn decode_satellite_antenna_options(
             })
         })
         .collect::<NifResult<Vec<_>>>()?;
-    Ok(Some(ppp::SatelliteAntennaOptions {
+    Ok(Some(ppp::SatelliteAntennaOptions::new(
         freq1_label,
         freq1_hz,
         freq2_label,
         freq2_hz,
         antennas,
-    }))
+    )))
 }
 
 fn civil_from_tuple(tuple: DateTimeTuple) -> ppp::CivilDateTime {

@@ -111,12 +111,11 @@ fn options(
     (forces, abs_tol, rel_tol, max_nfev, min_ledger_samples): OptionsTerm,
 ) -> NifResult<OrbitFitOptions> {
     let force_model = crate::propagation::force_model_kind(&forces)?;
-    let mut options = OrbitFitOptions {
-        force_model,
-        propagation_context: crate::propagation::propagation_context_for_force_model(force_model),
-        min_ledger_samples,
-        ..OrbitFitOptions::default()
-    };
+    let mut options = OrbitFitOptions::default();
+    options.force_model = force_model;
+    options.propagation_context =
+        crate::propagation::propagation_context_for_force_model(force_model);
+    options.min_ledger_samples = min_ledger_samples;
     options.integrator_options.abs_tol = abs_tol;
     options.integrator_options.rel_tol = rel_tol;
     options.solver_options.max_nfev = max_nfev;

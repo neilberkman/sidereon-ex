@@ -31,10 +31,10 @@ fn tuple3(v: [f64; 3]) -> Vec3 {
 }
 
 fn finder_options(coarse_step_seconds: f64, time_tolerance_seconds: f64) -> TcaFinderOptions {
-    TcaFinderOptions {
-        coarse_step_seconds,
-        time_tolerance_seconds,
-    }
+    let mut options = TcaFinderOptions::default();
+    options.coarse_step_seconds = coarse_step_seconds;
+    options.time_tolerance_seconds = time_tolerance_seconds;
+    options
 }
 
 fn tca_window(

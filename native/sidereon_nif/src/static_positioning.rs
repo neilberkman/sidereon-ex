@@ -94,15 +94,15 @@ fn static_options(
     with_geodetic: bool,
     robust: Option<sidereon_core::positioning::RobustConfig>,
 ) -> StaticSolveOptions {
-    StaticSolveOptions {
-        initial_position_m: [
-            initial_position_m.0,
-            initial_position_m.1,
-            initial_position_m.2,
-        ],
-        with_geodetic,
-        robust,
-    }
+    let mut options = StaticSolveOptions::default();
+    options.initial_position_m = [
+        initial_position_m.0,
+        initial_position_m.1,
+        initial_position_m.2,
+    ];
+    options.with_geodetic = with_geodetic;
+    options.robust = robust;
+    options
 }
 
 fn decode_epochs(

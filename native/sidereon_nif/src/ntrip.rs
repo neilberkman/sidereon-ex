@@ -141,17 +141,17 @@ fn config_from_term(term: NtripConfigTerm) -> NifResult<NtripConfig> {
             )))
         }
     };
-    Ok(NtripConfig {
-        host: term.host,
-        port: term.port,
-        mountpoint: term.mountpoint,
-        version: parse_version(&term.version)?,
-        credentials,
-        user_agent_product: term
-            .user_agent_product
-            .unwrap_or_else(|| NtripConfig::default().user_agent_product),
-        gga_interval_s: term.gga_interval_s,
-    })
+    let mut config = NtripConfig::default();
+    config.host = term.host;
+    config.port = term.port;
+    config.mountpoint = term.mountpoint;
+    config.version = parse_version(&term.version)?;
+    config.credentials = credentials;
+    config.user_agent_product = term
+        .user_agent_product
+        .unwrap_or_else(|| NtripConfig::default().user_agent_product);
+    config.gga_interval_s = term.gga_interval_s;
+    Ok(config)
 }
 
 fn position_from_term(term: GgaPositionTerm) -> GgaPosition {

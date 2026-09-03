@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-02
+
+### Changed
+
+- Engine update: sidereon 2.0.0 and sidereon-core 2.0.0 from crates.io registry.
+- Struct instantiation modernization: all public non-exhaustive option and config structs now use canonical constructors (`Default::default()` or `::new(...)`) followed by explicit field assignments, preserving field coverage and strict backwards compatibility.
+- Zero behavioral change: full precision, exact test value pinning, and complete parity preserved across all modules.
+
 ## [1.4.1] - 2026-08-31
 
 ### Changed

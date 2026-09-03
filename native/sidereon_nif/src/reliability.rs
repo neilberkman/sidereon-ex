@@ -84,12 +84,12 @@ fn decode_design_row((id, design_row, sigma_m): DesignRowTerm) -> RangeReliabili
 fn decode_options(
     (alpha, power, lambda0_override, min_redundancy): OptionsTerm,
 ) -> ReliabilityOptions {
-    ReliabilityOptions {
-        alpha,
-        beta: 1.0 - power,
-        lambda0_override,
-        min_redundancy,
-    }
+    let mut options = ReliabilityOptions::default();
+    options.alpha = alpha;
+    options.beta = 1.0 - power;
+    options.lambda0_override = lambda0_override;
+    options.min_redundancy = min_redundancy;
+    options
 }
 
 fn quality_error_atom(error: QualityError) -> rustler::Atom {

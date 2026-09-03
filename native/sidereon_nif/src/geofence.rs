@@ -256,7 +256,9 @@ fn probability_options(method: &str) -> Result<ProbabilityOptions, BoundaryError
         "planar_quadrature" => ProbabilityMethod::PlanarQuadrature,
         _ => return Err(BoundaryError::InvalidProbabilityMethod),
     };
-    Ok(ProbabilityOptions { method })
+    let mut options = ProbabilityOptions::default();
+    options.method = method;
+    Ok(options)
 }
 
 fn encode_events<'a>(env: Env<'a>, events: &[CrossingEvent]) -> Vec<Term<'a>> {

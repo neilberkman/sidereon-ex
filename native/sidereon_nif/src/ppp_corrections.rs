@@ -51,14 +51,13 @@ pub fn ppp_corrections_build<'a>(
     ocean_loading: Option<OceanLoadingTerm>,
 ) -> NifResult<Term<'a>> {
     let epochs = decode_epochs(epochs)?;
-    let options = core::PppCorrectionsOptions {
-        solid_earth_tide,
-        pole_tide: decode_pole_tide(pole_tide),
-        ocean_loading: decode_ocean_loading(ocean_loading)?,
-        phase_windup,
-        satellite_antenna: decode_satellite_antenna_options(satellite_antenna)?,
-        code_bias: None,
-    };
+    let mut options = core::PppCorrectionsOptions::new();
+    options.solid_earth_tide = solid_earth_tide;
+    options.pole_tide = decode_pole_tide(pole_tide);
+    options.ocean_loading = decode_ocean_loading(ocean_loading)?;
+    options.phase_windup = phase_windup;
+    options.satellite_antenna = decode_satellite_antenna_options(satellite_antenna)?;
+    options.code_bias = None;
     let corrections = core::build(
         &handle.sp3,
         &epochs,
@@ -133,22 +132,19 @@ fn decode_satellite_antenna_options(
         })
         .collect::<NifResult<Vec<_>>>()?;
 
-    Ok(Some(core::SatelliteAntennaOptions {
+    Ok(Some(core::SatelliteAntennaOptions::new(
         freq1_label,
         freq1_hz,
         freq2_label,
         freq2_hz,
         antennas,
-    }))
+    )))
 }
 
 /// Decode the optional pole-tide polar-motion inputs `{xp_arcsec, yp_arcsec}`.
 /// `None` leaves the pole tide off, byte-identical to the prior behavior.
 pub(crate) fn decode_pole_tide(term: Option<PoleTideTerm>) -> Option<core::PoleTideOptions> {
-    term.map(|(xp_arcsec, yp_arcsec)| core::PoleTideOptions {
-        xp_arcsec,
-        yp_arcsec,
-    })
+    term.map(|(xp_arcsec, yp_arcsec)| core::PoleTideOptions::new(xp_arcsec, yp_arcsec))
 }
 
 /// Decode the optional ocean-loading BLQ block `{amplitude_rows, phase_rows}`.

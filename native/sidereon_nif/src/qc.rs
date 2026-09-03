@@ -213,11 +213,10 @@ fn qc_raim<'a>(
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let options = RaimOptions {
-        p_fa,
-        weights: raim_weights(unit_weights, weights),
-        n_systems: decode_optional_isize(n_systems)?,
-    };
+    let mut options = RaimOptions::default();
+    options.p_fa = p_fa;
+    options.weights = raim_weights(unit_weights, weights);
+    options.n_systems = decode_optional_isize(n_systems)?;
     let input = RaimInput {
         used_sats,
         residuals_m,
@@ -505,11 +504,10 @@ fn qc_raim_fde_design<'a>(
             weight: row.weight,
         })
         .collect();
-    let options = RangeFdeOptions {
-        p_fa,
-        max_exclusions: max_exclusions as usize,
-        min_redundancy: min_redundancy as usize,
-    };
+    let mut options = RangeFdeOptions::default();
+    options.p_fa = p_fa;
+    options.max_exclusions = max_exclusions as usize;
+    options.min_redundancy = min_redundancy as usize;
     match quality::raim_fde_design(&rows, &options) {
         Ok(result) => (atoms::ok(), RangeFdeResultFields::from(result)).encode(env),
         Err(error) => (atoms::error(), quality_error_atom(error)).encode(env),
@@ -529,21 +527,16 @@ fn encode_fde_result<'a>(
     max_iterations: u64,
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let validation = SolutionValidationOptions {
-        max_pdop: decode_optional_f64(max_pdop)?,
-        ..Default::default()
-    };
-    let options = FdeSppOptions {
-        fde: FdeOptions {
-            raim: RaimOptions {
-                p_fa,
-                weights: raim_weights(unit_weights, weights),
-                n_systems: decode_optional_isize(n_systems)?,
-            },
-            max_iterations: max_iterations as usize,
-        },
-        validation,
-    };
+    let mut validation = SolutionValidationOptions::default();
+    validation.max_pdop = decode_optional_f64(max_pdop)?;
+
+    let mut raim = RaimOptions::default();
+    raim.p_fa = p_fa;
+    raim.weights = raim_weights(unit_weights, weights);
+    raim.n_systems = decode_optional_isize(n_systems)?;
+
+    let fde = FdeOptions::new(raim, max_iterations as usize);
+    let options = FdeSppOptions::new(fde, validation);
 
     let result = quality::fde_spp(eph, &inputs, with_geodetic, &options);
 
@@ -563,21 +556,16 @@ fn encode_robust_fde_result<'a>(
     max_iterations: u64,
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let validation = SolutionValidationOptions {
-        max_pdop: decode_optional_f64(max_pdop)?,
-        ..Default::default()
-    };
-    let options = FdeSppOptions {
-        fde: FdeOptions {
-            raim: RaimOptions {
-                p_fa,
-                weights: raim_weights(unit_weights, weights),
-                n_systems: decode_optional_isize(n_systems)?,
-            },
-            max_iterations: max_iterations as usize,
-        },
-        validation,
-    };
+    let mut validation = SolutionValidationOptions::default();
+    validation.max_pdop = decode_optional_f64(max_pdop)?;
+
+    let mut raim = RaimOptions::default();
+    raim.p_fa = p_fa;
+    raim.weights = raim_weights(unit_weights, weights);
+    raim.n_systems = decode_optional_isize(n_systems)?;
+
+    let fde = FdeOptions::new(raim, max_iterations as usize);
+    let options = FdeSppOptions::new(fde, validation);
 
     let result = quality::spp_robust_fde_driver(
         eph,
@@ -623,13 +611,13 @@ fn variance_options<'a>(
         "elevation_cn0" => PseudorangeVarianceModel::ElevationCn0,
         _ => return Err(Error::Term(Box::new("invalid QC variance model"))),
     };
-    Ok(PseudorangeVarianceOptions {
-        a_m,
-        b_m,
-        model,
-        cn0_dbhz: decode_optional_f64(cn0)?,
-        cn0_scale_m2,
-    })
+    let mut options = PseudorangeVarianceOptions::default();
+    options.a_m = a_m;
+    options.b_m = b_m;
+    options.model = model;
+    options.cn0_dbhz = decode_optional_f64(cn0)?;
+    options.cn0_scale_m2 = cn0_scale_m2;
+    Ok(options)
 }
 
 fn decode_weight_entries(entries: Vec<WeightEntryTerm>) -> Vec<WeightEntry> {

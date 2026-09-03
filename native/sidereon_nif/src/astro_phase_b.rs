@@ -648,12 +648,10 @@ fn terrain_dted_height<'a>(
         .terrain
         .lock()
         .map_err(|_| Error::Term(Box::new("terrain lock poisoned")))?;
+    let mut lookup_options = DtedLookupOptions::default();
+    lookup_options.interpolation = interpolation;
     Ok(
-        match terrain.height_m_with_options(
-            longitude_deg,
-            latitude_deg,
-            DtedLookupOptions { interpolation },
-        ) {
+        match terrain.height_m_with_options(longitude_deg, latitude_deg, lookup_options) {
             Ok(height) => (atoms::ok(), height).encode(env),
             Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
         },
@@ -676,8 +674,10 @@ fn terrain_dted_height_batch<'a>(
         .terrain
         .lock()
         .map_err(|_| Error::Term(Box::new("terrain lock poisoned")))?;
+    let mut lookup_options = DtedLookupOptions::default();
+    lookup_options.interpolation = interpolation;
     Ok(terrain
-        .height_batch(&points, DtedLookupOptions { interpolation })
+        .height_batch(&points, lookup_options)
         .into_iter()
         .map(|result| match result {
             Ok(height) => (atoms::ok(), height).encode(env),
@@ -688,7 +688,7 @@ fn terrain_dted_height_batch<'a>(
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn terrain_dted_tile_load(path: String) -> NifResult<ResourceArc<DtedTileResource>> {
-    let tile = DtedTile::from_path(path).map_err(|e| Error::Term(Box::new(e)))?;
+    let tile = DtedTile::from_path(path).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     Ok(ResourceArc::new(DtedTileResource { tile }))
 }
 

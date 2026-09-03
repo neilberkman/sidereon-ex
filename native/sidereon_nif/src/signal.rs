@@ -144,12 +144,12 @@ fn signal_correlator_replica<'a>(
 ) -> Term<'a> {
     match signal::replica(
         prn,
-        ReplicaOptions {
+        ReplicaOptions::new(
             sample_rate_hz,
-            num_samples: num_samples as usize,
+            num_samples as usize,
             code_phase_chips,
             code_doppler_hz,
-        },
+        ),
     ) {
         Ok(samples) => (
             atoms::ok(),
@@ -171,16 +171,12 @@ fn signal_correlator_correlate<'a>(
     code_doppler_hz: f64,
 ) -> Term<'a> {
     let iq = decode_iq(iq);
-    match signal::correlate(
-        &iq,
-        prn,
-        CorrelateOptions {
-            sample_rate_hz,
-            doppler_hz,
-            code_phase_chips,
-            code_doppler_hz,
-        },
-    ) {
+    let mut options = CorrelateOptions::default();
+    options.sample_rate_hz = sample_rate_hz;
+    options.doppler_hz = doppler_hz;
+    options.code_phase_chips = code_phase_chips;
+    options.code_doppler_hz = code_doppler_hz;
+    match signal::correlate(&iq, prn, options) {
         Ok(result) => (atoms::ok(), (result.i, result.q, result.power)).encode(env),
         Err(err) => encode_error(env, err),
     }
@@ -210,16 +206,12 @@ fn signal_correlator_acquire<'a>(
     doppler_step_hz: f64,
 ) -> Term<'a> {
     let samples = decode_iq(samples);
-    match signal::acquire(
-        &samples,
-        prn,
-        AcquisitionOptions {
-            sample_rate_hz,
-            doppler_min_hz,
-            doppler_max_hz,
-            doppler_step_hz,
-        },
-    ) {
+    let mut options = AcquisitionOptions::default();
+    options.sample_rate_hz = sample_rate_hz;
+    options.doppler_min_hz = doppler_min_hz;
+    options.doppler_max_hz = doppler_max_hz;
+    options.doppler_step_hz = doppler_step_hz;
+    match signal::acquire(&samples, prn, options) {
         Ok(result) => (
             atoms::ok(),
             (
@@ -517,11 +509,11 @@ fn signal_analysis_multipath_envelope<'a>(
     encode_analysis_result(env, || {
         analysis::multipath_error_envelope(
             &modulation,
-            MultipathOptions {
-                multipath_to_direct_ratio: options.multipath_to_direct_ratio,
-                correlator_spacing_chips: options.correlator_spacing_chips,
-                receiver_bandwidth_hz: options.receiver_bandwidth_hz,
-            },
+            MultipathOptions::new(
+                options.multipath_to_direct_ratio,
+                options.correlator_spacing_chips,
+                options.receiver_bandwidth_hz,
+            ),
             &delay_chips,
         )
         .map(|points| {
@@ -579,13 +571,13 @@ fn decode_interference(
 }
 
 fn decode_dll_options(options: DllTrackingOptionsTerm) -> DllTrackingOptions {
-    DllTrackingOptions {
-        cn0_db_hz: options.cn0_db_hz,
-        loop_bandwidth_hz: options.loop_bandwidth_hz,
-        integration_time_s: options.integration_time_s,
-        correlator_spacing_chips: options.correlator_spacing_chips,
-        receiver_bandwidth_hz: options.receiver_bandwidth_hz,
-    }
+    DllTrackingOptions::new(
+        options.cn0_db_hz,
+        options.loop_bandwidth_hz,
+        options.integration_time_s,
+        options.correlator_spacing_chips,
+        options.receiver_bandwidth_hz,
+    )
 }
 
 fn encode_jitter_tuple(jitter: analysis::DllJitter) -> (f64, f64, f64, f64) {
