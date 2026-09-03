@@ -167,11 +167,10 @@ fn bodies_find_moon_elevation_crossings<'a>(
     let (Some(start), Some(end)) = (instant(start_datetime), instant(end_datetime)) else {
         return (atoms::error(), atoms::invalid_input()).encode(env);
     };
-    let options = MoonElevationOptions {
-        elevation_threshold_deg,
-        step_seconds,
-        time_tolerance_seconds,
-    };
+    let mut options = MoonElevationOptions::default();
+    options.elevation_threshold_deg = elevation_threshold_deg;
+    options.step_seconds = step_seconds;
+    options.time_tolerance_seconds = time_tolerance_seconds;
     match find_moon_elevation_crossings(&station(lat_deg, lon_deg, alt_km), start, end, options) {
         Ok(crossings) => {
             let rows: Vec<EventTerm> = crossings

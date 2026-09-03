@@ -398,11 +398,9 @@ pub(crate) fn propagate_dp54_impl_with_drag(
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
-    let options = IntegratorOptions {
-        abs_tol,
-        rel_tol,
-        ..IntegratorOptions::default()
-    };
+    let mut options = IntegratorOptions::default();
+    options.abs_tol = abs_tol;
+    options.rel_tol = rel_tol;
     let force_model = force_model_kind(&forces)?;
     let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {
@@ -450,11 +448,9 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
-    let options = IntegratorOptions {
-        abs_tol,
-        rel_tol,
-        ..IntegratorOptions::default()
-    };
+    let mut options = IntegratorOptions::default();
+    options.abs_tol = abs_tol;
+    options.rel_tol = rel_tol;
     let force_model = force_model_kind(&forces)?;
     let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {

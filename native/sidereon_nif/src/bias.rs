@@ -77,13 +77,14 @@ fn dcb_options(term: Option<CodeDcbOptionsTerm>) -> NifResult<Option<CodeDcbOpti
             Some(letter) => Some(crate::sp3::system_from_letter(&letter)?),
             None => None,
         };
-        Ok(CodeDcbOptions {
-            pair: (opts.obs1, opts.obs2),
-            year: opts.year,
-            month: opts.month,
-            time_scale: parse_time_scale(&opts.time_scale)?,
-            receiver_system,
-        })
+        let mut options = CodeDcbOptions::new(
+            (opts.obs1, opts.obs2),
+            opts.year,
+            opts.month,
+            parse_time_scale(&opts.time_scale)?,
+        );
+        options.receiver_system = receiver_system;
+        Ok(options)
     })
     .transpose()
 }

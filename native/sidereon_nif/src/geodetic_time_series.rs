@@ -179,11 +179,11 @@ fn samples(values: Vec<SampleTerm>) -> NifResult<Vec<PositionSample>> {
 fn midas_options(
     (dominant_period_years, period_tolerance_years, min_pairs): MidasOptionsTerm,
 ) -> MidasOptions {
-    MidasOptions {
-        dominant_period_years,
-        period_tolerance_years,
-        min_pairs,
-    }
+    let mut options = MidasOptions::default();
+    options.dominant_period_years = dominant_period_years;
+    options.period_tolerance_years = period_tolerance_years;
+    options.min_pairs = min_pairs;
+    options
 }
 
 fn trajectory_model(
@@ -211,11 +211,11 @@ fn loss(kind: &str) -> NifResult<Loss> {
 fn fit_options(
     (loss_kind, f_scale_m, max_nfev): TrajectoryFitOptionsTerm,
 ) -> NifResult<TrajectoryFitOptions> {
-    Ok(TrajectoryFitOptions {
-        loss: loss(&loss_kind)?,
-        f_scale_m,
-        max_nfev,
-    })
+    let mut options = TrajectoryFitOptions::default();
+    options.loss = loss(&loss_kind)?;
+    options.f_scale_m = f_scale_m;
+    options.max_nfev = max_nfev;
+    Ok(options)
 }
 
 fn step_options(
@@ -228,14 +228,14 @@ fn step_options(
         midas,
     ): StepOptionsTerm,
 ) -> StepDetectionOptions {
-    StepDetectionOptions {
-        window_years,
-        score_threshold,
-        min_offset_m,
-        min_samples_each_side,
-        min_separation_years,
-        midas: midas_options(midas),
-    }
+    let mut options = StepDetectionOptions::default();
+    options.window_years = window_years;
+    options.score_threshold = score_threshold;
+    options.min_offset_m = min_offset_m;
+    options.min_samples_each_side = min_samples_each_side;
+    options.min_separation_years = min_separation_years;
+    options.midas = midas_options(midas);
+    options
 }
 
 fn network_frame(

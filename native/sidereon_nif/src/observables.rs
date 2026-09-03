@@ -57,16 +57,16 @@ pub fn sp3_observables<'a>(
     let result = sat_from_parts(&system_letter, prn).and_then(|sat| {
         let t_rx_j2000_s =
             j2000_seconds_from_split(jd_whole, jd_fraction).map_err(PredictFailure::from)?;
+        let mut options = PredictOptions::default();
+        options.carrier_hz = carrier_hz;
+        options.light_time = light_time;
+        options.sagnac = sagnac;
         predict(
             &handle.sp3,
             sat,
             vec3_to_array(receiver_ecef_m),
             t_rx_j2000_s,
-            PredictOptions {
-                carrier_hz,
-                light_time,
-                sagnac,
-            },
+            options,
         )
         .map_err(PredictFailure::from)
     });
@@ -87,16 +87,16 @@ pub fn broadcast_observables<'a>(
     sagnac: bool,
 ) -> Term<'a> {
     let result = sat_from_parts(&system_letter, prn).and_then(|sat| {
+        let mut options = PredictOptions::default();
+        options.carrier_hz = carrier_hz;
+        options.light_time = light_time;
+        options.sagnac = sagnac;
         predict(
             &handle.store,
             sat,
             vec3_to_array(receiver_ecef_m),
             t_rx_j2000_s,
-            PredictOptions {
-                carrier_hz,
-                light_time,
-                sagnac,
-            },
+            options,
         )
         .map_err(PredictFailure::from)
     });
@@ -115,11 +115,10 @@ pub fn sp3_predict_batch<'a>(
     light_time: bool,
     sagnac: bool,
 ) -> Term<'a> {
-    let options = PredictOptions {
-        carrier_hz,
-        light_time,
-        sagnac,
-    };
+    let mut options = PredictOptions::default();
+    options.carrier_hz = carrier_hz;
+    options.light_time = light_time;
+    options.sagnac = sagnac;
     // Resolve every request's satellite/epoch up front so a malformed request is
     // reported in place (preserving index alignment) without entering the core.
     let mut prepared: Vec<Result<PredictRequest, PredictFailure>> =
@@ -284,18 +283,17 @@ pub fn predict_ranges_batch<'a>(
             Ok(sat) => sat,
             Err(failure) => return Ok((atoms::error(), failure_reason(env, failure)).encode(env)),
         };
-        resolved.push(RangePredictionRequest {
+        resolved.push(RangePredictionRequest::new(
             sat,
-            receiver_ecef_m: vec3_to_array(receiver_ecef_m),
+            vec3_to_array(receiver_ecef_m),
             t_rx_j2000_s,
-        });
+        ));
     }
 
-    let options = PredictOptions {
-        carrier_hz: 0.0,
-        light_time,
-        sagnac,
-    };
+    let mut options = PredictOptions::default();
+    options.carrier_hz = 0.0;
+    options.light_time = light_time;
+    options.sagnac = sagnac;
     let mut out = vec![
         RangePrediction {
             geometric_range_m: 0.0,
@@ -365,14 +363,13 @@ pub fn emission_media_batch<'a>(
     let receiver = vec3_to_array(receiver_ecef_m);
 
     if is_nil(ionosphere) {
-        let options = EmissionMediaBatchOptions {
-            carrier_hz,
-            media: ObservableMediaOptions {
-                troposphere,
-                ionosphere: None,
-            },
-            min_elevation_rad,
-        };
+        let mut media = ObservableMediaOptions::default();
+        media.troposphere = troposphere;
+        media.ionosphere = None;
+        let mut options = EmissionMediaBatchOptions::default();
+        options.carrier_hz = carrier_hz;
+        options.media = media;
+        options.min_elevation_rad = min_elevation_rad;
         return call_emission_media(env, source, &satellites, &epochs, receiver, options);
     }
 
@@ -384,14 +381,13 @@ pub fn emission_media_batch<'a>(
             alpha: [alpha.0, alpha.1, alpha.2, alpha.3],
             beta: [beta.0, beta.1, beta.2, beta.3],
         });
-        let options = EmissionMediaBatchOptions {
-            carrier_hz,
-            media: ObservableMediaOptions {
-                troposphere,
-                ionosphere: Some(ObservableIonosphereCorrection::Broadcast(model)),
-            },
-            min_elevation_rad,
-        };
+        let mut media = ObservableMediaOptions::default();
+        media.troposphere = troposphere;
+        media.ionosphere = Some(ObservableIonosphereCorrection::Broadcast(model));
+        let mut options = EmissionMediaBatchOptions::default();
+        options.carrier_hz = carrier_hz;
+        options.media = media;
+        options.min_elevation_rad = min_elevation_rad;
         return call_emission_media(env, source, &satellites, &epochs, receiver, options);
     }
 
@@ -399,14 +395,13 @@ pub fn emission_media_batch<'a>(
         if tag != "ionex" {
             return Err(Error::Term(Box::new("unknown ionosphere media option")));
         }
-        let options = EmissionMediaBatchOptions {
-            carrier_hz,
-            media: ObservableMediaOptions {
-                troposphere,
-                ionosphere: Some(ObservableIonosphereCorrection::Ionex(&ionex.ionex)),
-            },
-            min_elevation_rad,
-        };
+        let mut media = ObservableMediaOptions::default();
+        media.troposphere = troposphere;
+        media.ionosphere = Some(ObservableIonosphereCorrection::Ionex(&ionex.ionex));
+        let mut options = EmissionMediaBatchOptions::default();
+        options.carrier_hz = carrier_hz;
+        options.media = media;
+        options.min_elevation_rad = min_elevation_rad;
         return call_emission_media(env, source, &satellites, &epochs, receiver, options);
     }
 

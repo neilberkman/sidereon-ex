@@ -67,11 +67,9 @@ pub(crate) fn predict_passes_impl<'a>(
     };
     // Find ALL horizon passes (mask = 0 deg) so AOS/LOS stay on the horizon,
     // then apply `:min_elevation` as a peak filter below.
-    let options = PassFinderOptions {
-        elevation_mask_deg: 0.0,
-        coarse_step_seconds: step_seconds as f64,
-        ..PassFinderOptions::default()
-    };
+    let mut options = PassFinderOptions::default();
+    options.elevation_mask_deg = 0.0;
+    options.coarse_step_seconds = step_seconds as f64;
 
     Ok(
         find_passes_for_satellite(&satellite, station, start_time, end_time, options)
@@ -345,11 +343,9 @@ pub(crate) fn constellation_passes_impl<'a>(
     }
     // Find ALL horizon passes (mask = 0 deg) so AOS/LOS stay on the horizon,
     // then keep only those whose peak clears `min_elevation`.
-    let options = PassFinderOptions {
-        elevation_mask_deg: 0.0,
-        coarse_step_seconds: step_seconds as f64,
-        ..PassFinderOptions::default()
-    };
+    let mut options = PassFinderOptions::default();
+    options.elevation_mask_deg = 0.0;
+    options.coarse_step_seconds = step_seconds as f64;
 
     let mut out = Vec::new();
     for (index, tle_map) in tle_maps.into_iter().enumerate() {

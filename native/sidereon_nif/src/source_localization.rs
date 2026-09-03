@@ -161,19 +161,16 @@ fn decode_options(
         (ftol, xtol, gtol, max_nfev),
     ): OptionsTerm,
 ) -> Result<(SourceLocateOptions, bool), SourceLocalizationError> {
-    Ok((
-        SourceLocateOptions {
-            mode: decode_mode(mode)?,
-            timing_sigma_s,
-            loss: decode_loss(&loss)?,
-            f_scale_s,
-            ftol,
-            xtol,
-            gtol,
-            max_nfev,
-        },
-        include_influence,
-    ))
+    let mut options = SourceLocateOptions::default();
+    options.mode = decode_mode(mode)?;
+    options.timing_sigma_s = timing_sigma_s;
+    options.loss = decode_loss(&loss)?;
+    options.f_scale_s = f_scale_s;
+    options.ftol = ftol;
+    options.xtol = xtol;
+    options.gtol = gtol;
+    options.max_nfev = max_nfev;
+    Ok((options, include_influence))
 }
 
 fn decode_mode(

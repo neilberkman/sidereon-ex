@@ -364,6 +364,15 @@ fn propagate_covariance<'a>(
         return atom_error(env, atoms::invalid_input());
     };
     let initial = state(initial_state);
+    let mut integrator_options = IntegratorOptions::default();
+    integrator_options.abs_tol = options.abs_tol;
+    integrator_options.rel_tol = options.rel_tol;
+    integrator_options.min_step = options.min_step;
+    integrator_options.max_step = options.max_step;
+    integrator_options.initial_step = options.initial_step;
+    integrator_options.max_steps = options.max_steps;
+    integrator_options.dense_output = options.dense_output;
+
     let propagator = StatePropagator::new(
         initial.epoch_tdb_seconds,
         initial.position_array(),
@@ -371,20 +380,11 @@ fn propagate_covariance<'a>(
         force_model(&options.forces),
         integrator,
     )
-    .with_options(IntegratorOptions {
-        abs_tol: options.abs_tol,
-        rel_tol: options.rel_tol,
-        min_step: options.min_step,
-        max_step: options.max_step,
-        initial_step: options.initial_step,
-        max_steps: options.max_steps,
-        dense_output: options.dense_output,
-    });
+    .with_options(integrator_options);
 
-    let propagation_options = CovariancePropagationOptions {
-        process_noise,
-        output_frame,
-    };
+    let mut propagation_options = CovariancePropagationOptions::default();
+    propagation_options.process_noise = process_noise;
+    propagation_options.output_frame = output_frame;
     match propagator.propagate_covariance(
         LabeledCovariance6 {
             covariance,

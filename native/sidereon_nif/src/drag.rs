@@ -127,13 +127,12 @@ pub(crate) fn decay_config_from_terms(
     max_duration_s: f64,
     max_scan_samples: u32,
 ) -> NifResult<DecayConfig> {
+    let mut integrator_options = IntegratorOptions::default();
+    integrator_options.abs_tol = abs_tol;
+    integrator_options.rel_tol = rel_tol;
     let mut config = DecayConfig::new(decode_drag_parameters_from_term(params)?)
         .with_force_model(force_model(&force_model_name)?)
-        .with_options(IntegratorOptions {
-            abs_tol,
-            rel_tol,
-            ..IntegratorOptions::default()
-        })
+        .with_options(integrator_options)
         .with_reentry_altitude_km(reentry_altitude_km)
         .with_scan_step_s(scan_step_s)
         .with_crossing_tolerance_s(crossing_tolerance_s)
@@ -281,13 +280,12 @@ fn drag_estimate_decay<'a>(
     max_duration_s: f64,
     max_scan_samples: u32,
 ) -> NifResult<Term<'a>> {
+    let mut integrator_options = IntegratorOptions::default();
+    integrator_options.abs_tol = abs_tol;
+    integrator_options.rel_tol = rel_tol;
     let mut config = DecayConfig::new(decode_drag_parameters(params)?)
         .with_force_model(force_model(&force_model_name)?)
-        .with_options(IntegratorOptions {
-            abs_tol,
-            rel_tol,
-            ..IntegratorOptions::default()
-        })
+        .with_options(integrator_options)
         .with_reentry_altitude_km(reentry_altitude_km)
         .with_scan_step_s(scan_step_s)
         .with_crossing_tolerance_s(crossing_tolerance_s)

@@ -614,19 +614,19 @@ fn lint_report_term(report: LintReport) -> LintReportTerm {
 }
 
 fn repair_options(term: RepairOptionsTerm) -> RepairOptions {
-    RepairOptions {
-        file_stamp: term.file_stamp.map(|stamp| PgmRunByDate {
-            program: stamp.program,
-            run_by: stamp.run_by,
-            date: stamp.date,
-        }),
-        set_interval: term.set_interval,
-        set_time_of_last_obs: term.set_time_of_last_obs,
-        set_obs_counts: term.set_obs_counts,
-        drop_empty_records: term.drop_empty_records,
-        sort_records: term.sort_records,
-        drop_unsupported: term.drop_unsupported,
-    }
+    let mut options = RepairOptions::default();
+    options.file_stamp = term.file_stamp.map(|stamp| PgmRunByDate {
+        program: stamp.program,
+        run_by: stamp.run_by,
+        date: stamp.date,
+    });
+    options.set_interval = term.set_interval;
+    options.set_time_of_last_obs = term.set_time_of_last_obs;
+    options.set_obs_counts = term.set_obs_counts;
+    options.drop_empty_records = term.drop_empty_records;
+    options.sort_records = term.sort_records;
+    options.drop_unsupported = term.drop_unsupported;
+    options
 }
 
 fn action_terms(actions: Vec<RepairAction>) -> Vec<RepairActionTerm> {
@@ -667,12 +667,11 @@ fn rinex_obs_observation_qc<'a>(
     gap_factor: f64,
     clock_jump_threshold_s: Option<f64>,
 ) -> Term<'a> {
-    let options = ObservationQcOptions {
-        interval_override_s,
-        gap_factor,
-        clock_jump_threshold_s: clock_jump_threshold_s
-            .unwrap_or(sidereon_core::observation_qc::DEFAULT_CLOCK_JUMP_THRESHOLD_S),
-    };
+    let mut options = ObservationQcOptions::default();
+    options.interval_override_s = interval_override_s;
+    options.gap_factor = gap_factor;
+    options.clock_jump_threshold_s = clock_jump_threshold_s
+        .unwrap_or(sidereon_core::observation_qc::DEFAULT_CLOCK_JUMP_THRESHOLD_S);
     match observation_qc_with_options(&handle.obs, options) {
         Ok(report) => (atoms::ok(), observation_report_term(report)).encode(env),
         Err(sidereon_core::observation_qc::ObservationQcError::InvalidInterval) => {

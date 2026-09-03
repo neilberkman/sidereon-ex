@@ -1639,19 +1639,19 @@ pub fn rtk_solve_static_reference_station_rinex<'a>(
                 Ok(config) => config,
                 Err(error) => return Ok((atoms::error(), error).encode(env)),
             };
-        Some(StaticReferenceCarrierRinexOptions {
+        Some(StaticReferenceCarrierRinexOptions::new(
             arc_options,
             static_config,
-        })
+        ))
     } else {
         None
     };
 
-    let options = StaticReferenceStationRinexOptions {
+    let options = StaticReferenceStationRinexOptions::new(
         code_options,
         carrier_options,
-        with_geodetic: config.with_geodetic,
-    };
+        config.with_geodetic,
+    );
     let reference_position_m = vec3(config.reference_position_m);
 
     Ok(
@@ -1794,16 +1794,16 @@ fn decode_static_arc_config(
     let receiver_antenna_corrections = term
         .receiver_antenna_corrections
         .map(decode_receiver_antenna_corrections);
-    let mut arc = RtkArcConfig {
-        base_m: vec3(term.base_m),
+    let mut arc = RtkArcConfig::new(
+        vec3(term.base_m),
         reference,
         model,
-        baseline_prior_sigma_m: 1.0,
-        ambiguity_prior_sigma_m: 1.0,
-        initial_baseline_m: vec3(term.initial_baseline_m),
-        wavelengths_m: BTreeMap::new(),
-        offsets_m: BTreeMap::new(),
-        update_opts: UpdateOpts {
+        1.0,
+        1.0,
+        vec3(term.initial_baseline_m),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        UpdateOpts {
             hold_sigma_m: 1.0e-4,
             position_tol_m: float.position_tol_m,
             ambiguity_tol_m: float.ambiguity_tol_m,
@@ -1819,7 +1819,7 @@ fn decode_static_arc_config(
             },
         },
         preprocessing,
-    };
+    );
     let ambiguity_satellites = static_ambiguity_satellites(epochs, &arc)?;
     arc.wavelengths_m = expand_static_scale(
         term.wavelengths_m,
@@ -1832,14 +1832,14 @@ fn decode_static_arc_config(
         StaticScaleKind::Offset,
     )?;
 
-    Ok(RtkStaticArcConfig {
+    Ok(RtkStaticArcConfig::new(
         arc,
-        opts: ValidatedFixedSolveOpts {
+        ValidatedFixedSolveOpts {
             float,
             fixed,
             residual,
         },
-    })
+    ))
 }
 
 fn decode_float_solve_opts(term: FloatSolveOptsTerm) -> FloatSolveOpts {
@@ -2489,56 +2489,56 @@ fn decode_wide_lane_arc_config(term: RtkWideLaneArcConfigTerm) -> Option<RtkWide
         Some(term) => Some(decode_dual_cycle_slip_config(term)?),
         None => None,
     };
-    Some(RtkWideLaneArcConfig {
-        base_m: vec3(term.base_m),
-        reference: decode_arc_reference(term.reference)?,
-        options: sidereon_core::rtk_filter::WideLaneOptions {
-            min_epochs: term.min_epochs as usize,
-            tolerance_cycles: term.tolerance_cycles,
-            skip_short_fragments: term.skip_short_fragments,
-        },
+    let mut options = sidereon_core::rtk_filter::WideLaneOptions::new(
+        term.min_epochs as usize,
+        term.tolerance_cycles,
+    );
+    options.skip_short_fragments = term.skip_short_fragments;
+    Some(RtkWideLaneArcConfig::new(
+        vec3(term.base_m),
+        decode_arc_reference(term.reference)?,
+        options,
         cycle_slip,
-    })
+    ))
 }
 
 fn decode_dual_cycle_slip_config(
     term: RtkDualCycleSlipConfigTerm,
 ) -> Option<RtkDualCycleSlipConfig> {
-    Some(RtkDualCycleSlipConfig {
-        policy: decode_cycle_slip_policy(&term.policy)?,
-        options: CycleSlipOptions {
-            gf_threshold_m: term.gf_threshold_m,
-            mw_threshold_cycles: term.mw_threshold_cycles,
-            min_arc_gap_s: term.min_arc_gap_s,
-        },
-    })
+    let mut options = CycleSlipOptions::default();
+    options.gf_threshold_m = term.gf_threshold_m;
+    options.mw_threshold_cycles = term.mw_threshold_cycles;
+    options.min_arc_gap_s = term.min_arc_gap_s;
+    Some(RtkDualCycleSlipConfig::new(
+        decode_cycle_slip_policy(&term.policy)?,
+        options,
+    ))
 }
 
 fn decode_ionosphere_free_arc_config(
     term: RtkIonosphereFreeArcConfigTerm,
 ) -> Option<RtkIonosphereFreeArcConfig> {
-    Some(RtkIonosphereFreeArcConfig {
-        base_m: vec3(term.base_m),
-        initial_baseline_m: vec3(term.initial_baseline_m),
-        reference: decode_arc_reference(term.reference)?,
-        apply_troposphere: term.apply_troposphere,
-    })
+    Some(RtkIonosphereFreeArcConfig::new(
+        vec3(term.base_m),
+        vec3(term.initial_baseline_m),
+        decode_arc_reference(term.reference)?,
+        term.apply_troposphere,
+    ))
 }
 
 fn decode_rinex_arc_options(term: &RtkRinexArcOptionsTerm) -> Option<RtkRinexArcOptions> {
     let mut options = if term.signal_pairs.is_empty() {
         RtkRinexArcOptions::gps_l1_c()
     } else {
-        RtkRinexArcOptions {
-            signal_pairs: term
-                .signal_pairs
+        RtkRinexArcOptions::new(
+            term.signal_pairs
                 .iter()
                 .map(decode_rinex_signal_pair)
                 .collect::<Option<Vec<_>>>()?,
-            max_epochs: None,
-            min_common_satellites: 4,
-            include_prediction_time: true,
-        }
+            None,
+            4,
+            true,
+        )
     };
     options.max_epochs = term.max_epochs;
     options.min_common_satellites = term.min_common_satellites;
@@ -2560,16 +2560,15 @@ fn decode_rinex_dual_arc_options(
     let mut options = if term.signal_pairs.is_empty() {
         RtkRinexDualArcOptions::gps_l1_l2_cw()
     } else {
-        RtkRinexDualArcOptions {
-            signal_pairs: term
-                .signal_pairs
+        RtkRinexDualArcOptions::new(
+            term.signal_pairs
                 .iter()
                 .map(decode_rinex_dual_signal_pair)
                 .collect::<Option<Vec<_>>>()?,
-            max_epochs: None,
-            min_common_satellites: 4,
-            include_prediction_time: true,
-        }
+            None,
+            4,
+            true,
+        )
     };
     options.max_epochs = term.max_epochs;
     options.min_common_satellites = term.min_common_satellites;
@@ -2625,25 +2624,27 @@ fn decode_rinex_static_config(
     update_opts.search.ratio_threshold = fixed.ratio_threshold;
     let residual = decode_residual_validation_opts(term.residual_opts);
 
-    Ok(RtkStaticArcConfig {
-        arc: RtkArcConfig {
-            base_m: vec3(term.base_m),
-            reference,
-            model,
-            baseline_prior_sigma_m: term.baseline_prior_sigma_m,
-            ambiguity_prior_sigma_m: term.ambiguity_prior_sigma_m,
-            initial_baseline_m: vec3(term.initial_baseline_m),
-            wavelengths_m,
-            offsets_m,
-            update_opts,
-            preprocessing,
-        },
-        opts: ValidatedFixedSolveOpts {
+    let arc = RtkArcConfig::new(
+        vec3(term.base_m),
+        reference,
+        model,
+        term.baseline_prior_sigma_m,
+        term.ambiguity_prior_sigma_m,
+        vec3(term.initial_baseline_m),
+        wavelengths_m,
+        offsets_m,
+        update_opts,
+        preprocessing,
+    );
+
+    Ok(RtkStaticArcConfig::new(
+        arc,
+        ValidatedFixedSolveOpts {
             float,
             fixed,
             residual,
         },
-    })
+    ))
 }
 
 fn decode_rinex_wide_lane_fixed_config(
@@ -2664,48 +2665,51 @@ fn decode_rinex_wide_lane_fixed_config(
     update_opts.search.ratio_threshold = fixed.ratio_threshold;
     let residual = decode_residual_validation_opts(term.residual_opts);
 
-    let static_config = RtkStaticArcConfig {
-        arc: RtkArcConfig {
-            base_m: vec3(term.base_m),
-            reference: reference.clone(),
-            model,
-            baseline_prior_sigma_m: term.baseline_prior_sigma_m,
-            ambiguity_prior_sigma_m: term.ambiguity_prior_sigma_m,
-            initial_baseline_m: vec3(term.initial_baseline_m),
-            wavelengths_m: BTreeMap::new(),
-            offsets_m: BTreeMap::new(),
-            update_opts,
-            preprocessing: RtkArcPreprocessing::default(),
-        },
-        opts: ValidatedFixedSolveOpts {
+    let arc = RtkArcConfig::new(
+        vec3(term.base_m),
+        reference.clone(),
+        model,
+        term.baseline_prior_sigma_m,
+        term.ambiguity_prior_sigma_m,
+        vec3(term.initial_baseline_m),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        update_opts,
+        RtkArcPreprocessing::default(),
+    );
+
+    let static_config = RtkStaticArcConfig::new(
+        arc,
+        ValidatedFixedSolveOpts {
             float,
             fixed,
             residual,
         },
-    };
+    );
 
-    Ok(RtkWideLaneFixedArcConfig {
-        wide_lane: RtkWideLaneArcConfig {
-            base_m: vec3(term.base_m),
-            reference: reference.clone(),
-            options: WideLaneOptions {
-                min_epochs: 2,
-                tolerance_cycles: 0.5,
-                skip_short_fragments: false,
-            },
-            cycle_slip: Some(RtkDualCycleSlipConfig {
-                policy: CycleSlipPolicy::DropSatellite,
-                options: CycleSlipOptions::default(),
-            }),
-        },
-        ionosphere_free: RtkIonosphereFreeArcConfig {
-            base_m: vec3(term.base_m),
-            initial_baseline_m: vec3(term.initial_baseline_m),
-            reference,
-            apply_troposphere: term.apply_troposphere,
-        },
-        solve: RtkWideLaneFixedArcSolveConfig::Static(static_config),
-    })
+    let mut options = WideLaneOptions::new(2, 0.5);
+    options.skip_short_fragments = false;
+
+    let cycle_slip = Some(RtkDualCycleSlipConfig::new(
+        CycleSlipPolicy::DropSatellite,
+        CycleSlipOptions::default(),
+    ));
+
+    let wide_lane =
+        RtkWideLaneArcConfig::new(vec3(term.base_m), reference.clone(), options, cycle_slip);
+
+    let ionosphere_free = RtkIonosphereFreeArcConfig::new(
+        vec3(term.base_m),
+        vec3(term.initial_baseline_m),
+        reference,
+        term.apply_troposphere,
+    );
+
+    Ok(RtkWideLaneFixedArcConfig::new(
+        wide_lane,
+        ionosphere_free,
+        RtkWideLaneFixedArcSolveConfig::Static(static_config),
+    ))
 }
 
 fn encode_wide_lane_arc_solution<'a>(env: Env<'a>, solution: RtkWideLaneArcSolution) -> Term<'a> {
@@ -3254,18 +3258,18 @@ fn decode_arc_config(term: RtkArcConfigTerm) -> NifResult<RtkArcConfig> {
         .ok_or_else(|| rustler::Error::Term(Box::new("invalid reference selection")))?;
     let preprocessing = decode_arc_preprocessing(term.preprocessing)
         .ok_or_else(|| rustler::Error::Term(Box::new("invalid cycle-slip policy")))?;
-    Ok(RtkArcConfig {
-        base_m: vec3(term.base_m),
+    Ok(RtkArcConfig::new(
+        vec3(term.base_m),
         reference,
         model,
-        baseline_prior_sigma_m: term.baseline_prior_sigma_m,
-        ambiguity_prior_sigma_m: term.ambiguity_prior_sigma_m,
-        initial_baseline_m: vec3(term.initial_baseline_m),
-        wavelengths_m: term.wavelengths_m.into_iter().collect(),
-        offsets_m: term.offsets_m.into_iter().collect(),
+        term.baseline_prior_sigma_m,
+        term.ambiguity_prior_sigma_m,
+        vec3(term.initial_baseline_m),
+        term.wavelengths_m.into_iter().collect(),
+        term.offsets_m.into_iter().collect(),
         update_opts,
         preprocessing,
-    })
+    ))
 }
 
 fn decode_arc_preprocessing(term: RtkArcPreprocessingTerm) -> Option<RtkArcPreprocessing> {

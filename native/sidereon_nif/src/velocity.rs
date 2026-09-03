@@ -63,16 +63,16 @@ pub fn sp3_velocity_solve<'a>(
         Err(_) => return (atoms::error(), atoms::invalid_epoch()).encode(env),
     };
     let result = decode_observable(&observable).map(|observable| {
+        let mut options = VelocitySolveOptions::default();
+        options.observable = observable;
+        options.light_time = light_time;
+        options.sagnac = sagnac;
         solve(
             &handle.sp3,
             &decode_observations(observations),
             vec3_to_array(receiver_ecef_m),
             t_rx_j2000_s,
-            VelocitySolveOptions {
-                observable,
-                light_time,
-                sagnac,
-            },
+            options,
         )
     });
     encode_nested_result(env, result)
@@ -91,16 +91,16 @@ pub fn broadcast_velocity_solve<'a>(
     sagnac: bool,
 ) -> Term<'a> {
     let result = decode_observable(&observable).map(|observable| {
+        let mut options = VelocitySolveOptions::default();
+        options.observable = observable;
+        options.light_time = light_time;
+        options.sagnac = sagnac;
         solve(
             &handle.store,
             &decode_observations(observations),
             vec3_to_array(receiver_ecef_m),
             t_rx_j2000_s,
-            VelocitySolveOptions {
-                observable,
-                light_time,
-                sagnac,
-            },
+            options,
         )
     });
     encode_nested_result(env, result)

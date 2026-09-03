@@ -116,21 +116,21 @@ fn instant(datetime: Term) -> NifResult<UtcInstant> {
 
 fn observe_options(term: Term<'_>) -> NifResult<ObserveOptions> {
     let decoded: ObserveOptionsTerm = term.decode()?;
-    Ok(ObserveOptions {
-        polar_motion: decoded
-            .polar_motion
-            .map(|(xp, yp)| PolarMotion::from_radians(xp, yp))
-            .transpose()
-            .map_err(errors::invalid_input)?,
-        refraction: decoded
-            .refraction
-            .map(|(pressure_mbar, temperature_c)| Refraction {
-                pressure_mbar,
-                temperature_c,
-            }),
-        deflection: decoded.deflection,
-        aberration: decoded.aberration,
-    })
+    let mut options = ObserveOptions::default();
+    options.polar_motion = decoded
+        .polar_motion
+        .map(|(xp, yp)| PolarMotion::from_radians(xp, yp))
+        .transpose()
+        .map_err(errors::invalid_input)?;
+    options.refraction = decoded
+        .refraction
+        .map(|(pressure_mbar, temperature_c)| Refraction {
+            pressure_mbar,
+            temperature_c,
+        });
+    options.deflection = decoded.deflection;
+    options.aberration = decoded.aberration;
+    Ok(options)
 }
 
 fn equatorial_term(value: Equatorial) -> EquatorialTerm {

@@ -225,23 +225,23 @@ fn decode_config(config: FitConfigTerm) -> Option<FitConfig> {
     let loss = decode_loss(&config.loss)?;
     let max_nfev = config.max_nfev.map(usize::try_from).transpose().ok()?;
 
-    Some(FitConfig {
-        epoch,
-        fit_bstar: config.fit_bstar,
-        bstar_seed: config.bstar_seed,
-        use_velocity: config.use_velocity,
-        velocity_weight_s: config.velocity_weight_s,
-        weights: config.weights,
-        opsmode,
-        ftol: config.ftol,
-        xtol: config.xtol,
-        gtol: config.gtol,
-        max_nfev,
-        x_scale,
-        loss,
-        f_scale: config.f_scale,
-        metadata: config.metadata.into(),
-    })
+    let mut fit_config = FitConfig::default();
+    fit_config.epoch = epoch;
+    fit_config.fit_bstar = config.fit_bstar;
+    fit_config.bstar_seed = config.bstar_seed;
+    fit_config.use_velocity = config.use_velocity;
+    fit_config.velocity_weight_s = config.velocity_weight_s;
+    fit_config.weights = config.weights;
+    fit_config.opsmode = opsmode;
+    fit_config.ftol = config.ftol;
+    fit_config.xtol = config.xtol;
+    fit_config.gtol = config.gtol;
+    fit_config.max_nfev = max_nfev;
+    fit_config.x_scale = x_scale;
+    fit_config.loss = loss;
+    fit_config.f_scale = config.f_scale;
+    fit_config.metadata = config.metadata.into();
+    Some(fit_config)
 }
 
 fn encode_fit_result<'a>(env: Env<'a>, result: Result<TleFit, TleFitError>) -> Term<'a> {

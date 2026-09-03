@@ -111,9 +111,9 @@ fn interpolation_from_str(interpolation: &str) -> NifResult<DtedInterpolation> {
 }
 
 fn lookup_options(interpolation: String) -> NifResult<DtedLookupOptions> {
-    Ok(DtedLookupOptions {
-        interpolation: interpolation_from_str(&interpolation)?,
-    })
+    let mut options = DtedLookupOptions::default();
+    options.interpolation = interpolation_from_str(&interpolation)?;
+    Ok(options)
 }
 
 fn vertical_datum_name(datum: VerticalDatum) -> &'static str {
@@ -439,17 +439,13 @@ fn terrain_store_height_m<'a>(
     longitude_deg: f64,
     latitude_deg: f64,
 ) -> Term<'a> {
+    let mut options = DtedLookupOptions::default();
+    options.interpolation = DtedInterpolation::Bilinear;
     terrain_result_term(
         env,
         handle
             .read()
-            .orthometric_height_m_with_options(
-                longitude_deg,
-                latitude_deg,
-                DtedLookupOptions {
-                    interpolation: DtedInterpolation::Bilinear,
-                },
-            )
+            .orthometric_height_m_with_options(longitude_deg, latitude_deg, options)
             .map(OrthometricHeightM::metres),
     )
 }
@@ -483,15 +479,13 @@ fn terrain_store_orthometric_height_m<'a>(
     longitude_deg: f64,
     latitude_deg: f64,
 ) -> Term<'a> {
+    let mut options = DtedLookupOptions::default();
+    options.interpolation = DtedInterpolation::Bilinear;
     orthometric_result_term(
         env,
-        handle.read().orthometric_height_m_with_options(
-            longitude_deg,
-            latitude_deg,
-            DtedLookupOptions {
-                interpolation: DtedInterpolation::Bilinear,
-            },
-        ),
+        handle
+            .read()
+            .orthometric_height_m_with_options(longitude_deg, latitude_deg, options),
     )
 }
 
@@ -567,15 +561,13 @@ fn terrain_store_ellipsoidal_height_m<'a>(
     longitude_deg: f64,
     latitude_deg: f64,
 ) -> Term<'a> {
+    let mut options = DtedLookupOptions::default();
+    options.interpolation = DtedInterpolation::Bilinear;
     ellipsoidal_result_term(
         env,
-        handle.read().ellipsoidal_height_m_with_options(
-            longitude_deg,
-            latitude_deg,
-            DtedLookupOptions {
-                interpolation: DtedInterpolation::Bilinear,
-            },
-        ),
+        handle
+            .read()
+            .ellipsoidal_height_m_with_options(longitude_deg, latitude_deg, options),
     )
 }
 

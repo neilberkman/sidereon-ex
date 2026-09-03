@@ -167,12 +167,11 @@ pub fn data_exact_cache_open_single_flight<'a>(
         Ok(cache) => cache,
         Err(error) => return encode_error(env, error),
     };
-    let options = ExactCacheSingleFlightOptions {
-        poll_interval: Duration::from_millis(poll_interval_ms),
-        heartbeat_interval: Duration::from_millis(heartbeat_interval_ms),
-        liveness_timeout: Duration::from_millis(liveness_timeout_ms),
-        wait_timeout: Duration::from_millis(wait_timeout_ms),
-    };
+    let mut options = ExactCacheSingleFlightOptions::default();
+    options.poll_interval = Duration::from_millis(poll_interval_ms);
+    options.heartbeat_interval = Duration::from_millis(heartbeat_interval_ms);
+    options.liveness_timeout = Duration::from_millis(liveness_timeout_ms);
+    options.wait_timeout = Duration::from_millis(wait_timeout_ms);
     match cache.open_single_flight(options) {
         Ok(ExactCacheOpen::Hit(entry)) => encode_entry(env, atoms::hit(), entry),
         Ok(ExactCacheOpen::Owner(owner)) => (
