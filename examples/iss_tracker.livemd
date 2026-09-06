@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:sidereon, "~> 2.0"},
+  {:sidereon, "~> 2.1"},
   {:kino, "~> 0.14"},
   {:kino_maplibre, "~> 0.1"}
 ])

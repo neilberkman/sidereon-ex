@@ -25,9 +25,11 @@ defmodule Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact do
   @doc """
   Build canonical artifact bytes from an SP3 product, an interpolant, or an opened artifact.
   """
-  @spec artifact_bytes(SP3.t() | Interpolant.t() | t()) :: {:ok, binary()} | {:error, term()}
-  def artifact_bytes(%__MODULE__{interpolant: interpolant}), do: Interpolant.as_bytes(interpolant)
-  def artifact_bytes(source), do: Interpolant.artifact_bytes(source)
+  @spec artifact_bytes(SP3.t() | Interpolant.t() | t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def artifact_bytes(source, opts \\ [])
+  def artifact_bytes(%__MODULE__{interpolant: interpolant}, []), do: Interpolant.as_bytes(interpolant)
+  def artifact_bytes(%__MODULE__{interpolant: interpolant}, opts), do: Interpolant.artifact_bytes(interpolant, opts)
+  def artifact_bytes(source, opts), do: Interpolant.artifact_bytes(source, opts)
 
   @doc """
   Open precise-interpolant artifact bytes into a named artifact handle.
@@ -112,6 +114,14 @@ defmodule Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact do
   """
   @spec time_scale(t()) :: String.t()
   def time_scale(%__MODULE__{interpolant: interpolant}), do: Interpolant.time_scale(interpolant)
+
+  @doc """
+  Return the position-interpolation gap threshold factor carried by this artifact.
+  """
+  @spec gap_threshold_factor(t()) :: float()
+  def gap_threshold_factor(%__MODULE__{interpolant: interpolant}) do
+    Interpolant.gap_threshold_factor(interpolant)
+  end
 
   @doc """
   Return the satellite ids available in the artifact.

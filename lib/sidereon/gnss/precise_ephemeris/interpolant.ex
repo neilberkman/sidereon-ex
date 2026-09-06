@@ -46,18 +46,24 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   The SP3 product is already parsed and held by the BEAM. This function copies
   its interpolation nodes into a second read-only handle. Returns
   `{:ok, %Sidereon.GNSS.PreciseEphemeris.Interpolant{}}`.
+
+  Options:
+    * `:gap_threshold_factor` - override the position-interpolation gap threshold
+      factor (default inherits from product).
   """
-  @spec from_sp3(SP3.t()) :: {:ok, t()} | {:error, term()}
-  def from_sp3(%SP3{handle: handle}) do
-    case NIF.precise_interpolant_from_sp3(handle) do
-      {:ok, resource} when is_reference(resource) ->
-        {:ok, %__MODULE__{handle: resource, time_scale: NIF.precise_interpolant_time_scale(resource)}}
+  @spec from_sp3(SP3.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def from_sp3(%SP3{handle: handle}, opts \\ []) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.precise_interpolant_from_sp3(handle, factor) do
+        {:ok, resource} when is_reference(resource) ->
+          {:ok, %__MODULE__{handle: resource, time_scale: NIF.precise_interpolant_time_scale(resource)}}
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
 
-      other ->
-        {:error, other}
+        other ->
+          {:error, other}
+      end
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
@@ -70,11 +76,16 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   time scale, be grouped into at least two strictly increasing epochs per
   satellite, and carry finite positions and clocks. Validation reasons match
   `Sidereon.GNSS.PreciseEphemeris.from_samples/1`.
+
+  Options:
+    * `:gap_threshold_factor` - multiple of nominal node spacing above which
+      consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
   """
-  @spec from_samples([PreciseEphemerisSample.t()]) :: {:ok, t()} | {:error, term()}
-  def from_samples(samples) when is_list(samples) do
-    with {:ok, tuples} <- to_nif_tuples(samples) do
-      case NIF.precise_interpolant_from_samples(tuples) do
+  @spec from_samples([PreciseEphemerisSample.t()], keyword()) :: {:ok, t()} | {:error, term()}
+  def from_samples(samples, opts \\ []) when is_list(samples) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts),
+         {:ok, tuples} <- to_nif_tuples(samples) do
+      case NIF.precise_interpolant_from_samples(tuples, factor) do
         {:ok, resource} when is_reference(resource) ->
           {:ok, %__MODULE__{handle: resource, time_scale: NIF.precise_interpolant_time_scale(resource)}}
 
@@ -94,18 +105,24 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
 
   This reuses the already validated `Sidereon.GNSS.PreciseEphemeris` handle and
   copies its prepared interpolation nodes.
+
+  Options:
+    * `:gap_threshold_factor` - override the position-interpolation gap threshold
+      factor (default inherits from source).
   """
-  @spec from_precise_ephemeris_samples(PreciseEphemeris.t()) :: {:ok, t()} | {:error, term()}
-  def from_precise_ephemeris_samples(%PreciseEphemeris{handle: handle}) do
-    case NIF.precise_interpolant_from_precise_samples(handle) do
-      {:ok, resource} when is_reference(resource) ->
-        {:ok, %__MODULE__{handle: resource, time_scale: NIF.precise_interpolant_time_scale(resource)}}
+  @spec from_precise_ephemeris_samples(PreciseEphemeris.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def from_precise_ephemeris_samples(%PreciseEphemeris{handle: handle}, opts \\ []) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.precise_interpolant_from_precise_samples(handle, factor) do
+        {:ok, resource} when is_reference(resource) ->
+          {:ok, %__MODULE__{handle: resource, time_scale: NIF.precise_interpolant_time_scale(resource)}}
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
 
-      other ->
-        {:error, other}
+        other ->
+          {:error, other}
+      end
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
@@ -118,23 +135,33 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   The returned binary is deterministic for a deterministic source and can be
   persisted by the caller. `open/1` reads the same bytes back into an evaluation
   handle.
+
+  Options:
+    * `:gap_threshold_factor` - override the position-interpolation gap threshold
+      factor recorded in the artifact header.
   """
-  @spec artifact_bytes(SP3.t() | t()) :: {:ok, binary()} | {:error, term()}
-  def artifact_bytes(%SP3{handle: handle}) do
-    case NIF.precise_interpolant_store_bytes_from_sp3(handle) do
-      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
-      {:error, _} = err -> err
-      other -> {:error, other}
+  @spec artifact_bytes(SP3.t() | t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def artifact_bytes(source, opts \\ [])
+
+  def artifact_bytes(%SP3{handle: handle}, opts) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.precise_interpolant_store_bytes_from_sp3(handle, factor) do
+        {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
   end
 
-  def artifact_bytes(%__MODULE__{handle: handle}) do
-    case NIF.precise_interpolant_store_bytes_from_interpolant(handle) do
-      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
-      {:error, _} = err -> err
-      other -> {:error, other}
+  def artifact_bytes(%__MODULE__{handle: handle}, opts) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.precise_interpolant_store_bytes_from_interpolant(handle, factor) do
+        {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
@@ -312,6 +339,19 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   def time_scale(%__MODULE__{time_scale: time_scale}), do: time_scale
 
   @doc """
+  Return the position-interpolation gap threshold factor carried by this interpolant or opened artifact.
+  """
+  @spec gap_threshold_factor(t()) :: float()
+  def gap_threshold_factor(%__MODULE__{handle: handle}) do
+    NIF.precise_interpolant_gap_threshold_factor(handle)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not read interpolant gap threshold factor: #{inspect(e.original)}"],
+              __STACKTRACE__
+  end
+
+  @doc """
   Return the satellite ids available in the cached interpolant.
 
   The ids are canonical SP3/RINEX tokens such as `"G01"` and are sorted in core
@@ -435,4 +475,14 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   defp nif_error_reason(error), do: Map.get(error, :original, Exception.message(error))
+
+  defp normalize_gap_threshold_factor(opts) when is_list(opts) do
+    case Keyword.get(opts, :gap_threshold_factor) do
+      nil -> {:ok, nil}
+      factor when is_number(factor) -> {:ok, factor / 1.0}
+      other -> {:error, {:bad_gap_threshold_factor, other}}
+    end
+  end
+
+  defp normalize_gap_threshold_factor(other), do: {:error, {:bad_gap_threshold_factor, other}}
 end

@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-05
+
+### Added
+
+- Expose SP3 interpolation policy (`gap_threshold_factor`) across SP3 parsing, continuity checking, merge verification, precise ephemeris sample sources, and precise interpolant artifacts:
+  - `Sidereon.GNSS.SP3.load/2`, `SP3.load!/2`, `SP3.parse/2`, and `SP3.parse_exact/3` accept `:gap_threshold_factor` (default `1.5`, must be > 1.0).
+  - `Sidereon.GNSS.SP3.gap_threshold_factor/1` returns the configured gap threshold factor for an SP3 product.
+  - `Sidereon.GNSS.SP3.check_continuity/2`, `SP3.continuity_verdict/4`, and `SP3.merge/2` (via `:verify_continuity`) accept `:gap_threshold_factor`.
+  - `Sidereon.GNSS.PreciseEphemeris.from_samples/2` and `PreciseEphemeris.gap_threshold_factor/1`.
+  - `Sidereon.GNSS.PreciseEphemeris.Interpolant.from_sp3/2`, `from_samples/2`, `from_precise_ephemeris_samples/2`, `artifact_bytes/2`, and `gap_threshold_factor/1`.
+  - `Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact` and `PreciseInterpolantArtifact` support `:gap_threshold_factor` in `artifact_bytes/2` and expose `gap_threshold_factor/1`.
+
+### Changed
+
+
+- Engine update: sidereon 2.1.0 / sidereon-core 2.1.0. Additive upstream release: the SP3 coverage-gap threshold is now a validated, product-carried policy (`Sp3InterpolationOptions`, default 1.5 and bit-identical to before), the SP3 window-scoped continuity reach is derived from the interpolator's actual selectable node spans, and RINEX 4 CNAV week/TOW round trips are stable at the week boundary.
+
 ## [2.0.0] - 2026-09-02
 
 ### Changed

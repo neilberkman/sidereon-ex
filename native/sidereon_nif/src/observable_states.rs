@@ -14,7 +14,8 @@ use sidereon_core::ephemeris::{
     precise_interpolant_store_checksum64, MmapPreciseEphemerisInterpolant,
     ObservableEphemerisSource, ObservableStateBatch, ObservableStateElementStatus,
     ObservablesError, PreciseEphemerisInterpolant, PreciseEphemerisSample, PreciseInterpolantError,
-    PreciseInterpolantStoreError, PreciseSamplesError, OBSERVABLE_STATE_MISSING_POSITION_ECEF_M,
+    PreciseInterpolantStoreError, PreciseSamplesError, Sp3InterpolationOptions,
+    OBSERVABLE_STATE_MISSING_POSITION_ECEF_M,
 };
 use sidereon_core::DigestProvenance;
 use sidereon_core::{Error as CoreError, GnssSatelliteId};
@@ -101,13 +102,19 @@ impl rustler::Resource for MappedPreciseInterpolantResource {}
 pub fn precise_interpolant_from_sp3<'a>(
     env: Env<'a>,
     handle: ResourceArc<Sp3Resource>,
-) -> Term<'a> {
-    let interpolant = PreciseEphemerisInterpolant::from_sp3(&handle.sp3);
-    (
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<Term<'a>> {
+    let mut interpolant = PreciseEphemerisInterpolant::from_sp3(&handle.sp3);
+    if let Some(factor) = gap_threshold_factor {
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        interpolant = interpolant.with_interpolation_options(opts);
+    }
+    Ok((
         atoms::ok(),
         ResourceArc::new(PreciseInterpolantResource { interpolant }),
     )
-        .encode(env)
+        .encode(env))
 }
 
 /// Build a cached interpolant from sample tuples.
@@ -115,20 +122,27 @@ pub fn precise_interpolant_from_sp3<'a>(
 pub fn precise_interpolant_from_samples<'a>(
     env: Env<'a>,
     samples: Vec<SampleTerm>,
+    gap_threshold_factor: Option<f64>,
 ) -> NifResult<Term<'a>> {
     let mut built = Vec::with_capacity(samples.len());
     for sample in samples {
         built.push(decode_sample(sample)?);
     }
 
-    Ok(match PreciseEphemerisInterpolant::from_samples(built) {
-        Ok(interpolant) => (
-            atoms::ok(),
-            ResourceArc::new(PreciseInterpolantResource { interpolant }),
-        )
-            .encode(env),
-        Err(error) => (atoms::error(), interpolant_error_atom(error)).encode(env),
-    })
+    let mut interpolant = match PreciseEphemerisInterpolant::from_samples(built) {
+        Ok(interpolant) => interpolant,
+        Err(error) => return Ok((atoms::error(), interpolant_error_atom(error)).encode(env)),
+    };
+    if let Some(factor) = gap_threshold_factor {
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        interpolant = interpolant.with_interpolation_options(opts);
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(PreciseInterpolantResource { interpolant }),
+    )
+        .encode(env))
 }
 
 /// Build a cached interpolant from an existing sample-backed source handle.
@@ -136,13 +150,37 @@ pub fn precise_interpolant_from_samples<'a>(
 pub fn precise_interpolant_from_precise_samples<'a>(
     env: Env<'a>,
     handle: ResourceArc<SampleSourceResource>,
-) -> Term<'a> {
-    let interpolant = PreciseEphemerisInterpolant::from_precise_ephemeris_samples(&handle.source);
-    (
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<Term<'a>> {
+    let mut interpolant =
+        PreciseEphemerisInterpolant::from_precise_ephemeris_samples(&handle.source);
+    if let Some(factor) = gap_threshold_factor {
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        interpolant = interpolant.with_interpolation_options(opts);
+    }
+    Ok((
         atoms::ok(),
         ResourceArc::new(PreciseInterpolantResource { interpolant }),
     )
-        .encode(env)
+        .encode(env))
+}
+
+/// Position-interpolation gap threshold factor carried by the interpolant or opened artifact.
+#[rustler::nif]
+pub fn precise_interpolant_gap_threshold_factor(source: Term<'_>) -> NifResult<f64> {
+    if let Ok(handle) = source.decode::<ResourceArc<PreciseInterpolantResource>>() {
+        Ok(handle
+            .interpolant
+            .interpolation_options()
+            .gap_threshold_factor())
+    } else if let Ok(handle) = source.decode::<ResourceArc<MappedPreciseInterpolantResource>>() {
+        Ok(handle.read().interpolation_options().gap_threshold_factor())
+    } else {
+        Err(Error::Term(Box::new(
+            "expected a precise-interpolant handle",
+        )))
+    }
 }
 
 /// Time-scale abbreviation for the interpolant's source epochs.
@@ -187,11 +225,18 @@ pub fn precise_interpolant_satellite_ids(source: Term<'_>) -> NifResult<Vec<Stri
 pub fn precise_interpolant_store_bytes_from_sp3<'a>(
     env: Env<'a>,
     handle: ResourceArc<Sp3Resource>,
-) -> Term<'a> {
-    match handle.sp3.precise_interpolant_store_bytes() {
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<Term<'a>> {
+    let mut interpolant = PreciseEphemerisInterpolant::from_sp3(&handle.sp3);
+    if let Some(factor) = gap_threshold_factor {
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        interpolant = interpolant.with_interpolation_options(opts);
+    }
+    Ok(match interpolant.to_mmap_store_bytes() {
         Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
-    }
+    })
 }
 
 /// Build canonical precise-interpolant store bytes from a fitted interpolant.
@@ -199,11 +244,18 @@ pub fn precise_interpolant_store_bytes_from_sp3<'a>(
 pub fn precise_interpolant_store_bytes_from_interpolant<'a>(
     env: Env<'a>,
     handle: ResourceArc<PreciseInterpolantResource>,
-) -> Term<'a> {
-    match handle.interpolant.to_mmap_store_bytes() {
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<Term<'a>> {
+    let mut interpolant = handle.interpolant.clone();
+    if let Some(factor) = gap_threshold_factor {
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        interpolant = interpolant.with_interpolation_options(opts);
+    }
+    Ok(match interpolant.to_mmap_store_bytes() {
         Ok(bytes) => (atoms::ok(), bytes_to_binary(env, &bytes)).encode(env),
         Err(error) => (atoms::error(), store_error_term(env, error)).encode(env),
-    }
+    })
 }
 
 /// Open canonical precise-interpolant store bytes into an evaluation handle.

@@ -210,20 +210,24 @@ defmodule Sidereon.GNSS.SP3 do
 
   Returns `{:ok, %Sidereon.GNSS.SP3{}}` or `{:error, reason}`. The file is read and
   parsed exactly once; the parsed product is held as a resource handle.
+
+  Options:
+    * `:gap_threshold_factor` - multiple of nominal node spacing above which
+      consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
   """
-  @spec load(String.t()) :: {:ok, t()} | {:error, term()}
-  def load(path) when is_binary(path) do
+  @spec load(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def load(path, opts \\ []) when is_binary(path) and is_list(opts) do
     with {:ok, bytes} <- File.read(path) do
-      parse_bytes(bytes)
+      parse_bytes(bytes, opts)
     end
   end
 
   @doc """
-  Like `load/1` but raises on failure.
+  Like `load/2` but raises on failure.
   """
-  @spec load!(String.t()) :: t()
-  def load!(path) when is_binary(path) do
-    case load(path) do
+  @spec load!(String.t(), keyword()) :: t()
+  def load!(path, opts \\ []) when is_binary(path) and is_list(opts) do
+    case load(path, opts) do
       {:ok, sp3} -> sp3
       {:error, reason} -> raise ArgumentError, "could not load SP3 #{path}: #{inspect(reason)}"
     end
@@ -231,20 +235,26 @@ defmodule Sidereon.GNSS.SP3 do
 
   @doc """
   Parse an in-memory SP3 byte buffer (already decompressed) into a handle.
+
+  Options:
+    * `:gap_threshold_factor` - multiple of nominal node spacing above which
+      consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
   """
-  @spec parse(binary()) :: {:ok, t()} | {:error, term()}
-  def parse(bytes) when is_binary(bytes), do: parse_bytes(bytes)
+  @spec parse(binary(), keyword()) :: {:ok, t()} | {:error, term()}
+  def parse(bytes, opts \\ []) when is_binary(bytes) and is_list(opts), do: parse_bytes(bytes, opts)
 
-  defp parse_bytes(bytes) do
-    case NIF.sp3_parse(bytes) do
-      handle when is_reference(handle) ->
-        from_handle(handle, bytes)
+  defp parse_bytes(bytes, opts) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.sp3_parse(bytes, factor) do
+        handle when is_reference(handle) ->
+          from_handle(handle, bytes)
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
 
-      other ->
-        {:error, other}
+        other ->
+          {:error, other}
+      end
     end
   rescue
     e in ErlangError -> {:error, e.original}
@@ -256,27 +266,36 @@ defmodule Sidereon.GNSS.SP3 do
   Returns the parsed product together with `:half_open` or `:inclusive` to
   identify the accepted boundary representation. Parse, identity, cadence,
   grid, and span failures are returned as exact-product integrity errors.
+
+  Options:
+    * `:gap_threshold_factor` - multiple of nominal node spacing above which
+      consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
   """
-  @spec parse_exact(binary(), ExactRequest.t()) ::
+  @spec parse_exact(binary(), ExactRequest.t(), keyword()) ::
           {:ok, t(), exact_coverage()} | {:error, term()}
-  def parse_exact(bytes, %ExactRequest{handle: request}) when is_binary(bytes) do
-    case NIF.sp3_parse_exact(bytes, request) do
-      {:ok, {handle, coverage}} when is_reference(handle) and coverage in [:half_open, :inclusive] ->
-        with {:ok, product} <- from_handle(handle, bytes) do
-          {:ok, product, coverage}
-        end
+  def parse_exact(bytes, request, opts \\ [])
 
-      {:error, _reason} = error ->
-        error
+  def parse_exact(bytes, %ExactRequest{handle: request}, opts) when is_binary(bytes) and is_list(opts) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts) do
+      case NIF.sp3_parse_exact(bytes, request, factor) do
+        {:ok, {handle, coverage}} when is_reference(handle) and coverage in [:half_open, :inclusive] ->
+          with {:ok, product} <- from_handle(handle, bytes) do
+            {:ok, product, coverage}
+          end
 
-      other ->
-        {:error, other}
+        {:error, _reason} = error ->
+          error
+
+        other ->
+          {:error, other}
+      end
     end
   rescue
     e in ErlangError -> {:error, e.original}
   end
 
-  def parse_exact(_bytes, _request), do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 parse arguments"}}
+  def parse_exact(_bytes, _request, _opts),
+    do: {:error, {:exact_sp3_validation_failed, "invalid exact SP3 parse arguments"}}
 
   @doc """
   Validate an already parsed SP3 product against an exact request.
@@ -412,6 +431,19 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   @doc """
+  Return the position-interpolation gap threshold factor carried by the product.
+  """
+  @spec gap_threshold_factor(t()) :: float()
+  def gap_threshold_factor(%__MODULE__{handle: handle}) do
+    NIF.sp3_gap_threshold_factor(handle)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not read SP3 gap threshold factor: #{inspect(e.original)}"],
+              __STACKTRACE__
+  end
+
+  @doc """
   Return the time reach of the product's position-interpolation stencil.
 
   The core derives both extents from the parsed epoch interval and the same
@@ -466,8 +498,8 @@ defmodule Sidereon.GNSS.SP3 do
   """
   @spec check_continuity(t(), keyword()) :: {:ok, map()} | {:error, term()}
   def check_continuity(%__MODULE__{handle: handle}, opts \\ []) do
-    with {:ok, class, tolerance} <- normalize_continuity_options(opts) do
-      case NIF.sp3_check_continuity(handle, class, tolerance) do
+    with {:ok, class, tolerance, gap_factor} <- normalize_continuity_options(opts) do
+      case NIF.sp3_check_continuity(handle, class, tolerance, gap_factor) do
         {:ok, report} -> {:ok, decode_continuity_report(report)}
         {:error, reason} -> {:error, reason}
       end
@@ -490,14 +522,15 @@ defmodule Sidereon.GNSS.SP3 do
 
   def continuity_verdict(%__MODULE__{handle: handle}, from_j2000_s, through_j2000_s, opts)
       when is_number(from_j2000_s) and is_number(through_j2000_s) do
-    with {:ok, class, tolerance} <- normalize_continuity_options(opts),
+    with {:ok, class, tolerance, gap_factor} <- normalize_continuity_options(opts),
          {:ok, verdict} <-
            NIF.sp3_continuity_verdict(
              handle,
              from_j2000_s / 1.0,
              through_j2000_s / 1.0,
              class,
-             tolerance
+             tolerance,
+             gap_factor
            ) do
       {:ok, decode_window_continuity_verdict(verdict)}
     end
@@ -580,20 +613,23 @@ defmodule Sidereon.GNSS.SP3 do
       end
 
     tolerance = Keyword.get(opts, :residual_tolerance_m, 1.0)
+    gap_threshold_factor = Keyword.get(opts, :gap_threshold_factor)
 
     cond do
       match?({:bad_orbit_class, _}, orbit_class) ->
         {:bad_orbit_class, other} = orbit_class
         {:error, {:bad_orbit_class, other}}
 
-      is_nil(tolerance) ->
-        {:ok, orbit_class, nil}
+      not (is_nil(tolerance) or is_number(tolerance)) ->
+        {:error, {:bad_residual_tolerance_m, tolerance}}
 
-      is_number(tolerance) ->
-        {:ok, orbit_class, tolerance / 1.0}
+      not (is_nil(gap_threshold_factor) or is_number(gap_threshold_factor)) ->
+        {:error, {:bad_gap_threshold_factor, gap_threshold_factor}}
 
       true ->
-        {:error, {:bad_residual_tolerance_m, tolerance}}
+        tolerance = if is_number(tolerance), do: tolerance / 1.0
+        gap_factor = if is_number(gap_threshold_factor), do: gap_threshold_factor / 1.0
+        {:ok, orbit_class, tolerance, gap_factor}
     end
   end
 
@@ -729,10 +765,14 @@ defmodule Sidereon.GNSS.SP3 do
 
   @doc """
   Build canonical precise-interpolant artifact bytes from this SP3 product.
+
+  Options:
+    * `:gap_threshold_factor` - override the position-interpolation gap threshold
+      factor recorded in the artifact header.
   """
-  @spec precise_interpolant_artifact_bytes(t()) :: {:ok, binary()} | {:error, term()}
-  def precise_interpolant_artifact_bytes(%__MODULE__{} = sp3) do
-    Interpolant.artifact_bytes(sp3)
+  @spec precise_interpolant_artifact_bytes(t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def precise_interpolant_artifact_bytes(%__MODULE__{} = sp3, opts \\ []) when is_list(opts) do
+    Interpolant.artifact_bytes(sp3, opts)
   end
 
   @doc """
@@ -1508,8 +1548,8 @@ defmodule Sidereon.GNSS.SP3 do
 
   defp normalize_verify_continuity(opts) when is_list(opts) do
     case normalize_continuity_options(opts) do
-      {:ok, orbit_class, residual_tolerance_m} ->
-        {:ok, {orbit_class, residual_tolerance_m}}
+      {:ok, orbit_class, residual_tolerance_m, gap_threshold_factor} ->
+        {:ok, {orbit_class, residual_tolerance_m, gap_threshold_factor}}
 
       {:error, reason} ->
         {:error, {:invalid_verify_continuity, reason}}
@@ -1517,6 +1557,16 @@ defmodule Sidereon.GNSS.SP3 do
   end
 
   defp normalize_verify_continuity(value), do: {:error, {:invalid_verify_continuity, value}}
+
+  defp normalize_gap_threshold_factor(opts) when is_list(opts) do
+    case Keyword.get(opts, :gap_threshold_factor) do
+      nil -> {:ok, nil}
+      factor when is_number(factor) -> {:ok, factor / 1.0}
+      other -> {:error, {:bad_gap_threshold_factor, other}}
+    end
+  end
+
+  defp normalize_gap_threshold_factor(other), do: {:error, {:bad_gap_threshold_factor, other}}
 
   defp outlier_reject_map(nil), do: nil
 

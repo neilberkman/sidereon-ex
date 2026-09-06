@@ -669,7 +669,9 @@ defmodule Sidereon.NIF do
         _time_tolerance_seconds
       ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def sp3_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def sp3_parse(_bytes, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_gap_threshold_factor(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -685,10 +687,17 @@ defmodule Sidereon.NIF do
 
   def sp3_stencil_extent(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def sp3_check_continuity(_handle, _orbit_class, _residual_tolerance_m), do: :erlang.nif_error(:nif_not_loaded)
-
-  def sp3_continuity_verdict(_handle, _from_j2000_s, _through_j2000_s, _orbit_class, _residual_tolerance_m),
+  def sp3_check_continuity(_handle, _orbit_class, _residual_tolerance_m, _gap_threshold_factor \\ nil),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_continuity_verdict(
+        _handle,
+        _from_j2000_s,
+        _through_j2000_s,
+        _orbit_class,
+        _residual_tolerance_m,
+        _gap_threshold_factor \\ nil
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_merge_continuity_verdict(_report, _merged, _from_j2000_s, _through_j2000_s),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -702,7 +711,7 @@ defmodule Sidereon.NIF do
 
   def sp3_exact_request_require_agency(_request, _agency), do: :erlang.nif_error(:nif_not_loaded)
 
-  def sp3_parse_exact(_bytes, _request), do: :erlang.nif_error(:nif_not_loaded)
+  def sp3_parse_exact(_bytes, _request, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_validate_exact(_product, _request), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -716,21 +725,28 @@ defmodule Sidereon.NIF do
 
   def sp3_precise_ephemeris_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_samples_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_samples_from_samples(_samples, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_interpolant_from_sp3(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_samples_gap_threshold_factor(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_interpolant_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_interpolant_from_sp3(_handle, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_interpolant_from_precise_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_interpolant_from_samples(_samples, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_from_precise_samples(_handle, _gap_threshold_factor \\ nil),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_gap_threshold_factor(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_interpolant_store_bytes_from_sp3(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_interpolant_store_bytes_from_sp3(_handle, _gap_threshold_factor \\ nil),
+    do: :erlang.nif_error(:nif_not_loaded)
 
-  def precise_interpolant_store_bytes_from_interpolant(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_interpolant_store_bytes_from_interpolant(_handle, _gap_threshold_factor \\ nil),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_store_open(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 

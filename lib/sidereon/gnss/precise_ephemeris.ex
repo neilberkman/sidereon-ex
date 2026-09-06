@@ -57,11 +57,15 @@ defmodule Sidereon.GNSS.PreciseEphemeris do
 
   A malformed satellite token or time scale in a sample is returned verbatim as
   `{:error, reason}` without raising.
+  Options:
+    * `:gap_threshold_factor` - multiple of nominal node spacing above which
+      consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
   """
-  @spec from_samples([PreciseEphemerisSample.t()]) :: {:ok, t()} | {:error, term()}
-  def from_samples(samples) when is_list(samples) do
-    with {:ok, tuples} <- to_nif_tuples(samples) do
-      case NIF.precise_samples_from_samples(tuples) do
+  @spec from_samples([PreciseEphemerisSample.t()], keyword()) :: {:ok, t()} | {:error, term()}
+  def from_samples(samples, opts \\ []) when is_list(samples) do
+    with {:ok, factor} <- normalize_gap_threshold_factor(opts),
+         {:ok, tuples} <- to_nif_tuples(samples) do
+      case NIF.precise_samples_from_samples(tuples, factor) do
         {:ok, handle} when is_reference(handle) ->
           {:ok, %__MODULE__{handle: handle, time_scale: time_scale_of(samples)}}
 
@@ -74,6 +78,19 @@ defmodule Sidereon.GNSS.PreciseEphemeris do
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Return the position-interpolation gap threshold factor carried by this sample-backed source.
+  """
+  @spec gap_threshold_factor(t()) :: float()
+  def gap_threshold_factor(%__MODULE__{handle: handle}) do
+    NIF.precise_samples_gap_threshold_factor(handle)
+  rescue
+    e in ErlangError ->
+      reraise ArgumentError,
+              [message: "could not read precise-ephemeris gap threshold factor: #{inspect(e.original)}"],
+              __STACKTRACE__
   end
 
   @doc """
@@ -120,4 +137,14 @@ defmodule Sidereon.GNSS.PreciseEphemeris do
 
   defp time_scale_of([%PreciseEphemerisSample{epoch: %{time_scale: time_scale}} | _]), do: time_scale
   defp time_scale_of(_samples), do: nil
+
+  defp normalize_gap_threshold_factor(opts) when is_list(opts) do
+    case Keyword.get(opts, :gap_threshold_factor) do
+      nil -> {:ok, nil}
+      factor when is_number(factor) -> {:ok, factor / 1.0}
+      other -> {:error, {:bad_gap_threshold_factor, other}}
+    end
+  end
+
+  defp normalize_gap_threshold_factor(other), do: {:error, {:bad_gap_threshold_factor, other}}
 end
