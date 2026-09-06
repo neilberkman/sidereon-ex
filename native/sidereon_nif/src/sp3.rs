@@ -227,9 +227,15 @@ fn merge_options_from_terms(
     frame_reconciliation.helmert = helmert_frame_reconciliation;
     options.frame_reconciliation = frame_reconciliation;
     options.verify_continuity = verify_continuity
-        .map(|(orbit_class, residual_tolerance_m, gap_threshold_factor)| {
-            continuity_options_from_terms(orbit_class, residual_tolerance_m, gap_threshold_factor)
-        })
+        .map(
+            |(orbit_class, residual_tolerance_m, gap_threshold_factor)| {
+                continuity_options_from_terms(
+                    orbit_class,
+                    residual_tolerance_m,
+                    gap_threshold_factor,
+                )
+            },
+        )
         .transpose()
         .map_err(|error| Error::Term(Box::new(error)))?;
     Ok(options)
@@ -267,8 +273,8 @@ fn sp3_parse(
 ) -> NifResult<ResourceArc<Sp3Resource>> {
     let mut sp3 = Sp3::parse(bytes.as_slice()).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         sp3 = sp3.with_interpolation_options(opts);
     }
     Ok(ResourceArc::new(Sp3Resource { sp3 }))
@@ -1235,6 +1241,3 @@ fn sp3_merge_input_identity(
 fn sp3_to_iodata(handle: ResourceArc<Sp3Resource>) -> NifResult<String> {
     Ok(handle.sp3.to_sp3_string())
 }
-
-
-

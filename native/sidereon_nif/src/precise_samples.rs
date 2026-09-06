@@ -135,8 +135,8 @@ pub fn precise_samples_from_samples(
         Err(err) => return Ok((atoms::error(), samples_error_atom(err)).encode(env)),
     };
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         source = source.with_interpolation_options(opts);
     }
 

@@ -106,8 +106,8 @@ pub fn precise_interpolant_from_sp3<'a>(
 ) -> NifResult<Term<'a>> {
     let mut interpolant = PreciseEphemerisInterpolant::from_sp3(&handle.sp3);
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         interpolant = interpolant.with_interpolation_options(opts);
     }
     Ok((
@@ -134,8 +134,8 @@ pub fn precise_interpolant_from_samples<'a>(
         Err(error) => return Ok((atoms::error(), interpolant_error_atom(error)).encode(env)),
     };
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         interpolant = interpolant.with_interpolation_options(opts);
     }
     Ok((
@@ -155,8 +155,8 @@ pub fn precise_interpolant_from_precise_samples<'a>(
     let mut interpolant =
         PreciseEphemerisInterpolant::from_precise_ephemeris_samples(&handle.source);
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         interpolant = interpolant.with_interpolation_options(opts);
     }
     Ok((
@@ -229,8 +229,8 @@ pub fn precise_interpolant_store_bytes_from_sp3<'a>(
 ) -> NifResult<Term<'a>> {
     let mut interpolant = PreciseEphemerisInterpolant::from_sp3(&handle.sp3);
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         interpolant = interpolant.with_interpolation_options(opts);
     }
     Ok(match interpolant.to_mmap_store_bytes() {
@@ -248,8 +248,8 @@ pub fn precise_interpolant_store_bytes_from_interpolant<'a>(
 ) -> NifResult<Term<'a>> {
     let mut interpolant = handle.interpolant.clone();
     if let Some(factor) = gap_threshold_factor {
-        let opts =
-            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        let opts = Sp3InterpolationOptions::new(factor)
+            .map_err(|e| Error::Term(Box::new(e.to_string())))?;
         interpolant = interpolant.with_interpolation_options(opts);
     }
     Ok(match interpolant.to_mmap_store_bytes() {
