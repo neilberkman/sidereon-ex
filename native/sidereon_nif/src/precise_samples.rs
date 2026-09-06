@@ -12,10 +12,10 @@
 //! - `sp3_precise_ephemeris_samples/1` extracts a parsed SP3 product as the
 //!   canonical samples, one per real position record.
 
-use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
+use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{Instant, JulianDateSplit};
 use sidereon_core::ephemeris::{
-    PreciseEphemerisSample, PreciseEphemerisSamples, PreciseSamplesError,
+    PreciseEphemerisSample, PreciseEphemerisSamples, PreciseSamplesError, Sp3InterpolationOptions,
 };
 use sidereon_core::GnssSatelliteId;
 
@@ -120,20 +120,37 @@ fn sample_to_tuple(sample: &PreciseEphemerisSample) -> SampleTerm {
 /// mixed time scales, non-finite value, epoch out of range). Dirty-CPU: the
 /// sample set is unbounded relative to the 1 ms NIF budget.
 #[rustler::nif(schedule = "DirtyCpu")]
-pub fn precise_samples_from_samples(env: Env<'_>, samples: Vec<SampleTerm>) -> NifResult<Term<'_>> {
+pub fn precise_samples_from_samples(
+    env: Env<'_>,
+    samples: Vec<SampleTerm>,
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<Term<'_>> {
     let mut built = Vec::with_capacity(samples.len());
     for sample in samples {
         built.push(decode_sample(sample)?);
     }
 
-    Ok(match PreciseEphemerisSamples::from_samples(built) {
-        Ok(source) => (
-            atoms::ok(),
-            ResourceArc::new(SampleSourceResource { source }),
-        )
-            .encode(env),
-        Err(err) => (atoms::error(), samples_error_atom(err)).encode(env),
-    })
+    let mut source = match PreciseEphemerisSamples::from_samples(built) {
+        Ok(source) => source,
+        Err(err) => return Ok((atoms::error(), samples_error_atom(err)).encode(env)),
+    };
+    if let Some(factor) = gap_threshold_factor {
+        let opts =
+            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        source = source.with_interpolation_options(opts);
+    }
+
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(SampleSourceResource { source }),
+    )
+        .encode(env))
+}
+
+/// Position-interpolation gap threshold factor carried by the sample source.
+#[rustler::nif]
+pub fn precise_samples_gap_threshold_factor(handle: ResourceArc<SampleSourceResource>) -> f64 {
+    handle.source.interpolation_options().gap_threshold_factor()
 }
 
 /// Extract a parsed SP3 product as the canonical precise-ephemeris samples, one

@@ -25,8 +25,8 @@ use sidereon_core::ephemeris::{
     MergeContinuityReport, MergeContinuityViolation, MergeFlag, MergeOptions, MergePrecedenceScope,
     MergeReport, OrbitClass, OutlierRejectOptions, Sp3, Sp3ArtifactIdentity, Sp3FrameLabelSet,
     Sp3FrameReconciliation, Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions,
-    Sp3MergeInputIdentity, Sp3State, SpeedBound, StencilExtent, WindowContinuityDecision,
-    WindowContinuityVerdict,
+    Sp3InterpolationOptions, Sp3MergeInputIdentity, Sp3State, SpeedBound, StencilExtent,
+    WindowContinuityDecision, WindowContinuityVerdict,
 };
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
 use std::collections::BTreeSet;
@@ -159,7 +159,7 @@ fn merge_options_from_terms(
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
-    verify_continuity: Option<(Option<String>, Option<f64>)>,
+    verify_continuity: Option<(Option<String>, Option<f64>, Option<f64>)>,
 ) -> NifResult<MergeOptions> {
     let combine = match combine.as_str() {
         "mean" => MergeCombine::Mean,
@@ -227,8 +227,8 @@ fn merge_options_from_terms(
     frame_reconciliation.helmert = helmert_frame_reconciliation;
     options.frame_reconciliation = frame_reconciliation;
     options.verify_continuity = verify_continuity
-        .map(|(orbit_class, residual_tolerance_m)| {
-            continuity_options_from_terms(orbit_class, residual_tolerance_m)
+        .map(|(orbit_class, residual_tolerance_m, gap_threshold_factor)| {
+            continuity_options_from_terms(orbit_class, residual_tolerance_m, gap_threshold_factor)
         })
         .transpose()
         .map_err(|error| Error::Term(Box::new(error)))?;
@@ -261,9 +261,23 @@ pub(crate) fn time_scale_from_abbrev(abbrev: &str) -> NifResult<TimeScale> {
 /// budget. On success returns the [`Sp3Resource`] handle; on a
 /// malformed buffer returns the crate's parse-error reason as an Erlang term.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn sp3_parse(bytes: rustler::Binary) -> NifResult<ResourceArc<Sp3Resource>> {
-    let sp3 = Sp3::parse(bytes.as_slice()).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+fn sp3_parse(
+    bytes: rustler::Binary,
+    gap_threshold_factor: Option<f64>,
+) -> NifResult<ResourceArc<Sp3Resource>> {
+    let mut sp3 = Sp3::parse(bytes.as_slice()).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+    if let Some(factor) = gap_threshold_factor {
+        let opts =
+            Sp3InterpolationOptions::new(factor).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        sp3 = sp3.with_interpolation_options(opts);
+    }
     Ok(ResourceArc::new(Sp3Resource { sp3 }))
+}
+
+/// Position-interpolation gap threshold factor carried by the product.
+#[rustler::nif]
+fn sp3_gap_threshold_factor(handle: ResourceArc<Sp3Resource>) -> f64 {
+    handle.sp3.interpolation_options().gap_threshold_factor()
 }
 
 /// The file's own header time-scale abbreviation (e.g. `"GPST"`), so the Elixir
@@ -312,6 +326,7 @@ fn sp3_stencil_extent(handle: ResourceArc<Sp3Resource>) -> Result<(f64, f64), St
 fn continuity_options_from_terms(
     orbit_class: Option<String>,
     residual_tolerance_m: Option<f64>,
+    gap_threshold_factor: Option<f64>,
 ) -> Result<ContinuityOptions, String> {
     let speed_bound = match orbit_class.as_deref() {
         None => None,
@@ -320,7 +335,12 @@ fn continuity_options_from_terms(
         Some("leo") => Some(SpeedBound::OrbitClass(OrbitClass::Leo)),
         Some(other) => return Err(format!("unknown orbit class: {other}")),
     };
-    Ok(ContinuityOptions::new(speed_bound, residual_tolerance_m))
+    let mut options = ContinuityOptions::new(speed_bound, residual_tolerance_m);
+    if let Some(factor) = gap_threshold_factor {
+        let interpolation = Sp3InterpolationOptions::new(factor).map_err(|e| e.to_string())?;
+        options = options.with_interpolation_options(interpolation);
+    }
+    Ok(options)
 }
 
 /// Attest that a parsed or merged product is physically continuous.
@@ -328,16 +348,20 @@ fn continuity_options_from_terms(
 /// `orbit_class` selects the physical earth-fixed speed bound
 /// (`"meo_gnss" | "geosynchronous" | "leo"`); passing `nil` disables that gate.
 /// `residual_tolerance_m` enables the sensitive hold-out interpolation residual
-/// check; passing `nil` disables it. Returns the defects with their epochs and
-/// magnitudes plus the counts of what was actually examined, so a caller can
-/// tell "checked and clean" from "not checked".
+/// check; passing `nil` disables it. `gap_threshold_factor` sets the
+/// hold-out interpolation policy; passing `nil` uses the core default (1.5).
+/// Returns the defects with their epochs and magnitudes plus the counts of what
+/// was actually examined, so a caller can tell "checked and clean" from "not
+/// checked".
 #[rustler::nif(schedule = "DirtyCpu")]
 fn sp3_check_continuity(
     handle: ResourceArc<Sp3Resource>,
     orbit_class: Option<String>,
     residual_tolerance_m: Option<f64>,
+    gap_threshold_factor: Option<f64>,
 ) -> Result<ContinuityReportTuple, String> {
-    let options = continuity_options_from_terms(orbit_class, residual_tolerance_m)?;
+    let options =
+        continuity_options_from_terms(orbit_class, residual_tolerance_m, gap_threshold_factor)?;
     let report = check_continuity(&handle.sp3.precise_ephemeris_samples(), &options);
     Ok(continuity_report_to_tuple(&report))
 }
@@ -481,8 +505,10 @@ fn sp3_continuity_verdict(
     through_j2000_s: f64,
     orbit_class: Option<String>,
     residual_tolerance_m: Option<f64>,
+    gap_threshold_factor: Option<f64>,
 ) -> Result<WindowContinuityVerdictTuple, String> {
-    let options = continuity_options_from_terms(orbit_class, residual_tolerance_m)?;
+    let options =
+        continuity_options_from_terms(orbit_class, residual_tolerance_m, gap_threshold_factor)?;
     let window =
         EpochWindow::new(from_j2000_s, through_j2000_s).map_err(|error| error.to_string())?;
     let stencil = StencilExtent::for_sp3(&handle.sp3).map_err(|error| error.to_string())?;
@@ -606,16 +632,25 @@ fn sp3_parse_exact<'a>(
     env: Env<'a>,
     bytes: rustler::Binary<'a>,
     request: ResourceArc<ExactSp3RequestResource>,
+    gap_threshold_factor: Option<f64>,
 ) -> Term<'a> {
     match parse_exact_sp3(bytes.as_slice(), &request.request) {
-        Ok((sp3, coverage)) => (
-            atoms::ok(),
+        Ok((mut sp3, coverage)) => {
+            if let Some(factor) = gap_threshold_factor {
+                match Sp3InterpolationOptions::new(factor) {
+                    Ok(opts) => sp3 = sp3.with_interpolation_options(opts),
+                    Err(error) => return exact_error(env, error),
+                }
+            }
             (
-                ResourceArc::new(Sp3Resource { sp3 }),
-                exact_coverage(env, coverage),
-            ),
-        )
-            .encode(env),
+                atoms::ok(),
+                (
+                    ResourceArc::new(Sp3Resource { sp3 }),
+                    exact_coverage(env, coverage),
+                ),
+            )
+                .encode(env)
+        }
         Err(error) => exact_error(env, error),
     }
 }
@@ -1006,7 +1041,7 @@ fn sp3_merge<'a>(
     system_letters: Vec<String>,
     asserted_frame_label_sets: Vec<Vec<String>>,
     helmert_frame_reconciliation: bool,
-    verify_continuity: Option<(Option<String>, Option<f64>)>,
+    verify_continuity: Option<(Option<String>, Option<f64>, Option<f64>)>,
 ) -> NifResult<Term<'a>> {
     let opts = merge_options_from_terms(
         position_tolerance_m,
@@ -1200,3 +1235,6 @@ fn sp3_merge_input_identity(
 fn sp3_to_iodata(handle: ResourceArc<Sp3Resource>) -> NifResult<String> {
     Ok(handle.sp3.to_sp3_string())
 }
+
+
+

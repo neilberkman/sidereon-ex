@@ -302,7 +302,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
                )
 
       assert %{attested?: false, defects: [_ | _], splices: [_ | _]} = report.continuity
-      assert {:ok, %{before_s: 1_500.0, after_s: 1_500.0}} = SP3.stencil_extent(merged)
+      assert {:ok, %{before_s: 3_300.0, after_s: 3_300.0}} = SP3.stencil_extent(merged)
 
       inside_one_day = {seam - 18.0 * 3_600.0, seam - 6.0 * 3_600.0}
 
@@ -326,10 +326,10 @@ defmodule Sidereon.GNSS.SP3MergeTest do
               }} = SP3.merge_continuity_verdict(report, merged, seam - 600.0, seam + 600.0)
 
       assert {:ok, %{decision: :refuse, accepted: false}} =
-               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 1_500.0)
+               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 3_300.0)
 
       assert {:ok, %{decision: :accept, accepted: true}} =
-               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 1_500.001)
+               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 3_300.001)
 
       assert {:ok, %{decision: :refuse, influencing_splices: [], all_splices: []}} =
                SP3.continuity_verdict(merged, seam - 600.0, seam + 600.0,

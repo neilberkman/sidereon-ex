@@ -165,7 +165,29 @@ A runnable [`sidereon.livemd`](sidereon.livemd) walks through propagation,
 positioning, and conjunction screening; more notebooks live under
 [the examples directory](https://github.com/neilberkman/sidereon-ex/tree/main/examples).
 
+## SP3 interpolation policy and continuity
+
+Precise orbit interpolation fits polynomial stencils over consecutive ephemeris
+nodes. `Sidereon.GNSS.SP3.load/2`, `Sidereon.GNSS.SP3.parse/2`, and
+`Sidereon.GNSS.SP3.parse_exact/3` accept optional `:gap_threshold_factor`
+(default `1.5`, must be > 1.0) to configure the multiple of nominal node
+spacing above which consecutive records mark a coverage gap:
+
+```elixir
+# Parse SP3 with a relaxed gap threshold to bridge coverage gaps:
+{:ok, sp3} = Sidereon.GNSS.SP3.load("path/to/ephemeris.sp3", gap_threshold_factor: 13.0)
+13.0 = Sidereon.GNSS.SP3.gap_threshold_factor(sp3)
+```
+
+The configured policy propagates across the pipeline:
+- Carried by parsed `Sidereon.GNSS.SP3` products and retrievable with `Sidereon.GNSS.SP3.gap_threshold_factor/1`.
+- Configurable on sample sources via `Sidereon.GNSS.PreciseEphemeris.from_samples/2` and `Sidereon.GNSS.PreciseEphemeris.gap_threshold_factor/1`.
+- Inherited or overridden by cached interpolants via `Sidereon.GNSS.PreciseEphemeris.Interpolant.from_sp3/2`, `from_samples/2`, and `from_precise_ephemeris_samples/2`.
+- Persisted in binary store headers via `artifact_bytes/2` and restored on `open/1` via `Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact` and `PreciseInterpolantArtifact`.
+- Applied during continuity checks and multi-center merges with `Sidereon.GNSS.SP3.check_continuity/2`, `Sidereon.GNSS.SP3.continuity_verdict/4`, and `Sidereon.GNSS.SP3.merge/2` (under `verify_continuity: [gap_threshold_factor: ...]`).
+
 ## What's in the box
+
 
 - **Orbit propagation** SGP4 / SDP4 from TLE and OMM, numerical propagation
   with a composable force model (spherical-harmonic geopotential to selectable

@@ -17,8 +17,9 @@ defmodule Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact do
   @type digest_provenance :: InterpolantArtifact.digest_provenance()
 
   @doc "Build canonical artifact bytes from an SP3 product, an interpolant, or an opened artifact."
-  @spec artifact_bytes(SP3.t() | Interpolant.t() | t()) :: {:ok, binary()} | {:error, term()}
+  @spec artifact_bytes(SP3.t() | Interpolant.t() | t(), keyword()) :: {:ok, binary()} | {:error, term()}
   defdelegate artifact_bytes(source), to: InterpolantArtifact
+  defdelegate artifact_bytes(source, opts), to: InterpolantArtifact
 
   @doc "Open precise-interpolant artifact bytes."
   @spec open(binary()) :: {:ok, t()} | {:error, term()}
@@ -63,6 +64,10 @@ defmodule Sidereon.GNSS.PreciseEphemeris.PreciseInterpolantArtifact do
   @doc "Return the source time-scale abbreviation."
   @spec time_scale(t()) :: String.t()
   defdelegate time_scale(artifact), to: InterpolantArtifact
+
+  @doc "Return the position-interpolation gap threshold factor carried by this artifact."
+  @spec gap_threshold_factor(t()) :: float()
+  defdelegate gap_threshold_factor(artifact), to: InterpolantArtifact
 
   @doc "Return the satellite ids available in the artifact."
   @spec satellite_ids(t()) :: [String.t()]
