@@ -100,12 +100,14 @@ defmodule Sidereon.GNSS.DistributionTest do
     assert message =~ "duplicate expected:"
   end
 
-  test "exact product sets retain prediction tier metadata" do
+  test "exact product sets distinguish the predicted lines for one map date" do
     {:ok, one_day_product} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
     {:ok, two_day_product} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-14])
     {:ok, one_day} = Data.identity(one_day_product)
     {:ok, two_day} = Data.identity(two_day_product)
-    assert one_day.official_filename == two_day.official_filename
+    assert one_day.date == two_day.date
+    assert one_day.official_filename == "COD0OPSP0D_20261960000_01D_01H_GIM.INX"
+    assert two_day.official_filename == "COD0OPSP1D_20261960000_01D_01H_GIM.INX"
 
     assert {:error, {:exact_product_set, message}} =
              Data.validate_exact_product_set([one_day], [two_day])
@@ -268,29 +270,34 @@ defmodule Sidereon.GNSS.DistributionTest do
     end
   end
 
-  test "predicted IONEX direct paths preserve tier, year, and semantic identity", %{root: root} do
-    {:ok, p1} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
-    {:ok, p2} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
+  # CODE archives both predicted lines under `CODE/IONO/PRD/`, one filename
+  # token per prediction lead, with no year directory (recorded in
+  # `fixtures/listings/aiub-iono-prd-20260923.csv`).
+  test "predicted IONEX direct paths use the AIUB PRD archive and semantic identity", %{
+    root: root
+  } do
+    {:ok, one_day} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-15])
+    {:ok, two_day} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
 
     assert {:ok,
-            "https://www.aiub.unibe.ch/download/CODE/IONO/P1/2026/" <>
-              "COD0OPSPRD_20261960000_01D_01H_GIM.INX.gz"} = Data.archive_url(p1)
+            "https://www.aiub.unibe.ch/download/CODE/IONO/PRD/" <>
+              "COD0OPSP0D_20261960000_01D_01H_GIM.INX.gz"} = Data.archive_url(one_day)
 
     assert {:ok,
-            "https://www.aiub.unibe.ch/download/CODE/IONO/P2/2026/" <>
-              "COD0OPSPRD_20261970000_01D_01H_GIM.INX.gz"} = Data.archive_url(p2)
+            "https://www.aiub.unibe.ch/download/CODE/IONO/PRD/" <>
+              "COD0OPSP1D_20261970000_01D_01H_GIM.INX.gz"} = Data.archive_url(two_day)
 
-    {:ok, request} = Data.request(p1, [Distribution.in_memory(ionex_body(p1.date))])
+    {:ok, request} = Data.request(one_day, [Distribution.in_memory(ionex_body(one_day.date))])
     assert {:ok, result} = Data.acquire(request, cache_dir: root)
     assert result.provenance.requested_identity == request.identity
-    assert result.provenance.resolved_identity.date == p1.date
+    assert result.provenance.resolved_identity.date == one_day.date
 
     {:ok, boundary} = Data.predicted_ionex(:cod_prd2, ~D[2026-12-31])
     assert boundary.date == ~D[2027-01-01]
 
     assert {:ok,
-            "https://www.aiub.unibe.ch/download/CODE/IONO/P2/2027/" <>
-              "COD0OPSPRD_20270010000_01D_01H_GIM.INX.gz"} = Data.archive_url(boundary)
+            "https://www.aiub.unibe.ch/download/CODE/IONO/PRD/" <>
+              "COD0OPSP1D_20270010000_01D_01H_GIM.INX.gz"} = Data.archive_url(boundary)
   end
 
   test "wrong-date IONEX bytes fail with a typed validation error", %{root: root} do
@@ -301,18 +308,23 @@ defmodule Sidereon.GNSS.DistributionTest do
              Data.acquire(request, cache_dir: root)
   end
 
-  test "P1 and P2 with the same filename cannot share a cache hit", %{root: root} do
-    {:ok, p1} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-16])
-    {:ok, p2} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
-    {:ok, p1_identity} = Data.identity(p1)
-    {:ok, p2_identity} = Data.identity(p2)
-    assert p1_identity.official_filename == p2_identity.official_filename
+  test "the two predicted lines for one map date cannot share a cache hit", %{root: root} do
+    {:ok, one_day} = Data.predicted_ionex(:cod_prd1, ~D[2026-07-16])
+    {:ok, two_day} = Data.predicted_ionex(:cod_prd2, ~D[2026-07-15])
+    {:ok, one_day_identity} = Data.identity(one_day)
+    {:ok, two_day_identity} = Data.identity(two_day)
+    assert one_day_identity.date == two_day_identity.date
+    assert one_day_identity.official_filename == "COD0OPSP0D_20261970000_01D_01H_GIM.INX"
+    assert two_day_identity.official_filename == "COD0OPSP1D_20261970000_01D_01H_GIM.INX"
 
-    {:ok, seed} = Data.request(p1, [Distribution.in_memory(ionex_body(p1.date))])
+    {:ok, seed} = Data.request(one_day, [Distribution.in_memory(ionex_body(one_day.date))])
     assert {:ok, seeded} = Data.acquire(seed, cache_dir: root)
 
-    {:ok, exact_p2} = Data.request(p2, [Distribution.direct()])
-    assert {:error, :offline_cache_miss} = Data.acquire(exact_p2, cache_dir: root, offline: true)
+    {:ok, exact_two_day} = Data.request(two_day, [Distribution.direct()])
+
+    assert {:error, :offline_cache_miss} =
+             Data.acquire(exact_two_day, cache_dir: root, offline: true)
+
     refute String.contains?(seeded.path, "cod_prd2")
   end
 

@@ -5,8 +5,9 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
   The cross-line predicted-IONEX walk, the closed-dialect listing parsers,
   and newest-published-issue selection are pure and deterministic in
   `sidereon-core`; these tests check faithful marshaling against the archive
-  listings recorded live during the 2026-08-04 publication lag (the same
-  fixtures the core pins).
+  listings recorded live (the same fixtures the core pins): the GFZ and WHU
+  listings during the 2026-08-04 publication lag, and AIUB's whole-tree
+  listing of the CODE predicted-map archive `CODE/IONO/PRD/` on 2026-09-23.
   """
   use ExUnit.Case, async: true
 
@@ -25,10 +26,17 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
     assert {:ok, [one_day, two_day]} = Data.predicted_ionex_line_candidates(map_date)
     assert %Product{center: "cod_prd1", date: ^map_date} = one_day
     assert %Product{center: "cod_prd2", date: ^map_date} = two_day
-    # Same official filename, distinct archive lines.
-    assert one_day.filename == two_day.filename
-    assert one_day.url =~ "/IONO/P1/2026/"
-    assert two_day.url =~ "/IONO/P2/2026/"
+    # Same map date and archive directory, one filename token per line.
+    assert {:ok, "COD0OPSP0D_20262170000_01D_01H_GIM.INX"} = Data.canonical_filename(one_day)
+    assert {:ok, "COD0OPSP1D_20262170000_01D_01H_GIM.INX"} = Data.canonical_filename(two_day)
+
+    assert one_day.url ==
+             "https://www.aiub.unibe.ch/download/CODE/IONO/PRD/" <>
+               "COD0OPSP0D_20262170000_01D_01H_GIM.INX.gz"
+
+    assert two_day.url ==
+             "https://www.aiub.unibe.ch/download/CODE/IONO/PRD/" <>
+               "COD0OPSP1D_20262170000_01D_01H_GIM.INX.gz"
   end
 
   test "the walk stays whole across the civil year boundary" do
@@ -36,16 +44,50 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
     assert Enum.all?(candidates, &(&1.date == ~D[2027-01-01]))
   end
 
-  test "the recorded P1 gap resolves to P2 with the line named" do
+  test "the recorded one-day gap resolves to the two-day line with the line named" do
     assert {:ok, objects} =
-             Data.parse_archive_listing(fixture("aiub-iono-p1p2-20260804.csv"))
+             Data.parse_archive_listing(fixture("aiub-iono-prd-20260923.csv"))
 
-    assert {:ok, gap} = Data.predicted_ionex_line_candidates(~D[2026-08-05])
+    # Map date 266: the one-day object is not yet published, the two-day one is.
+    assert {:ok, gap} = Data.predicted_ionex_line_candidates(~D[2026-09-23])
     assert {:ok, 1} = Data.resolve_first_published(gap, objects)
     assert Enum.at(gap, 1).center == "cod_prd2"
+    assert Enum.at(gap, 1).date == ~D[2026-09-23]
+    assert {:ok, identity} = Data.identity(Enum.at(gap, 1))
+    assert identity.analysis_center == "cod_prd2"
+    assert identity.prediction_horizon_days == 2
+    assert identity.date == ~D[2026-09-23], "the map date is never substituted"
 
-    assert {:ok, both} = Data.predicted_ionex_line_candidates(~D[2026-08-04])
+    # Map date 265: both lines are published and the walk prefers one-day.
+    assert {:ok, both} = Data.predicted_ionex_line_candidates(~D[2026-09-22])
     assert {:ok, 0} = Data.resolve_first_published(both, objects)
+  end
+
+  test "the AIUB whole-tree listing separates the predicted lines by filename token" do
+    assert {:ok, objects} =
+             Data.parse_archive_listing(fixture("aiub-iono-prd-20260923.csv"))
+
+    # Rows with spaces in the path are objects, not grammar violations.
+    assert Enum.any?(objects, &String.contains?(&1.path, " "))
+
+    assert {:ok, one_day} = Data.newest_published_product(:cod_prd1, :ionex, objects)
+    assert one_day.date == ~D[2026-09-22]
+    assert one_day.filename == "COD0OPSP0D_20262650000_01D_01H_GIM.INX"
+    assert one_day.observed_at == "2026-09-22T10:00:02Z"
+
+    assert {:ok, two_day} = Data.newest_published_product(:cod_prd2, :ionex, objects)
+    assert two_day.date == ~D[2026-09-23]
+    assert two_day.filename == "COD0OPSP1D_20262660000_01D_01H_GIM.INX"
+    assert two_day.observed_at == "2026-09-22T10:00:02Z"
+
+    # The rolling copies CODE keeps at the tree root are not the archived
+    # objects and belong to neither line.
+    root_copies = Enum.reject(objects, &String.starts_with?(&1.path, "CODE/IONO/"))
+    assert Enum.any?(root_copies, &(&1.path == "CODE/COD0OPSP1D_20262660000_01D_01H_GIM.INX.gz"))
+
+    for center <- [:cod_prd1, :cod_prd2] do
+      assert {:ok, nil} = Data.newest_published_product(center, :ionex, root_copies)
+    end
   end
 
   test "newest_published_product reports the recorded GFZ lag" do
@@ -171,7 +213,7 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
 
           "https://download.aiub.unibe.ch/full_listing.csv" ->
             {:ok, 200, [],
-             "CODE/IONO/P2/2026/COD0OPSPRD_20262170000_01D_01H_GIM.INX.gz;1;" <>
+             "CODE/IONO/PRD/COD0OPSP1D_20262170000_01D_01H_GIM.INX.gz;1;" <>
                "2026-08-04T06:51:15Z;00\n"}
         end
       end

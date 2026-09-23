@@ -602,9 +602,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon"
-version = "2.1.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34f5f297673a6c59dd5f22fa93124f8502a1ffa39b4c5c3c2f75d764a2ead2d0"
+checksum = "5e89a28f55662eb126c21a639b333f7769721ac3ba84d6efe04b8254f570f618"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -613,9 +613,9 @@ dependencies = [
 
 [[package]]
 name = "sidereon-core"
-version = "2.1.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6dea92a59883415b579bded7065f8f233c4d069a1677c629685eef7b6620d17"
+checksum = "524bab044cce8033fd57c7b4daae6bfd463bb3296de96e83d998e3ec5931ae0e"
 dependencies = [
  "approx",
  "cc",
