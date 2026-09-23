@@ -444,8 +444,10 @@ defmodule Sidereon.GNSS.Data do
   @doc """
   Ordered cross-line candidates for one predicted IONEX map date.
 
-  CODE publishes two predicted lines for every map date; both carry the same
-  official filename, but the two-day line is produced a day earlier, so
+  CODE publishes two predicted lines for every map date, both archived under
+  `CODE/IONO/PRD/`: the one-day line `COD0OPSP0D_*` (`cod_prd1`) and the
+  two-day line `COD0OPSP1D_*` (`cod_prd2`). The filename date is the map date
+  in both lines, but the two-day line is produced a day earlier, so
   `cod_prd2`'s artifact for a map date is routinely published while
   `cod_prd1`'s is still absent whenever CODE runs behind. Candidates are
   ordered `cod_prd1` first, all cover the SAME map date (the walk never
