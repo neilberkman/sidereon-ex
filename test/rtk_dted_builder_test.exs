@@ -3,8 +3,9 @@ defmodule Sidereon.RtkDtedBuilderTest do
 
   alias Sidereon.GNSS.RINEX.Observations, as: RinexObservations
   alias Sidereon.GNSS.RTK
-  alias Sidereon.GNSS.RTK.{DualFrequencyRinexArc, IonosphereFreeArcSolution, RinexArc}
+  alias Sidereon.GNSS.RTK.{DualFrequencyRinexArc, IonosphereFreeArcSolution, RinexArc, RinexUnresolvedCarrier}
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.Time.ExactEpoch
   alias Sidereon.Terrain.MmapTerrain
   alias Sidereon.Terrain.MmapTerrain.{DtedTileListEntry, TerrainStoreError, TerrainTileId}
 
@@ -30,8 +31,10 @@ defmodule Sidereon.RtkDtedBuilderTest do
 
     assert RinexArc.epoch_count(arc) == 2
     assert RinexArc.skipped_epoch_count(arc) == 0
+    assert RinexArc.unresolved_carriers(arc) == []
 
     [first | _] = RinexArc.epochs(arc)
+    assert %ExactEpoch{} = first.prediction_epoch
     satellite_ids = Enum.map(first.base, & &1.satellite_id)
 
     assert satellite_ids == Enum.sort(satellite_ids)
@@ -61,6 +64,7 @@ defmodule Sidereon.RtkDtedBuilderTest do
 
     assert DualFrequencyRinexArc.epoch_count(arc) == 2
     assert DualFrequencyRinexArc.skipped_epoch_count(arc) == 0
+    assert DualFrequencyRinexArc.unresolved_carriers(arc) == []
 
     [first | _] = DualFrequencyRinexArc.epochs(arc)
     satellite_ids = Enum.map(first.observations, & &1.satellite_id)
@@ -81,14 +85,88 @@ defmodule Sidereon.RtkDtedBuilderTest do
     assert is_float(first.jd_fraction)
     assert is_binary(first.epoch_sort_key)
     assert is_float(first.gap_time_s)
+    assert %ExactEpoch{} = first.gap_epoch
+    assert %ExactEpoch{} = first.prediction_epoch
 
     [baseline_epoch | _] = DualFrequencyRinexArc.baseline_epochs(arc)
+    assert ExactEpoch.equal?(baseline_epoch.gap_epoch, first.gap_epoch)
+    assert ExactEpoch.equal?(baseline_epoch.prediction_epoch, first.prediction_epoch)
     assert is_number(baseline_epoch.epoch)
     assert baseline_epoch.jd_whole == first.jd_whole
     assert baseline_epoch.jd_fraction == first.jd_fraction
     assert Enum.map(baseline_epoch.base_observations, & &1.satellite_id) == satellite_ids
     assert Enum.all?(baseline_epoch.base_observations, &Map.has_key?(&1, :phi1_cyc))
     refute Enum.any?(baseline_epoch.base_observations, &Map.has_key?(&1, :phi1_cycles))
+  end
+
+  describe "unresolved carriers" do
+    @gps_and_glonass_l1 [
+      %{system: "G", code_observable: "C1C", phase_observable: "L1C"},
+      %{system: "R", code_observable: "C1C", phase_observable: "L1C"}
+    ]
+
+    test "a GLONASS slot with no channel is left out and reported, not failing the arc", context do
+      # The same base file without its `GLONASS SLOT / FRQ #` table: no GLONASS
+      # FDMA carrier resolves at the base, so each GLONASS measurement is left
+      # out of its epoch and reported, and the GPS measurements build the arc.
+      base_text =
+        @base_obs_path
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.reject(&String.contains?(&1, "GLONASS SLOT / FRQ #"))
+        |> Enum.join("\n")
+
+      assert {:ok, base_without_channels} = RinexObservations.parse(base_text)
+
+      assert {:ok, %RinexArc{} = arc} =
+               RTK.build_rinex_rtk_arc(context.sp3, base_without_channels, context.rover_obs,
+                 signal_pairs: @gps_and_glonass_l1,
+                 max_epochs: 2
+               )
+
+      assert RinexArc.epoch_count(arc) == 2
+      unresolved = RinexArc.unresolved_carriers(arc)
+      assert unresolved != []
+
+      assert Enum.all?(unresolved, fn
+               %RinexUnresolvedCarrier{
+                 receiver: :base,
+                 epoch_index: epoch_index,
+                 satellite_id: "R" <> _,
+                 observable_code: "L1C"
+               } ->
+                 epoch_index in [0, 1]
+
+               _ ->
+                 false
+             end)
+
+      # One entry per satellite and epoch: the single configured GLONASS pair
+      # names one phase observable.
+      assert length(Enum.uniq_by(unresolved, &{&1.epoch_index, &1.satellite_id})) == length(unresolved)
+
+      reported = unresolved |> MapSet.new(& &1.satellite_id)
+
+      for epoch <- RinexArc.epochs(arc) do
+        ids = Enum.map(epoch.base, & &1.satellite_id)
+        assert Enum.all?(ids, &String.starts_with?(&1, "G"))
+        assert MapSet.disjoint?(MapSet.new(ids), reported)
+      end
+
+      # With its channel table the same base resolves every GLONASS carrier.
+      assert {:ok, %RinexArc{} = with_channels} =
+               RTK.build_rinex_rtk_arc(context.sp3, context.base_obs, context.rover_obs,
+                 signal_pairs: @gps_and_glonass_l1,
+                 max_epochs: 2
+               )
+
+      assert RinexArc.unresolved_carriers(with_channels) == []
+    end
+
+    test "the native tuple decodes into the struct field by field" do
+      assert RinexUnresolvedCarrier.from_native({:rover, 7, "R28", "L1C"}) ==
+               %RinexUnresolvedCarrier{receiver: :rover, epoch_index: 7, satellite_id: "R28", observable_code: "L1C"}
+    end
   end
 
   test "dual-frequency baseline epoch contract documents split Julian metadata" do
@@ -120,6 +198,8 @@ defmodule Sidereon.RtkDtedBuilderTest do
                _ -> false
              end)
 
+    # The typedoc is wrapped prose, so a phrase may cross a line break.
+    typedoc = String.replace(typedoc, ~r/\s+/, " ")
     assert typedoc =~ ":jd_whole"
     assert typedoc =~ ":jd_fraction"
     assert typedoc =~ "civil `:epoch`"

@@ -5,7 +5,7 @@
 //! functions, and encodes `{:ok, seconds}` / `{:error, reason}`. The offset
 //! algebra (atomic constants, leap-second resolution) lives in the crate.
 
-use rustler::{Encoder, Env, Term};
+use rustler::{Encoder, Env, ResourceArc, Term};
 use sidereon_core::astro::time::civil;
 use sidereon_core::astro::time::model::{Instant, TimeScale};
 use sidereon_core::astro::time::scales::{
@@ -13,6 +13,7 @@ use sidereon_core::astro::time::scales::{
     leap_second_table, tai_utc_offset_s as core_tai_utc_offset_s, ut1_coverage,
 };
 use sidereon_core::astro::time::{timescale_offset_at_s, timescale_offset_s, TimeOffsetError};
+use sidereon_core::astro::time::{ExactEpoch, ExactEpochQuery};
 
 mod atoms {
     rustler::atoms! {
@@ -22,8 +23,211 @@ mod atoms {
         epoch_required,
         unsupported,
         non_finite_epoch,
-        invalid_instant
+        invalid_instant,
+        invalid_exact_epoch,
+        less,
+        equal,
+        greater
     }
+}
+
+pub struct ExactEpochResource {
+    pub epoch: ExactEpoch,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ExactEpochResource {}
+
+pub struct ExactEpochQueryResource {
+    pub query: ExactEpochQuery,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ExactEpochQueryResource {}
+
+fn encode_exact_epoch<'a>(env: Env<'a>, epoch: ExactEpoch) -> Term<'a> {
+    (atoms::ok(), ResourceArc::new(ExactEpochResource { epoch })).encode(env)
+}
+
+fn encode_exact_query<'a>(env: Env<'a>, query: ExactEpochQuery) -> Term<'a> {
+    (
+        atoms::ok(),
+        ResourceArc::new(ExactEpochQueryResource { query }),
+    )
+        .encode(env)
+}
+
+#[rustler::nif]
+fn exact_epoch_from_civil<'a>(
+    env: Env<'a>,
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: f64,
+) -> Term<'a> {
+    match ExactEpoch::from_civil(year, month, day, hour, minute, second) {
+        Some(epoch) => encode_exact_epoch(env, epoch),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_new<'a>(env: Env<'a>, seconds: i64, attoseconds: u64) -> Term<'a> {
+    match ExactEpoch::new(seconds, attoseconds) {
+        Some(epoch) => encode_exact_epoch(env, epoch),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_from_j2000_seconds<'a>(env: Env<'a>, seconds: f64) -> Term<'a> {
+    match ExactEpoch::from_j2000_seconds(seconds) {
+        Some(epoch) => encode_exact_epoch(env, epoch),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_fields(
+    handle: rustler::ResourceArc<ExactEpochResource>,
+) -> (i64, u64, (i64, u16), f64) {
+    let epoch = handle.epoch;
+    (
+        epoch.whole_seconds(),
+        epoch.attoseconds(),
+        epoch.sub_attosecond(),
+        epoch.j2000_seconds(),
+    )
+}
+
+#[rustler::nif]
+fn exact_epoch_seconds_since(
+    later: rustler::ResourceArc<ExactEpochResource>,
+    earlier: rustler::ResourceArc<ExactEpochResource>,
+) -> f64 {
+    later.epoch.seconds_since(earlier.epoch)
+}
+
+#[rustler::nif]
+fn exact_epoch_checked_add_seconds<'a>(
+    env: Env<'a>,
+    handle: rustler::ResourceArc<ExactEpochResource>,
+    seconds: f64,
+) -> Term<'a> {
+    match handle.epoch.checked_add_seconds(seconds) {
+        Some(epoch) => encode_exact_epoch(env, epoch),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_checked_sub_seconds<'a>(
+    env: Env<'a>,
+    handle: rustler::ResourceArc<ExactEpochResource>,
+    seconds: f64,
+) -> Term<'a> {
+    match handle.epoch.checked_sub_seconds(seconds) {
+        Some(epoch) => encode_exact_epoch(env, epoch),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_split_julian_date(handle: rustler::ResourceArc<ExactEpochResource>) -> (f64, f64) {
+    handle.epoch.split_julian_date()
+}
+
+#[rustler::nif]
+fn exact_epoch_compare(
+    later: rustler::ResourceArc<ExactEpochResource>,
+    earlier: rustler::ResourceArc<ExactEpochResource>,
+) -> rustler::Atom {
+    match later.epoch.cmp(&earlier.epoch) {
+        std::cmp::Ordering::Less => atoms::less(),
+        std::cmp::Ordering::Equal => atoms::equal(),
+        std::cmp::Ordering::Greater => atoms::greater(),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_query(
+    handle: rustler::ResourceArc<ExactEpochResource>,
+) -> rustler::ResourceArc<ExactEpochQueryResource> {
+    rustler::ResourceArc::new(ExactEpochQueryResource {
+        query: handle.epoch.query(),
+    })
+}
+
+#[rustler::nif]
+fn exact_epoch_query_from_binary_j2000_seconds<'a>(env: Env<'a>, seconds: f64) -> Term<'a> {
+    match ExactEpoch::from_binary_j2000_seconds(seconds) {
+        Some(query) => encode_exact_query(env, query),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_query_epoch(
+    handle: rustler::ResourceArc<ExactEpochQueryResource>,
+) -> rustler::ResourceArc<ExactEpochResource> {
+    rustler::ResourceArc::new(ExactEpochResource {
+        epoch: handle.query.epoch(),
+    })
+}
+
+#[rustler::nif]
+fn exact_epoch_query_add_binary_seconds<'a>(
+    env: Env<'a>,
+    handle: rustler::ResourceArc<ExactEpochQueryResource>,
+    seconds: f64,
+) -> Term<'a> {
+    match handle.query.clone().checked_add_binary_seconds(seconds) {
+        Some(query) => encode_exact_query(env, query),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_query_sub_binary_seconds<'a>(
+    env: Env<'a>,
+    handle: rustler::ResourceArc<ExactEpochQueryResource>,
+    seconds: f64,
+) -> Term<'a> {
+    match handle.query.clone().checked_sub_binary_seconds(seconds) {
+        Some(query) => encode_exact_query(env, query),
+        None => (atoms::error(), atoms::invalid_exact_epoch()).encode(env),
+    }
+}
+
+#[rustler::nif]
+fn exact_epoch_query_seconds_since(
+    query: rustler::ResourceArc<ExactEpochQueryResource>,
+    earlier: rustler::ResourceArc<ExactEpochResource>,
+) -> f64 {
+    query.query.seconds_since(earlier.epoch)
+}
+
+#[rustler::nif]
+fn exact_epoch_query_seconds_since_query(
+    query: rustler::ResourceArc<ExactEpochQueryResource>,
+    earlier: rustler::ResourceArc<ExactEpochQueryResource>,
+) -> f64 {
+    query.query.seconds_since_query(&earlier.query)
+}
+
+#[rustler::nif]
+fn exact_epoch_query_equal(
+    left: rustler::ResourceArc<ExactEpochQueryResource>,
+    right: rustler::ResourceArc<ExactEpochQueryResource>,
+) -> bool {
+    left.query == right.query
+}
+
+#[rustler::nif]
+fn exact_epoch_query_j2000_seconds(handle: rustler::ResourceArc<ExactEpochQueryResource>) -> f64 {
+    handle.query.j2000_seconds()
 }
 
 /// Map a time-scale abbreviation onto the core [`TimeScale`]. Covers every
@@ -219,4 +423,23 @@ fn civil_utc_instant_split<'a>(
         Some(split) => (atoms::ok(), (split.jd_whole, split.fraction)).encode(env),
         None => (atoms::error(), atoms::invalid_instant()).encode(env),
     }
+}
+
+/// Typed sibling for callers that need the core TimeModelError fields.
+#[rustler::nif]
+fn civil_utc_instant_split_detailed<'a>(
+    env: Env<'a>,
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: f64,
+) -> Result<Term<'a>, rustler::Error> {
+    let instant = Instant::from_utc_civil(year, month, day, hour, minute, second)
+        .map_err(crate::tropo::time_model_error_detail)?;
+    let split = instant
+        .julian_date()
+        .ok_or_else(|| rustler::Error::Term(Box::new(atoms::invalid_instant())))?;
+    Ok((atoms::ok(), (split.jd_whole, split.fraction)).encode(env))
 }

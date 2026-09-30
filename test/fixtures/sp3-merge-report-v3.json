@@ -1,0 +1,346 @@
+{
+  "absent": [
+    {
+      "center": "cod",
+      "filename": "COD0MGXFIN_20261970000_01D_05M_ORB.SP3",
+      "http_status": 404,
+      "pattern": "canonical",
+      "reason": "product_not_published",
+      "url": "https://example.invalid/COD0MGXFIN_20261970000_01D_05M_ORB.SP3.gz"
+    }
+  ],
+  "contributors": [
+    {
+      "acquisition_facts": {
+        "attempts": [
+          {
+            "error_type": "transport_failure",
+            "message": "transport:timeout",
+            "source": "direct",
+            "status": null,
+            "url": "https://example.invalid/ESA0MGNFIN_20261970000_01D_05M_ORB.SP3.gz"
+          },
+          {
+            "detail": "{:tls_alert, :bad_record_mac}",
+            "error_type": "unclassified_failure",
+            "message": "{:tls_alert, :bad_record_mac}",
+            "source": "direct",
+            "status": null,
+            "url": "https://example.invalid/ESA0MGNFIN_20261970000_01D_05M_ORB.SP3.gz"
+          }
+        ],
+        "cache_hit": false,
+        "etag": null,
+        "final_url": "https://example.invalid/ESA0MGNFIN_20261970000_01D_05M_ORB.SP3.gz",
+        "last_modified": null,
+        "original_url": "https://example.invalid/ESA0MGNFIN_20261970000_01D_05M_ORB.SP3.gz",
+        "retrieved_at": "2026-07-16T12:00:00+00:00",
+        "schema_version": 1
+      },
+      "artifact_identity": {
+        "archive_byte_length": 6789,
+        "archive_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+        "compression": "gzip",
+        "distribution_source": "direct",
+        "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+        "product_byte_length": 12345,
+        "product_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "requested_identity": {
+          "analysis_center": "esa",
+          "campaign": "MGN",
+          "date": "2026-07-16",
+          "family": "sp3",
+          "filename_version": 0,
+          "format": "SP3",
+          "format_version": null,
+          "issue": "0000",
+          "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+          "prediction_horizon_days": null,
+          "publisher": "ESA",
+          "sample": "05M",
+          "solution_class": "final",
+          "span": "01D"
+        },
+        "resolved_identity": {
+          "analysis_center": "esa",
+          "campaign": "MGN",
+          "date": "2026-07-16",
+          "family": "sp3",
+          "filename_version": 0,
+          "format": "SP3",
+          "format_version": "SP3-d",
+          "issue": "0000",
+          "official_filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+          "prediction_horizon_days": null,
+          "publisher": "ESA",
+          "sample": "05M",
+          "solution_class": "final",
+          "span": "01D"
+        },
+        "schema_version": 1
+      },
+      "center": "esa",
+      "date": "2026-07-16",
+      "filename": "ESA0MGNFIN_20261970000_01D_05M_ORB.SP3",
+      "issue": null,
+      "pattern": "canonical"
+    }
+  ],
+  "input_identity_schema_version": 1,
+  "merge_policy": {
+    "asserted_frame_label_sets": [
+      [
+        "IGS14",
+        "ITRF2014"
+      ],
+      [
+        "IGS20",
+        "ITRF2020"
+      ]
+    ],
+    "clock_min_common": 3,
+    "clock_tolerance_s": 2.5e-09,
+    "combine": "mean",
+    "helmert": true,
+    "min_agree": 2,
+    "outlier_reject": {
+      "clock_tolerance_s": 7.5e-09,
+      "position_tolerance_m": 1.25
+    },
+    "position_tolerance_m": 0.0,
+    "precedence_artifact_sha256": [],
+    "precedence_scope": "satellite_arc",
+    "provenance": "full",
+    "schema_version": 2,
+    "systems": [
+      "E",
+      "G"
+    ],
+    "target_epoch_interval_s": 900.0,
+    "verify_continuity": {
+      "gap_threshold_factor": null,
+      "orbit_class": "meo_gnss",
+      "residual_tolerance_m": null
+    }
+  },
+  "merge_report": {
+    "agreement": {
+      "cells": [
+        {
+          "clock_max_s": 0.0,
+          "clock_members": 1,
+          "clock_rms_s": 0.0,
+          "jd_fraction": 0.0,
+          "jd_whole": 2461237.5,
+          "position_max_m": 0.0,
+          "position_members": 1,
+          "position_rms_m": 0.0,
+          "satellite": "G01"
+        },
+        {
+          "clock_max_s": 0.0,
+          "clock_members": 1,
+          "clock_rms_s": 0.0,
+          "jd_fraction": 0.010416666666666666,
+          "jd_whole": 2461237.5,
+          "position_max_m": 0.0,
+          "position_members": 1,
+          "position_rms_m": 0.0,
+          "satellite": "G01"
+        }
+      ],
+      "clock_max_s": 0.0,
+      "clock_rms_s": null,
+      "epochs": [
+        {
+          "clock_max_s": null,
+          "clock_rms_s": null,
+          "jd_fraction": 0.0,
+          "jd_whole": 2461237.5,
+          "position_max_m": null,
+          "position_rms_m": null,
+          "satellites": 0
+        },
+        {
+          "clock_max_s": null,
+          "clock_rms_s": null,
+          "jd_fraction": 0.010416666666666666,
+          "jd_whole": 2461237.5,
+          "position_max_m": null,
+          "position_rms_m": null,
+          "satellites": 0
+        }
+      ],
+      "position_max_m": 0.0,
+      "position_rms_m": null
+    },
+    "arc_withheld": [],
+    "clock_omissions": [],
+    "clock_outliers": [],
+    "continuity": {
+      "attested": false,
+      "defects": [
+        {
+          "bound": 6111.346339724744,
+          "bound_m_s": 6111.346339724744,
+          "displacement_m": 10000000.0,
+          "from_j2000_s": 837432000.0,
+          "implied_speed_m_s": 11111.111111111111,
+          "interval_s": 900.0,
+          "kind": "speed_bound",
+          "magnitude": 11111.111111111111,
+          "satellite": "G01",
+          "to_j2000_s": 837432900.0
+        }
+      ],
+      "pairs_checked": 1,
+      "residuals_checked": 0,
+      "residuals_skipped": 0,
+      "splices": [],
+      "violations": [
+        {
+          "cells": [
+            {
+              "epoch_j2000_s": 837432000.0,
+              "role": "pair_end",
+              "selection": {
+                "kind": "single_source",
+                "source": 0
+              }
+            },
+            {
+              "epoch_j2000_s": 837432900.0,
+              "role": "pair_end",
+              "selection": {
+                "kind": "single_source",
+                "source": 0
+              }
+            }
+          ],
+          "crosses_contributors": false,
+          "defect": {
+            "bound": 6111.346339724744,
+            "bound_m_s": 6111.346339724744,
+            "displacement_m": 10000000.0,
+            "from_j2000_s": 837432000.0,
+            "implied_speed_m_s": 11111.111111111111,
+            "interval_s": 900.0,
+            "kind": "speed_bound",
+            "magnitude": 11111.111111111111,
+            "satellite": "G01",
+            "to_j2000_s": 837432900.0
+          },
+          "from_sources": [
+            0
+          ],
+          "sources": [
+            0
+          ],
+          "to_sources": [
+            0
+          ]
+        }
+      ]
+    },
+    "dropped_input_epochs": [],
+    "frame_reconciliations": [],
+    "omitted_epochs": [],
+    "position_outliers": [],
+    "provenance": {
+      "cells": [
+        {
+          "clock": {
+            "kind": "single_source",
+            "source": 0
+          },
+          "epoch": {
+            "jd_fraction": 0.0,
+            "jd_whole": 2461237.5,
+            "time_scale": "GPST"
+          },
+          "position": {
+            "kind": "single_source",
+            "source": 0
+          },
+          "satellite": "G01"
+        },
+        {
+          "clock": {
+            "kind": "single_source",
+            "source": 0
+          },
+          "epoch": {
+            "jd_fraction": 0.010416666666666666,
+            "jd_whole": 2461237.5,
+            "time_scale": "GPST"
+          },
+          "position": {
+            "kind": "single_source",
+            "source": 0
+          },
+          "satellite": "G01"
+        }
+      ],
+      "coverage": [
+        {
+          "cells_absent": 0,
+          "cells_contributed": 2,
+          "cells_selected": 2,
+          "first_epoch": {
+            "jd_fraction": 0.0,
+            "jd_whole": 2461237.5,
+            "time_scale": "GPST"
+          },
+          "last_epoch": {
+            "jd_fraction": 0.010416666666666666,
+            "jd_whole": 2461237.5,
+            "time_scale": "GPST"
+          },
+          "source": 0
+        }
+      ],
+      "mode": "full",
+      "transitions": [
+        {
+          "epoch": {
+            "jd_fraction": 0.0,
+            "jd_whole": 2461237.5,
+            "time_scale": "GPST"
+          },
+          "from_source": null,
+          "reason": "sole_availability",
+          "satellite": "G01",
+          "to_source": 0
+        }
+      ]
+    },
+    "quarantined": [],
+    "single_source": [
+      {
+        "jd_fraction": 0.0,
+        "jd_whole": 2461237.5,
+        "satellite": "G01",
+        "sources": [
+          0
+        ]
+      },
+      {
+        "jd_fraction": 0.010416666666666666,
+        "jd_whole": 2461237.5,
+        "satellite": "G01",
+        "sources": [
+          0
+        ]
+      }
+    ]
+  },
+  "merged": true,
+  "requested_centers": [
+    "esa",
+    "cod"
+  ],
+  "schema_version": 3,
+  "single_product": true,
+  "source_count": 1,
+  "stable_input_identity": "sidereon-sp3-merge-input-v1:61b7a723717a9e03db1701d769e965e18ce81c87ed2caffae33e9e0c41e75c94"
+}

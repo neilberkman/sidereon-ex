@@ -8,6 +8,7 @@ defmodule Sidereon.Astro.Almanac do
 
   alias Sidereon.Ephemeris
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type time :: DateTime.t() | NaiveDateTime.t() | {tuple(), tuple()}
 
@@ -97,7 +98,7 @@ defmodule Sidereon.Astro.Almanac do
       {:error, _} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, nif)
   end
 
   defp default_step(:almanac_moon_phases_analytic), do: 86_400.0

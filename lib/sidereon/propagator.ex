@@ -7,6 +7,7 @@ defmodule Sidereon.Propagator do
   """
 
   alias Sidereon.Drag.Parameters
+  alias Sidereon.NifCall
   alias Sidereon.SpaceWeather
 
   @type vec3 :: {float(), float(), float()}
@@ -30,6 +31,10 @@ defmodule Sidereon.Propagator do
       or `[:earth_phase_a]` (default: `[:twobody]`)
     * `:drag` - optional `%Sidereon.Drag.Parameters{}` drag model
     * `:space_weather_table` - optional `%Sidereon.SpaceWeather{}` used with `:drag`
+    * `:space_weather_policy` - the `Sidereon.SpaceWeather.Policy` (or keyword
+      list) the table is read under; without it the default policy, which
+      refuses Ap values the file does not state and rows with no flux
+      observation
     * `:epoch_tdb_seconds` - initial epoch for table-backed drag (default: 0.0)
   """
   @spec propagate(state(), float(), keyword()) :: {:ok, state()} | {:error, any()}
@@ -54,7 +59,8 @@ defmodule Sidereon.Propagator do
           tol,
           tol,
           drag_map(drag),
-          handle
+          handle,
+          space_weather_policy(opts)
         )
 
       {nil, %SpaceWeather{}} ->
@@ -81,7 +87,14 @@ defmodule Sidereon.Propagator do
       covariance_options(opts)
     )
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :propagate_covariance)
+  end
+
+  defp space_weather_policy(opts) do
+    case Keyword.get(opts, :space_weather_policy) do
+      nil -> nil
+      policy -> SpaceWeather.policy_to_native(policy)
+    end
   end
 
   defp drag_map(%Parameters{} = drag) do
@@ -159,6 +172,10 @@ defmodule Sidereon.Propagator do
   end
 
   defp force_token(:solid_earth_tide), do: "solid_earth_tide"
+
+  defp force_token({:solid_earth_tide, tide_system}) when tide_system in [:tide_free, :zero_tide, :mean_tide],
+    do: "solid_earth_tide:#{tide_system}"
+
   defp force_token(:solid_earth_pole_tide), do: "solid_earth_pole_tide"
 
   defp force_token(value), do: to_string(value)

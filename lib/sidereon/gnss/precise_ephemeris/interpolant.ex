@@ -1,6 +1,6 @@
 defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   @moduledoc """
-  Cached precise-ephemeris interpolant and batched satellite-state queries.
+  Cached precise-ephemeris interpolation and exact source-level queries.
 
   A parsed SP3 product or a sample-built precise source can be converted into a
   persistent interpolant handle. The handle copies the interpolation nodes once,
@@ -9,16 +9,21 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
 
   State batches return satellite positions in ITRF/IGS ECEF metres and satellite
   clocks in seconds. Query epochs are seconds since J2000 in the source's own
-  time scale.
+  time scale. Exact source-hook functions also accept broadcast handles and
+  preserve independent state and record-selection queries.
   """
 
+  alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.PreciseEphemeris
   alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
+  alias Sidereon.GNSS.PreciseEphemerisAccuracySample
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.Time.ExactEpochQuery
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @max_checksum64 0xFFFF_FFFF_FFFF_FFFF
 
@@ -26,7 +31,8 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   defstruct [:handle, :time_scale, artifact?: false, byte_len: nil, bytes: nil]
 
   @typedoc "Precise source accepted by interpolant batch evaluators."
-  @type source :: SP3.t() | PreciseEphemeris.t() | t() | InterpolantArtifact.t()
+  @type source ::
+          SP3.t() | Broadcast.t() | PreciseEphemeris.t() | t() | InterpolantArtifact.t()
 
   @typedoc "Cached precise-ephemeris interpolant or opened artifact handle."
   @type t :: %__MODULE__{
@@ -50,6 +56,9 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   Options:
     * `:gap_threshold_factor` - override the position-interpolation gap threshold
       factor (default inherits from product).
+
+  A numeric factor at or below `1.0` returns the typed
+  `PreciseEphemeris.interpolation_error()` map.
   """
   @spec from_sp3(SP3.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def from_sp3(%SP3{handle: handle}, opts \\ []) do
@@ -70,6 +79,37 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   @doc """
+  Evaluate states for parallel satellite and epoch arrays, retaining structured
+  core error details for failed rows. The legacy `states_at_j2000_s/3` return
+  format is unchanged.
+  """
+  @spec states_at_j2000_s_detailed(source(), [String.t()], [number()]) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def states_at_j2000_s_detailed(source, satellites, epochs_j2000_s)
+      when is_list(satellites) and is_list(epochs_j2000_s) do
+    with {:ok, handle} <- source_handle(source),
+         {:ok, sat_terms} <- satellite_terms(satellites) do
+      case NIF.observable_states_at_j2000_s_detailed(
+             handle,
+             sat_terms,
+             Enum.map(epochs_j2000_s, &(&1 / 1.0))
+           ) do
+        {:ok, tuple} -> {:ok, StateBatch.from_nif_tuple(tuple)}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
+  end
+
+  @doc "Alias for `states_at_j2000_s_detailed/3`."
+  @spec observable_states_at_j2000_s_detailed(source(), [String.t()], [number()]) ::
+          {:ok, StateBatch.t()} | {:error, term()}
+  def observable_states_at_j2000_s_detailed(source, satellites, epochs_j2000_s),
+    do: states_at_j2000_s_detailed(source, satellites, epochs_j2000_s)
+
+  @doc """
   Build a cached interpolant directly from precise ephemeris samples.
 
   Samples are `Sidereon.GNSS.PreciseEphemerisSample` structs. They must use one
@@ -80,8 +120,12 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   Options:
     * `:gap_threshold_factor` - multiple of nominal node spacing above which
       consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
+
+  A numeric factor at or below `1.0` returns the typed
+  `PreciseEphemeris.interpolation_error()` map.
   """
-  @spec from_samples([PreciseEphemerisSample.t()], keyword()) :: {:ok, t()} | {:error, term()}
+  @spec from_samples([PreciseEphemerisSample.t()], keyword()) ::
+          {:ok, t()} | {:error, PreciseEphemeris.construction_error()}
   def from_samples(samples, opts \\ []) when is_list(samples) do
     with {:ok, factor} <- normalize_gap_threshold_factor(opts),
          {:ok, tuples} <- to_nif_tuples(samples) do
@@ -101,14 +145,39 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   end
 
   @doc """
+  Build a cached interpolant from samples and aligned accuracy sidecars.
+
+  A numeric `:gap_threshold_factor` at or below `1.0` returns the typed
+  `PreciseEphemeris.interpolation_error()` map.
+  """
+  @spec from_samples_with_accuracy(
+          [PreciseEphemerisSample.t()],
+          [PreciseEphemerisAccuracySample.t()],
+          keyword()
+        ) :: {:ok, t()} | {:error, PreciseEphemeris.construction_error()}
+  def from_samples_with_accuracy(samples, accuracy, opts \\ [])
+
+  def from_samples_with_accuracy(samples, accuracy, opts) when is_list(samples) and is_list(accuracy) do
+    with {:ok, source} <- PreciseEphemeris.from_samples_with_accuracy(samples, accuracy, opts) do
+      from_precise_ephemeris_samples(source, opts)
+    end
+  end
+
+  def from_samples_with_accuracy(_samples, _accuracy, _opts), do: {:error, :invalid_accuracy_samples}
+
+  @doc """
   Build a cached interpolant from a sample-backed precise ephemeris source.
 
   This reuses the already validated `Sidereon.GNSS.PreciseEphemeris` handle and
-  copies its prepared interpolation nodes.
+  copies its prepared interpolation nodes. A numeric `:gap_threshold_factor` at
+  or below `1.0` returns the typed `PreciseEphemeris.interpolation_error()` map.
 
   Options:
     * `:gap_threshold_factor` - override the position-interpolation gap threshold
       factor (default inherits from source).
+
+  A numeric factor at or below `1.0` returns the typed
+  `PreciseEphemeris.interpolation_error()` map.
   """
   @spec from_precise_ephemeris_samples(PreciseEphemeris.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def from_precise_ephemeris_samples(%PreciseEphemeris{handle: handle}, opts \\ []) do
@@ -134,7 +203,8 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
 
   The returned binary is deterministic for a deterministic source and can be
   persisted by the caller. `open/1` reads the same bytes back into an evaluation
-  handle.
+  handle. A numeric `:gap_threshold_factor` at or below `1.0` returns the typed
+  `PreciseEphemeris.interpolation_error()` map.
 
   Options:
     * `:gap_threshold_factor` - override the position-interpolation gap threshold
@@ -347,7 +417,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not read interpolant gap threshold factor: #{inspect(e.original)}"],
+              [message: "could not read interpolant gap threshold factor: #{NifCall.describe(e)}"],
               __STACKTRACE__
   end
 
@@ -363,7 +433,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not read interpolant satellite ids: #{inspect(e.original)}"],
+              [message: "could not read interpolant satellite ids: #{NifCall.describe(e)}"],
               __STACKTRACE__
   end
 
@@ -382,6 +452,138 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
          {:ok, %{position_ecef_m: {x_m, y_m, z_m}, clock_s: clock_s}} <- StateBatch.element(batch, 0) do
       {:ok, %SP3.State{x_m: x_m, y_m: y_m, z_m: z_m, clock_s: clock_s}}
     end
+  end
+
+  @doc "Evaluate a satellite state at an exact epoch query without rounding its absolute epoch."
+  @spec position_at_epoch_query(source(), String.t(), ExactEpochQuery.t()) ::
+          {:ok, SP3.State.t()} | {:error, term()}
+  def position_at_epoch_query(source, sat_id, %ExactEpochQuery{handle: query}) when is_binary(sat_id) do
+    with {:ok, handle} <- source_handle(source),
+         {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.precise_interpolant_position_at_epoch_query(handle, letter, prn, query) do
+        {:ok, {x_m, y_m, z_m, clock_s}} ->
+          {:ok, %SP3.State{x_m: x_m, y_m: y_m, z_m: z_m, clock_s: clock_s}}
+
+        {:error, _} = error ->
+          error
+
+        other ->
+          {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :precise_interpolant_position_at_epoch_query)
+  end
+
+  def position_at_epoch_query(_source, _sat_id, _query), do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read a selected source state while retaining exact state and selection queries."
+  @spec selected_state_at_epoch_queries(
+          source(),
+          String.t(),
+          ExactEpochQuery.t(),
+          ExactEpochQuery.t()
+        ) :: {:ok, nil | map()} | {:error, term()}
+  def selected_state_at_epoch_queries(source, sat_id, %ExactEpochQuery{handle: state_query}, %ExactEpochQuery{
+        handle: selection_query
+      })
+      when is_binary(sat_id) do
+    with {:ok, state} <-
+           source_hook(source, sat_id, state_query, selection_query, "selected_state", nil) do
+      case state do
+        nil ->
+          {:ok, nil}
+
+        {position_x, position_y, position_z, clock_s, group_delay_s, degraded} ->
+          {:ok,
+           %{
+             position_ecef_m: {position_x, position_y, position_z},
+             clock_s: clock_s,
+             group_delay_s: group_delay_s,
+             degraded: degraded
+           }}
+      end
+    end
+  end
+
+  def selected_state_at_epoch_queries(_source, _sat_id, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read a transmission-placement clock at exact state and selection queries."
+  @spec transmit_clock_at_epoch_queries(
+          source(),
+          String.t(),
+          ExactEpochQuery.t(),
+          ExactEpochQuery.t()
+        ) :: {:ok, nil | map()} | {:error, term()}
+  def transmit_clock_at_epoch_queries(source, sat_id, %ExactEpochQuery{handle: state_query}, %ExactEpochQuery{
+        handle: selection_query
+      })
+      when is_binary(sat_id) do
+    with {:ok, clock} <-
+           source_hook(source, sat_id, state_query, selection_query, "transmit_clock", nil) do
+      case clock do
+        nil -> {:ok, nil}
+        {clock_s, degraded} -> {:ok, %{clock_s: clock_s, degraded: degraded}}
+      end
+    end
+  end
+
+  def transmit_clock_at_epoch_queries(_source, _sat_id, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Evaluate clock relativity for a state at its exact epoch query."
+  @spec clock_relativity_for_state_at_epoch_query(
+          source(),
+          String.t(),
+          ExactEpochQuery.t(),
+          {number(), number(), number()}
+        ) :: :not_applicable | :unavailable | {:term, float()} | {:error, term()}
+  def clock_relativity_for_state_at_epoch_query(
+        source,
+        sat_id,
+        %ExactEpochQuery{handle: state_query} = query,
+        {position_x, position_y, position_z} = position
+      )
+      when is_binary(sat_id) and is_number(position_x) and is_number(position_y) and is_number(position_z) do
+    source_hook(source, sat_id, state_query, query.handle, "clock_relativity", position)
+  end
+
+  def clock_relativity_for_state_at_epoch_query(_source, _sat_id, _state_query, _position),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read source variance at independent exact state and selection queries."
+  @spec ephemeris_variance_at_epoch_queries(
+          source(),
+          String.t(),
+          ExactEpochQuery.t(),
+          ExactEpochQuery.t()
+        ) :: float() | nil | {:error, term()}
+  def ephemeris_variance_at_epoch_queries(source, sat_id, %ExactEpochQuery{handle: state_query}, %ExactEpochQuery{
+        handle: selection_query
+      })
+      when is_binary(sat_id) do
+    source_hook(source, sat_id, state_query, selection_query, "ephemeris_variance", nil)
+  end
+
+  def ephemeris_variance_at_epoch_queries(_source, _sat_id, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
+
+  defp source_hook(source, sat_id, state_query, selection_query, hook, position) do
+    with {:ok, handle} <- source_handle(source),
+         {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      NIF.precise_source_exact_epoch_hook(
+        handle,
+        letter,
+        prn,
+        state_query,
+        selection_query,
+        hook,
+        position
+      )
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :precise_source_exact_epoch_hook)
   end
 
   @doc """
@@ -441,6 +643,7 @@ defmodule Sidereon.GNSS.PreciseEphemeris.Interpolant do
     do: states_at_shared_j2000_s(source, satellites, epoch_j2000_s)
 
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
+  defp source_handle(%Broadcast{handle: handle}), do: {:ok, handle}
   defp source_handle(%PreciseEphemeris{handle: handle}), do: {:ok, handle}
   defp source_handle(%__MODULE__{handle: handle}), do: {:ok, handle}
   defp source_handle(%InterpolantArtifact{interpolant: %__MODULE__{handle: handle}}), do: {:ok, handle}

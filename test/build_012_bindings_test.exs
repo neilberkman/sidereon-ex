@@ -8,7 +8,7 @@ defmodule SidereonBuild012BindingsTest do
   alias Sidereon.Terrain
   alias Sidereon.Terrain.{DtedLookupOptions, DtedTile}
   alias Sidereon.Terrain.MmapTerrain
-  alias Sidereon.Terrain.MmapTerrain.{Egm96FifteenMinuteGeoid, OrthometricHeightM, TerrainDatumError}
+  alias Sidereon.Terrain.MmapTerrain.{Egm96FifteenMinuteGeoid, OrthometricHeightM, TerrainDatumError, TerrainStoreError}
 
   # Provenance:
   # - Terrain, IONEX, ARAIM, SBAS, and angle fixtures mirror the local
@@ -112,7 +112,7 @@ defmodule SidereonBuild012BindingsTest do
       dted_results = Terrain.height_batch(dted, covered_points, interpolation: interpolation)
 
       assert store_results |> Enum.take(2) |> Enum.map(&orthometric_result_to_scalar/1) == dted_results
-      assert {:error, "missing terrain tile (36,-105)"} = List.last(store_results)
+      assert {:error, {:missing_terrain_tile, %{lat_index: 36, lon_index: -105}}} = List.last(store_results)
 
       for {longitude_deg, latitude_deg} <- covered_points do
         assert {:ok, %OrthometricHeightM{} = typed_height} =
@@ -133,15 +133,38 @@ defmodule SidereonBuild012BindingsTest do
     assert remediation =~ "from_ww15mgh_dac_bytes"
   end
 
+  test "terrain store refusals and lookup refusals decode by kind with their fields" do
+    assert %TerrainStoreError{kind: :tile_id_out_of_range, lat_index: 91, lon_index: 0} =
+             TerrainStoreError.from_nif({:tile_id_out_of_range, 91, 0})
+
+    assert %TerrainStoreError{kind: :tile_bounds_mismatch, lat_index: 36, lon_index: -107, field: "north"} =
+             TerrainStoreError.from_nif({:tile_bounds_mismatch, 36, -107, "north"})
+
+    assert %TerrainStoreError{kind: :non_wgs84_tile, path: "t.dt2", datum: :wgs72} =
+             TerrainStoreError.from_nif({:non_wgs84_tile, "t.dt2", :wgs72})
+
+    assert %TerrainDatumError{kind: :terrain, reason: {:missing_terrain_tile, %{lat_index: 36, lon_index: -105}}} =
+             TerrainDatumError.from_nif({:terrain, {:missing_terrain_tile, 36, -105}})
+
+    assert Terrain.lookup_error({:non_wgs84_terrain_tile, 36, -107, {:other, "EUR50"}}) ==
+             {:non_wgs84_terrain_tile, %{lat_index: 36, lon_index: -107, datum: {:other, "EUR50"}}}
+  end
+
   test "IONEX sample IR rebuilds parsed and node-sample products" do
     {:ok, parsed} = Ionosphere.parse_ionex(File.read!(@ionex_path))
-    assert %TecGridSamples{} = samples = Ionosphere.tec_grid_samples(parsed)
+    assert {:ok, %TecGridSamples{} = samples} = Ionosphere.tec_grid_samples(parsed)
 
     {:ok, from_grid} = Ionosphere.from_samples(samples)
-    assert [%TecSample{} | _] = node_samples = Ionosphere.tec_samples(parsed)
+    assert {:ok, [%TecSample{} | _] = node_samples} = Ionosphere.tec_samples(parsed)
 
     {:ok, from_nodes} =
-      Ionosphere.from_node_samples(node_samples, samples.shell_height_km, samples.base_radius_km, samples.exponent)
+      Ionosphere.from_node_samples(
+        node_samples,
+        samples.shell_height_km,
+        samples.base_radius_km,
+        samples.exponent,
+        samples.header
+      )
 
     epoch = {{2020, 6, 24}, {0, 0, 0}}
     assert {:ok, parsed_delay} = Ionosphere.ionex_slant_delay(parsed, 45.0, 10.0, 60.0, 60.0, epoch, @gps_l1_hz)
@@ -162,7 +185,9 @@ defmodule SidereonBuild012BindingsTest do
     assert message.payload.prc == [2047, 4, 1, 2047, 3, 2047, 2, 2047, 2047, 0, 2047, 2047, 2047]
     assert message.payload.udrei == [14, 14, 10, 14, 14, 14, 14, 14, 14, 6, 14, 14, 14]
 
-    line = "2360 259200 120 1 : 5308DFFC010005FFC00DFFC009FFDFFC001FFDFFDFFFBABBBBBB9BBB80\n"
+    # The fourth field is the message type RTKLIB `sbsoutmsg` writes, the type
+    # the message carries (2, fast corrections).
+    line = "2360 259200 120 2 : 5308DFFC010005FFC00DFFC009FFDFFC001FFDFFDFFFBABBBBBB9BBB80\n"
     assert {:ok, [%SBAS.LogBlock{message: ^message}]} = SBAS.parse_rtklib(line)
     assert {:ok, %SBAS{}} = SBAS.store_from_rtklib(line)
   end

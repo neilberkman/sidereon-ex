@@ -4,6 +4,7 @@ defmodule Sidereon do
   transformations, and ground station pass prediction.
   """
 
+  alias Sidereon.CCSDS.Error
   alias Sidereon.Format.TLE
   alias Sidereon.Geodesic.GeodesicError
   alias Sidereon.GNSS.Constellation, as: GNSSConstellation
@@ -12,6 +13,7 @@ defmodule Sidereon do
   alias Sidereon.GNSS.RTCM
   alias Sidereon.GNSS.RTK
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type vec3 :: {number(), number(), number()}
   @type ground_station :: %{
@@ -21,10 +23,26 @@ defmodule Sidereon do
         }
   @type gcrs_state :: %{position: vec3(), velocity: vec3()}
 
+  @typedoc """
+  The reason a function returns in `{:error, reason}`, in place of raising, when
+  a native call could not take one of its arguments.
+
+    * `{:invalid_argument, native_call}` - the call could not decode an
+      argument: a value of another type, a map without a key the call reads,
+      an integer outside the range the call accepts, or a reference to another
+      kind of resource. `native_call` names the call.
+    * `{:arithmetic_error, native_call}` - arithmetic around the call failed,
+      as `value / 1.0` does when an argument that must be a number is not one.
+  """
+  @type argument_error :: {:invalid_argument, atom()} | {:arithmetic_error, atom()}
+
   @doc """
   Parse a Two-Line Element set.
 
-  Returns `{:ok, %Sidereon.Elements{}}` or `{:error, reason}`.
+  Returns `{:ok, %Sidereon.Elements{}}` or `{:error, reason}`. Takes the
+  `:policy` option of `Sidereon.Format.TLE.parse/3`: `:strict` (default)
+  refuses a line whose column 69 disagrees with its checksum, and `:lenient`
+  reads it and logs the finding.
 
   ## Examples
 
@@ -36,18 +54,20 @@ defmodule Sidereon do
       "25544"
 
   """
-  @spec parse_tle(String.t(), String.t()) ::
-          {:ok, Sidereon.Elements.t()} | {:error, String.t()}
-  defdelegate parse_tle(line1, line2), to: TLE, as: :parse
+  @spec parse_tle(String.t(), String.t(), keyword()) ::
+          {:ok, Sidereon.Elements.t()} | {:error, Error.tle() | {:invalid_field, :policy, term()}}
+  defdelegate parse_tle(line1, line2, opts \\ []), to: TLE, as: :parse
 
   @doc """
   Parse a multi-record TLE file (CelesTrak / Space-Track style) into named satellites.
 
   Handles bare two-line sets, three-line name+line1+line2 sets, and CelesTrak
   `0 NAME` markers, tolerating blank lines and CRLF. Returns
-  `{:ok, %{satellites: [%{name: name, tle: %Sidereon.Elements{}}], skipped: n}}`,
-  where each `tle` is ready for `propagate/2`, `look_angle/3`, etc., and `skipped`
-  counts records that failed SGP4 initialization.
+  `{:ok, %{satellites: satellites, rejected: rejected, skipped: n}}`, where each
+  satellite's `tle` is ready for `propagate/2`, `look_angle/3`, etc., `rejected`
+  lists every other non-blank line with its line number and reason, and
+  `skipped` is the number of rejected entries. Takes the `:policy` option of
+  `Sidereon.Format.TLE.parse_file/2`.
 
   ## Examples
 
@@ -61,13 +81,15 @@ defmodule Sidereon do
       "ISS (ZARYA)"
 
   """
-  @spec parse_tle_file(String.t()) ::
+  @spec parse_tle_file(String.t(), keyword()) ::
           {:ok,
            %{
-             satellites: [%{name: String.t(), tle: Sidereon.Elements.t()}],
+             satellites: [TLE.file_satellite()],
+             rejected: [TLE.rejected_record()],
              skipped: non_neg_integer()
            }}
-  defdelegate parse_tle_file(text), to: TLE, as: :parse_file
+          | {:error, {:invalid_field, :policy, term()}}
+  defdelegate parse_tle_file(text, opts \\ []), to: TLE, as: :parse_file
 
   @doc """
   Propagate orbital elements to a specific datetime, returning TEME position and velocity.
@@ -257,7 +279,7 @@ defmodule Sidereon do
       {sun, moon} -> {:ok, %{sun: sun, moon: moon}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sun_moon_eci_batch)
   end
 
   @doc """
@@ -270,25 +292,36 @@ defmodule Sidereon do
       {sun, moon} -> {:ok, %{sun: sun, moon: moon}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sun_moon_ecef_batch)
   end
 
   @doc """
   Compute solid-earth tide station displacement in metres, ECEF.
+
+  Options:
+
+    * `:constants` - the diurnal Step 2 constants: `:conventions` (default), the
+      IERS Conventions (2010) Chapter 7 values, or `:iers_routine`, the values
+      the IERS `DEHANTTIDEINEL` routine carries, for comparison with it.
   """
-  @spec solid_earth_tide(vec3(), integer(), integer(), integer(), number(), vec3(), vec3()) ::
+  @spec solid_earth_tide(vec3(), integer(), integer(), integer(), number(), vec3(), vec3(), keyword()) ::
           {:ok, vec3()} | {:error, term()}
-  def solid_earth_tide(station_ecef_m, year, month, day, fhr, sun_ecef_m, moon_ecef_m) do
+  def solid_earth_tide(station_ecef_m, year, month, day, fhr, sun_ecef_m, moon_ecef_m, opts \\ []) do
     with {:ok, station} <- public_vec3(station_ecef_m, :station_ecef_m),
          {:ok, sun} <- public_vec3(sun_ecef_m, :sun_ecef_m),
-         {:ok, moon} <- public_vec3(moon_ecef_m, :moon_ecef_m) do
+         {:ok, moon} <- public_vec3(moon_ecef_m, :moon_ecef_m),
+         {:ok, constants} <- solid_earth_tide_constants(Keyword.get(opts, :constants, :conventions)) do
       {x, y, z} = station
 
-      {:ok, NIF.solid_earth_tide(x, y, z, year, month, day, fhr / 1.0, sun, moon)}
+      {:ok, NIF.solid_earth_tide(x, y, z, year, month, day, fhr / 1.0, sun, moon, constants)}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :solid_earth_tide)
   end
+
+  defp solid_earth_tide_constants(:conventions), do: {:ok, "conventions"}
+  defp solid_earth_tide_constants(:iers_routine), do: {:ok, "iers_routine"}
+  defp solid_earth_tide_constants(_other), do: {:error, {:invalid_option, :constants}}
 
   @doc """
   Compute solid-earth pole tide station displacement in metres, ECEF.
@@ -311,7 +344,7 @@ defmodule Sidereon do
        )}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :solid_earth_pole_tide)
   end
 
   @doc """
@@ -337,7 +370,7 @@ defmodule Sidereon do
        )}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ocean_tide_loading)
   end
 
   @doc """

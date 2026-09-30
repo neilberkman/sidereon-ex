@@ -6,14 +6,26 @@
 //! the epoch crosses as `(epoch_year, epoch_day_of_year)` and the Elixir binding
 //! marshals it to/from its native `DateTime`.
 
-use rustler::{Encoder, Env, Term};
-use sidereon_core::astro::sgp4;
-use sidereon_core::astro::tle::{self, TleElements};
+use crate::ndm_errors::{sgp4_error_term, tle_error_term};
+use rustler::{Atom, Encoder, Env, NifResult, Term};
+use sidereon_core::astro::sgp4::{self, TleRecordIssue};
+use sidereon_core::astro::tle::{
+    self, ChecksumWarning, ChecksumWarningKind, TleElements, TlePolicy,
+};
 
 mod atoms {
     rustler::atoms! {
         ok,
-        error
+        error,
+        strict,
+        lenient,
+        mismatch,
+        not_digit,
+        missing,
+        invalid,
+        missing_line_2,
+        orphan_line_2,
+        orphan_name,
     }
 }
 
@@ -29,16 +41,18 @@ struct TleFields {
     epoch_day_of_year: f64,
     mean_motion_dot: f64,
     mean_motion_double_dot: f64,
+    mean_motion_double_dot_text: Option<String>,
     bstar: f64,
-    ephemeris_type: i32,
-    elset_number: i32,
+    bstar_text: Option<String>,
+    ephemeris_type: Option<i32>,
+    elset_number: Option<i32>,
     inclination_deg: f64,
     raan_deg: f64,
     eccentricity: f64,
     arg_perigee_deg: f64,
     mean_anomaly_deg: f64,
     mean_motion: f64,
-    rev_number: i32,
+    rev_number: Option<i32>,
 }
 
 impl From<TleElements> for TleFields {
@@ -51,7 +65,9 @@ impl From<TleElements> for TleFields {
             epoch_day_of_year: el.epoch_day_of_year,
             mean_motion_dot: el.mean_motion_dot,
             mean_motion_double_dot: el.mean_motion_double_dot,
+            mean_motion_double_dot_text: el.mean_motion_double_dot_text,
             bstar: el.bstar,
+            bstar_text: el.bstar_text,
             ephemeris_type: el.ephemeris_type,
             elset_number: el.elset_number,
             inclination_deg: el.inclination_deg,
@@ -75,7 +91,9 @@ impl From<TleFields> for TleElements {
             epoch_day_of_year: f.epoch_day_of_year,
             mean_motion_dot: f.mean_motion_dot,
             mean_motion_double_dot: f.mean_motion_double_dot,
+            mean_motion_double_dot_text: f.mean_motion_double_dot_text,
             bstar: f.bstar,
+            bstar_text: f.bstar_text,
             ephemeris_type: f.ephemeris_type,
             elset_number: f.elset_number,
             inclination_deg: f.inclination_deg,
@@ -89,63 +107,125 @@ impl From<TleFields> for TleElements {
     }
 }
 
+fn decode_policy(policy: Atom) -> NifResult<TlePolicy> {
+    if policy == atoms::strict() {
+        Ok(TlePolicy::Strict)
+    } else if policy == atoms::lenient() {
+        Ok(TlePolicy::Lenient)
+    } else {
+        Err(rustler::Error::BadArg)
+    }
+}
+
+/// `{line_label, kind, computed}`, where `kind` is `{:mismatch, digit}`,
+/// `{:not_digit, character}` or `:missing`.
+fn encode_warning<'a>(env: Env<'a>, warning: &ChecksumWarning) -> Term<'a> {
+    let kind = match warning.kind {
+        ChecksumWarningKind::Mismatch { expected } => {
+            (atoms::mismatch(), expected as i64).encode(env)
+        }
+        ChecksumWarningKind::NotDigit { found } => {
+            (atoms::not_digit(), found.to_string()).encode(env)
+        }
+        ChecksumWarningKind::Missing => atoms::missing().encode(env),
+    };
+    (
+        warning.line_label.to_string(),
+        kind,
+        warning.computed as i64,
+    )
+        .encode(env)
+}
+
+fn encode_warnings<'a>(env: Env<'a>, warnings: &[ChecksumWarning]) -> Term<'a> {
+    warnings
+        .iter()
+        .map(|w| encode_warning(env, w))
+        .collect::<Vec<_>>()
+        .encode(env)
+}
+
 /// Returns `{:ok, fields, checksum_warnings}` on success, or `{:error, reason}`.
-/// Each checksum warning is `{line_label, expected_digit, computed_digit}` for
-/// the host to log; the bad checksum does not reject the parse.
+/// Each checksum warning is `{line_label, kind, computed_digit}`: a line with
+/// no column 69 under either policy, and under `:lenient` also a mismatching
+/// digit or a non-digit, which `:strict` refuses.
 #[rustler::nif]
-fn tle_parse<'a>(env: Env<'a>, line1: String, line2: String) -> Term<'a> {
-    match tle::parse(&line1, &line2) {
+fn tle_parse<'a>(env: Env<'a>, line1: String, line2: String, policy: Atom) -> NifResult<Term<'a>> {
+    let policy = decode_policy(policy)?;
+    Ok(match tle::parse_with_policy(&line1, &line2, policy) {
         Ok(parsed) => {
             let fields: TleFields = parsed.elements.into();
-            let warnings: Vec<(String, i64, i64)> = parsed
-                .checksum_warnings
-                .into_iter()
-                .map(|w| {
-                    (
-                        w.line_label.to_string(),
-                        w.expected as i64,
-                        w.computed as i64,
-                    )
-                })
-                .collect();
+            let warnings = encode_warnings(env, &parsed.checksum_warnings);
             (atoms::ok(), fields, warnings).encode(env)
         }
-        Err(e) => (atoms::error(), e.to_string()).encode(env),
-    }
+        Err(e) => (atoms::error(), tle_error_term(env, &e)).encode(env),
+    })
 }
 
 #[rustler::nif]
 fn tle_encode(env: Env, fields: TleFields) -> Term {
     match tle::encode(&fields.into()) {
         Ok(lines) => (atoms::ok(), lines).encode(env),
-        Err(e) => (atoms::error(), e.to_string()).encode(env),
+        Err(e) => (atoms::error(), tle_error_term(env, &e)).encode(env),
+    }
+}
+
+fn encode_issue<'a>(env: Env<'a>, issue: &TleRecordIssue) -> Term<'a> {
+    match issue {
+        TleRecordIssue::Invalid(error) => {
+            (atoms::invalid(), sgp4_error_term(env, error)).encode(env)
+        }
+        TleRecordIssue::MissingLine2 => atoms::missing_line_2().encode(env),
+        TleRecordIssue::OrphanLine2 => atoms::orphan_line_2().encode(env),
+        TleRecordIssue::OrphanName => atoms::orphan_name().encode(env),
     }
 }
 
 /// Parse a CelesTrak/Space-Track multi-record TLE file.
 ///
-/// Returns `{:ok, satellites, skipped}` where `satellites` is a list of
-/// `{name, fields}` tuples in file order (the name is the empty string for a
-/// bare two-line record), and `skipped` counts records whose element set failed
-/// SGP4 initialization. The per-record `fields` reuse the same `TleFields` shape
-/// as `tle_parse`, so the Elixir binding marshals each into `%Sidereon.Elements{}`
-/// through the identical path. The file scan, name handling, and skip accounting
-/// all live in `sidereon_core::astro::sgp4::parse_tle_file`; this is pure glue.
+/// Returns `{:ok, satellites, rejected}`. `satellites` lists
+/// `{name, fields, line_number, checksum_warnings}` in file order (the name is
+/// the empty string for a bare two-line record, `line_number` the one-based
+/// line of its line 1). `rejected` lists `{line_number, name, issue}` for every
+/// other non-blank line, where `issue` is `{:invalid, reason}`,
+/// `:missing_line_2`, `:orphan_line_2` or `:orphan_name`. The file scan, name
+/// handling and rejection accounting live in
+/// `sidereon_core::astro::sgp4::parse_tle_file_with_policy`; this is glue.
 #[rustler::nif]
-fn parse_tle_file<'a>(env: Env<'a>, text: String) -> Term<'a> {
-    let file = sgp4::parse_tle_file(&text);
-    let satellites: Vec<(String, TleFields)> = file
-        .satellites
-        .into_iter()
-        .filter_map(|named| {
-            // Re-derive the normalized element fields from the satellite's source
-            // lines through the same codec `tle_parse` uses. Every satellite in a
-            // parsed file carries its raw lines, and the core already proved they
-            // SGP4-initialize, so this parse cannot fail.
-            tle::parse(named.satellite.line1(), named.satellite.line2())
-                .ok()
-                .map(|parsed| (named.name, parsed.elements.into()))
+fn parse_tle_file<'a>(env: Env<'a>, text: String, policy: Atom) -> NifResult<Term<'a>> {
+    let policy = decode_policy(policy)?;
+    let file = sgp4::parse_tle_file_with_policy(&text, sgp4::OpsMode::Improved, policy);
+    let mut satellites = Vec::with_capacity(file.satellites.len());
+    for named in file.satellites {
+        // Re-derive the normalized element fields from the satellite's source
+        // lines through the same codec and policy `tle_parse` uses. Every
+        // satellite in a parsed file carries its raw lines and was read under
+        // this policy, so this parse cannot fail.
+        let parsed =
+            tle::parse_with_policy(named.satellite.line1(), named.satellite.line2(), policy)
+                .map_err(|e| rustler::Error::Term(Box::new(e.to_string())))?;
+        let fields: TleFields = parsed.elements.into();
+        satellites.push(
+            (
+                named.name,
+                fields,
+                named.line_number as u64,
+                encode_warnings(env, &named.checksum_warnings),
+            )
+                .encode(env),
+        );
+    }
+    let rejected: Vec<Term<'a>> = file
+        .rejected
+        .iter()
+        .map(|record| {
+            (
+                record.line_number as u64,
+                record.name.clone(),
+                encode_issue(env, &record.issue),
+            )
+                .encode(env)
         })
         .collect();
-    (atoms::ok(), satellites, file.skipped as i64).encode(env)
+    Ok((atoms::ok(), satellites, rejected).encode(env))
 }

@@ -31,12 +31,39 @@ defmodule Sidereon.OrbitalElementsTest do
     assert_in_delta vz, ovz, 1.0e-9
   end
 
-  test "rv2coe rejects a degenerate (zero-position) state" do
-    assert {:error, _reason} = OrbitalElements.rv2coe({0.0, 0.0, 0.0}, @v)
+  test "rv2coe preserves finite core refusal reasons" do
+    assert {:error, {:orbital_elements, :zero_position, nil}} =
+             OrbitalElements.rv2coe({0.0, 0.0, 0.0}, @v)
+
+    assert {:error, {:orbital_elements, :non_positive_mu, nil}} =
+             OrbitalElements.rv2coe(@r, @v, 0.0)
+
+    assert {:error, {:orbital_elements, :degenerate_orbit, nil}} =
+             OrbitalElements.rv2coe({1.0, 0.0, 0.0}, {1.0, 0.0, 0.0})
   end
 
-  test "coe2rv rejects a non-positive gravitational parameter" do
+  test "coe2rv preserves finite core refusal reasons" do
     assert {:ok, coe} = OrbitalElements.rv2coe(@r, @v)
-    assert {:error, _reason} = OrbitalElements.coe2rv(coe, -1.0)
+
+    assert {:error, {:orbital_elements, :non_positive_mu, nil}} =
+             OrbitalElements.coe2rv(coe, -1.0)
+
+    assert {:error, {:orbital_elements, :non_positive_semi_latus, nil}} =
+             OrbitalElements.coe2rv(%{coe | p: 0.0})
+
+    assert {:error, {:unknown_orbit_type, :unknown}} =
+             OrbitalElements.coe2rv(%{coe | orbit_type: :unknown})
+  end
+
+  test "numeric conversion overflow keeps the native-call boundary reason" do
+    huge_integer = Integer.pow(10, 400)
+
+    assert {:error, {:arithmetic_error, :elements_rv2coe}} =
+             OrbitalElements.rv2coe(@r, @v, huge_integer)
+
+    assert {:ok, coe} = OrbitalElements.rv2coe(@r, @v)
+
+    assert {:error, {:arithmetic_error, :elements_coe2rv}} =
+             OrbitalElements.coe2rv(coe, huge_integer)
   end
 end

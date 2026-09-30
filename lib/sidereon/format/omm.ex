@@ -8,13 +8,25 @@ defmodule Sidereon.Format.OMM do
   messages as KVN, XML, and JSON.
 
   `parse_kvn/1`, `parse_xml/1`, `parse_json/1`, and string `parse/1` return a
-  typed `%Sidereon.Format.OMM{}` that preserves the OMM metadata and
-  microsecond epoch fields. The legacy decoded-map `parse/1` clause is kept for
-  CelesTrak JSON maps and returns `%Sidereon.Elements{}`.
+  typed `%Sidereon.Format.OMM{}` that keeps every item of CCSDS 502.0-B-3
+  tables 4-1 to 4-3 the message states: the header, metadata, mean elements,
+  spacecraft parameters, TLE-related parameters, covariance, `USER_DEFINED_*`
+  parameters and the comments of each block. A keyword the message does not
+  state is `nil`; no reader fills in a default. `parse_xml_all/1` and
+  `parse_json_array/1` read documents holding several OMMs. The legacy
+  decoded-map `parse/1` clause is kept for CelesTrak JSON maps and returns
+  `%Sidereon.Elements{}`.
+
+  Each writer returns `{:error, reason}` for a message it cannot write so that
+  its reader returns it unchanged, such as text with a line break in KVN, a
+  character XML 1.0 cannot carry, a non-finite number, or, in GP JSON, a
+  comment other than the single header comment GP JSON carries.
   """
 
+  alias Sidereon.CCSDS.Error
   alias Sidereon.Elements
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Epoch do
     @moduledoc """
@@ -38,66 +50,190 @@ defmodule Sidereon.Format.OMM do
     defstruct [:year, :month, :day, :hour, :minute, :second, :microsecond, femtosecond: 0]
   end
 
+  defmodule Spacecraft do
+    @moduledoc """
+    OMM spacecraft parameters (CCSDS 502.0-B-3 table 4-3). Present on an OMM
+    when any of its keywords occurs, even with a blank value.
+    """
+
+    @type t :: %__MODULE__{
+            comments: [String.t()],
+            mass_kg: float() | nil,
+            solar_rad_area_m2: float() | nil,
+            solar_rad_coeff: float() | nil,
+            drag_area_m2: float() | nil,
+            drag_coeff: float() | nil
+          }
+
+    defstruct comments: [],
+              mass_kg: nil,
+              solar_rad_area_m2: nil,
+              solar_rad_coeff: nil,
+              drag_area_m2: nil,
+              drag_coeff: nil
+  end
+
+  defmodule Covariance do
+    @moduledoc """
+    OMM position/velocity covariance (CCSDS 502.0-B-3 table 4-3), kept exactly
+    as read.
+
+    `lower_triangle` holds the 21 lower-triangle values in keyword order `CX_X`,
+    `CY_X`, `CY_Y`, `CZ_X`, `CZ_Y`, `CZ_Z`, `CX_DOT_X` ... `CZ_DOT_Z_DOT`: km²
+    for two position components, km²/s for one position and one velocity
+    component, km²/s² for two velocity components. `cov_ref_frame` is `nil`
+    when the matrix is in the OMM's `REF_FRAME`.
+    """
+
+    @type t :: %__MODULE__{
+            comments: [String.t()],
+            cov_ref_frame: String.t() | nil,
+            lower_triangle: [float()]
+          }
+
+    defstruct comments: [], cov_ref_frame: nil, lower_triangle: []
+  end
+
+  defmodule UserDefined do
+    @moduledoc """
+    One `USER_DEFINED_*` parameter: the text after `USER_DEFINED_` (the XML
+    `parameter` attribute) and its value, verbatim.
+    """
+
+    @type t :: %__MODULE__{parameter: String.t(), value: String.t()}
+
+    @enforce_keys [:parameter, :value]
+    defstruct [:parameter, :value]
+  end
+
+  defmodule Comments do
+    @moduledoc """
+    Comments of the OMM header, metadata, mean-elements, TLE-parameters and
+    user-defined blocks, each in source order. Spacecraft and covariance
+    comments live in `Sidereon.Format.OMM.Spacecraft` and
+    `Sidereon.Format.OMM.Covariance`.
+    """
+
+    @type t :: %__MODULE__{
+            header: [String.t()],
+            metadata: [String.t()],
+            mean_elements: [String.t()],
+            tle_parameters: [String.t()],
+            user_defined: [String.t()]
+          }
+
+    defstruct header: [], metadata: [], mean_elements: [], tle_parameters: [], user_defined: []
+  end
+
+  @typedoc """
+  A CCSDS OMM.
+
+  `ccsds_omm_vers` is the version the message states, or `nil`, as CelesTrak
+  GP JSON and CSV state none; each writer states it only when present. At
+  least one of `mean_motion` (rev/day) and `semi_major_axis_km` is present in
+  a message read from text. The TLE-related parameters are `nil` when the
+  message does not state them, since table 4-3 requires them only for
+  SGP/SGP4 element sets. `bterm_m2_kg` and `agom_m2_kg` are the SGP4-XP `BTERM`
+  and `AGOM` (m²/kg); `gm_km3_s2` is `GM` (km³/s²).
+  """
   @type t :: %__MODULE__{
-          ccsds_omm_vers: String.t(),
+          ccsds_omm_vers: String.t() | nil,
+          classification: String.t() | nil,
           creation_date: String.t() | nil,
           originator: String.t() | nil,
+          message_id: String.t() | nil,
           object_name: String.t() | nil,
           object_id: String.t() | nil,
           center_name: String.t() | nil,
           ref_frame: String.t() | nil,
+          ref_frame_epoch: String.t() | nil,
           time_system: String.t() | nil,
           mean_element_theory: String.t() | nil,
           epoch: Epoch.t(),
-          mean_motion: float(),
+          mean_motion: float() | nil,
+          semi_major_axis_km: float() | nil,
           eccentricity: float(),
           inclination_deg: float(),
           ra_of_asc_node_deg: float(),
           arg_of_pericenter_deg: float(),
           mean_anomaly_deg: float(),
-          ephemeris_type: integer(),
-          classification_type: String.t(),
-          norad_cat_id: integer(),
-          element_set_no: integer(),
-          rev_at_epoch: integer(),
-          bstar: float(),
-          mean_motion_dot: float(),
-          mean_motion_ddot: float()
+          gm_km3_s2: float() | nil,
+          spacecraft: Spacecraft.t() | nil,
+          ephemeris_type: integer() | nil,
+          classification_type: String.t() | nil,
+          norad_cat_id: non_neg_integer() | nil,
+          element_set_no: integer() | nil,
+          rev_at_epoch: integer() | nil,
+          bstar: float() | nil,
+          bterm_m2_kg: float() | nil,
+          mean_motion_dot: float() | nil,
+          mean_motion_ddot: float() | nil,
+          agom_m2_kg: float() | nil,
+          covariance: Covariance.t() | nil,
+          user_defined: [UserDefined.t()],
+          comments: Comments.t()
         }
 
-  defstruct ccsds_omm_vers: "2.0",
+  defstruct ccsds_omm_vers: nil,
+            classification: nil,
             creation_date: nil,
             originator: nil,
+            message_id: nil,
             object_name: nil,
             object_id: nil,
             center_name: nil,
             ref_frame: nil,
+            ref_frame_epoch: nil,
             time_system: nil,
             mean_element_theory: nil,
             epoch: nil,
             mean_motion: nil,
+            semi_major_axis_km: nil,
             eccentricity: nil,
             inclination_deg: nil,
             ra_of_asc_node_deg: nil,
             arg_of_pericenter_deg: nil,
             mean_anomaly_deg: nil,
-            ephemeris_type: 0,
-            classification_type: "U",
+            gm_km3_s2: nil,
+            spacecraft: nil,
+            ephemeris_type: nil,
+            classification_type: nil,
             norad_cat_id: nil,
-            element_set_no: 999,
-            rev_at_epoch: 0,
-            bstar: 0.0,
-            mean_motion_dot: 0.0,
-            mean_motion_ddot: 0.0
+            element_set_no: nil,
+            rev_at_epoch: nil,
+            bstar: nil,
+            bterm_m2_kg: nil,
+            mean_motion_dot: nil,
+            mean_motion_ddot: nil,
+            agom_m2_kg: nil,
+            covariance: nil,
+            user_defined: [],
+            # A call rather than `%Comments{}`: a struct literal cannot name a
+            # module nested in the one whose struct is being defined.
+            comments: struct(Comments)
 
+  @typedoc """
+  A record `parse_xml_all/1` or `parse_json_array/1` could not read: its
+  zero-based position in the document and the reason.
+  """
+  @type skipped_record :: {non_neg_integer(), Error.omm()}
+
+  @typedoc """
+  A refusal of the decoded-map `parse/1`: a missing or unreadable key, named
+  as the key it reads.
+  """
   @type parse_error ::
           {:missing_field, String.t()}
           | {:invalid_field, String.t(), term()}
 
-  @type encode_error ::
-          {:missing_field, atom()}
-          | {:invalid_field, atom(), term()}
-          | String.t()
+  @typedoc """
+  A reader, writer or element-set refusal from the core
+  (`t:Sidereon.CCSDS.Error.omm/0`), or `{:invalid_field, field, value}` for a
+  struct field that does not hold a value of its type.
+  """
+  @type error :: Error.omm() | {:invalid_field, atom(), term()}
+
+  @type encode_error :: error()
 
   @doc """
   Parse an OMM from text or from a decoded JSON map.
@@ -109,7 +245,10 @@ defmodule Sidereon.Format.OMM do
   For map input, accepts decoded CelesTrak/Space-Track OMM JSON maps with field
   names such as `"NORAD_CAT_ID"`, `"INCLINATION"`, and `"MEAN_MOTION"`. This
   legacy path returns `{:ok, %Sidereon.Elements{}}` and handles both numeric and
-  string values for numeric fields.
+  string values for numeric fields. `"MEAN_MOTION"` and `"BSTAR"`, which SGP4
+  propagates with, are required; an unstated mean-motion derivative,
+  `"CLASSIFICATION_TYPE"`, `"EPHEMERIS_TYPE"`, `"ELEMENT_SET_NO"` or
+  `"REV_AT_EPOCH"` is `nil`.
 
   ## Examples
 
@@ -122,7 +261,8 @@ defmodule Sidereon.Format.OMM do
       ...>   "ECCENTRICITY" => 0.0007,
       ...>   "ARG_OF_PERICENTER" => 90.0,
       ...>   "MEAN_ANOMALY" => 270.0,
-      ...>   "MEAN_MOTION" => 15.5
+      ...>   "MEAN_MOTION" => 15.5,
+      ...>   "BSTAR" => 0.0001
       ...> })
       iex> el.catalog_number
       "25544"
@@ -130,7 +270,7 @@ defmodule Sidereon.Format.OMM do
       "ISS (ZARYA)"
 
   """
-  @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec parse(String.t()) :: {:ok, t()} | {:error, Error.omm()}
   @spec parse(map()) :: {:ok, Elements.t()} | {:error, parse_error()}
   def parse(text) when is_binary(text) do
     text
@@ -146,9 +286,9 @@ defmodule Sidereon.Format.OMM do
 
   def parse(omm) when is_map(omm) do
     with {:ok, epoch} <- parse_epoch(omm["EPOCH"]),
-         {:ok, ndot} <- to_float_field(omm, "MEAN_MOTION_DOT"),
-         {:ok, nddot} <- to_float_field(omm, "MEAN_MOTION_DDOT"),
-         {:ok, bstar} <- to_float_field(omm, "BSTAR"),
+         {:ok, ndot} <- optional_float_field(omm, "MEAN_MOTION_DOT"),
+         {:ok, nddot} <- optional_float_field(omm, "MEAN_MOTION_DDOT"),
+         {:ok, bstar} <- required_float_field(omm, "BSTAR"),
          {:ok, inclination_deg} <- required_float_field(omm, "INCLINATION"),
          {:ok, raan_deg} <- required_float_field(omm, "RA_OF_ASC_NODE"),
          {:ok, eccentricity} <- required_float_field(omm, "ECCENTRICITY"),
@@ -158,22 +298,22 @@ defmodule Sidereon.Format.OMM do
       {:ok,
        %Elements{
          object_name: omm["OBJECT_NAME"],
-         catalog_number: to_string(omm["NORAD_CAT_ID"]),
-         classification: omm["CLASSIFICATION_TYPE"] || "U",
+         catalog_number: catalog_number(omm["NORAD_CAT_ID"]),
+         classification: omm["CLASSIFICATION_TYPE"],
          international_designator: omm["OBJECT_ID"] || "",
          epoch: epoch,
          mean_motion_dot: ndot,
          mean_motion_double_dot: nddot,
          bstar: bstar,
-         ephemeris_type: omm["EPHEMERIS_TYPE"] || 0,
-         elset_number: omm["ELEMENT_SET_NO"] || 999,
+         ephemeris_type: omm["EPHEMERIS_TYPE"],
+         elset_number: omm["ELEMENT_SET_NO"],
          inclination_deg: inclination_deg,
          raan_deg: raan_deg,
          eccentricity: eccentricity,
          arg_perigee_deg: arg_perigee_deg,
          mean_anomaly_deg: mean_anomaly_deg,
          mean_motion: mean_motion,
-         rev_number: omm["REV_AT_EPOCH"] || 0
+         rev_number: omm["REV_AT_EPOCH"]
        }}
     end
   end
@@ -183,7 +323,7 @@ defmodule Sidereon.Format.OMM do
 
   Returns `{:ok, %Sidereon.Format.OMM{}}` or `{:error, reason}`.
   """
-  @spec parse_kvn(String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec parse_kvn(String.t()) :: {:ok, t()} | {:error, Error.omm()}
   def parse_kvn(text) when is_binary(text) do
     text |> NIF.omm_parse_kvn() |> from_nif_fields()
   end
@@ -193,22 +333,48 @@ defmodule Sidereon.Format.OMM do
 
   Returns `{:ok, %Sidereon.Format.OMM{}}` or `{:error, reason}`.
   """
-  @spec parse_xml(String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec parse_xml(String.t()) :: {:ok, t()} | {:error, Error.omm()}
   def parse_xml(text) when is_binary(text) do
     text |> NIF.omm_parse_xml() |> from_nif_fields()
   end
 
   @doc """
-  Parse CCSDS/CelesTrak OMM JSON text into a typed OMM struct.
+  Parse every OMM of a CCSDS OMM XML document: a single message or an NDM
+  combined instantiation (CCSDS 505.0-B-3 4.11).
 
-  JSON input may be a single OMM object or an array of OMM objects; the core
-  parser follows CelesTrak convention and selects the first array item.
+  Returns `{:ok, omms, skipped}`, where `skipped` lists each message that could
+  not be read as `{index, reason}`, or `{:error, reason}` for a document that
+  cannot be read at all.
+  """
+  @spec parse_xml_all(String.t()) :: {:ok, [t()], [skipped_record()]} | {:error, Error.omm()}
+  def parse_xml_all(text) when is_binary(text) do
+    text |> NIF.omm_parse_xml_all() |> from_nif_array()
+  end
+
+  @doc """
+  Parse CCSDS/CelesTrak OMM JSON text holding one record into a typed OMM
+  struct.
+
+  JSON input may be a single OMM object or an array holding one object. A
+  document holding several records is refused; `parse_json_array/1` reads
+  them.
 
   Returns `{:ok, %Sidereon.Format.OMM{}}` or `{:error, reason}`.
   """
-  @spec parse_json(String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec parse_json(String.t()) :: {:ok, t()} | {:error, Error.omm()}
   def parse_json(text) when is_binary(text) do
     text |> NIF.omm_parse_json() |> from_nif_fields()
+  end
+
+  @doc """
+  Parse a CelesTrak/Space-Track GP JSON array of OMM records.
+
+  Returns `{:ok, omms, skipped}`, where `skipped` lists each array element that
+  could not be read as `{index, reason}`, or `{:error, reason}`.
+  """
+  @spec parse_json_array(String.t()) :: {:ok, [t()], [skipped_record()]} | {:error, Error.omm()}
+  def parse_json_array(text) when is_binary(text) do
+    text |> NIF.omm_parse_json_array() |> from_nif_array()
   end
 
   @doc """
@@ -282,6 +448,18 @@ defmodule Sidereon.Format.OMM do
   def encode_json(%__MODULE__{} = omm), do: encode_with_nif(omm, &NIF.omm_encode_json/1)
 
   @doc """
+  Encode a typed OMM struct as GP JSON, leaving out every comment GP JSON
+  cannot carry: all but the single header comment. A spacecraft-parameters
+  block that held only comments is still written, as `"MASS": null`.
+
+  `encode_json/1` refuses such a record instead; use this function only when
+  that loss is acceptable. Returns `{:ok, text}` or `{:error, reason}`.
+  """
+  @spec encode_json_discarding_comments(t()) :: {:ok, String.t()} | {:error, encode_error()}
+  def encode_json_discarding_comments(%__MODULE__{} = omm),
+    do: encode_with_nif(omm, &NIF.omm_encode_json_discarding_comments/1)
+
+  @doc """
   Alias for `encode_kvn/1`, matching the core and Python binding terminology.
   """
   @spec to_kvn_string(t()) :: {:ok, String.t()} | {:error, encode_error()}
@@ -302,70 +480,145 @@ defmodule Sidereon.Format.OMM do
   @doc """
   Convert a typed OMM struct to `%Sidereon.Elements{}` for SGP4 propagation.
 
-  OMM-specific metadata remains available on the original OMM struct; the
-  returned `%Sidereon.Elements{}` carries the TLE-compatible mean elements.
+  The elements are the SGP4 element set the core forms from the OMM
+  (`Omm::to_element_set`); OMM-specific metadata remains available on the
+  original OMM struct. The core refuses:
+
+    * a stated `MEAN_ELEMENT_THEORY` other than `SGP4`, `SGP/SGP4` or `SDP4`,
+      `CENTER_NAME` other than `EARTH`, `REF_FRAME` other than `TEME` or
+      `TIME_SYSTEM` other than `UTC` (compared ignoring surrounding whitespace
+      and letter case), in that order, with `{:incompatible_metadata, field,
+      value}`, since the elements would then not be the Earth-centred TEME UTC
+      SGP4 elements (CCSDS 502.0-B-3 4.2.4.6); an absent or blank value is not
+      refused;
+    * an OMM without `MEAN_MOTION` or `BSTAR`, which SGP4 propagates with, with
+      `{:missing_field, :mean_motion}` or `{:missing_field, :bstar}`;
+    * an epoch that names no UTC instant, or an element that is not finite or
+      out of range, with `{:invalid_field, field, kind}`.
+
+  An OMM without `NORAD_CAT_ID` gives elements whose `catalog_number` is
+  `nil`. `epoch_jd` is the epoch as the core's split Julian date, with the
+  epoch's femtoseconds and a UTC leap second (`23:59:60`) kept, and
+  propagation uses it; `epoch` is that instant as a `DateTime` to the
+  microsecond, so a leap-second epoch reads as the start of the next day, the
+  same Julian date. An epoch of whole microseconds, which python-sgp4 reads,
+  gives elements with `omm_epoch_days` set, which SGP4 initialises as
+  python-sgp4 initialises the OMM, and `bstar` and `mean_motion_double_dot`
+  as stated; any other epoch bridges the OMM as a TLE, and `bstar` and
+  `mean_motion_double_dot` are quantized to the values the TLE fields hold.
+  A value no TLE field holds passes through unquantized. Unstated mean-motion
+  derivatives and bookkeeping fields stay `nil`.
 
   Returns `{:ok, elements}` or `{:error, reason}`.
   """
   @spec to_elements(t()) :: {:ok, Elements.t()} | {:error, encode_error()}
   def to_elements(%__MODULE__{} = omm) do
-    with {:ok, epoch} <- epoch_to_datetime(omm.epoch) do
+    with {:ok, fields} <- to_nif_fields(omm),
+         {:ok, set} <- NIF.omm_to_element_set(fields),
+         {:ok, epoch} <- epoch_instant(omm.epoch) do
       {:ok,
        %Elements{
          object_name: omm.object_name,
-         catalog_number: Integer.to_string(omm.norad_cat_id),
-         classification: omm.classification_type || "U",
+         catalog_number: set.catalog_number && Integer.to_string(set.catalog_number),
+         classification: omm.classification_type,
          international_designator: omm.object_id || "",
          epoch: epoch,
-         mean_motion_dot: omm.mean_motion_dot,
-         mean_motion_double_dot: omm.mean_motion_ddot,
-         bstar: omm.bstar,
+         epoch_jd: epoch_jd(set.epoch_jd),
+         omm_epoch_days: set.omm_epoch_days,
+         mean_motion_dot: set.mean_motion_dot,
+         mean_motion_double_dot: set.mean_motion_double_dot,
+         bstar: set.bstar,
          ephemeris_type: omm.ephemeris_type,
          elset_number: omm.element_set_no,
-         inclination_deg: omm.inclination_deg,
-         raan_deg: omm.ra_of_asc_node_deg,
-         eccentricity: omm.eccentricity,
-         arg_perigee_deg: omm.arg_of_pericenter_deg,
-         mean_anomaly_deg: omm.mean_anomaly_deg,
-         mean_motion: omm.mean_motion,
+         inclination_deg: set.inclination_deg,
+         raan_deg: set.right_ascension_deg,
+         eccentricity: set.eccentricity,
+         arg_perigee_deg: set.argument_of_perigee_deg,
+         mean_anomaly_deg: set.mean_anomaly_deg,
+         mean_motion: set.mean_motion_rev_per_day,
          rev_number: omm.rev_at_epoch
        }}
     end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :omm_to_element_set)
   end
+
+  # The epoch as a `DateTime` to the microsecond. A UTC leap second, which a
+  # `DateTime` cannot hold, is the instant after 23:59:59 by its seconds, the
+  # same Julian date the core forms for it. The core has already checked that
+  # the epoch names a UTC instant.
+  defp epoch_instant(%Epoch{second: 60} = epoch) do
+    with {:ok, datetime} <- epoch_to_datetime(%{epoch | second: 59}) do
+      {:ok, DateTime.add(datetime, 1, :second)}
+    end
+  end
+
+  defp epoch_instant(epoch), do: epoch_to_datetime(epoch)
+
+  defp epoch_jd({jd_whole, jd_fraction}), do: %{jd_whole: jd_whole, jd_fraction: jd_fraction}
 
   # -- Text parse/encode helpers --
 
-  defp from_nif_fields({:ok, fields}) do
-    {:ok,
-     %__MODULE__{
-       ccsds_omm_vers: fields.ccsds_omm_vers,
-       creation_date: fields.creation_date,
-       originator: fields.originator,
-       object_name: fields.object_name,
-       object_id: fields.object_id,
-       center_name: fields.center_name,
-       ref_frame: fields.ref_frame,
-       time_system: fields.time_system,
-       mean_element_theory: fields.mean_element_theory,
-       epoch: build_epoch(fields.epoch),
-       mean_motion: fields.mean_motion,
-       eccentricity: fields.eccentricity,
-       inclination_deg: fields.inclination_deg,
-       ra_of_asc_node_deg: fields.ra_of_asc_node_deg,
-       arg_of_pericenter_deg: fields.arg_of_pericenter_deg,
-       mean_anomaly_deg: fields.mean_anomaly_deg,
-       ephemeris_type: fields.ephemeris_type,
-       classification_type: fields.classification_type,
-       norad_cat_id: fields.norad_cat_id,
-       element_set_no: fields.element_set_no,
-       rev_at_epoch: fields.rev_at_epoch,
-       bstar: fields.bstar,
-       mean_motion_dot: fields.mean_motion_dot,
-       mean_motion_ddot: fields.mean_motion_ddot
-     }}
-  end
+  defp from_nif_fields({:ok, fields}), do: {:ok, build_omm(fields)}
 
   defp from_nif_fields({:error, reason}), do: {:error, reason}
+
+  defp from_nif_array({:ok, omms, skipped}), do: {:ok, Enum.map(omms, &build_omm/1), skipped}
+  defp from_nif_array({:error, reason}), do: {:error, reason}
+
+  @plain_fields [
+    :ccsds_omm_vers,
+    :classification,
+    :creation_date,
+    :originator,
+    :message_id,
+    :object_name,
+    :object_id,
+    :center_name,
+    :ref_frame,
+    :ref_frame_epoch,
+    :time_system,
+    :mean_element_theory,
+    :mean_motion,
+    :semi_major_axis_km,
+    :eccentricity,
+    :inclination_deg,
+    :ra_of_asc_node_deg,
+    :arg_of_pericenter_deg,
+    :mean_anomaly_deg,
+    :gm_km3_s2,
+    :ephemeris_type,
+    :classification_type,
+    :norad_cat_id,
+    :element_set_no,
+    :rev_at_epoch,
+    :bstar,
+    :bterm_m2_kg,
+    :mean_motion_dot,
+    :mean_motion_ddot,
+    :agom_m2_kg
+  ]
+
+  defp build_omm(fields) do
+    plain = Map.take(fields, @plain_fields)
+
+    struct(
+      __MODULE__,
+      Map.merge(plain, %{
+        epoch: build_epoch(fields.epoch),
+        spacecraft: build_spacecraft(fields.spacecraft),
+        covariance: build_covariance(fields.covariance),
+        user_defined: Enum.map(fields.user_defined, &%UserDefined{parameter: &1.parameter, value: &1.value}),
+        comments: struct(Comments, fields.comments)
+      })
+    )
+  end
+
+  defp build_spacecraft(nil), do: nil
+  defp build_spacecraft(fields), do: struct(Spacecraft, fields)
+
+  defp build_covariance(nil), do: nil
+  defp build_covariance(fields), do: struct(Covariance, fields)
 
   defp build_epoch(fields) do
     %Epoch{
@@ -385,62 +638,149 @@ defmodule Sidereon.Format.OMM do
       fun.(fields)
     end
   rescue
-    e in ErlangError -> {:error, Exception.message(e)}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :omm_encode)
   end
 
   defp to_nif_fields(%__MODULE__{} = omm) do
     with {:ok, epoch} <- epoch_fields(omm.epoch),
-         {:ok, ccsds_omm_vers} <- required_string(omm, :ccsds_omm_vers),
-         {:ok, classification_type} <- required_string(omm, :classification_type),
-         {:ok, mean_motion} <- required_float(omm, :mean_motion),
-         {:ok, eccentricity} <- required_float(omm, :eccentricity),
-         {:ok, inclination_deg} <- required_float(omm, :inclination_deg),
-         {:ok, ra_of_asc_node_deg} <- required_float(omm, :ra_of_asc_node_deg),
-         {:ok, arg_of_pericenter_deg} <- required_float(omm, :arg_of_pericenter_deg),
-         {:ok, mean_anomaly_deg} <- required_float(omm, :mean_anomaly_deg),
-         {:ok, bstar} <- required_float(omm, :bstar),
-         {:ok, mean_motion_dot} <- required_float(omm, :mean_motion_dot),
-         {:ok, mean_motion_ddot} <- required_float(omm, :mean_motion_ddot),
-         {:ok, ephemeris_type} <- required_integer(omm, :ephemeris_type),
-         {:ok, norad_cat_id} <- required_integer(omm, :norad_cat_id),
-         {:ok, element_set_no} <- required_integer(omm, :element_set_no),
-         {:ok, rev_at_epoch} <- required_integer(omm, :rev_at_epoch),
-         {:ok, creation_date} <- optional_string(omm, :creation_date),
-         {:ok, originator} <- optional_string(omm, :originator),
-         {:ok, object_name} <- optional_string(omm, :object_name),
-         {:ok, object_id} <- optional_string(omm, :object_id),
-         {:ok, center_name} <- optional_string(omm, :center_name),
-         {:ok, ref_frame} <- optional_string(omm, :ref_frame),
-         {:ok, time_system} <- optional_string(omm, :time_system),
-         {:ok, mean_element_theory} <- optional_string(omm, :mean_element_theory) do
+         {:ok, required_floats} <-
+           collect(
+             [:eccentricity, :inclination_deg, :ra_of_asc_node_deg, :arg_of_pericenter_deg, :mean_anomaly_deg],
+             &required_float(omm, &1)
+           ),
+         {:ok, optional_floats} <-
+           collect(
+             [
+               :mean_motion,
+               :semi_major_axis_km,
+               :gm_km3_s2,
+               :bstar,
+               :bterm_m2_kg,
+               :mean_motion_dot,
+               :mean_motion_ddot,
+               :agom_m2_kg
+             ],
+             &optional_float(omm, &1)
+           ),
+         {:ok, optional_integers} <-
+           collect(
+             [:ephemeris_type, :norad_cat_id, :element_set_no, :rev_at_epoch],
+             &optional_integer(omm, &1)
+           ),
+         {:ok, optional_strings} <-
+           collect(
+             [
+               :ccsds_omm_vers,
+               :classification,
+               :creation_date,
+               :originator,
+               :message_id,
+               :object_name,
+               :object_id,
+               :center_name,
+               :ref_frame,
+               :ref_frame_epoch,
+               :time_system,
+               :mean_element_theory,
+               :classification_type
+             ],
+             &optional_string(omm, &1)
+           ),
+         {:ok, spacecraft} <- spacecraft_fields(omm.spacecraft),
+         {:ok, covariance} <- covariance_fields(omm.covariance),
+         {:ok, user_defined} <- user_defined_fields(omm.user_defined),
+         {:ok, comments} <- comments_fields(omm.comments) do
       {:ok,
-       %{
-         ccsds_omm_vers: ccsds_omm_vers,
-         creation_date: creation_date,
-         originator: originator,
-         object_name: object_name,
-         object_id: object_id,
-         center_name: center_name,
-         ref_frame: ref_frame,
-         time_system: time_system,
-         mean_element_theory: mean_element_theory,
+       required_floats
+       |> Map.merge(optional_floats)
+       |> Map.merge(optional_integers)
+       |> Map.merge(optional_strings)
+       |> Map.merge(%{
          epoch: epoch,
-         mean_motion: mean_motion,
-         eccentricity: eccentricity,
-         inclination_deg: inclination_deg,
-         ra_of_asc_node_deg: ra_of_asc_node_deg,
-         arg_of_pericenter_deg: arg_of_pericenter_deg,
-         mean_anomaly_deg: mean_anomaly_deg,
-         ephemeris_type: ephemeris_type,
-         classification_type: classification_type,
-         norad_cat_id: norad_cat_id,
-         element_set_no: element_set_no,
-         rev_at_epoch: rev_at_epoch,
-         bstar: bstar,
-         mean_motion_dot: mean_motion_dot,
-         mean_motion_ddot: mean_motion_ddot
-       }}
+         spacecraft: spacecraft,
+         covariance: covariance,
+         user_defined: user_defined,
+         comments: comments
+       })}
     end
+  end
+
+  defp collect(fields, fun) do
+    Enum.reduce_while(fields, {:ok, %{}}, fn field, {:ok, acc} ->
+      case fun.(field) do
+        {:ok, value} -> {:cont, {:ok, Map.put(acc, field, value)}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp spacecraft_fields(nil), do: {:ok, nil}
+
+  defp spacecraft_fields(%Spacecraft{} = spacecraft) do
+    with {:ok, comments} <- string_list(spacecraft.comments, :spacecraft_comments),
+         {:ok, values} <-
+           collect(
+             [:mass_kg, :solar_rad_area_m2, :solar_rad_coeff, :drag_area_m2, :drag_coeff],
+             &optional_float(spacecraft, &1)
+           ) do
+      {:ok, Map.put(values, :comments, comments)}
+    end
+  end
+
+  defp spacecraft_fields(value), do: {:error, {:invalid_field, :spacecraft, value}}
+
+  defp covariance_fields(nil), do: {:ok, nil}
+
+  defp covariance_fields(%Covariance{lower_triangle: values} = covariance)
+       when is_list(values) and length(values) == 21 do
+    with {:ok, comments} <- string_list(covariance.comments, :covariance_comments),
+         {:ok, cov_ref_frame} <- optional_string(covariance, :cov_ref_frame),
+         {:ok, lower_triangle} <- float_list(values, :covariance) do
+      {:ok, %{comments: comments, cov_ref_frame: cov_ref_frame, lower_triangle: lower_triangle}}
+    end
+  end
+
+  defp covariance_fields(value), do: {:error, {:invalid_field, :covariance, value}}
+
+  defp user_defined_fields(parameters) when is_list(parameters) do
+    parameters
+    |> Enum.reduce_while({:ok, []}, fn
+      %UserDefined{parameter: parameter, value: value}, {:ok, acc}
+      when is_binary(parameter) and is_binary(value) ->
+        {:cont, {:ok, [%{parameter: parameter, value: value} | acc]}}
+
+      other, _acc ->
+        {:halt, {:error, {:invalid_field, :user_defined, other}}}
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      error -> error
+    end
+  end
+
+  defp user_defined_fields(value), do: {:error, {:invalid_field, :user_defined, value}}
+
+  defp comments_fields(%Comments{} = comments) do
+    collect(
+      [:header, :metadata, :mean_elements, :tle_parameters, :user_defined],
+      &string_list(Map.fetch!(comments, &1), :comments)
+    )
+  end
+
+  defp comments_fields(value), do: {:error, {:invalid_field, :comments, value}}
+
+  defp string_list(values, field) when is_list(values) do
+    if Enum.all?(values, &is_binary/1),
+      do: {:ok, values},
+      else: {:error, {:invalid_field, field, values}}
+  end
+
+  defp string_list(values, field), do: {:error, {:invalid_field, field, values}}
+
+  defp float_list(values, field) do
+    if Enum.all?(values, &is_number/1),
+      do: {:ok, Enum.map(values, &(&1 * 1.0))},
+      else: {:error, {:invalid_field, field, values}}
   end
 
   defp epoch_fields(%Epoch{} = epoch) do
@@ -470,6 +810,9 @@ defmodule Sidereon.Format.OMM do
 
   # -- Legacy decoded-map parser helpers --
 
+  defp catalog_number(nil), do: nil
+  defp catalog_number(value), do: to_string(value)
+
   defp parse_epoch(nil), do: {:error, {:missing_field, "EPOCH"}}
 
   defp parse_epoch(epoch_str) when is_binary(epoch_str) do
@@ -487,9 +830,9 @@ defmodule Sidereon.Format.OMM do
 
   defp parse_epoch(value), do: {:error, {:invalid_field, "EPOCH", value}}
 
-  defp to_float_field(omm, key) do
+  defp optional_float_field(omm, key) do
     case omm[key] do
-      nil -> {:ok, 0.0}
+      nil -> {:ok, nil}
       value -> parse_float_field(key, value)
     end
   end
@@ -521,14 +864,6 @@ defmodule Sidereon.Format.OMM do
 
   # -- Validation helpers used by text encoding --
 
-  defp required_string(struct, field) do
-    case Map.fetch!(struct, field) do
-      value when is_binary(value) -> {:ok, value}
-      nil -> {:error, {:missing_field, field}}
-      value -> {:error, {:invalid_field, field, value}}
-    end
-  end
-
   defp optional_string(struct, field) do
     case Map.fetch!(struct, field) do
       nil -> {:ok, nil}
@@ -553,10 +888,17 @@ defmodule Sidereon.Format.OMM do
     end
   end
 
-  defp required_integer(struct, field) do
+  defp optional_float(struct, field) do
     case Map.fetch!(struct, field) do
+      nil -> {:ok, nil}
+      _value -> required_float(struct, field)
+    end
+  end
+
+  defp optional_integer(struct, field) do
+    case Map.fetch!(struct, field) do
+      nil -> {:ok, nil}
       value when is_integer(value) -> {:ok, value}
-      nil -> {:error, {:missing_field, field}}
       value -> {:error, {:invalid_field, field, value}}
     end
   end

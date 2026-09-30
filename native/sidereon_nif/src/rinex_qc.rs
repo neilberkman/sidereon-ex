@@ -13,13 +13,14 @@ use sidereon_core::observation_qc::{
     SatelliteSignalQc, SnrStats, SsiHistogram, SystemCycleSlipQc, SystemMultipathQc,
     SystemObservationQc, SystemSignalQc,
 };
+use sidereon_core::rinex::encode_crinex;
 use sidereon_core::rinex::nav::encode_nav;
 use sidereon_core::rinex::observations::{ObsEpochTime, PgmRunByDate};
 use sidereon_core::rinex::qc::{
-    lint_nav_text, lint_obs, lint_obs_text, repair_nav_text, repair_obs_text,
-    repair_obs_to_crinex_string, FindingRef, LintReport, RepairAction, RepairOptions, Severity,
+    lint_nav_text, lint_obs, lint_obs_text, repair_nav_text, repair_obs_text, FindingRef,
+    LintReport, RepairAction, RepairOptions, Severity,
 };
-use sidereon_core::GnssSystem;
+use sidereon_core::{Error as CoreError, GnssSystem};
 
 mod atoms {
     rustler::atoms! {
@@ -27,7 +28,13 @@ mod atoms {
         error,
         invalid_interval,
         invalid_gap_factor,
-        invalid_clock_jump_threshold
+        invalid_clock_jump_threshold,
+        parse,
+        invalid_input,
+        unhandled,
+        repaired_product_unwritable,
+        crinex_encode_failed,
+        not_representable
     }
 }
 
@@ -280,6 +287,10 @@ struct IonoTupleTerm {
     gps: Option<(Vec<f64>, Vec<f64>)>,
     beidou: Option<(Vec<f64>, Vec<f64>)>,
     galileo: Option<Vec<f64>>,
+    galileo_disturbance_flags: Option<f64>,
+    qzss: Option<(Vec<f64>, Vec<f64>)>,
+    navic: Option<(Vec<f64>, Vec<f64>)>,
+    beidou_bdgim: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -366,6 +377,12 @@ fn note_term(note: ObservationQcNote) -> ObservationNoteTerm {
         },
         ObservationQcNote::IntervalUnresolved => ObservationNoteTerm {
             kind: "interval_unresolved".to_string(),
+            epoch_index: None,
+        },
+        // Every epoch was taken with the file header because an event's header
+        // records did not read. A product read from text always reads.
+        ObservationQcNote::EventHeaderRecordsUnread => ObservationNoteTerm {
+            kind: "event_header_records_unread".to_string(),
             epoch_index: None,
         },
     }
@@ -645,6 +662,10 @@ fn iono_term(iono: Option<sidereon_core::rinex::nav::IonoCorrections>) -> IonoTu
             gps: None,
             beidou: None,
             galileo: None,
+            galileo_disturbance_flags: None,
+            qzss: None,
+            navic: None,
+            beidou_bdgim: None,
         };
     };
     let coeffs = |value: sidereon_core::rinex::nav::KlobucharAlphaBeta| {
@@ -656,6 +677,10 @@ fn iono_term(iono: Option<sidereon_core::rinex::nav::IonoCorrections>) -> IonoTu
         galileo: iono
             .galileo
             .map(|values| vec![values.ai0, values.ai1, values.ai2]),
+        galileo_disturbance_flags: iono.galileo_disturbance_flags,
+        qzss: iono.qzss.map(coeffs),
+        navic: iono.navic.map(coeffs),
+        beidou_bdgim: iono.beidou_bdgim.map(|alpha| alpha.to_vec()),
     }
 }
 
@@ -725,28 +750,75 @@ fn rinex_qc_lint_nav_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
     (atoms::ok(), lint_report_term(lint_nav_text(&text))).encode(env)
 }
 
+/// Repair RINEX observation or CRINEX text and write the repaired product
+/// back as RINEX and as CRINEX.
+///
+/// The repaired product is written with its own fallible writer and the text
+/// then compressed, rather than through the core's one-call CRINEX helper,
+/// which reports a writer refusal only as text. Each failure keeps its own
+/// shape:
+///
+/// - the input does not read, or repair refuses it: `{:parse, message}` or
+///   `{:invalid_input, message}`, as the core names it;
+/// - the repaired product cannot be written exactly:
+///   `{:repaired_product_unwritable, {tag, fields}}`, the writer's refusal with
+///   every field its variant carries;
+/// - the written RINEX does not compress: `{:crinex_encode_failed, reason}`,
+///   `reason` again tagged by the core's error kind.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_qc_repair_obs_text<'a>(
     env: Env<'a>,
     text: String,
     options: RepairOptionsTerm,
 ) -> Term<'a> {
-    match repair_obs_text(&text, &repair_options(options)) {
-        Ok(repair) => match repair_obs_to_crinex_string(&repair) {
-            Ok(crinex) => (
-                atoms::ok(),
-                ObsRepairTerm {
-                    rinex: repair.repaired.to_rinex_string(),
-                    crinex,
-                    actions: action_terms(repair.actions),
-                    remaining: lint_report_term(repair.remaining),
-                    decoded_from_crinex: repair.decoded_from_crinex,
-                },
+    let repair = match repair_obs_text(&text, &repair_options(options)) {
+        Ok(repair) => repair,
+        Err(error) => return (atoms::error(), core_error_term(env, error)).encode(env),
+    };
+    let rinex = match repair.repaired.to_rinex_string() {
+        Ok(rinex) => rinex,
+        Err(error) => {
+            return (
+                atoms::error(),
+                (
+                    atoms::repaired_product_unwritable(),
+                    crate::rinex_obs::encode_write_error(env, error),
+                ),
             )
-                .encode(env),
-            Err(error) => (atoms::error(), error.to_string()).encode(env),
+                .encode(env)
+        }
+    };
+    let crinex = match encode_crinex(&rinex) {
+        Ok(crinex) => crinex,
+        Err(error) => {
+            return (
+                atoms::error(),
+                (atoms::crinex_encode_failed(), core_error_term(env, error)),
+            )
+                .encode(env)
+        }
+    };
+    (
+        atoms::ok(),
+        ObsRepairTerm {
+            rinex,
+            crinex,
+            actions: action_terms(repair.actions),
+            remaining: lint_report_term(repair.remaining),
+            decoded_from_crinex: repair.decoded_from_crinex,
         },
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+    )
+        .encode(env)
+}
+
+/// A core error tagged by its kind: `{:parse, message}` for text that does not
+/// read, `{:invalid_input, message}` for a value the operation refuses, and
+/// `{:unhandled, message}` for any other kind, each with the core's own text.
+fn core_error_term<'a>(env: Env<'a>, error: CoreError) -> Term<'a> {
+    match error {
+        CoreError::Parse(message) => (atoms::parse(), message).encode(env),
+        CoreError::InvalidInput(message) => (atoms::invalid_input(), message).encode(env),
+        other => (atoms::unhandled(), other.to_string()).encode(env),
     }
 }
 
@@ -757,17 +829,35 @@ fn rinex_qc_repair_nav_text<'a>(
     options: RepairOptionsTerm,
 ) -> Term<'a> {
     match repair_nav_text(&text, &repair_options(options)) {
-        Ok(repair) => (
-            atoms::ok(),
-            NavRepairTerm {
-                rinex: encode_nav(&repair.records),
-                actions: action_terms(repair.actions),
-                remaining: lint_report_term(repair.remaining),
-                iono: iono_term(repair.iono),
-                leap_seconds: repair.leap_seconds,
-            },
-        )
-            .encode(env),
+        Ok(repair) => {
+            let rinex = match encode_nav(&repair.records) {
+                Ok(rinex) => rinex,
+                Err(sidereon_core::rinex::nav::NavWriteError::NotRepresentable {
+                    line,
+                    reason,
+                }) => {
+                    return (
+                        atoms::error(),
+                        (
+                            atoms::repaired_product_unwritable(),
+                            (atoms::not_representable(), line as u64, reason),
+                        ),
+                    )
+                        .encode(env)
+                }
+            };
+            (
+                atoms::ok(),
+                NavRepairTerm {
+                    rinex,
+                    actions: action_terms(repair.actions),
+                    remaining: lint_report_term(repair.remaining),
+                    iono: iono_term(repair.iono),
+                    leap_seconds: repair.leap_seconds,
+                },
+            )
+                .encode(env)
+        }
         Err(error) => (atoms::error(), error.to_string()).encode(env),
     }
 }

@@ -39,6 +39,7 @@ defmodule Sidereon.GNSS.Data do
   alias Sidereon.GNSS.FtpClient
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
+  alias Sidereon.NifCall
   alias Sidereon.SpaceWeather
 
   @default_max_compressed_bytes 64 * 1024 * 1024
@@ -156,9 +157,18 @@ defmodule Sidereon.GNSS.Data do
   defmodule AbsentCenter do
     @moduledoc """
     SP3 center that did not contribute to a merge.
+
+    `reason` is `"no_candidate"` (the catalog names no candidate for the center
+    and date), `"catalog_unavailable"` (the center has no cataloged naming
+    convention for the date), `"offline_cache_miss"`, `"product_not_published"`,
+    `"checksum_mismatch"`, `"http_status"` or `"unclassified"`; the last five
+    name the failed candidate in `filename`, `pattern` and `url`, with its HTTP
+    status in `http_status` where it has one. An `"unclassified"` failure, one
+    no other case describes, carries the inspected reason in `detail`, which is
+    `nil` otherwise.
     """
     @enforce_keys [:center, :reason]
-    defstruct [:center, :filename, :pattern, :reason, :url, :http_status]
+    defstruct [:center, :filename, :pattern, :reason, :url, :http_status, :detail]
   end
 
   defmodule Contributor do
@@ -591,7 +601,7 @@ defmodule Sidereon.GNSS.Data do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :data_next_issue_due)
   end
 
   def next_issue_due(_center, _content, %DateTime{}), do: {:error, {:invalid_datetime, :utc_required}}
@@ -996,7 +1006,12 @@ defmodule Sidereon.GNSS.Data do
   def fetch_merged_sp3(target, centers, opts) when is_list(centers) do
     normalized_centers = Enum.map(centers, &normalize_code/1)
 
-    with :ok <- validate_centers(normalized_centers) do
+    # The merge and its input identity both run after every fetch. A policy
+    # rejected by the facade's own checks is refused before any product is
+    # fetched; the core validates exact interval ticks and continuity options
+    # when the identity or merge is constructed.
+    with :ok <- validate_centers(normalized_centers),
+         :ok <- SP3.validate_identity_policy(merge_opts(opts)) do
       normalized_centers
       |> Enum.reduce_while({:ok, [], []}, fn center, {:ok, contributors, absent} ->
         case fetch_center_sp3(center, target, opts) do
@@ -1051,14 +1066,24 @@ defmodule Sidereon.GNSS.Data do
   The map never includes credentials, authorization headers, cache paths, or
   temporary paths. Recomputing `stable_input_identity` requires only the
   contributor artifact identities and `merge_policy` in this map.
+
+  This writes schema version 3, in the record layout the sidereon Python
+  package writes and verifies: each contributor's `acquisition_facts` and
+  `artifact_identity` carry `schema_version: 1`, and `merge_policy` is policy
+  schema 2 with `target_epoch_interval_s`, `nil` systems for no filter, an
+  empty precedence list for a combining rule, and the `verify_continuity` and
+  `provenance` options. The merge report carries `:dropped_input_epochs`,
+  `:omitted_epochs`, `:arc_withheld`, `:clock_omissions`, and `:continuity`
+  (with its attestation as `:attested`) and `:provenance`, each `nil` when the
+  merge was not asked for it.
   """
   def merge_report_to_map(%MergeReport{} = report) do
     %{
-      schema_version: 1,
+      schema_version: 3,
       requested_centers: report.requested_centers,
       input_identity_schema_version: report.input_identity_schema_version,
       stable_input_identity: report.stable_input_identity,
-      merge_policy: report.merge_policy,
+      merge_policy: shared_merge_policy(report.merge_policy),
       source_count: report.source_count,
       single_product: report.single_product,
       merged: report.merged,
@@ -1075,7 +1100,14 @@ defmodule Sidereon.GNSS.Data do
   complete persisted artifact records and merge policy through the shared Rust
   canonicalizer, then compares both the schema version and stable identity. All
   report and nested record schemas are exact: unknown, duplicated, coercive, or
-  internally inconsistent fields fail closed.
+  internally inconsistent fields fail closed. A version 3 record is read in
+  the layout the sidereon Python package shares and checked against its
+  agreement and policy. Version 1 and 2
+  maps are read in the layout this binding wrote them in: a version 1 map,
+  written before the merge report stated what it did not write, is verified
+  without those four fields; a version 2 map carries them and is verified
+  without the continuity report, the provenance and the two options that
+  request them.
   Maps returned by `merge_report_to_map/1`, including a JSON encode/decode
   round-trip with string keys, are accepted.
   """
@@ -1110,22 +1142,24 @@ defmodule Sidereon.GNSS.Data do
     ]
 
     with {:ok, values} <- exact_fields(report, fields, :report),
-         :ok <- exact_value(values.schema_version, 1, :schema_version),
+         {:ok, schema_version} <- persisted_schema_version(values.schema_version),
          true <- is_list(values.contributors) || {:error, {:invalid_field, :contributors}},
          true <- values.contributors != [] || {:error, {:invalid_field, :contributors}},
+         {:ok, contributors, policy} <- persisted_layout(values.contributors, values.merge_policy, schema_version),
          {:ok, requested_centers} <- persisted_requested_centers(values.requested_centers),
-         {:ok, artifacts, contributor_centers} <- persisted_contributors(values.contributors),
-         {:ok, opts, normalized_policy, precedence} <- persisted_merge_policy(values.merge_policy),
+         {:ok, artifacts, contributor_centers} <- persisted_contributors(contributors, schema_version),
+         {:ok, opts, normalized_policy, precedence} <- persisted_merge_policy(policy, schema_version),
          :ok <- validate_persisted_precedence(artifacts, precedence, opts),
          {:ok, recomputed} <- SP3.merge_input_identity(artifacts, opts),
-         :ok <- verify_report_identity(values, recomputed, normalized_policy),
+         :ok <- verify_report_identity(values, recomputed, normalized_policy, schema_version),
          :ok <- verify_report_counts(values, artifacts),
-         {:ok, absent_centers} <- verify_absent(values.absent, contributor_centers),
+         {:ok, absent_centers} <- verify_absent(values.absent, contributor_centers, schema_version),
          :ok <- verify_requested_partition(requested_centers, contributor_centers, absent_centers),
          :ok <-
            verify_merge_result(values.merge_report, %{
              source_count: length(artifacts),
-             policy: normalized_policy
+             policy: normalized_policy,
+             schema_version: schema_version
            }) do
       :ok
     else
@@ -1136,12 +1170,14 @@ defmodule Sidereon.GNSS.Data do
 
   @doc """
   Write an SP3 product atomically.
+
+  Nothing is written when the SP3 writer refuses the product; its refusal is
+  returned as `Sidereon.GNSS.SP3.to_iodata/2` documents it.
   """
   def write_sp3(%SP3{} = sp3, path, opts \\ []) when is_binary(path) do
-    data = SP3.to_iodata(sp3) |> IO.iodata_to_binary()
-    data = if truthy?(Keyword.get(opts, :gzip)), do: :zlib.gzip(data), else: data
-
-    with :ok <- ensure_dir(Path.dirname(Path.expand(path))),
+    with {:ok, text} <- SP3.to_sp3_string(sp3),
+         data = if(truthy?(Keyword.get(opts, :gzip)), do: :zlib.gzip(text), else: text),
+         :ok <- ensure_dir(Path.dirname(Path.expand(path))),
          {:ok, tmp} <- write_temp(Path.dirname(Path.expand(path)), data),
          :ok <- rename_file(tmp, path) do
       {:ok, path}
@@ -1414,6 +1450,7 @@ defmodule Sidereon.GNSS.Data do
       :asserted_frame_label_sets,
       :helmert,
       :verify_continuity,
+      :provenance,
       :sample,
       :issue,
       :catalog_variants,
@@ -1449,25 +1486,29 @@ defmodule Sidereon.GNSS.Data do
   defp contributor_candidate(product, provenance),
     do: {product.filename || provenance.official_filename, product.pattern || "canonical"}
 
+  @merge_option_keys [
+    :systems,
+    :epoch_interval_s,
+    :position_tolerance_m,
+    :clock_tolerance_s,
+    :min_agree,
+    :clock_min_common,
+    :combine,
+    :precedence_scope,
+    :outlier_reject,
+    :asserted_frame_label_sets,
+    :helmert,
+    :verify_continuity,
+    :provenance
+  ]
+
+  defp merge_opts(opts), do: Keyword.take(opts, @merge_option_keys)
+
   defp merge_sp3_contributors(contributors, absent, requested_centers, opts) do
     sources = Enum.map(contributors, fn {:ok, _info, sp3} -> sp3 end)
     infos = Enum.map(contributors, fn {:ok, info, _sp3} -> info end)
 
-    merge_opts =
-      Keyword.take(opts, [
-        :systems,
-        :epoch_interval_s,
-        :position_tolerance_m,
-        :clock_tolerance_s,
-        :min_agree,
-        :clock_min_common,
-        :combine,
-        :precedence_scope,
-        :outlier_reject,
-        :asserted_frame_label_sets,
-        :helmert,
-        :verify_continuity
-      ])
+    merge_opts = merge_opts(opts)
 
     case SP3.merge(sources, merge_opts) do
       {:ok, merged, merge_report} ->
@@ -1521,20 +1562,37 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp candidate_attempt(reason, url) do
-    {_response_url, status} = diagnostic_fields(reason)
+    {type, message, status, detail} = candidate_failure(reason)
 
     %Distribution.SourceFailure{
       source: :direct,
-      error_type: candidate_error_type(reason),
-      message: reason_string(reason),
+      error_type: type,
+      message: message,
       url: url,
-      status: status
+      status: status,
+      detail: detail
     }
   end
 
-  defp candidate_error_type(:offline_cache_miss), do: :offline_cache_miss
-  defp candidate_error_type({:product_not_published, _status, _url}), do: :product_not_published
-  defp candidate_error_type(_reason), do: :acquisition
+  # A candidate's failure as one of the classified cases, or as
+  # `:unclassified_failure` with the inspected reason as its detail. A status
+  # outside 100-599 is no HTTP status, so that failure is the transport's.
+  defp candidate_failure(:offline_cache_miss), do: {:offline_cache_miss, "offline_cache_miss", nil, nil}
+
+  defp candidate_failure({:not_found_on_archive, _url}), do: {:product_not_published, "product_not_published", 404, nil}
+
+  defp candidate_failure({:product_not_published, status, _url}) when status in 100..599,
+    do: {:product_not_published, "product_not_published", status, nil}
+
+  defp candidate_failure({:checksum_mismatch, _expected, _got}), do: {:checksum_mismatch, "checksum_mismatch", nil, nil}
+
+  defp candidate_failure({:http_status, status, _url}) when status in 100..599,
+    do: {:http_status, "http_status", status, nil}
+
+  defp candidate_failure({:http_status, status, _url}) when is_integer(status),
+    do: {:transport, "transport:http_#{status}", nil, nil}
+
+  defp candidate_failure(reason), do: {:unclassified_failure, inspect(reason), nil, inspect(reason)}
 
   defp contributor_to_map(%Contributor{} = contributor) do
     %{
@@ -1543,10 +1601,223 @@ defmodule Sidereon.GNSS.Data do
       date: Date.to_iso8601(contributor.date),
       issue: contributor.issue,
       pattern: contributor.pattern,
-      artifact_identity: artifact_identity_to_map(contributor.artifact_identity),
-      acquisition: acquisition_to_map(contributor.acquisition)
+      artifact_identity: Map.put(artifact_identity_to_map(contributor.artifact_identity), :schema_version, 1),
+      acquisition_facts:
+        contributor.acquisition
+        |> acquisition_to_map()
+        |> Map.update!(:retrieved_at, &shared_timestamp/1)
+        |> Map.update!(:attempts, fn attempts -> Enum.map(attempts, &shared_attempt/1) end)
+        |> Map.put(:schema_version, 1)
     }
   end
+
+  # An attempt as a shared record states it: the failure in the shared
+  # vocabulary, and the detail only for an unclassified failure.
+  defp shared_attempt(attempt) do
+    attempt = Map.update!(attempt, :error_type, &shared_failure_spelling/1)
+    if attempt.error_type == "unclassified_failure", do: attempt, else: Map.delete(attempt, :detail)
+  end
+
+  # This binding's failure atoms that the shared vocabulary spells otherwise.
+  @shared_failure_spellings %{
+    transport: "transport_failure",
+    decompression_failed: "decompression_failure",
+    product_validation_failed: "product_validation_failure",
+    cache_read_failed: "cache_read_failure",
+    cache_write_failed: "cache_write_failure"
+  }
+
+  # A failure as the shared vocabulary spells it.
+  defp shared_failure_spelling(type) when is_atom(type),
+    do: Map.get(@shared_failure_spellings, type, Atom.to_string(type))
+
+  defp shared_failure_spelling(type), do: type
+
+  # The retrieval time as a shared record states it: the UTC instant in ISO
+  # 8601 with a `+00:00` offset, and microseconds only when there are any.
+  # The instant is unchanged; a value that is not a timestamp is kept, for
+  # verification to refuse.
+  defp shared_timestamp(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        {microsecond, _precision} = datetime.microsecond
+        seconds = datetime |> DateTime.truncate(:second) |> DateTime.to_naive() |> NaiveDateTime.to_iso8601()
+
+        fraction =
+          if microsecond == 0,
+            do: "",
+            else: "." <> String.pad_leading(Integer.to_string(microsecond), 6, "0")
+
+        seconds <> fraction <> "+00:00"
+
+      _error ->
+        value
+    end
+  end
+
+  defp shared_timestamp(value), do: value
+
+  # A shared record states the retrieval time as an ISO 8601 instant with its
+  # UTC offset, in the one form that restates it unchanged: whole
+  # seconds, a six-digit fraction only when it is not zero, and a `+HH:MM`
+  # offset (`+HH:MM:SS` when it has seconds).
+  defp shared_timestamp_form(value, field) when is_binary(value) do
+    with {:ok, datetime, offset} <- DateTime.from_iso8601(value),
+         {microsecond, _precision} = datetime.microsecond,
+         local = datetime |> DateTime.to_naive() |> NaiveDateTime.add(offset, :second),
+         true <- canonical_timestamp(local, microsecond, offset) == value do
+      :ok
+    else
+      _other -> {:error, {:invalid_field, field}}
+    end
+  end
+
+  defp shared_timestamp_form(_value, field), do: {:error, {:invalid_field, field}}
+
+  defp canonical_timestamp(local, microsecond, offset) do
+    seconds = local |> NaiveDateTime.truncate(:second) |> NaiveDateTime.to_iso8601()
+    fraction = if microsecond == 0, do: "", else: "." <> String.pad_leading(Integer.to_string(microsecond), 6, "0")
+    sign = if offset < 0, do: "-", else: "+"
+    magnitude = abs(offset)
+    pad = &String.pad_leading(Integer.to_string(&1), 2, "0")
+    hours_minutes = pad.(div(magnitude, 3600)) <> ":" <> pad.(div(rem(magnitude, 3600), 60))
+    offset_seconds = if rem(magnitude, 60) == 0, do: "", else: ":" <> pad.(rem(magnitude, 60))
+    seconds <> fraction <> sign <> hours_minutes <> offset_seconds
+  end
+
+  # The merge policy as a schema 3 record states it, in the layout the
+  # Python package shares: policy schema 2, the target interval under
+  # `target_epoch_interval_s`, `nil` systems for no filter and an empty
+  # precedence list for a combining rule.
+  defp shared_merge_policy(policy) do
+    %{
+      schema_version: 2,
+      position_tolerance_m: policy.position_tolerance_m,
+      clock_tolerance_s: policy.clock_tolerance_s,
+      min_agree: policy.min_agree,
+      clock_min_common: policy.clock_min_common,
+      combine: policy.combine,
+      precedence_scope: policy.precedence_scope,
+      outlier_reject: policy.outlier_reject,
+      target_epoch_interval_s: policy.epoch_interval_s,
+      systems: if(policy.systems != [], do: policy.systems),
+      asserted_frame_label_sets: policy.asserted_frame_label_sets,
+      helmert: policy.helmert,
+      precedence_artifact_sha256: policy.precedence_artifact_sha256 || [],
+      verify_continuity: policy.verify_continuity,
+      provenance: policy.provenance
+    }
+  end
+
+  # A schema 3 record's contributors and policy, in the shared layout, read
+  # into the layout schema 1 and 2 records carry, which the rest of the
+  # verification reads.
+  defp persisted_layout(contributors, policy, schema_version) when schema_version < 3, do: {:ok, contributors, policy}
+
+  defp persisted_layout(contributors, policy, _schema_version) do
+    with {:ok, contributors} <- shared_contributors(contributors),
+         {:ok, policy} <- shared_policy(policy) do
+      {:ok, contributors, policy}
+    end
+  end
+
+  @shared_artifact_fields [
+    :requested_identity,
+    :resolved_identity,
+    :distribution_source,
+    :official_filename,
+    :product_sha256,
+    :product_byte_length,
+    :archive_sha256,
+    :archive_byte_length,
+    :compression
+  ]
+
+  @shared_acquisition_fields [:retrieved_at, :cache_hit, :original_url, :final_url, :etag, :last_modified, :attempts]
+
+  defp shared_contributors(contributors) do
+    contributors
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {contributor, index}, {:ok, converted} ->
+      fields = [:center, :filename, :date, :issue, :pattern, :artifact_identity, :acquisition_facts]
+
+      result =
+        with {:ok, values} <- exact_fields(contributor, fields, {:contributor, index}),
+             {:ok, artifact} <-
+               record_schema_1(values.artifact_identity, @shared_artifact_fields, {:artifact_identity, index}),
+             {:ok, acquisition} <-
+               record_schema_1(values.acquisition_facts, @shared_acquisition_fields, {:acquisition_facts, index}),
+             :ok <- shared_timestamp_form(acquisition.retrieved_at, {:acquisition_facts, index, :retrieved_at}) do
+          {:ok,
+           values
+           |> Map.delete(:acquisition_facts)
+           |> Map.put(:artifact_identity, artifact)
+           |> Map.put(:acquisition, acquisition)}
+        end
+
+      case result do
+        {:ok, value} -> {:cont, {:ok, [value | converted]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, converted} -> {:ok, Enum.reverse(converted)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp record_schema_1(record, fields, context) do
+    with {:ok, values} <- exact_fields(record, [:schema_version | fields], context),
+         :ok <- exact_value(values.schema_version, 1, {context, :schema_version}) do
+      {:ok, Map.delete(values, :schema_version)}
+    end
+  end
+
+  defp shared_policy(policy) do
+    fields = [
+      :schema_version,
+      :position_tolerance_m,
+      :clock_tolerance_s,
+      :min_agree,
+      :clock_min_common,
+      :combine,
+      :precedence_scope,
+      :outlier_reject,
+      :target_epoch_interval_s,
+      :systems,
+      :asserted_frame_label_sets,
+      :helmert,
+      :precedence_artifact_sha256,
+      :verify_continuity,
+      :provenance
+    ]
+
+    with {:ok, values} <- exact_fields(policy, fields, :merge_policy),
+         :ok <- exact_value(values.schema_version, 2, {:merge_policy, :schema_version}),
+         {:ok, systems} <- shared_systems(values.systems),
+         {:ok, precedence} <- shared_precedence(values.precedence_artifact_sha256, values.combine) do
+      {:ok,
+       values
+       |> Map.drop([:schema_version, :target_epoch_interval_s])
+       |> Map.merge(%{
+         epoch_interval_s: values.target_epoch_interval_s,
+         systems: systems,
+         precedence_artifact_sha256: precedence
+       })}
+    end
+  end
+
+  defp shared_systems(nil), do: {:ok, []}
+  defp shared_systems([_ | _] = systems), do: {:ok, systems}
+  defp shared_systems(_systems), do: {:error, {:invalid_field, {:merge_policy, :systems}}}
+
+  defp shared_precedence(digests, combine) when combine in [:precedence, "precedence"] and is_list(digests),
+    do: {:ok, digests}
+
+  defp shared_precedence([], _combine), do: {:ok, nil}
+
+  defp shared_precedence(_digests, _combine),
+    do: {:error, {:invalid_field, {:merge_policy, :precedence_artifact_sha256}}}
 
   defp artifact_identity_to_map(%ArtifactIdentity{} = artifact) do
     artifact
@@ -1569,13 +1840,17 @@ defmodule Sidereon.GNSS.Data do
     end)
   end
 
-  defp absent_to_map(%AbsentCenter{} = absent), do: Map.from_struct(absent)
+  defp absent_to_map(%AbsentCenter{} = absent) do
+    absent = Map.from_struct(absent)
+    if absent.reason == "unclassified", do: absent, else: Map.delete(absent, :detail)
+  end
 
   defp merge_result_to_map(nil), do: nil
 
   defp merge_result_to_map(report) when is_map(report) do
     report
-    |> Map.drop([:handle, :continuity])
+    |> Map.delete(:handle)
+    |> Map.update(:continuity, nil, &persisted_continuity/1)
     |> Map.update!(:frame_reconciliations, fn reconciliations ->
       Enum.map(reconciliations, fn reconciliation ->
         Map.update!(reconciliation, :epoch_year_span, fn
@@ -1589,7 +1864,16 @@ defmodule Sidereon.GNSS.Data do
 
   defp merge_result_to_map(report), do: report
 
-  defp persisted_contributors(contributors) do
+  # The shared record states the attestation as `attested`.
+  defp persisted_continuity(nil), do: nil
+
+  defp persisted_continuity(continuity) do
+    continuity
+    |> Map.delete(:attested?)
+    |> Map.put(:attested, continuity.attested?)
+  end
+
+  defp persisted_contributors(contributors, schema_version) do
     contributors
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], []}, fn {contributor, index}, {:ok, artifacts, centers} ->
@@ -1605,7 +1889,7 @@ defmodule Sidereon.GNSS.Data do
            :ok <- optional_binary(values.issue, {:contributor, index, :issue}),
            :ok <- nonempty_binary(values.pattern, {:contributor, index, :pattern}),
            {:ok, artifact} <- persisted_artifact(values.artifact_identity, index),
-           {:ok, acquisition} <- persisted_acquisition(values.acquisition, index),
+           {:ok, acquisition} <- persisted_acquisition(values.acquisition, index, schema_version),
            :ok <-
              verify_contributor_metadata(
                %{values | date: date},
@@ -1728,7 +2012,7 @@ defmodule Sidereon.GNSS.Data do
 
   defp persisted_product_identity(_identity, context), do: {:error, {:invalid_field, context}}
 
-  defp persisted_acquisition(acquisition, index) when is_map(acquisition) do
+  defp persisted_acquisition(acquisition, index, schema_version) when is_map(acquisition) do
     fields = [:retrieved_at, :cache_hit, :original_url, :final_url, :etag, :last_modified, :attempts]
 
     with {:ok, values} <- exact_fields(acquisition, fields, {:acquisition, index}),
@@ -1739,30 +2023,54 @@ defmodule Sidereon.GNSS.Data do
          :ok <- optional_binary(values.etag, {:acquisition, index, :etag}),
          :ok <- optional_binary(values.last_modified, {:acquisition, index, :last_modified}),
          true <- is_list(values.attempts) || {:error, {:invalid_field, {:acquisition, index, :attempts}}},
-         :ok <- persisted_attempts(values.attempts, index) do
+         :ok <- persisted_attempts(values.attempts, index, schema_version) do
       {:ok, values}
     end
   end
 
-  defp persisted_acquisition(_acquisition, index), do: {:error, {:invalid_field, {:acquisition, index}}}
+  defp persisted_acquisition(_acquisition, index, _schema_version),
+    do: {:error, {:invalid_field, {:acquisition, index}}}
 
-  @failure_types ~w(
-    authentication_required authentication_failed authorization_denied product_not_published
-    retired_endpoint redirect_policy_failure malformed_url transport http_status invalid_content_type
-    error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch
-    product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution
-    acquisition unknown
+  # The acquisition-failure vocabulary of a schema 3 record, one spelling per
+  # case, which every interface writing the shared layout writes.
+  @shared_failure_types ~w(
+    authentication_required authentication_failed authorization_denied product_not_published retired_endpoint
+    redirect_policy_failure malformed_url transport_failure http_client_failure http_status invalid_content_type
+    error_document content_length_mismatch download_size_exceeded checksum_mismatch decompression_failure
+    product_validation_failure cache_read_failure cache_write_failure offline_cache_miss unsupported_distribution
+    unclassified_failure
   )
 
-  defp persisted_attempts(attempts, contributor_index) do
+  # The spellings schema 1 and 2 records carry besides: this binding's own and
+  # its catch-alls, and the Python package's class codes.
+  @legacy_failure_types ~w(
+    transport decompression_failed product_validation_failed cache_read_failed cache_write_failed acquisition unknown
+    acquisition_error all_distributors_failed exact_product_set_error
+  )
+
+  defp persisted_attempts(attempts, contributor_index, schema_version) do
+    # An unclassified failure, and its detail, exist from schema 3.
+    failure_types =
+      if schema_version >= 3,
+        do: @shared_failure_types,
+        else: (@shared_failure_types -- ["unclassified_failure"]) ++ @legacy_failure_types
+
     attempts
     |> Enum.with_index()
     |> Enum.reduce_while(:ok, fn {attempt, attempt_index}, :ok ->
       context = {:attempt, contributor_index, attempt_index}
 
-      with {:ok, values} <- exact_fields(attempt, [:source, :error_type, :message, :url, :status], context),
+      unclassified = schema_version >= 3 and label_string(map_value(attempt, :error_type)) == "unclassified_failure"
+      fields = [:source, :error_type, :message, :url, :status] ++ if(unclassified, do: [:detail], else: [])
+
+      with {:ok, values} <- exact_fields(attempt, fields, context),
+           :ok <- if(unclassified, do: nonempty_binary(values.detail, {context, :detail}), else: :ok),
            {:ok, _source} <- persisted_source(values.source),
-           :ok <- failure_type(values.error_type, context),
+           :ok <- failure_type(values.error_type, failure_types, context),
+           # A schema 3 record states the status of an HTTP-status failure.
+           true <-
+             (schema_version < 3 or label_string(values.error_type) != "http_status" or is_integer(values.status)) ||
+               {:error, {:invalid_field, {context, :status}}},
            :ok <- nonempty_binary(values.message, {context, :message}),
            :ok <- public_url(values.url, {context, :url}),
            :ok <- optional_http_status(values.status, {context, :status}) do
@@ -1773,28 +2081,61 @@ defmodule Sidereon.GNSS.Data do
     end)
   end
 
-  defp failure_type(value, context) when is_atom(value), do: failure_type(Atom.to_string(value), context)
-  defp failure_type(value, _context) when is_binary(value) and value in @failure_types, do: :ok
-  defp failure_type(_value, context), do: {:error, {:invalid_field, {context, :error_type}}}
+  defp failure_type(value, types, context) when is_atom(value) and not is_nil(value),
+    do: failure_type(Atom.to_string(value), types, context)
+
+  defp failure_type(value, types, context) when is_binary(value) do
+    if value in types, do: :ok, else: {:error, {:invalid_field, {context, :error_type}}}
+  end
+
+  defp failure_type(_value, _types, context), do: {:error, {:invalid_field, {context, :error_type}}}
 
   defp verify_contributor_metadata(values, artifact, acquisition, index) do
     requested = artifact.requested_identity
     resolved = artifact.resolved_identity
+    persisted_issue = if values.issue in [nil, ""], do: "0000", else: values.issue
 
     with true <- values.center == requested.analysis_center || {:error, {:contributor_mismatch, index, :center}},
          true <- values.center == resolved.analysis_center || {:error, {:contributor_mismatch, index, :center}},
          true <- values.date == requested.date || {:error, {:contributor_mismatch, index, :date}},
          true <- values.date == resolved.date || {:error, {:contributor_mismatch, index, :date}},
-         true <- values.issue == requested.issue || {:error, {:contributor_mismatch, index, :issue}} do
+         # A product without an issue is the catalog's issue "0000", which its
+         # identity states.
+         true <- persisted_issue == requested.issue || {:error, {:contributor_mismatch, index, :issue}} do
       verify_contributor_catalog(values, artifact, acquisition, index)
     end
   end
 
-  defp verify_contributor_catalog(%{pattern: pattern, filename: filename}, artifact, _acquisition, _index)
+  # A canonical contributor is a center's dated product and a requested-sample
+  # one an ultra-rapid center's product at the sample the request named; the
+  # catalog derives either's identity and filename exactly.
+  defp verify_contributor_catalog(%{pattern: pattern} = values, artifact, _acquisition, index)
        when pattern in ["canonical", "requested_sample"] do
-    if filename == artifact.official_filename,
-      do: :ok,
-      else: {:error, :contributor_filename_mismatch}
+    requested = artifact.requested_identity
+
+    with {:ok, entry} <- center_entry(values.center),
+         true <-
+           pattern == "canonical" == (entry.issues == []) || {:error, {:contributor_mismatch, index, :pattern}} do
+      product_issue =
+        if !(entry.issues == [] and values.issue in [nil, "", "0000"]) do
+          values.issue
+        end
+
+      product = %Product{
+        center: values.center,
+        product_type: "sp3",
+        date: values.date,
+        sample: requested.sample,
+        issue: product_issue
+      }
+
+      with {:ok, identity} <- Distribution.identity(product),
+           true <- identity == requested || {:error, {:contributor_mismatch, index, :requested_identity}} do
+        if values.filename == identity.official_filename and values.filename == artifact.official_filename,
+          do: :ok,
+          else: {:error, :contributor_filename_mismatch}
+      end
+    end
   end
 
   defp verify_contributor_catalog(values, artifact, acquisition, index) do
@@ -1829,21 +2170,24 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp persisted_merge_policy(policy) when is_map(policy) do
-    fields = [
-      :position_tolerance_m,
-      :clock_tolerance_s,
-      :min_agree,
-      :clock_min_common,
-      :combine,
-      :precedence_artifact_sha256,
-      :precedence_scope,
-      :outlier_reject,
-      :epoch_interval_s,
-      :systems,
-      :asserted_frame_label_sets,
-      :helmert
-    ]
+  defp persisted_merge_policy(policy, schema_version) when is_map(policy) do
+    reporting_fields = if schema_version >= 3, do: [:verify_continuity, :provenance], else: []
+
+    fields =
+      [
+        :position_tolerance_m,
+        :clock_tolerance_s,
+        :min_agree,
+        :clock_min_common,
+        :combine,
+        :precedence_artifact_sha256,
+        :precedence_scope,
+        :outlier_reject,
+        :epoch_interval_s,
+        :systems,
+        :asserted_frame_label_sets,
+        :helmert
+      ] ++ reporting_fields
 
     with {:ok, values} <- exact_fields(policy, fields, :merge_policy),
          {:ok, position_tolerance_m} <- persisted_nonnegative_float(values.position_tolerance_m, :position_tolerance_m),
@@ -1857,7 +2201,8 @@ defmodule Sidereon.GNSS.Data do
          {:ok, systems} <- persisted_systems(values.systems),
          {:ok, label_sets} <- persisted_label_sets(values.asserted_frame_label_sets),
          true <- is_boolean(values.helmert) || {:error, {:invalid_field, {:merge_policy, :helmert}}},
-         :ok <- persisted_precedence_list(values.precedence_artifact_sha256) do
+         :ok <- persisted_precedence_list(values.precedence_artifact_sha256),
+         {:ok, reporting_opts, reporting_policy} <- persisted_reporting_options(values, schema_version) do
       opts = [
         position_tolerance_m: position_tolerance_m,
         clock_tolerance_s: clock_tolerance_s,
@@ -1871,6 +2216,7 @@ defmodule Sidereon.GNSS.Data do
         helmert: values.helmert
       ]
 
+      opts = opts ++ reporting_opts
       opts = if systems == [], do: opts, else: Keyword.put(opts, :systems, systems)
 
       normalized = %{
@@ -1888,11 +2234,73 @@ defmodule Sidereon.GNSS.Data do
         helmert: values.helmert
       }
 
-      {:ok, opts, normalized, values.precedence_artifact_sha256}
+      {:ok, opts, Map.merge(normalized, reporting_policy), values.precedence_artifact_sha256}
     end
   end
 
-  defp persisted_merge_policy(_policy), do: {:error, :invalid_merge_policy}
+  defp persisted_merge_policy(_policy, _schema_version), do: {:error, :invalid_merge_policy}
+
+  # The options that ask a merge to report its continuity and provenance,
+  # recorded from schema version 3. They change neither the product nor the
+  # stable identity.
+  defp persisted_reporting_options(_values, schema_version) when schema_version < 3, do: {:ok, [], %{}}
+
+  defp persisted_reporting_options(values, _schema_version) do
+    with {:ok, continuity_opt, continuity_policy} <- persisted_verify_continuity(values.verify_continuity),
+         {:ok, provenance} <- persisted_provenance(values.provenance) do
+      {:ok, [verify_continuity: continuity_opt, provenance: provenance],
+       %{
+         verify_continuity: continuity_policy,
+         provenance: provenance && Atom.to_string(provenance)
+       }}
+    end
+  end
+
+  defp persisted_verify_continuity(nil), do: {:ok, false, nil}
+
+  defp persisted_verify_continuity(value) when is_map(value) do
+    context = {:merge_policy, :verify_continuity}
+    fields = [:orbit_class, :residual_tolerance_m, :gap_threshold_factor]
+
+    with {:ok, values} <- exact_fields(value, fields, context),
+         {:ok, orbit_class} <- persisted_orbit_class(values.orbit_class),
+         :ok <- optional_nonnegative_float(values.residual_tolerance_m, {context, :residual_tolerance_m}),
+         :ok <- persisted_gap_threshold_factor(values.gap_threshold_factor) do
+      {:ok,
+       [
+         orbit_class: orbit_class,
+         residual_tolerance_m: values.residual_tolerance_m,
+         gap_threshold_factor: values.gap_threshold_factor
+       ],
+       %{
+         orbit_class: orbit_class && Atom.to_string(orbit_class),
+         residual_tolerance_m: values.residual_tolerance_m,
+         gap_threshold_factor: values.gap_threshold_factor
+       }}
+    end
+  end
+
+  defp persisted_verify_continuity(_value), do: {:error, {:invalid_field, {:merge_policy, :verify_continuity}}}
+
+  defp persisted_orbit_class(nil), do: {:ok, nil}
+  defp persisted_orbit_class(value) when value in [:meo_gnss, "meo_gnss"], do: {:ok, :meo_gnss}
+  defp persisted_orbit_class(value) when value in [:geosynchronous, "geosynchronous"], do: {:ok, :geosynchronous}
+  defp persisted_orbit_class(value) when value in [:leo, "leo"], do: {:ok, :leo}
+  defp persisted_orbit_class(_value), do: {:error, {:invalid_field, {:merge_policy, :verify_continuity, :orbit_class}}}
+
+  # The core's interpolation options take a gap threshold factor greater than 1.
+  defp persisted_gap_threshold_factor(nil), do: :ok
+
+  defp persisted_gap_threshold_factor(value) when is_float(value) and value > 1.0,
+    do: finite_float(value, {:merge_policy, :verify_continuity, :gap_threshold_factor})
+
+  defp persisted_gap_threshold_factor(_value),
+    do: {:error, {:invalid_field, {:merge_policy, :verify_continuity, :gap_threshold_factor}}}
+
+  defp persisted_provenance(nil), do: {:ok, nil}
+  defp persisted_provenance(value) when value in [:summary, "summary"], do: {:ok, :summary}
+  defp persisted_provenance(value) when value in [:full, "full"], do: {:ok, :full}
+  defp persisted_provenance(_value), do: {:error, {:invalid_field, {:merge_policy, :provenance}}}
 
   defp validate_persisted_precedence(_artifacts, nil, opts) do
     if Keyword.fetch!(opts, :combine) == :precedence,
@@ -1933,11 +2341,13 @@ defmodule Sidereon.GNSS.Data do
 
   defp persisted_epoch_interval(nil), do: {:ok, nil}
 
+  # Persisted identities use the same exact 10 ns tick and strict range rule
+  # as the core. The value is kept as recorded.
   defp persisted_epoch_interval(value) when is_float(value) do
-    rounded = Float.round(value)
+    tick_count = value * 100_000_000.0
 
-    if value - value == 0.0 and rounded >= 1.0 and abs(value - rounded) <= 1.0e-9,
-      do: {:ok, rounded},
+    if value > 0.0 and value < 100_000.0 and tick_count == Float.round(tick_count),
+      do: {:ok, value},
       else: {:error, {:invalid_field, {:merge_policy, :epoch_interval_s}}}
   end
 
@@ -2005,13 +2415,20 @@ defmodule Sidereon.GNSS.Data do
   defp persisted_precedence_scope(value) when value in [:satellite_arc, "satellite_arc"], do: {:ok, :satellite_arc}
   defp persisted_precedence_scope(_value), do: {:error, :invalid_merge_policy}
 
-  defp verify_report_identity(values, recomputed, normalized_policy) do
+  defp verify_report_identity(values, recomputed, normalized_policy, schema_version) do
+    # Before schema version 3 the policy did not record the two reporting
+    # options, so the recomputed policy is compared without them.
+    recomputed_policy =
+      if schema_version >= 3,
+        do: recomputed.merge_policy,
+        else: Map.drop(recomputed.merge_policy, [:verify_continuity, :provenance])
+
     cond do
       not is_integer(values.input_identity_schema_version) -> {:error, {:invalid_field, :input_identity_schema_version}}
       not is_binary(values.stable_input_identity) -> {:error, {:invalid_field, :stable_input_identity}}
       recomputed.schema_version != values.input_identity_schema_version -> {:error, :merge_input_identity_mismatch}
       recomputed.stable_id != values.stable_input_identity -> {:error, :merge_input_identity_mismatch}
-      recomputed.merge_policy != normalized_policy -> {:error, :merge_policy_mismatch}
+      recomputed_policy != normalized_policy -> {:error, :merge_policy_mismatch}
       true -> :ok
     end
   end
@@ -2028,19 +2445,23 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp verify_absent(absent, contributor_centers) when is_list(absent) do
+  defp verify_absent(absent, contributor_centers, schema_version) when is_list(absent) do
     absent
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {entry, index}, {:ok, centers} ->
-      fields = [:center, :filename, :pattern, :reason, :url, :http_status]
+      unclassified = schema_version >= 3 and map_value(entry, :reason) == "unclassified"
+      fields = [:center, :filename, :pattern, :reason, :url, :http_status] ++ if(unclassified, do: [:detail], else: [])
 
       with {:ok, values} <- exact_fields(entry, fields, {:absent, index}),
+           :ok <- if(unclassified, do: nonempty_binary(values.detail, {:absent, index, :detail}), else: :ok),
            :ok <- nonempty_binary(values.center, {:absent, index, :center}),
            :ok <- optional_binary(values.filename, {:absent, index, :filename}),
            :ok <- optional_binary(values.pattern, {:absent, index, :pattern}),
            :ok <- nonempty_binary(values.reason, {:absent, index, :reason}),
            :ok <- public_url(values.url, {:absent, index, :url}),
            :ok <- optional_http_status(values.http_status, {:absent, index, :http_status}),
+           :ok <- verify_absence_candidate(values, {:absent, index}),
+           :ok <- verify_absence_reason(values, schema_version, {:absent, index}),
            true <- values.center not in contributor_centers || {:error, :absent_contributor_overlap} do
         {:cont, {:ok, [values.center | centers]}}
       else
@@ -2060,7 +2481,56 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp verify_absent(_absent, _contributor_centers), do: {:error, {:invalid_field, :absent}}
+  defp verify_absent(_absent, _contributor_centers, _schema_version), do: {:error, {:invalid_field, :absent}}
+
+  # A named candidate carries its filename and URL together, and a pattern
+  # only with a filename; a filename is never a path.
+  defp verify_absence_candidate(values, context) do
+    consistent =
+      is_nil(values.filename) == is_nil(values.url) and (not is_nil(values.filename) or is_nil(values.pattern)) and
+        (is_nil(values.filename) or not String.contains?(values.filename, ["/", "\\"]))
+
+    if consistent, do: :ok, else: {:error, {:invalid_field, {context, :candidate}}}
+  end
+
+  # A schema 3 absence is one of the six shared cases, each with the candidate
+  # fields it states. Earlier records may also carry the spellings written
+  # before the shared vocabulary, a status as a canonical decimal suffix.
+  defp verify_absence_reason(values, schema_version, context) when schema_version < 3 do
+    legacy =
+      values.reason in ~w(no_candidate catalog_unavailable offline_cache_miss product_not_published checksum_mismatch
+                          http_status offline_miss candidate_not_found checksum) or
+        legacy_status_reason?(values.reason)
+
+    if legacy, do: :ok, else: {:error, {:invalid_field, {context, :reason}}}
+  end
+
+  defp verify_absence_reason(values, _schema_version, context) do
+    named = not is_nil(values.filename)
+
+    consistent =
+      case values.reason do
+        reason when reason in ["no_candidate", "catalog_unavailable"] -> not named and is_nil(values.http_status)
+        "offline_cache_miss" -> named and is_nil(values.http_status)
+        "product_not_published" -> named
+        "checksum_mismatch" -> named
+        "http_status" -> named and is_integer(values.http_status)
+        "unclassified" -> named
+        _other -> false
+      end
+
+    if consistent, do: :ok, else: {:error, {:invalid_field, {context, :reason}}}
+  end
+
+  defp legacy_status_reason?(reason) do
+    case String.split(reason, ":", parts: 2) do
+      [prefix, status] when prefix in ["product_not_published", "http_status"] ->
+        String.match?(status, ~r/\A[1-5][0-9]{2}\z/)
+
+      _other ->
+        false
+    end
+  end
 
   defp verify_requested_partition(requested, contributors, absent) do
     contributor_set = MapSet.new(contributors)
@@ -2084,8 +2554,8 @@ defmodule Sidereon.GNSS.Data do
     end
   end
 
-  defp verify_merge_result(report, %{source_count: source_count, policy: policy}) when is_map(report) do
-    fields = [
+  defp verify_merge_result(report, %{source_count: source_count, policy: policy} = context) when is_map(report) do
+    base_fields = [
       :frame_reconciliations,
       :quarantined,
       :single_source,
@@ -2094,6 +2564,16 @@ defmodule Sidereon.GNSS.Data do
       :agreement
     ]
 
+    omission_fields = [:dropped_input_epochs, :omitted_epochs, :arc_withheld, :clock_omissions]
+    reporting_fields = [:continuity, :provenance]
+
+    fields =
+      cond do
+        context.schema_version >= 3 -> base_fields ++ omission_fields ++ reporting_fields
+        context.schema_version == 2 -> base_fields ++ omission_fields
+        true -> base_fields
+      end
+
     with {:ok, values} <- exact_fields(report, fields, :merge_result),
          {:ok, reconciliations} <- verify_frame_reconciliations(values.frame_reconciliations, source_count),
          :ok <- verify_frame_reconciliation_consistency(reconciliations, policy),
@@ -2101,7 +2581,8 @@ defmodule Sidereon.GNSS.Data do
          {:ok, single_source} <- verify_flags(values.single_source, source_count, :single_source),
          {:ok, position_outliers} <- verify_flags(values.position_outliers, source_count, :position_outliers),
          {:ok, clock_outliers} <- verify_flags(values.clock_outliers, source_count, :clock_outliers),
-         {:ok, agreement} <- verify_agreement(values.agreement, source_count) do
+         {:ok, agreement} <- verify_agreement(values.agreement, source_count),
+         {:ok, audited} <- verify_merge_audit(values, context, agreement.cells) do
       verify_merge_result_consistency(
         quarantined,
         single_source,
@@ -2109,12 +2590,843 @@ defmodule Sidereon.GNSS.Data do
         clock_outliers,
         agreement,
         source_count,
-        policy
+        policy,
+        audited
       )
     end
   end
 
   defp verify_merge_result(_report, _source_count), do: {:error, {:invalid_field, :merge_result}}
+
+  defp persisted_schema_version(version) when version in [1, 2, 3], do: {:ok, version}
+  defp persisted_schema_version(_version), do: {:error, {:invalid_field, :schema_version}}
+
+  # --- What a merge did not write, its continuity and its provenance --------
+  #
+  # Schema 2 carries the four omission lists and schema 3 adds the continuity
+  # report and the provenance. Each is checked against the accepted cells and
+  # the policy. The epochs
+  # they name are returned for the grid and system checks the accepted cells
+  # face: the omitted epochs, the withheld and clock-omitted cells and the
+  # provenance cells and transitions. A dropped input epoch is off the merge
+  # grid by definition and is not returned.
+
+  defp verify_merge_audit(_values, %{schema_version: 1}, _agreement_cells), do: {:ok, %{grid: [], records: []}}
+
+  defp verify_merge_audit(values, %{schema_version: schema_version, source_count: source_count, policy: policy}, cells) do
+    accepted_epochs = MapSet.new(cells, &{&1.jd_whole, &1.jd_fraction})
+    orbit_keys = cells |> Enum.filter(&(&1.position_members > 0)) |> MapSet.new(&cell_key/1)
+    clock_members = Map.new(cells, &{cell_key(&1), &1.clock_members})
+
+    with :ok <- verify_dropped_input_epochs(values.dropped_input_epochs, source_count, policy),
+         {:ok, omitted} <- verify_omitted_epochs(values.omitted_epochs, accepted_epochs),
+         {:ok, withheld} <- verify_arc_withheld(values.arc_withheld, source_count, policy, orbit_keys),
+         {:ok, clock_omissions} <-
+           verify_clock_omissions(values.clock_omissions, source_count, policy, clock_members),
+         {:ok, provenance_grid} <- verify_merge_reporting(values, schema_version, source_count, policy, cells),
+         :ok <- verify_audit_time_scale(values, schema_version) do
+      {:ok,
+       %{
+         grid: Enum.map(omitted ++ withheld ++ clock_omissions ++ provenance_grid, &split_record/1),
+         records: Enum.map(values.arc_withheld ++ values.clock_omissions, &%{satellite: map_value(&1, :satellite)})
+       }}
+    end
+  end
+
+  defp split_record({jd_whole, jd_fraction}), do: %{jd_whole: jd_whole, jd_fraction: jd_fraction}
+
+  # The default grid holds every input epoch; only an explicit target grid
+  # leaves one off.
+  defp verify_dropped_input_epochs(dropped, source_count, policy) do
+    with {:ok, verified} <- verify_list(dropped, :dropped_input_epochs, &verify_dropped_epoch(&1, &2, source_count)),
+         true <-
+           (policy.epoch_interval_s != nil or Enum.all?(verified, &(label_string(&1.reason) != "off_target_grid"))) ||
+             {:error, :dropped_epoch_without_target_grid} do
+      if strictly_ascending?(Enum.map(verified, &{&1.source, &1.epoch_index})),
+        do: :ok,
+        else: {:error, {:invalid_field, :dropped_input_epochs}}
+    end
+  end
+
+  defp verify_dropped_epoch(dropped, context, source_count) do
+    with {:ok, values} <- exact_fields(dropped, [:source, :epoch_index, :epoch, :reason], context),
+         :ok <- source_index(values.source, source_count, {context, :source}),
+         true <-
+           (is_integer(values.epoch_index) and values.epoch_index >= 0) ||
+             {:error, {:invalid_field, {context, :epoch_index}}},
+         {:ok, _split} <- merge_epoch_split(values.epoch, {context, :epoch}),
+         :ok <- omission_reason(values.reason, [:off_target_grid, :not_on_tick_axis], {context, :reason}) do
+      {:ok, values}
+    end
+  end
+
+  # An omitted epoch is one at which the merge accepted no cell.
+  defp verify_omitted_epochs(omitted, accepted_epochs) do
+    with {:ok, splits} <- verify_list(omitted, :omitted_epochs, &merge_epoch_split/2),
+         true <- strictly_ascending?(splits) || {:error, {:invalid_field, :omitted_epochs}},
+         true <- Enum.all?(splits, &(not MapSet.member?(accepted_epochs, &1))) || {:error, :omitted_epoch_accepted} do
+      {:ok, splits}
+    end
+  end
+
+  # Cell precedence always prefers a source that carries the cell, so only
+  # satellite-arc precedence withholds a position another source carried, and
+  # the withheld position was not written.
+  defp verify_arc_withheld(withheld, source_count, policy, orbit_keys) do
+    with {:ok, verified} <- verify_list(withheld, :arc_withheld, &verify_withheld_cell(&1, &2, source_count)),
+         true <-
+           (verified == [] or (policy.combine == "precedence" and policy.precedence_scope == "satellite_arc")) ||
+             {:error, :withheld_cells_without_satellite_arc_precedence},
+         true <-
+           Enum.all?(verified, &(not MapSet.member?(orbit_keys, &1.key))) || {:error, :withheld_position_written},
+         true <- strictly_ascending?(Enum.map(verified, & &1.key)) || {:error, {:invalid_field, :arc_withheld}} do
+      {:ok, Enum.map(verified, & &1.split)}
+    end
+  end
+
+  defp verify_withheld_cell(cell, context, source_count) do
+    with {:ok, values} <- exact_fields(cell, [:satellite, :epoch, :sources], context),
+         :ok <- satellite_id(values.satellite, {context, :satellite}),
+         {:ok, split} <- merge_epoch_split(values.epoch, {context, :epoch}),
+         :ok <- source_indices(values.sources, source_count, {context, :sources}) do
+      {:ok, %{split: split, key: satellite_cell_key(split, values.satellite)}}
+    end
+  end
+
+  # Clock datums are estimated against source 0, a preference exists only
+  # under precedence, and a merged cell carries a clock exactly when its
+  # agreement counts clock members. A source's clock is written or omitted,
+  # never both.
+  defp verify_clock_omissions(omissions, source_count, policy, clock_members) do
+    with {:ok, verified} <-
+           verify_list(omissions, :clock_omissions, &verify_clock_omission(&1, &2, source_count, policy, clock_members)),
+         true <-
+           strictly_ascending?(Enum.map(verified, &{&1.key, &1.source})) ||
+             {:error, {:invalid_field, :clock_omissions}} do
+      overfull =
+        verified
+        |> Enum.frequencies_by(& &1.key)
+        |> Enum.any?(fn {key, omitted} -> Map.get(clock_members, key, 0) + omitted > source_count end)
+
+      if overfull,
+        do: {:error, :clock_omissions_exceed_sources},
+        else: {:ok, Enum.map(verified, & &1.split)}
+    end
+  end
+
+  defp verify_clock_omission(omission, context, source_count, policy, clock_members) do
+    fields = [:epoch, :satellite, :source, :reason, :preferred, :cell_has_clock]
+
+    with {:ok, values} <- exact_fields(omission, fields, context),
+         {:ok, split} <- merge_epoch_split(values.epoch, {context, :epoch}),
+         :ok <- satellite_id(values.satellite, {context, :satellite}),
+         :ok <- source_index(values.source, source_count, {context, :source}),
+         :ok <-
+           omission_reason(
+             values.reason,
+             [:datum_not_observable, :preferred_source_without_clock, :no_consensus],
+             {context, :reason}
+           ),
+         :ok <- optional_source_index(values.preferred, source_count, {context, :preferred}),
+         true <- is_boolean(values.cell_has_clock) || {:error, {:invalid_field, {context, :cell_has_clock}}} do
+      reason = label_string(values.reason)
+      key = satellite_cell_key(split, values.satellite)
+
+      cond do
+        reason == "preferred_source_without_clock" and policy.combine != "precedence" ->
+          {:error, {:invalid_field, {context, :reason}}}
+
+        reason != "preferred_source_without_clock" and values.preferred != nil ->
+          {:error, {:invalid_field, {context, :preferred}}}
+
+        reason == "datum_not_observable" and values.source == 0 ->
+          {:error, {:invalid_field, {context, :source}}}
+
+        values.cell_has_clock != Map.get(clock_members, key, 0) > 0 ->
+          {:error, {:invalid_field, {context, :cell_has_clock}}}
+
+        true ->
+          {:ok, %{split: split, key: key, source: values.source}}
+      end
+    end
+  end
+
+  defp satellite_cell_key({jd_whole, jd_fraction}, satellite) do
+    <<system::binary-size(1), prn::binary>> = satellite
+    {jd_whole, jd_fraction, gnss_system_order(system), String.to_integer(prn)}
+  end
+
+  # Every epoch of one report is on the product's one time scale.
+  defp verify_audit_time_scale(values, schema_version) do
+    scales =
+      values
+      |> audit_epochs(schema_version)
+      |> Enum.map(&map_value(&1, :time_scale))
+      |> Enum.uniq()
+
+    if length(scales) <= 1, do: :ok, else: {:error, :merge_report_time_scales_disagree}
+  end
+
+  defp audit_epochs(values, schema_version) do
+    epochs =
+      Enum.map(values.dropped_input_epochs, &map_value(&1, :epoch)) ++
+        values.omitted_epochs ++
+        Enum.map(values.arc_withheld ++ values.clock_omissions, &map_value(&1, :epoch))
+
+    provenance = if schema_version >= 3, do: values.provenance
+
+    if is_map(provenance) do
+      epochs ++
+        Enum.map(map_value(provenance, :cells) ++ map_value(provenance, :transitions), &map_value(&1, :epoch)) ++
+        Enum.flat_map(map_value(provenance, :coverage), fn coverage ->
+          Enum.reject([map_value(coverage, :first_epoch), map_value(coverage, :last_epoch)], &is_nil/1)
+        end)
+    else
+      epochs
+    end
+  end
+
+  defp verify_merge_reporting(_values, schema_version, _source_count, _policy, _cells) when schema_version < 3,
+    do: {:ok, []}
+
+  defp verify_merge_reporting(values, _schema_version, source_count, policy, cells) do
+    with :ok <- verify_merge_continuity(values.continuity, policy.verify_continuity, source_count, policy) do
+      verify_merge_provenance(values.provenance, policy.provenance, source_count, policy, cells)
+    end
+  end
+
+  # Present exactly when the policy asked for it. The core attributes one
+  # violation to each defect, in defect order, and the splices are the
+  # violations that cross a contributor change.
+  defp verify_merge_continuity(nil, nil, _source_count, _policy), do: :ok
+
+  defp verify_merge_continuity(report, requested, source_count, policy) when is_map(report) and is_map(requested) do
+    fields = [:defects, :attested, :pairs_checked, :residuals_checked, :residuals_skipped, :violations, :splices]
+
+    with {:ok, values} <- exact_fields(report, fields, :continuity),
+         {:ok, defects} <- verify_list(values.defects, :continuity_defects, &verify_continuity_defect/2),
+         true <- values.attested === (defects == []) || {:error, {:invalid_field, {:continuity, :attested}}},
+         :ok <- nonnegative_integer(values.pairs_checked, {:continuity, :pairs_checked}),
+         :ok <- nonnegative_integer(values.residuals_checked, {:continuity, :residuals_checked}),
+         :ok <- nonnegative_integer(values.residuals_skipped, {:continuity, :residuals_skipped}),
+         {:ok, violations} <-
+           verify_list(
+             values.violations,
+             :continuity_violations,
+             &verify_continuity_violation(&1, &2, source_count, policy)
+           ),
+         true <-
+           Enum.map(violations, & &1.defect) == values.defects ||
+             {:error, :continuity_violation_defect_mismatch},
+         :ok <- verify_continuity_request(defects, values, requested),
+         true <- is_list(values.splices) || {:error, {:invalid_field, {:continuity, :splices}}} do
+      splices =
+        values.violations
+        |> Enum.zip(violations)
+        |> Enum.filter(fn {_violation, verified} -> verified.crosses_contributors end)
+        |> Enum.map(&elem(&1, 0))
+
+      if values.splices == splices, do: :ok, else: {:error, :continuity_splice_mismatch}
+    end
+  end
+
+  defp verify_merge_continuity(_report, _requested, _source_count, _policy), do: {:error, {:invalid_field, :continuity}}
+
+  # What the requested options allow, as the core's check runs them: without an
+  # orbit class no pair is checked and no speed-gate finding exists, and every
+  # speed-gate finding states the one class bound; without a residual tolerance
+  # no residual is checked or skipped and no residual finding exists, and every
+  # residual finding states the requested tolerance. The core counts each pair
+  # and residual it checks, so there are no more findings than checks.
+  defp verify_continuity_request(defects, values, requested) do
+    speed = Enum.filter(defects, &(label_string(&1.kind) == "speed_bound"))
+    residual = Enum.filter(defects, &(label_string(&1.kind) == "hold_out_residual"))
+    tolerance = map_value(requested, :residual_tolerance_m)
+
+    # Each finding is a pair or residual the check counted.
+    speed_consistent =
+      if is_nil(map_value(requested, :orbit_class)),
+        do: speed == [] and values.pairs_checked == 0,
+        else: canonical_speed_findings?(speed, requested, values.pairs_checked)
+
+    residual_consistent =
+      if is_nil(tolerance),
+        do: residual == [] and values.residuals_checked == 0 and values.residuals_skipped == 0,
+        else:
+          length(residual) <= values.residuals_checked and
+            Enum.all?(residual, &(&1.tolerance_m === tolerance))
+
+    if speed_consistent and residual_consistent,
+      do: :ok,
+      else: {:error, :continuity_request_mismatch}
+  end
+
+  defp canonical_speed_findings?(speed, requested, pairs_checked) do
+    with true <- length(speed) <= pairs_checked,
+         {:ok, bound} <- NIF.sp3_orbit_class_speed_bound_m_s(map_value(requested, :orbit_class)) do
+      Enum.all?(speed, &(&1.bound_m_s === bound))
+    else
+      _other -> false
+    end
+  end
+
+  @continuity_defect_summary [:kind, :satellite, :from_j2000_s, :to_j2000_s, :magnitude, :bound]
+
+  @continuity_defect_kind_fields %{
+    "duplicate_epoch" => [:epoch_j2000_s, :occurrences],
+    "single_sample_series" => [],
+    "unusable_sample" => [:epoch_j2000_s, :sample_index, :reason],
+    "speed_bound" => [:interval_s, :displacement_m, :implied_speed_m_s, :bound_m_s],
+    "hold_out_residual" => [:epoch_j2000_s, :preceding_j2000_s, :residual_m, :tolerance_m, :node_epochs_j2000_s]
+  }
+
+  defp verify_continuity_defect(defect, context) when is_map(defect) do
+    kind = label_string(map_value(defect, :kind))
+
+    case Map.fetch(@continuity_defect_kind_fields, kind) do
+      {:ok, kind_fields} ->
+        with {:ok, values} <- exact_fields(defect, @continuity_defect_summary ++ kind_fields, context),
+             :ok <- satellite_id(values.satellite, {context, :satellite}),
+             :ok <- verify_defect_fields(kind, values, context) do
+          {:ok, Map.put(values, :kind, kind)}
+        end
+
+      :error ->
+        {:error, {:invalid_field, {context, :kind}}}
+    end
+  end
+
+  defp verify_continuity_defect(_defect, context), do: {:error, {:invalid_field, context}}
+
+  # The summary fields restate the kind's own fields as `check_continuity/2`
+  # reports them, and the kind's own fields hold as the core forms them.
+  defp verify_defect_fields("duplicate_epoch", values, context) do
+    with :ok <- finite_float(values.epoch_j2000_s, {context, :epoch_j2000_s}),
+         true <-
+           (is_integer(values.occurrences) and values.occurrences >= 2) ||
+             {:error, {:invalid_field, {context, :occurrences}}} do
+      summary =
+        {values.from_j2000_s, values.to_j2000_s, values.magnitude, values.bound} ===
+          {values.epoch_j2000_s, values.epoch_j2000_s, values.occurrences * 1.0, nil}
+
+      if summary, do: :ok, else: {:error, {:invalid_field, {context, :summary}}}
+    end
+  end
+
+  defp verify_defect_fields("single_sample_series", values, context) do
+    if {values.from_j2000_s, values.to_j2000_s, values.magnitude, values.bound} === {nil, nil, nil, nil},
+      do: :ok,
+      else: {:error, {:invalid_field, {context, :summary}}}
+  end
+
+  defp verify_defect_fields("unusable_sample", values, context) do
+    with :ok <- optional_finite_float(values.epoch_j2000_s, {context, :epoch_j2000_s}),
+         :ok <- nonnegative_integer(values.sample_index, {context, :sample_index}),
+         true <-
+           values.reason in [:epoch_not_placed, :non_finite_position, "epoch_not_placed", "non_finite_position"] ||
+             {:error, {:invalid_field, {context, :reason}}},
+         true <-
+           values.reason in [:epoch_not_placed, "epoch_not_placed"] == is_nil(values.epoch_j2000_s) ||
+             {:error, {:invalid_field, {context, :reason_epoch}}} do
+      expected_summary = {values.epoch_j2000_s, values.epoch_j2000_s, nil, nil}
+
+      if {values.from_j2000_s, values.to_j2000_s, values.magnitude, values.bound} === expected_summary,
+        do: :ok,
+        else: {:error, {:invalid_field, {context, :summary}}}
+    end
+  end
+
+  defp verify_defect_fields("speed_bound", values, context) do
+    with :ok <- finite_float(values.from_j2000_s, {context, :from_j2000_s}),
+         :ok <- finite_float(values.to_j2000_s, {context, :to_j2000_s}),
+         :ok <- finite_float(values.interval_s, {context, :interval_s}),
+         :ok <- nonnegative_float(values.displacement_m, {context, :displacement_m}),
+         :ok <- finite_float(values.implied_speed_m_s, {context, :implied_speed_m_s}),
+         :ok <- nonnegative_float(values.bound_m_s, {context, :bound_m_s}),
+         # The core forms the interval, and the speed from it, exactly so, and
+         # records a pair only above the bound.
+         true <-
+           (values.interval_s > 0.0 and values.interval_s === values.to_j2000_s - values.from_j2000_s and
+              values.implied_speed_m_s === values.displacement_m / values.interval_s and
+              values.implied_speed_m_s > values.bound_m_s) ||
+             {:error, {:invalid_field, {context, :implied_speed_m_s}}} do
+      if {values.magnitude, values.bound} === {values.implied_speed_m_s, values.bound_m_s},
+        do: :ok,
+        else: {:error, {:invalid_field, {context, :summary}}}
+    end
+  end
+
+  defp verify_defect_fields("hold_out_residual", values, context) do
+    with :ok <- finite_float(values.epoch_j2000_s, {context, :epoch_j2000_s}),
+         :ok <- finite_float(values.preceding_j2000_s, {context, :preceding_j2000_s}),
+         :ok <- nonnegative_float(values.residual_m, {context, :residual_m}),
+         :ok <- finite_float(values.tolerance_m, {context, :tolerance_m}),
+         :ok <- ascending_epochs(values.node_epochs_j2000_s, {context, :node_epochs_j2000_s}),
+         true <-
+           (values.preceding_j2000_s < values.epoch_j2000_s and values.residual_m > values.tolerance_m) ||
+             {:error, {:invalid_field, {context, :residual_m}}} do
+      summary =
+        {values.from_j2000_s, values.to_j2000_s, values.magnitude, values.bound} ===
+          {values.preceding_j2000_s, values.epoch_j2000_s, values.residual_m, values.tolerance_m}
+
+      if summary, do: :ok, else: {:error, {:invalid_field, {context, :summary}}}
+    end
+  end
+
+  defp ascending_epochs(epochs, field) when is_list(epochs) do
+    if Enum.all?(epochs, &(finite_float(&1, field) == :ok)) and strictly_ascending?(epochs),
+      do: :ok,
+      else: {:error, {:invalid_field, field}}
+  end
+
+  defp ascending_epochs(_epochs, field), do: {:error, {:invalid_field, field}}
+
+  # The records a defect rests on, in time order as the core orders a
+  # violation's cells (a stable sort by epoch): the held-out sample and each
+  # node of its prediction, both ends of a speed-gated pair, or the repeated
+  # epoch.
+  defp defect_cells(%{kind: "hold_out_residual"} = defect) do
+    Enum.sort_by(
+      [{defect.epoch_j2000_s, "held_out"} | Enum.map(defect.node_epochs_j2000_s, &{&1, "interpolation_node"})],
+      &elem(&1, 0)
+    )
+  end
+
+  defp defect_cells(%{kind: "speed_bound"} = defect),
+    do: [{defect.from_j2000_s, "pair_end"}, {defect.to_j2000_s, "pair_end"}]
+
+  defp defect_cells(%{kind: "duplicate_epoch"} = defect), do: [{defect.epoch_j2000_s, "repeated_epoch"}]
+  defp defect_cells(%{kind: "unusable_sample"}), do: []
+  defp defect_cells(%{kind: "single_sample_series"}), do: []
+
+  # A violation's cells are the records its defect rests on; its sources are
+  # every source written to them, a speed-gated pair's end sources are those
+  # written at its ends, and it crosses contributors when two consecutive
+  # written cells were written from different sources.
+  defp verify_continuity_violation(violation, context, source_count, policy) do
+    fields = [:defect, :from_sources, :to_sources, :cells, :sources, :crosses_contributors]
+
+    with {:ok, values} <- exact_fields(violation, fields, context),
+         {:ok, defect} <- verify_continuity_defect(values.defect, {context, :defect}),
+         :ok <- optional_source_indices(values.from_sources, source_count, {context, :from_sources}),
+         :ok <- optional_source_indices(values.to_sources, source_count, {context, :to_sources}),
+         :ok <- optional_source_indices(values.sources, source_count, {context, :sources}),
+         {:ok, cells} <-
+           verify_list(values.cells, {context, :cells}, &verify_continuity_cell(&1, &2, source_count, policy)),
+         true <-
+           Enum.map(cells, &{&1.epoch_j2000_s, &1.role}) == defect_cells(defect) ||
+             {:error, {:invalid_field, {context, :cells}}},
+         true <- is_boolean(values.crosses_contributors) || {:error, {:invalid_field, {context, :crosses_contributors}}} do
+      written = cells |> Enum.map(& &1.written) |> Enum.reject(&is_nil/1)
+      written_at = cells |> Enum.reject(&is_nil(&1.written)) |> Map.new(&{&1.epoch_j2000_s, &1.written})
+      sources = written |> List.flatten() |> Enum.uniq() |> Enum.sort()
+      crosses = written |> Enum.chunk_every(2, 1, :discard) |> Enum.any?(fn [a, b] -> a != b end)
+
+      pair_sources =
+        defect.kind != "speed_bound" or
+          (values.from_sources == Map.get(written_at, defect.from_j2000_s, []) and
+             values.to_sources == Map.get(written_at, defect.to_j2000_s, []))
+
+      cond do
+        not pair_sources -> {:error, {:invalid_field, {context, :pair_sources}}}
+        values.sources != sources -> {:error, {:invalid_field, {context, :sources}}}
+        values.crosses_contributors != crosses -> {:error, {:invalid_field, {context, :crosses_contributors}}}
+        true -> {:ok, values}
+      end
+    end
+  end
+
+  defp verify_continuity_cell(cell, context, source_count, policy) do
+    with {:ok, values} <- exact_fields(cell, [:epoch_j2000_s, :role, :selection], context),
+         :ok <- finite_float(values.epoch_j2000_s, {context, :epoch_j2000_s}),
+         :ok <-
+           omission_reason(
+             values.role,
+             [:held_out, :interpolation_node, :pair_end, :repeated_epoch],
+             {context, :role}
+           ),
+         {:ok, selection} <-
+           verify_optional_selection(values.selection, {context, :selection}, source_count, policy) do
+      {:ok,
+       %{
+         epoch_j2000_s: values.epoch_j2000_s,
+         role: label_string(values.role),
+         written: selection && selection.written
+       }}
+    end
+  end
+
+  # How the merge arrived at a written value: the one source it came from, or
+  # the members a rule combined. A precedence pick is one agreeing member and
+  # occurs only under precedence; a combined value is the policy's mean or
+  # median of every member.
+  defp verify_optional_selection(nil, _context, _source_count, _policy), do: {:ok, nil}
+
+  defp verify_optional_selection(selection, context, source_count, policy) when is_map(selection) do
+    case label_string(map_value(selection, :kind)) do
+      "single_source" ->
+        with {:ok, values} <- exact_fields(selection, [:kind, :source], context),
+             :ok <- source_index(values.source, source_count, {context, :source}) do
+          {:ok, %{kind: "single_source", selected: values.source, written: [values.source], members: [values.source]}}
+        end
+
+      "precedence" ->
+        with {:ok, values} <- exact_fields(selection, [:kind, :source, :members], context),
+             :ok <- source_indices(values.members, source_count, {context, :members}),
+             true <-
+               (values.source in values.members and policy.combine == "precedence") ||
+                 {:error, {:invalid_field, {context, :source}}} do
+          {:ok, %{kind: "precedence", selected: values.source, written: [values.source], members: values.members}}
+        end
+
+      "combined" ->
+        with {:ok, values} <- exact_fields(selection, [:kind, :rule, :members], context),
+             :ok <- source_indices(values.members, source_count, {context, :members}),
+             true <-
+               (label_string(values.rule) in ["mean", "median"] and label_string(values.rule) == policy.combine) ||
+                 {:error, {:invalid_field, {context, :rule}}} do
+          {:ok, %{kind: "combined", selected: nil, written: values.members, members: values.members}}
+        end
+
+      _other ->
+        {:error, {:invalid_field, {context, :kind}}}
+    end
+  end
+
+  defp verify_optional_selection(_selection, context, _source_count, _policy), do: {:error, {:invalid_field, context}}
+
+  # Present exactly when the policy asked for it, in the mode it asked for.
+  # Under both modes each source's coverage splits the accepted cells between
+  # contributed and absent. Under "full" each accepted cell has one entry, in
+  # the agreement's order, naming as many position and clock members as the
+  # agreement counts, and the coverage and transitions are what the core
+  # accumulates from those entries: a source contributes to a cell when it is a
+  # member of its position or clock selection, is selected when it alone
+  # supplied the cell's position (or, for a clock-only cell, its clock), and a
+  # satellite's transitions are its first cell and each change of selected
+  # source or selection kind, for a reason the change admits.
+  defp verify_merge_provenance(nil, nil, _source_count, _policy, _agreement_cells), do: {:ok, []}
+
+  defp verify_merge_provenance(provenance, requested, source_count, policy, agreement_cells)
+       when is_map(provenance) and is_binary(requested) do
+    with {:ok, values} <- exact_fields(provenance, [:mode, :cells, :transitions, :coverage], :provenance),
+         true <- label_string(values.mode) == requested || {:error, {:invalid_field, {:provenance, :mode}}},
+         {:ok, cells} <-
+           verify_list(values.cells, :provenance_cells, &verify_provenance_cell(&1, &2, source_count, policy)),
+         :ok <- verify_provenance_cells(requested, cells, agreement_cells),
+         {:ok, transitions} <-
+           verify_list(
+             values.transitions,
+             :provenance_transitions,
+             &verify_provenance_transition(&1, &2, source_count)
+           ),
+         :ok <- verify_provenance_transition_cells(transitions, agreement_cells),
+         :ok <- verify_provenance_transitions(requested, transitions, cells),
+         :ok <-
+           verify_provenance_coverage(
+             values.coverage,
+             requested,
+             source_count,
+             cells,
+             length(agreement_cells),
+             MapSet.new(Enum.map(agreement_cells, &{&1.jd_whole, &1.jd_fraction}))
+           ) do
+      {:ok, Enum.map(cells, & &1.split) ++ Enum.map(transitions, & &1.split)}
+    end
+  end
+
+  defp verify_merge_provenance(_provenance, _requested, _source_count, _policy, _agreement_cells),
+    do: {:error, {:invalid_field, :provenance}}
+
+  defp verify_provenance_cell(cell, context, source_count, policy) do
+    with {:ok, values} <- exact_fields(cell, [:epoch, :satellite, :position, :clock], context),
+         {:ok, split} <- merge_epoch_split(values.epoch, {context, :epoch}),
+         :ok <- satellite_id(values.satellite, {context, :satellite}),
+         {:ok, position} <- verify_optional_selection(values.position, {context, :position}, source_count, policy),
+         {:ok, clock} <- verify_optional_selection(values.clock, {context, :clock}, source_count, policy),
+         true <- (position != nil or clock != nil) || {:error, {:invalid_field, {context, :selection}}} do
+      {:ok, %{satellite: values.satellite, split: split, position: position, clock: clock}}
+    end
+  end
+
+  defp verify_provenance_cells("summary", [], _agreement_cells), do: :ok
+
+  defp verify_provenance_cells("full", cells, agreement_cells) when length(cells) == length(agreement_cells) do
+    members = fn selection -> if selection, do: length(selection.members), else: 0 end
+
+    matches =
+      cells
+      |> Enum.zip(agreement_cells)
+      |> Enum.all?(fn {cell, agreement} ->
+        cell.satellite == agreement.satellite and cell.split == {agreement.jd_whole, agreement.jd_fraction} and
+          members.(cell.position) == agreement.position_members and
+          members.(cell.clock) == agreement.clock_members
+      end)
+
+    if matches, do: :ok, else: {:error, :provenance_agreement_mismatch}
+  end
+
+  defp verify_provenance_cells(_mode, _cells, _agreement_cells), do: {:error, :provenance_agreement_mismatch}
+
+  defp verify_provenance_transition(transition, context, source_count) do
+    fields = [:satellite, :epoch, :from_source, :to_source, :reason]
+
+    with {:ok, values} <- exact_fields(transition, fields, context),
+         :ok <- satellite_id(values.satellite, {context, :satellite}),
+         {:ok, split} <- merge_epoch_split(values.epoch, {context, :epoch}),
+         :ok <- optional_source_index(values.from_source, source_count, {context, :from_source}),
+         :ok <- optional_source_index(values.to_source, source_count, {context, :to_source}),
+         :ok <-
+           omission_reason(
+             values.reason,
+             [:sole_availability, :precedence, :outlier_rejection, :consensus_change],
+             {context, :reason}
+           ) do
+      {:ok,
+       %{
+         satellite: values.satellite,
+         split: split,
+         from_source: values.from_source,
+         to_source: values.to_source,
+         reason: label_string(values.reason)
+       }}
+    end
+  end
+
+  defp verify_provenance_transitions("summary", _transitions, _cells), do: :ok
+
+  defp verify_provenance_transitions("full", transitions, cells) do
+    implied = implied_transitions(cells)
+
+    matches =
+      length(transitions) == length(implied) and
+        transitions
+        |> Enum.zip(implied)
+        |> Enum.all?(fn {transition, {satellite, split, from_source, to_source, reasons}} ->
+          transition.satellite == satellite and transition.split == split and
+            transition.from_source == from_source and transition.to_source == to_source and
+            transition.reason in reasons
+        end)
+
+    if matches, do: :ok, else: {:error, :provenance_transition_mismatch}
+  end
+
+  defp verify_provenance_transition_cells(transitions, agreement_cells) do
+    accepted =
+      agreement_cells
+      |> MapSet.new(&{&1.satellite, {&1.jd_whole, &1.jd_fraction}})
+
+    if Enum.all?(transitions, &MapSet.member?(accepted, {&1.satellite, &1.split})),
+      do: :ok,
+      else: {:error, :provenance_transition_mismatch}
+  end
+
+  # A satellite's first cell opens its arc; after it, a change of selected
+  # source or of selection kind is a transition. A change away from a combined
+  # value, or between a combination and one source, is a consensus change; a
+  # change to another source that the previous one is not a member of is its
+  # availability or its rejection, which the recorded members cannot tell
+  # apart; any other change is precedence.
+  defp implied_transitions(cells) do
+    {implied, _previous} =
+      Enum.reduce(cells, {[], %{}}, fn cell, {implied, previous} ->
+        current = cell.position || cell.clock
+        before = Map.get(previous, cell.satellite)
+
+        transition =
+          cond do
+            before == nil ->
+              {cell.satellite, cell.split, nil, current.selected, ["sole_availability"]}
+
+            before.selected != current.selected or before.kind != current.kind ->
+              reasons =
+                cond do
+                  before.selected == nil -> ["consensus_change"]
+                  before.selected not in current.members -> ["sole_availability", "outlier_rejection"]
+                  before.kind != current.kind -> ["consensus_change"]
+                  true -> ["precedence"]
+                end
+
+              {cell.satellite, cell.split, before.selected, current.selected, reasons}
+
+            true ->
+              nil
+          end
+
+        implied = if transition, do: [transition | implied], else: implied
+        {implied, Map.put(previous, cell.satellite, current)}
+      end)
+
+    Enum.reverse(implied)
+  end
+
+  defp verify_provenance_coverage(coverage, requested, source_count, cells, accepted_cells, accepted_epochs)
+       when is_list(coverage) and length(coverage) == source_count do
+    accumulated = accumulate_coverage(cells, source_count)
+
+    coverage
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {entry, index}, :ok ->
+      context = {:provenance_coverage, index}
+
+      case verify_coverage_entry(entry, index, context, accepted_cells, accepted_epochs) do
+        {:ok, stated} when requested == "full" ->
+          if stated == Map.fetch!(accumulated, index),
+            do: {:cont, :ok},
+            else: {:halt, {:error, {:invalid_field, {context, :accumulated}}}}
+
+        {:ok, _stated} ->
+          {:cont, :ok}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp verify_provenance_coverage(_coverage, _requested, _source_count, _cells, _accepted_cells, _accepted_epochs),
+    do: {:error, {:invalid_field, :provenance_coverage}}
+
+  defp verify_coverage_entry(entry, index, context, accepted_cells, accepted_epochs) do
+    fields = [:source, :cells_contributed, :cells_selected, :first_epoch, :last_epoch, :cells_absent]
+
+    with {:ok, values} <- exact_fields(entry, fields, context),
+         true <- values.source === index || {:error, {:invalid_field, {context, :source}}},
+         :ok <- nonnegative_integer(values.cells_contributed, {context, :cells_contributed}),
+         :ok <- nonnegative_integer(values.cells_selected, {context, :cells_selected}),
+         :ok <- nonnegative_integer(values.cells_absent, {context, :cells_absent}),
+         true <-
+           (values.cells_contributed + values.cells_absent == accepted_cells and
+              values.cells_selected <= values.cells_contributed) ||
+             {:error, {:invalid_field, {context, :counts}}},
+         {:ok, span} <- coverage_span(values, context),
+         true <- span_on_accepted_epochs?(span, accepted_epochs) || {:error, {:invalid_field, {context, :span}}} do
+      {:ok, %{contributed: values.cells_contributed, selected: values.cells_selected, span: span}}
+    end
+  end
+
+  defp coverage_span(%{cells_contributed: 0, first_epoch: nil, last_epoch: nil}, _context), do: {:ok, nil}
+
+  defp coverage_span(%{cells_contributed: contributed} = values, context) when contributed > 0 do
+    with {:ok, first} <- merge_epoch_split(values.first_epoch, {context, :first_epoch}),
+         {:ok, last} <- merge_epoch_split(values.last_epoch, {context, :last_epoch}),
+         true <- first <= last || {:error, {:invalid_field, {context, :span}}} do
+      {:ok, {first, last}}
+    end
+  end
+
+  defp coverage_span(_values, context), do: {:error, {:invalid_field, {context, :span}}}
+
+  defp span_on_accepted_epochs?(nil, _accepted_epochs), do: true
+
+  defp span_on_accepted_epochs?({first, last}, accepted_epochs),
+    do: MapSet.member?(accepted_epochs, first) and MapSet.member?(accepted_epochs, last)
+
+  defp accumulate_coverage(cells, source_count) do
+    empty = Map.new(0..(source_count - 1)//1, &{&1, %{contributed: 0, selected: 0, span: nil}})
+
+    Enum.reduce(cells, empty, fn cell, acc ->
+      members =
+        [cell.position, cell.clock]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.flat_map(& &1.members)
+        |> Enum.uniq()
+
+      selected = (cell.position || cell.clock).selected
+
+      acc =
+        Enum.reduce(members, acc, fn source, acc ->
+          Map.update!(acc, source, fn entry ->
+            span =
+              case entry.span do
+                nil -> {cell.split, cell.split}
+                {first, last} -> {min(first, cell.split), max(last, cell.split)}
+              end
+
+            %{entry | contributed: entry.contributed + 1, span: span}
+          end)
+        end)
+
+      if selected == nil,
+        do: acc,
+        else: Map.update!(acc, selected, &%{&1 | selected: &1.selected + 1})
+    end)
+  end
+
+  # The split Julian date of a persisted merge epoch, which must be canonical
+  # on a known time scale. An integer-nanosecond epoch is split from the civil
+  # midnight before the J2000 origin, as the core states an SP3 epoch line.
+  @merge_time_scales ~w(UTC TAI TT TCG TDB TCB GPST GST BDT GLONASST QZSST)
+
+  defp merge_epoch_split(epoch, context) when is_map(epoch) do
+    nanos_form = Map.has_key?(epoch, :nanos_since_j2000) or Map.has_key?(epoch, "nanos_since_j2000")
+    fields = if nanos_form, do: [:time_scale, :nanos_since_j2000], else: [:time_scale, :jd_whole, :jd_fraction]
+
+    with {:ok, values} <- exact_fields(epoch, fields, context),
+         true <- values.time_scale in @merge_time_scales || {:error, {:invalid_field, {context, :time_scale}}},
+         {:ok, split} <- epoch_split(values, context),
+         :ok <- canonical_epoch(elem(split, 0), elem(split, 1), context) do
+      {:ok, split}
+    end
+  end
+
+  defp merge_epoch_split(_epoch, context), do: {:error, {:invalid_field, context}}
+
+  defp epoch_split(%{nanos_since_j2000: nanos}, _context) when is_integer(nanos) do
+    nanos_per_day = 86_400_000_000_000
+    shifted = nanos + div(nanos_per_day, 2)
+
+    {:ok,
+     {2_451_544.5 + Integer.floor_div(shifted, nanos_per_day), Integer.mod(shifted, nanos_per_day) / nanos_per_day}}
+  end
+
+  defp epoch_split(%{nanos_since_j2000: _nanos}, context), do: {:error, {:invalid_field, {context, :nanos_since_j2000}}}
+  defp epoch_split(%{jd_whole: jd_whole, jd_fraction: jd_fraction}, _context), do: {:ok, {jd_whole, jd_fraction}}
+
+  defp verify_list(items, kind, verify) when is_list(items) do
+    items
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {item, index}, {:ok, verified} ->
+      case verify.(item, {kind, index}) do
+        {:ok, value} -> {:cont, {:ok, [value | verified]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, verified} -> {:ok, Enum.reverse(verified)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp verify_list(_items, kind, _verify), do: {:error, {:invalid_field, kind}}
+
+  defp optional_source_indices([], _source_count, _field), do: :ok
+  defp optional_source_indices(indices, source_count, field), do: source_indices(indices, source_count, field)
+
+  defp map_value(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  defp map_value(_value, _key), do: nil
+
+  defp label_string(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
+  defp label_string(value) when is_binary(value), do: value
+  defp label_string(_value), do: nil
+
+  defp source_index(value, source_count, _field) when is_integer(value) and value >= 0 and value < source_count, do: :ok
+
+  defp source_index(_value, _source_count, field), do: {:error, {:invalid_field, field}}
+
+  defp optional_source_index(nil, _source_count, _field), do: :ok
+  defp optional_source_index(value, source_count, field), do: source_index(value, source_count, field)
+
+  # A decoded JSON map carries a label as a string.
+  defp omission_reason(reason, allowed, field) when is_atom(reason) do
+    if reason in allowed, do: :ok, else: {:error, {:invalid_field, field}}
+  end
+
+  defp omission_reason(reason, allowed, field) when is_binary(reason) do
+    if reason in Enum.map(allowed, &Atom.to_string/1), do: :ok, else: {:error, {:invalid_field, field}}
+  end
+
+  defp omission_reason(_reason, _allowed, field), do: {:error, {:invalid_field, field}}
 
   defp verify_flags(flags, source_count, kind) when is_list(flags) do
     flags
@@ -2184,13 +3496,17 @@ defmodule Sidereon.GNSS.Data do
       with {:ok, values} <- exact_fields(cell, fields, context),
            :ok <- satellite_id(values.satellite, {context, :satellite}),
            :ok <- canonical_epoch(values.jd_whole, values.jd_fraction, context),
-           :ok <- bounded_count(values.position_members, source_count, {context, :position_members}, false),
-           :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
-           :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
+           :ok <- bounded_count(values.position_members, source_count, {context, :position_members}, true),
+           :ok <- optional_nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
+           :ok <- optional_nonnegative_float(values.position_max_m, {context, :position_max_m}),
            :ok <- bounded_count(values.clock_members, source_count, {context, :clock_members}, true),
            :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
            :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}),
+           :ok <- verify_position_metric_presence(values, context),
            :ok <- verify_clock_metric_presence(values, context),
+           true <-
+             (values.position_members > 0 or values.clock_members > 0) ||
+               {:error, {:invalid_field, {context, :members}}},
            :ok <- verify_cell_dispersion(values, context) do
         {:cont, {:ok, [values | verified]}}
       else
@@ -2212,6 +3528,16 @@ defmodule Sidereon.GNSS.Data do
 
   defp verify_agreement_cells(_cells, _source_count), do: {:error, {:invalid_field, :agreement_cells}}
 
+  # An accepted cell carries a position, a clock, or both. A cell with no position
+  # is a clock-only record: no position members and no position metrics.
+  defp verify_position_metric_presence(%{position_members: 0, position_rms_m: nil, position_max_m: nil}, _context),
+    do: :ok
+
+  defp verify_position_metric_presence(%{position_members: members, position_rms_m: rms, position_max_m: max}, _context)
+       when members > 0 and is_float(rms) and is_float(max), do: :ok
+
+  defp verify_position_metric_presence(_values, context), do: {:error, {:invalid_field, {context, :position_metrics}}}
+
   defp verify_clock_metric_presence(%{clock_members: 0, clock_rms_s: nil, clock_max_s: nil}, _context), do: :ok
 
   defp verify_clock_metric_presence(%{clock_members: members, clock_rms_s: rms, clock_max_s: max}, _context)
@@ -2229,11 +3555,11 @@ defmodule Sidereon.GNSS.Data do
       with {:ok, values} <- exact_fields(epoch, fields, context),
            :ok <- canonical_epoch(values.jd_whole, values.jd_fraction, context),
            :ok <- nonnegative_integer(values.satellites, {context, :satellites}),
-           :ok <- nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
-           :ok <- nonnegative_float(values.position_max_m, {context, :position_max_m}),
+           :ok <- optional_nonnegative_float(values.position_rms_m, {context, :position_rms_m}),
+           :ok <- optional_nonnegative_float(values.position_max_m, {context, :position_max_m}),
            :ok <- optional_nonnegative_float(values.clock_rms_s, {context, :clock_rms_s}),
            :ok <- optional_nonnegative_float(values.clock_max_s, {context, :clock_max_s}),
-           :ok <- verify_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
+           :ok <- verify_optional_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
            :ok <- verify_optional_metric_pair(values.clock_rms_s, values.clock_max_s, {context, :clock}) do
         {:cont, {:ok, [values | verified]}}
       else
@@ -2256,7 +3582,7 @@ defmodule Sidereon.GNSS.Data do
   defp verify_agreement_epochs(_epochs), do: {:error, {:invalid_field, :agreement_epochs}}
 
   defp verify_cell_dispersion(values, context) do
-    with :ok <- verify_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
+    with :ok <- verify_optional_metric_pair(values.position_rms_m, values.position_max_m, {context, :position}),
          :ok <-
            verify_member_metric_bound(
              values.position_rms_m,
@@ -2338,7 +3664,11 @@ defmodule Sidereon.GNSS.Data do
         |> Enum.filter(&(&1.position_members >= 2))
         |> Enum.map(&{&1.position_rms_m, &1.position_members})
         |> pooled_rms(),
-      position_max_m: optional_max(Enum.map(cells, & &1.position_max_m)),
+      position_max_m:
+        cells
+        |> Enum.filter(&(&1.position_members > 0))
+        |> Enum.map(& &1.position_max_m)
+        |> optional_max(),
       clock_rms_s:
         cells
         |> Enum.filter(&(&1.clock_members >= 2))
@@ -2364,8 +3694,8 @@ defmodule Sidereon.GNSS.Data do
         jd_whole: first.jd_whole,
         jd_fraction: first.jd_fraction,
         satellites: length(multi_position),
-        position_rms_m: pooled_rms(Enum.map(multi_position, &{&1.position_rms_m, &1.position_members})) || 0.0,
-        position_max_m: epoch_cells |> Enum.map(& &1.position_max_m) |> Enum.max(),
+        position_rms_m: pooled_rms(Enum.map(multi_position, &{&1.position_rms_m, &1.position_members})),
+        position_max_m: optional_max(Enum.map(multi_position, & &1.position_max_m)),
         clock_rms_s: pooled_rms(Enum.map(multi_clock, &{&1.clock_rms_s, &1.clock_members})),
         clock_max_s: optional_max(Enum.map(multi_clock, & &1.clock_max_s))
       }
@@ -2397,7 +3727,8 @@ defmodule Sidereon.GNSS.Data do
          clock_outliers,
          agreement,
          source_count,
-         policy
+         policy,
+         audited
        ) do
     cells = Map.new(agreement.cells, &{cell_key(&1), &1})
     quarantined_by_key = Map.new(quarantined, &{cell_key(&1), &1})
@@ -2411,6 +3742,20 @@ defmodule Sidereon.GNSS.Data do
     position_keys = position_by_key |> Map.keys() |> MapSet.new()
     clock_keys = clock_by_key |> Map.keys() |> MapSet.new()
 
+    # Clock consensus is reached independently of position. A cell whose
+    # position is quarantined is still written, as a clock-only record, when its
+    # clocks agree, and carries that clock's single-source or outlier flag; its
+    # position is never also accepted or given a position outlier.
+    quarantined_written = MapSet.intersection(quarantined_keys, accepted_keys)
+    # A clock refusal writes no clock, so its flag can sit on a cell that was not
+    # written at all.
+    unwritten_clock_flags = MapSet.difference(clock_keys, accepted_keys)
+    # A single-source flag on a cell with a position names that position, and a
+    # clock-only record can add clocks from sources that gave no position, so
+    # clock outliers can sit beside it. On a clock-only cell the flag names the
+    # one clock, which then has no outlier.
+    single_with_clock_outliers = MapSet.intersection(single_keys, clock_keys)
+
     with true <-
            Enum.all?(quarantined, &(length(&1.sources) >= 2)) ||
              {:error, :invalid_quarantined_flags},
@@ -2421,24 +3766,24 @@ defmodule Sidereon.GNSS.Data do
            Enum.all?(single_source, &(length(&1.sources) == 1)) ||
              {:error, :invalid_single_source_flags},
          true <-
-           (MapSet.disjoint?(quarantined_keys, accepted_keys) and
-              MapSet.disjoint?(quarantined_keys, single_keys) and
-              MapSet.disjoint?(quarantined_keys, position_keys) and
-              MapSet.disjoint?(quarantined_keys, clock_keys)) ||
+           (MapSet.disjoint?(quarantined_keys, position_keys) and
+              Enum.all?(quarantined_written, &(Map.fetch!(cells, &1).position_members == 0))) ||
              {:error, :contradictory_quarantined_flags},
          true <-
            (MapSet.subset?(single_keys, accepted_keys) and
               MapSet.subset?(position_keys, accepted_keys) and
-              MapSet.subset?(clock_keys, accepted_keys)) ||
+              Enum.all?(unwritten_clock_flags, &clock_refusal?(Map.fetch!(clock_by_key, &1), policy))) ||
              {:error, :orphaned_merge_flags},
          true <-
-           (MapSet.disjoint?(single_keys, position_keys) and MapSet.disjoint?(single_keys, clock_keys)) ||
+           (MapSet.disjoint?(single_keys, position_keys) and
+              Enum.all?(single_with_clock_outliers, &(Map.fetch!(cells, &1).position_members == 1))) ||
              {:error, :contradictory_single_source_flags},
          :ok <- verify_agreement_policy(agreement.cells, policy),
          :ok <-
            verify_epoch_grid(
              quarantined ++
-               single_source ++ position_outliers ++ clock_outliers ++ agreement.cells ++ agreement.epochs,
+               single_source ++
+               position_outliers ++ clock_outliers ++ agreement.cells ++ agreement.epochs ++ audited.grid,
              policy.epoch_interval_s
            ),
          :ok <-
@@ -2460,7 +3805,7 @@ defmodule Sidereon.GNSS.Data do
              clock_outliers
            ) do
       verify_report_systems(
-        quarantined ++ single_source ++ position_outliers ++ clock_outliers,
+        quarantined ++ single_source ++ position_outliers ++ clock_outliers ++ audited.records,
         agreement.cells,
         policy
       )
@@ -2470,7 +3815,10 @@ defmodule Sidereon.GNSS.Data do
   defp verify_single_source_report(1, cells, single_source, quarantined, position_outliers, clock_outliers) do
     if quarantined == [] and position_outliers == [] and clock_outliers == [] and
          MapSet.new(Map.keys(cells)) == MapSet.new(Map.keys(single_source)) and
-         Enum.all?(cells, fn {_key, cell} -> cell.position_members == 1 and cell.clock_members <= 1 end),
+         Enum.all?(cells, fn {_key, cell} ->
+           (cell.position_members == 1 and cell.clock_members <= 1) or
+             (cell.position_members == 0 and cell.clock_members == 1)
+         end),
        do: :ok,
        else: {:error, :invalid_single_product_merge_report}
   end
@@ -2490,8 +3838,7 @@ defmodule Sidereon.GNSS.Data do
       position_flag = Map.get(position_outliers, key)
       clock_flag = Map.get(clock_outliers, key)
 
-      with :ok <- verify_cell_contributor_counts(cell, position_flag, clock_flag),
-           :ok <- verify_position_cell_flags(cell, single_flag, position_flag, source_count, policy),
+      with :ok <- verify_position_cell_flags(cell, single_flag, position_flag, clock_flag, source_count, policy),
            :ok <- verify_clock_cell_flags(cell, clock_flag, source_count, policy) do
         {:cont, :ok}
       else
@@ -2500,19 +3847,26 @@ defmodule Sidereon.GNSS.Data do
     end)
   end
 
-  defp verify_cell_contributor_counts(cell, position_outlier, clock_outlier) do
-    position_sources = cell.position_members + flag_source_count(position_outlier)
-    clock_sources = cell.clock_members + flag_source_count(clock_outlier)
+  # A clock-only cell carries no position, so no position flag describes it. Its
+  # single-source flag names the one clock it was given, and a single clock with
+  # neither that flag nor a clock outlier is unexplained.
+  defp verify_position_cell_flags(%{position_members: 0} = cell, single, outlier, clock_outlier, _source_count, _policy) do
+    cond do
+      outlier != nil ->
+        {:error, :invalid_position_outlier}
 
-    if clock_sources <= position_sources,
-      do: :ok,
-      else: {:error, :clock_contributor_mismatch}
+      single != nil and cell.clock_members != 1 ->
+        {:error, :contradictory_single_source_flags}
+
+      cell.clock_members == 1 and is_nil(single) and is_nil(clock_outlier) ->
+        {:error, :unexplained_single_member_cell}
+
+      true ->
+        :ok
+    end
   end
 
-  defp flag_source_count(nil), do: 0
-  defp flag_source_count(flag), do: length(flag.sources)
-
-  defp verify_position_cell_flags(cell, single, outlier, source_count, policy) do
+  defp verify_position_cell_flags(cell, single, outlier, _clock_outlier, source_count, policy) do
     required = contested_minimum(policy)
 
     cond do
@@ -2560,14 +3914,19 @@ defmodule Sidereon.GNSS.Data do
       cell.clock_members > 0 and cell.clock_members < required ->
         {:error, :invalid_clock_outlier_consensus}
 
-      cell.clock_members == 0 and
-          not (policy.combine == "precedence" and not is_nil(policy.outlier_reject) and
-                   length(outlier.sources) >= 2) ->
+      cell.clock_members == 0 and not clock_refusal?(outlier, policy) ->
         {:error, :invalid_clock_outlier}
 
       true ->
         :ok
     end
+  end
+
+  # Precedence with outlier rejection refuses a contested clock whose largest
+  # agreeing cluster is too small, and flags every clock it was offered, two or
+  # more. No clock is written for that cell.
+  defp clock_refusal?(flag, policy) do
+    policy.combine == "precedence" and not is_nil(policy.outlier_reject) and length(flag.sources) >= 2
   end
 
   defp contested_minimum(%{combine: "precedence", outlier_reject: outlier, min_agree: minimum})
@@ -2587,7 +3946,7 @@ defmodule Sidereon.GNSS.Data do
       case verify_selected_member_dispersion(cell, true, true) do
         :ok ->
           cond do
-            cell.position_max_m > position_tolerance ->
+            not is_nil(cell.position_max_m) and cell.position_max_m > position_tolerance ->
               {:halt, {:error, :position_agreement_exceeds_policy}}
 
             not is_nil(cell.clock_max_s) and cell.clock_max_s > clock_tolerance ->
@@ -2608,11 +3967,12 @@ defmodule Sidereon.GNSS.Data do
       case verify_selected_member_dispersion(cell, false, rem(cell.clock_members, 2) == 1) do
         :ok ->
           cond do
-            not within_scaled_relative_policy_bound?(
-              cell.position_max_m,
-              policy.position_tolerance_m,
-              :math.sqrt(3.0)
-            ) ->
+            not is_nil(cell.position_max_m) and
+                not within_scaled_relative_policy_bound?(
+                  cell.position_max_m,
+                  policy.position_tolerance_m,
+                  :math.sqrt(3.0)
+                ) ->
               {:halt, {:error, :position_agreement_exceeds_policy}}
 
             not is_nil(cell.clock_max_s) and
@@ -2636,6 +3996,7 @@ defmodule Sidereon.GNSS.Data do
   end
 
   defp verify_selected_position_dispersion(_cell, false), do: :ok
+  defp verify_selected_position_dispersion(%{position_members: 0}, true), do: :ok
 
   defp verify_selected_position_dispersion(cell, true) do
     verify_member_metric_bound(
@@ -3056,13 +4417,19 @@ defmodule Sidereon.GNSS.Data do
              {:error, {:invalid_field, {context, :jd_whole}}},
          :ok <- finite_float(jd_fraction, {context, :jd_fraction}),
          true <-
-           (jd_fraction >= 0.0 and jd_fraction <= 1.0) ||
+           ((jd_fraction >= 0.0 and jd_fraction <= 1.0) or leap_second_label?(jd_whole, jd_fraction)) ||
              {:error, {:invalid_field, {context, :jd_fraction}}},
          true <-
            (jd_fraction != 1.0 or positive_leap_second_day?(jd_whole)) ||
              {:error, {:invalid_field, {context, :jd_fraction}}} do
       :ok
     end
+  end
+
+  # The core holds a UTC `23:59:60.x` epoch on the next day's boundary with the
+  # negative fraction of the time remaining to it, `(x - 1) / 86400`.
+  defp leap_second_label?(jd_whole, jd_fraction) do
+    jd_fraction < 0.0 and jd_fraction >= -1.0 / 86_400.0 and positive_leap_second_day?(jd_whole - 1.0)
   end
 
   defp positive_leap_second_day?(jd_whole) do
@@ -3098,8 +4465,9 @@ defmodule Sidereon.GNSS.Data do
 
   defp satellite_id(value, _field) when is_binary(value) do
     case Regex.run(~r/^([GRECJIS])([0-9]{2})$/, value) do
-      [^value, system, prn] ->
-        if String.to_integer(prn) in satellite_prn_range(system),
+      [^value, _system, prn] ->
+        # The shared satellite-token range, `01`..`99` for every constellation.
+        if String.to_integer(prn) in 1..99,
           do: :ok,
           else: {:error, :invalid_satellite_id}
 
@@ -3110,14 +4478,6 @@ defmodule Sidereon.GNSS.Data do
 
   defp satellite_id(_value, field), do: {:error, {:invalid_field, field}}
 
-  defp satellite_prn_range("G"), do: 1..32
-  defp satellite_prn_range("R"), do: 1..27
-  defp satellite_prn_range("E"), do: 1..36
-  defp satellite_prn_range("C"), do: 1..63
-  defp satellite_prn_range("J"), do: 1..9
-  defp satellite_prn_range("I"), do: 1..14
-  defp satellite_prn_range("S"), do: 20..58
-
   defp float_vector(values, field) when is_list(values) and length(values) == 3 do
     if Enum.all?(values, &(finite_float(&1, field) == :ok)), do: :ok, else: {:error, {:invalid_field, field}}
   end
@@ -3126,6 +4486,8 @@ defmodule Sidereon.GNSS.Data do
 
   defp finite_float(value, _field) when is_float(value) and value - value == 0.0, do: :ok
   defp finite_float(_value, field), do: {:error, {:invalid_field, field}}
+  defp optional_finite_float(nil, _field), do: :ok
+  defp optional_finite_float(value, field), do: finite_float(value, field)
 
   defp finite_number?(value) when is_float(value), do: value - value == 0.0
 
@@ -4305,30 +5667,35 @@ defmodule Sidereon.GNSS.Data do
     do: core(NIF.data_archive_compression(product.center, product.product_type))
 
   defp absent_center(center, filename, pattern, candidate_url, reason) do
-    {_response_url, http_status} = diagnostic_fields(reason)
+    {reason_text, detail} = absence_reason(reason)
 
     %AbsentCenter{
       center: center,
       filename: filename,
       pattern: pattern,
-      reason: reason_string(reason),
+      reason: reason_text,
       url: candidate_url,
-      http_status: http_status
+      http_status: absence_status(reason),
+      detail: detail
     }
   end
 
-  defp diagnostic_fields({:not_found_on_archive, url}), do: {url, 404}
-  defp diagnostic_fields({:product_not_published, status, url}), do: {url, status}
-  defp diagnostic_fields({:http_status, status, url}), do: {url, status}
-  defp diagnostic_fields(_reason), do: {nil, nil}
+  # The HTTP status an absence states, only where it is one (100-599).
+  defp absence_status({:not_found_on_archive, _url}), do: 404
 
-  defp reason_string(:offline_cache_miss), do: "offline_miss"
-  defp reason_string({:not_found_on_archive, _}), do: "candidate_not_found"
-  defp reason_string({:product_not_published, 404, _}), do: "candidate_not_found"
-  defp reason_string({:product_not_published, status, _}), do: "product_not_published:#{status}"
-  defp reason_string({:checksum_mismatch, _, _}), do: "checksum"
-  defp reason_string({:http_status, status, _}), do: "http_status:#{status}"
-  defp reason_string(reason), do: inspect(reason)
+  defp absence_status({type, status, _url}) when type in [:product_not_published, :http_status] and status in 100..599,
+    do: status
+
+  defp absence_status(_reason), do: nil
+
+  # The shared absence vocabulary, with a detail only for an unclassified
+  # failure; the status is in the record's `http_status`.
+  defp absence_reason(:offline_cache_miss), do: {"offline_cache_miss", nil}
+  defp absence_reason({:not_found_on_archive, _}), do: {"product_not_published", nil}
+  defp absence_reason({:product_not_published, status, _}) when status in 100..599, do: {"product_not_published", nil}
+  defp absence_reason({:checksum_mismatch, _, _}), do: {"checksum_mismatch", nil}
+  defp absence_reason({:http_status, status, _}) when status in 100..599, do: {"http_status", nil}
+  defp absence_reason(reason), do: {"unclassified", inspect(reason)}
 
   defp truthy?(value), do: value in [true, "true", "1", 1]
 

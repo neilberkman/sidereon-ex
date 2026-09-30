@@ -10,6 +10,7 @@ defmodule Sidereon.Geofence do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Fence do
     @moduledoc """
@@ -104,6 +105,7 @@ defmodule Sidereon.Geofence do
           | {:invalid_input, String.t(), String.t()}
           | {:geodesic, String.t()}
           | {:uncertainty_validation_failed, atom()}
+          | Sidereon.argument_error()
 
   @doc """
   Construct a geodesic polygon fence from WGS84 degree vertices.
@@ -121,7 +123,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_new)
   end
 
   @doc """
@@ -139,7 +141,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_contains)
   end
 
   @doc """
@@ -158,7 +160,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_distance_to_boundary)
   end
 
   @doc """
@@ -182,7 +184,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_containment_probability)
   end
 
   @doc """
@@ -200,7 +202,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_crossing)
   end
 
   @doc """
@@ -233,7 +235,7 @@ defmodule Sidereon.Geofence do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geofence_crossing_probability)
   end
 
   defp normalize_positions(positions) do

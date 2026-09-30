@@ -44,7 +44,10 @@ pub fn dgnss_corrections(
         &observations,
         t_rx_j2000_s,
     )
-    .map_err(crate::errors::invalid_input)?;
+    .map_err(|error| match error {
+        DgnssError::Ut1OutsideCoverage(reason) => crate::errors::ut1_outside_coverage(reason),
+        other => crate::errors::invalid_input(other),
+    })?;
     Ok(corrections.into_iter().collect())
 }
 
@@ -127,6 +130,14 @@ pub fn dgnss_position<'a>(
         Err(DgnssError::InvalidInput { .. }) => {
             Ok((atom::error(), atom_from(env, "invalid_input")).encode(env))
         }
+        // The flat `{:error, tag, detail}` shape of the SPP errors, which
+        // `Sidereon.GNSS.Positioning.Decode` reads.
+        Err(DgnssError::Ut1OutsideCoverage(reason)) => Ok((
+            atom::error(),
+            atom_from(env, "ut1_outside_coverage"),
+            crate::errors::degrade_reason_atom(reason),
+        )
+            .encode(env)),
     }
 }
 

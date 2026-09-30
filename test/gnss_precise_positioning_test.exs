@@ -11,6 +11,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
   alias Sidereon.GNSS.PrecisePositioning.Solution
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Troposphere
+  alias Sidereon.Test.ModelClock
 
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @epoch ~N[2020-06-24 12:00:00]
@@ -67,17 +68,17 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     {:ok,
      sp3: sp3,
      sats: sats,
-     observations: synth_observations(sats),
-     tropo_observations: synth_observations(sats, troposphere: true, epoch: @epoch),
+     observations: synth_observations(sp3, sats),
+     tropo_observations: synth_observations(sp3, sats, troposphere: true, epoch: @epoch),
      multi_sats: multi_sats,
-     epoch_observations: synth_epoch_observations(multi_sats),
-     tropo_epoch_observations: synth_epoch_observations(multi_sats, troposphere: true),
+     epoch_observations: synth_epoch_observations(sp3, multi_sats),
+     tropo_epoch_observations: synth_epoch_observations(sp3, multi_sats, troposphere: true),
      ztd_epoch_observations:
-       synth_epoch_observations(multi_sats,
+       synth_epoch_observations(sp3, multi_sats,
          troposphere: true,
          residual_ztd_m: @residual_ztd_m
        ),
-     fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats)}
+     fixed_epoch_observations: synth_fixed_epoch_observations(sp3, multi_sats)}
   end
 
   describe "solve_float/4" do
@@ -485,12 +486,191 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
 
       assert fixed_direct.metadata.integer_status == :fixed
       assert fixed_direct.float_solution == float_direct
+      assert fixed_direct.solved_epoch_indices == [0, 1, 2]
+      assert fixed_direct.ssr_bias_exclusions == []
+      assert fixed_direct.unplaced_observations == []
+
+      for residual <- fixed_direct.residuals_m do
+        assert residual.ambiguity_id == residual.satellite_id
+        assert Enum.at(fixed_direct.epochs, residual.epoch_index) == residual.epoch
+      end
+
       assert map_size(fixed_direct.residual_ionosphere_m) == length(fixed_direct.used_sats)
       assert square_matrix?(fixed_direct.temporal_position_covariance.ecef_m2, 3)
 
       for {sat, cycles} <- true_fixed_cycles(ctx.multi_sats) do
         assert fixed_direct.fixed_ambiguities_cycles[sat] == cycles
       end
+    end
+  end
+
+  describe "float solution fields the fixed solve continues from" do
+    test "carry the solved epochs, options and left-out observations", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}, max_iterations: 12]
+
+      assert {:ok, float} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.fixed_epoch_observations, base)
+
+      assert float.solved_epoch_indices == [0, 1, 2]
+      assert Enum.map(float.epoch_clocks, & &1.epoch_index) == [0, 1, 2]
+      assert float.ssr_bias_exclusions == []
+      assert float.unplaced_observations == []
+      assert float.residual_screen_removals == []
+      assert float.metadata.solve_options.max_iterations == 12
+      assert is_boolean(float.metadata.residual_screen)
+    end
+
+    test "an observation with a code that is not positive is left out, reported and passed back", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      assert {:ok, float_seed} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.fixed_epoch_observations, base)
+
+      [first, %{observations: [dropped | kept]} = second | rest] = ctx.fixed_epoch_observations
+      epochs = [first, %{second | observations: [%{dropped | code_m: 0.0} | kept]} | rest]
+
+      initial_state = %{
+        position_m: position_tuple(float_seed.position),
+        clocks_m: Enum.map(float_seed.epoch_clocks, & &1.rx_clock_m),
+        ambiguities_m: float_seed.ambiguities_m
+      }
+
+      assert {:ok, float} = PrecisePositioning.solve_ppp_float(ctx.sp3, epochs, initial_state)
+
+      assert float.unplaced_observations == [
+               %{
+                 epoch_index: 1,
+                 satellite_id: dropped.satellite_id,
+                 ambiguity_id: dropped.satellite_id,
+                 reason: :code_not_positive
+               }
+             ]
+
+      assert {:ok, %FixedSolution{} = fixed} =
+               PrecisePositioning.solve_ppp_fixed(ctx.sp3, epochs, float, ambiguity_wavelength_m: @l1_wavelength_m)
+
+      assert fixed.float_solution == float
+      assert fixed.unplaced_observations == float.unplaced_observations
+
+      typed_refusal = %{
+        float
+        | unplaced_observations: [
+            %{
+              epoch_index: 1,
+              satellite_id: dropped.satellite_id,
+              ambiguity_id: dropped.satellite_id,
+              reason: {:ssr_correction_exceeds_limit, %{orbit_m: 0.31, clock_m: 0.44}}
+            }
+          ]
+      }
+
+      assert {:ok, ^typed_refusal} =
+               PrecisePositioning.__float_solution_round_trip__(typed_refusal, epochs)
+    end
+
+    test "SSR bias exclusions cross the boundary with every field and reach the fixed solve", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      assert {:ok, float} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.fixed_epoch_observations, base)
+
+      [%{observations: [excluded | _]} | _] = ctx.fixed_epoch_observations
+      sat = excluded.satellite_id
+      solution = %{source: :rtcm_ssr, provider_id: 7, solution_id: 2}
+      l1c = %{system: "G", code: "1C"}
+
+      code_query = %{
+        sat: sat,
+        signal: {:physical, l1c},
+        source_signal: %{source: :rtcm_ssr, system: "G", index: 0},
+        status: :expired,
+        bias_m: -1.25,
+        solution: solution,
+        iod_ssr: 4,
+        ref_epoch_j2000_s: 646_229_000.5,
+        lifetime: {:rtcm_update_interval, 5.0},
+        details: {:epoch_expired, %{expiry_epoch_j2000_s: 646_229_090.5, query_epoch_j2000_s: 646_229_100.25}}
+      }
+
+      phase_query = %{
+        sat: sat,
+        signal: {:unknown, %{source: :galileo_has, system: "G", index: 13}},
+        source_signal: %{source: :galileo_has, system: "G", index: 13},
+        status: :unknown_signal,
+        bias_m: 0.03,
+        bias_cycles: 0.125,
+        solution: %{source: :galileo_has, provider_id: 0, solution_id: 0},
+        iod_ssr: nil,
+        ref_epoch_j2000_s: 646_229_000.0,
+        lifetime: {:galileo_has_validity_interval, 300.0},
+        continuity_token: nil,
+        discontinuity_indicator: {:galileo_has_pdi, 2},
+        discontinuity_details: {:solution_changed, %{previous: solution, current: %{solution | solution_id: 3}}},
+        details: {:unknown_signal, %{source: :galileo_has, system: "G", index: 13}}
+      }
+
+      detailed = %{
+        epoch_index: 0,
+        satellite_id: sat,
+        ambiguity_id: sat,
+        code_bias_missing: true,
+        phase_bias_missing: false,
+        transmit_time_failure:
+          {:bias_record, %{transmit_time_j2000_s: 646_229_099.925, signal: {:physical, l1c}, status: :available}},
+        application: %{
+          epoch_index: 0,
+          sat: sat,
+          satellite_id: sat,
+          ambiguity_id: sat,
+          transmit_time_j2000_s: 646_229_099.925,
+          applied_orbit_clock_solution: solution,
+          observation_signals: %{code1: "1C", code2: "2W", phase1: "1C", phase2: "2W"},
+          code_status: {:ut1_outside_coverage, :after_coverage},
+          applied_code_if_m: nil,
+          code1_report: %{epoch_index: 0, sat: sat, ambiguity_id: sat, signal: l1c, query_result: code_query},
+          code2_report: nil,
+          phase_status: :orbit_clock_solution_mismatch,
+          applied_phase_if_m: 0.5,
+          phase1_report: %{epoch_index: 0, sat: sat, ambiguity_id: sat, signal: l1c, query_result: phase_query},
+          phase2_report: nil
+        }
+      }
+
+      with_exclusion = %{float | ssr_bias_exclusions: [detailed]}
+
+      # The native decoder builds the core records from the terms and the encoder
+      # writes them back: every field survives the trip.
+      assert {:ok, ^with_exclusion} =
+               PrecisePositioning.__float_solution_round_trip__(with_exclusion, ctx.fixed_epoch_observations)
+
+      for failure <- [
+            :source_without_ssr_corrections,
+            :transmit_time_unavailable,
+            {:orbit_clock_solution, %{transmit_time_j2000_s: 646_229_099.925, applied: nil}}
+          ] do
+        variant = %{float | ssr_bias_exclusions: [%{detailed | transmit_time_failure: failure, application: nil}]}
+
+        assert {:ok, ^variant} =
+                 PrecisePositioning.__float_solution_round_trip__(variant, ctx.fixed_epoch_observations)
+      end
+
+      # A value this binding marks as not carried is refused on the way back.
+      unrecognized = %{float | ssr_bias_exclusions: [%{detailed | transmit_time_failure: :unrecognized}]}
+
+      assert {:error, message} =
+               PrecisePositioning.__float_solution_round_trip__(unrecognized, ctx.fixed_epoch_observations)
+
+      assert message =~ "unrecognized"
+
+      # The fixed solve starts from the float solution's exclusions and reports them.
+      assert {:ok, %FixedSolution{} = fixed} =
+               PrecisePositioning.solve_ppp_fixed(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 with_exclusion,
+                 ambiguity_wavelength_m: @l1_wavelength_m
+               )
+
+      assert fixed.ssr_bias_exclusions == [detailed]
+      assert fixed.float_solution.ssr_bias_exclusions == [detailed]
     end
   end
 
@@ -585,7 +765,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     end
 
     test "fixed-ambiguity arcs apply a-priori troposphere consistently", ctx do
-      fixed_tropo = synth_fixed_epoch_observations(ctx.multi_sats, troposphere: true)
+      fixed_tropo = synth_fixed_epoch_observations(ctx.sp3, ctx.multi_sats, troposphere: true)
 
       assert {:ok, %FixedSolution{} = sol} =
                PrecisePositioning.solve_fixed_epochs(ctx.sp3, fixed_tropo,
@@ -627,7 +807,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
 
     test "fixed-ambiguity arcs estimate a residual zenith troposphere delay", ctx do
       fixed_tropo =
-        synth_fixed_epoch_observations(ctx.multi_sats,
+        synth_fixed_epoch_observations(ctx.sp3, ctx.multi_sats,
           troposphere: true,
           residual_ztd_m: @residual_ztd_m
         )
@@ -939,14 +1119,13 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     end
   end
 
-  defp synth_observations(sats, opts \\ []) do
+  defp synth_observations(sp3, sats, opts \\ []) do
     epoch = Keyword.get(opts, :epoch, @epoch)
 
     sats
     |> Enum.with_index()
     |> Enum.map(fn {{sat, obs}, idx} ->
-      tropo_m = synthetic_tropo_m(obs, epoch, opts)
-      code = obs.geometric_range_m - @c * obs.sat_clock_s + @clock_m + tropo_m
+      code = ppp_code_m(sp3, sat, obs, epoch, @clock_m, opts)
       ambiguity = ambiguity_m(idx)
 
       %{
@@ -957,7 +1136,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     end)
   end
 
-  defp synth_epoch_observations(multi_sats, opts \\ []) do
+  defp synth_epoch_observations(sp3, multi_sats, opts \\ []) do
     @epochs
     |> Enum.zip(@epoch_clocks_m)
     |> Enum.map(fn {epoch, clock_m} ->
@@ -966,8 +1145,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
           {_epoch, obs} =
             Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
 
-          tropo_m = synthetic_tropo_m(obs, epoch, opts)
-          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m + tropo_m
+          code = ppp_code_m(sp3, sat, obs, epoch, clock_m, opts)
           idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
 
           %{
@@ -981,7 +1159,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     end)
   end
 
-  defp synth_fixed_epoch_observations(multi_sats, opts \\ []) do
+  defp synth_fixed_epoch_observations(sp3, multi_sats, opts \\ []) do
     @epochs
     |> Enum.zip(@epoch_clocks_m)
     |> Enum.map(fn {epoch, clock_m} ->
@@ -990,8 +1168,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
           {_epoch, obs} =
             Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
 
-          tropo_m = synthetic_tropo_m(obs, epoch, opts)
-          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m + tropo_m
+          code = ppp_code_m(sp3, sat, obs, epoch, clock_m, opts)
           idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
 
           %{
@@ -1003,6 +1180,24 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
 
       %{epoch: epoch, observations: observations}
     end)
+  end
+
+  # The code pseudorange of `sat` at `epoch` for the truth receiver with
+  # receiver clock `clock_m`, as the PPP rows model it: the range of the
+  # satellite placed from the pseudorange itself (RTKLIB `satposs`, `geodist`),
+  # less the SP3 clock, plus the receiver clock and the synthetic troposphere at
+  # that geometry. `prediction` seeds the placement.
+  defp ppp_code_m(sp3, sat, prediction, epoch, clock_m, opts) do
+    delay = fn geometry -> -@c * geometry.sat_clock_s + clock_m + synthetic_tropo_m(geometry, epoch, opts) end
+
+    ModelClock.placed_pseudorange(
+      sp3,
+      sat,
+      @truth,
+      epoch,
+      prediction.geometric_range_m + delay.(prediction),
+      delay
+    )
   end
 
   defp synthetic_tropo_m(prediction, epoch, opts) do

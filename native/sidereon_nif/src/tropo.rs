@@ -17,12 +17,12 @@
 //! radians. The epoch is a split Julian date used for the Niell seasonal
 //! day-of-year term.
 
-use rustler::NifResult;
-use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeScale};
+use rustler::{Error as RustlerError, NifMap, NifResult};
+use sidereon_core::astro::time::model::{Instant, JulianDateSplit, TimeModelError, TimeScale};
 use sidereon_core::atmosphere::troposphere::{
     tropo_mapping, tropo_slant, tropo_zenith, MappingModel, Met, TropoModel,
 };
-use sidereon_core::Wgs84Geodetic;
+use sidereon_core::{FrameValueError, Wgs84Geodetic};
 
 mod atoms {
     rustler::atoms! {
@@ -30,6 +30,69 @@ mod atoms {
         below_mapping_elevation,
         above_mapping_elevation,
         outside_mapping_height
+    }
+}
+
+#[derive(NifMap)]
+struct CoreErrorDetailTerm {
+    family: String,
+    kind: String,
+    message: String,
+    field: Option<String>,
+    reason: Option<String>,
+    debug: Option<String>,
+}
+
+fn core_error_detail(error: sidereon_core::Error) -> RustlerError {
+    let debug = format!("{error:?}");
+    let (kind, message) = match error {
+        sidereon_core::Error::InvalidInput(message) => ("INVALID_INPUT", message),
+        other => ("CORE_ERROR", other.to_string()),
+    };
+    RustlerError::Term(Box::new((
+        atoms::invalid_input(),
+        CoreErrorDetailTerm {
+            family: "CoreError".to_owned(),
+            kind: kind.to_owned(),
+            message,
+            field: None,
+            reason: None,
+            debug: Some(debug),
+        },
+    )))
+}
+
+fn frame_value_error_detail(error: FrameValueError) -> RustlerError {
+    let message = error.to_string();
+    match error {
+        FrameValueError::InvalidInput { field, reason } => RustlerError::Term(Box::new((
+            atoms::invalid_input(),
+            CoreErrorDetailTerm {
+                family: "FrameValueError".to_owned(),
+                kind: "FRAME_VALUE_INVALID_INPUT".to_owned(),
+                message,
+                field: Some(field.to_owned()),
+                reason: Some(reason.to_owned()),
+                debug: None,
+            },
+        ))),
+    }
+}
+
+pub(crate) fn time_model_error_detail(error: TimeModelError) -> RustlerError {
+    let message = error.to_string();
+    match error {
+        TimeModelError::InvalidInput { field, reason } => RustlerError::Term(Box::new((
+            atoms::invalid_input(),
+            CoreErrorDetailTerm {
+                family: "TimeModelError".to_owned(),
+                kind: "TIME_MODEL_INVALID_INPUT".to_owned(),
+                message,
+                field: Some(field.to_owned()),
+                reason: Some(reason.to_owned()),
+                debug: None,
+            },
+        ))),
     }
 }
 
@@ -127,4 +190,71 @@ fn tropo_slant_delay(
     );
     tropo_slant(elevation_deg.to_radians(), receiver, met, epoch)
         .map_err(crate::errors::invalid_input)
+}
+
+/// Detailed sibling of `tropo_zenith_delay`; legacy NIF errors remain atoms.
+#[rustler::nif]
+fn tropo_zenith_delay_detailed(
+    lat_deg: f64,
+    height_m: f64,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+) -> NifResult<(f64, f64)> {
+    let receiver = Wgs84Geodetic::new(lat_deg.to_radians(), 0.0, height_m)
+        .map_err(frame_value_error_detail)?;
+    let met =
+        Met::new(pressure_hpa, temperature_k, relative_humidity).map_err(core_error_detail)?;
+    let z = tropo_zenith(TropoModel::Saastamoinen, receiver, met).map_err(core_error_detail)?;
+    Ok((z.dry_m, z.wet_m))
+}
+
+/// Detailed sibling of `tropo_mapping_factors` with the core refusal attached.
+#[rustler::nif]
+fn tropo_mapping_factors_detailed(
+    elevation_deg: f64,
+    lat_deg: f64,
+    height_m: f64,
+    jd_whole: f64,
+    jd_fraction: f64,
+) -> NifResult<(f64, f64)> {
+    let receiver = Wgs84Geodetic::new(lat_deg.to_radians(), 0.0, height_m)
+        .map_err(frame_value_error_detail)?;
+    let epoch = Instant::from_julian_date(
+        TimeScale::Gpst,
+        JulianDateSplit::new(jd_whole, jd_fraction).map_err(time_model_error_detail)?,
+    );
+    let factors = tropo_mapping(
+        MappingModel::Niell,
+        elevation_deg.to_radians(),
+        receiver,
+        epoch,
+    )
+    .map_err(core_error_detail)?;
+    Ok((factors.dry, factors.wet))
+}
+
+/// Detailed sibling of `tropo_slant_delay` with the core refusal attached.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn tropo_slant_delay_detailed(
+    elevation_deg: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+    height_m: f64,
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    jd_whole: f64,
+    jd_fraction: f64,
+) -> NifResult<f64> {
+    let receiver = Wgs84Geodetic::new(lat_deg.to_radians(), lon_deg.to_radians(), height_m)
+        .map_err(frame_value_error_detail)?;
+    let met =
+        Met::new(pressure_hpa, temperature_k, relative_humidity).map_err(core_error_detail)?;
+    let epoch = Instant::from_julian_date(
+        TimeScale::Gpst,
+        JulianDateSplit::new(jd_whole, jd_fraction).map_err(time_model_error_detail)?,
+    );
+    tropo_slant(elevation_deg.to_radians(), receiver, met, epoch).map_err(core_error_detail)
 }

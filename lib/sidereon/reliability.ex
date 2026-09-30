@@ -18,6 +18,7 @@ defmodule Sidereon.Reliability do
 
   alias Sidereon.GNSS.ARAIM
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule ReliabilityOptions do
     @moduledoc """
@@ -199,6 +200,14 @@ defmodule Sidereon.Reliability do
           | :invalid_reliability_parameter
           | :invalid_design
           | :singular_geometry
+          | :invalid_elevation
+          | :missing_cn0
+          | :invalid_parameter
+          | :invalid_system_count
+          | :invalid_dof
+          | :invalid_residuals
+          | :missing_variances
+          | :invalid_variance
           | :insufficient_geometry
           | :invalid_ism
           | :invalid_allocation
@@ -218,7 +227,7 @@ defmodule Sidereon.Reliability do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :reliability_wtest_noncentrality)
   end
 
   @doc """
@@ -227,12 +236,15 @@ defmodule Sidereon.Reliability do
   @spec reliability_design([RangeReliabilityRow.t()], ReliabilityOptions.t() | keyword()) ::
           {:ok, ReliabilityReport.t()} | {:error, reliability_error()}
   def reliability_design(rows, options \\ ReliabilityOptions.default()) when is_list(rows) do
-    case NIF.reliability_design(Enum.map(rows, &RangeReliabilityRow.to_nif_tuple/1), options_tuple(options)) do
+    case NIF.reliability_design(
+           Enum.map(rows, &RangeReliabilityRow.to_nif_tuple/1),
+           options_tuple(options)
+         ) do
       {:ok, report} -> {:ok, report(report)}
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :reliability_design)
   end
 
   @doc """
@@ -256,7 +268,7 @@ defmodule Sidereon.Reliability do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :reliability_araim)
   end
 
   defp options_tuple(%ReliabilityOptions{} = options), do: ReliabilityOptions.to_nif_tuple(options)

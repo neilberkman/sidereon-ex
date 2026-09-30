@@ -6,11 +6,11 @@
 
 use rustler::{Binary, Encoder, Env, ResourceArc, Term};
 use sidereon_core::nmea::{
-    group_epochs, parse_nmea_str, parse_sentence, write_gga, Diagnostics, EpochSnapshot, Gga,
-    GgaQuality, Gll, Gsa, GsaEntry, GsaFixMode, GsaSelectionMode, Gst, Gsv, GsvGroup, GsvSatellite,
-    NmeaAccumulator, NmeaBody, NmeaChunkOutput, NmeaCoordinate, NmeaDate, NmeaError, NmeaSatNumber,
-    NmeaSentence, NmeaSignalId, NmeaTalker, NmeaTime, RecordRef, Rmc, RmcStatus, SkipReason, Vtg,
-    WarningKind, Zda,
+    group_epochs, parse_nmea_str, parse_sentence, write_gga, Diagnostics, EpochSnapshot,
+    FieldError, Gga, GgaQuality, Gll, Gsa, GsaEntry, GsaFixMode, GsaSelectionMode, Gst, Gsv,
+    GsvGroup, GsvSatellite, NmeaAccumulator, NmeaBody, NmeaChunkOutput, NmeaCoordinate, NmeaDate,
+    NmeaError, NmeaSatNumber, NmeaSentence, NmeaSignalId, NmeaTalker, NmeaTime, RecordRef, Rmc,
+    RmcStatus, SkipReason, Vtg, WarningKind, Zda,
 };
 use sidereon_core::GnssSystem;
 use std::sync::Mutex;
@@ -30,27 +30,49 @@ pub struct NmeaAccumulatorResource {
 impl rustler::Resource for NmeaAccumulatorResource {}
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct RecordRefTerm {
-    line: Option<i64>,
-    record_index: Option<i64>,
+pub(crate) struct RecordRefTerm {
+    line: Option<u64>,
+    record_index: Option<u64>,
     satellite: Option<String>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct SkipTerm {
+pub(crate) struct SkipTerm {
     at: RecordRefTerm,
     reason: String,
     detail: Option<String>,
+    reason_kind: String,
+    record_type: Option<String>,
+    unit: Option<String>,
+    block: Option<String>,
+    inconsistent_reason: Option<String>,
+    cause: Option<FieldErrorTerm>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct WarningTerm {
+pub(crate) struct FieldErrorTerm {
+    kind: String,
+    field: String,
+    min: Option<f64>,
+    max: Option<f64>,
+    upper_inclusive: Option<bool>,
+    value: Option<String>,
+    year: Option<i64>,
+    month: Option<i64>,
+    day: Option<i64>,
+    hour: Option<i64>,
+    minute: Option<i64>,
+    second: Option<f64>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+pub(crate) struct WarningTerm {
     at: RecordRefTerm,
     kind: String,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct DiagnosticsTerm {
+pub(crate) struct DiagnosticsTerm {
     skips: Vec<SkipTerm>,
     warnings: Vec<WarningTerm>,
 }
@@ -286,32 +308,328 @@ struct GgaWriteTerm {
 
 fn record_ref_term(at: RecordRef) -> RecordRefTerm {
     RecordRefTerm {
-        line: at.line.map(|value| value as i64),
-        record_index: at.record_index.map(|value| value as i64),
+        line: at.line.map(|value| value as u64),
+        record_index: at.record_index.map(|value| value as u64),
         satellite: at.satellite,
     }
 }
 
-fn skip_reason(reason: SkipReason) -> (String, Option<String>) {
+#[cfg(test)]
+mod diagnostic_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn record_reference_indices_remain_lossless_u64_values() {
+        let mapped = record_ref_term(RecordRef {
+            line: Some(usize::MAX),
+            record_index: Some(usize::MAX),
+            satellite: None,
+        });
+        assert_eq!(mapped.line, Some(usize::MAX as u64));
+        assert_eq!(mapped.record_index, Some(usize::MAX as u64));
+    }
+
+    #[test]
+    fn every_field_error_variant_retains_its_typed_values() {
+        let cases = [
+            FieldError::Missing { field: "missing" },
+            FieldError::NonFinite { field: "finite" },
+            FieldError::NotPositive { field: "positive" },
+            FieldError::Negative {
+                field: "nonnegative",
+            },
+            FieldError::OutOfRange {
+                field: "range",
+                min: 1.0,
+                max: 4.0,
+                upper_inclusive: false,
+            },
+            FieldError::FloatParse {
+                field: "float",
+                value: "nan-token".to_string(),
+            },
+            FieldError::IntParse {
+                field: "integer",
+                value: "wide-token".to_string(),
+            },
+            FieldError::InvalidCivilDate {
+                field: "date",
+                year: i64::MAX,
+                month: i64::MIN,
+                day: 9_007_199_254_740_993,
+            },
+            FieldError::InvalidCivilTime {
+                field: "time",
+                hour: 25,
+                minute: 61,
+                second: 62.5,
+            },
+        ];
+        let mapped: Vec<_> = cases.into_iter().map(field_error_term).collect();
+        assert_eq!(
+            mapped
+                .iter()
+                .map(|error| error.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "missing",
+                "non_finite",
+                "not_positive",
+                "negative",
+                "out_of_range",
+                "float_parse",
+                "int_parse",
+                "invalid_civil_date",
+                "invalid_civil_time",
+            ]
+        );
+        assert_eq!(mapped[4].min, Some(1.0));
+        assert_eq!(mapped[4].max, Some(4.0));
+        assert_eq!(mapped[4].upper_inclusive, Some(false));
+        assert_eq!(mapped[5].value.as_deref(), Some("nan-token"));
+        assert_eq!(mapped[6].value.as_deref(), Some("wide-token"));
+        assert_eq!(mapped[7].year, Some(i64::MAX));
+        assert_eq!(mapped[7].month, Some(i64::MIN));
+        assert_eq!(mapped[7].day, Some(9_007_199_254_740_993));
+        assert_eq!(mapped[8].hour, Some(25));
+        assert_eq!(mapped[8].minute, Some(61));
+        assert_eq!(mapped[8].second, Some(62.5));
+
+        let non_finite_bounds = field_error_term(FieldError::OutOfRange {
+            field: "non-finite bounds",
+            min: f64::NAN,
+            max: f64::INFINITY,
+            upper_inclusive: false,
+        });
+        assert!(non_finite_bounds.min.unwrap().is_nan());
+        assert!(non_finite_bounds.max.unwrap().is_infinite());
+    }
+
+    #[test]
+    fn every_skip_reason_retains_its_variant_and_payload() {
+        let cases = [
+            SkipReason::UnrepresentableSatellite,
+            SkipReason::UnsupportedRecordType("unsupported sentence"),
+            SkipReason::MalformedField(FieldError::Missing { field: "required" }),
+            SkipReason::OutOfRangeEpoch,
+            SkipReason::Truncated,
+            SkipReason::UnsupportedUnit("furlongs".to_string()),
+            SkipReason::UnknownBlock("custom block".to_string()),
+            SkipReason::InconsistentRecord("invalid input"),
+        ];
+        let mapped: Vec<_> = cases.into_iter().map(skip_reason).collect();
+        assert_eq!(
+            mapped
+                .iter()
+                .map(|entry| entry.reason_kind.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "unrepresentable_satellite",
+                "unsupported_record_type",
+                "malformed_field",
+                "out_of_range_epoch",
+                "truncated",
+                "unsupported_unit",
+                "unknown_block",
+                "inconsistent_record",
+            ]
+        );
+        assert_eq!(
+            mapped[1].record_type.as_deref(),
+            Some("unsupported sentence")
+        );
+        assert_eq!(
+            mapped[2].cause.as_ref().map(|cause| cause.field.as_str()),
+            Some("required")
+        );
+        assert_eq!(mapped[5].unit.as_deref(), Some("furlongs"));
+        assert_eq!(mapped[6].block.as_deref(), Some("custom block"));
+        assert_eq!(
+            mapped[7].inconsistent_reason.as_deref(),
+            Some("invalid input")
+        );
+    }
+}
+
+fn field_error_term(error: FieldError) -> FieldErrorTerm {
+    let mut term = FieldErrorTerm {
+        kind: String::new(),
+        field: String::new(),
+        min: None,
+        max: None,
+        upper_inclusive: None,
+        value: None,
+        year: None,
+        month: None,
+        day: None,
+        hour: None,
+        minute: None,
+        second: None,
+    };
+    match error {
+        FieldError::Missing { field } => {
+            term.kind = "missing".to_string();
+            term.field = field.to_string();
+        }
+        FieldError::NonFinite { field } => {
+            term.kind = "non_finite".to_string();
+            term.field = field.to_string();
+        }
+        FieldError::NotPositive { field } => {
+            term.kind = "not_positive".to_string();
+            term.field = field.to_string();
+        }
+        FieldError::Negative { field } => {
+            term.kind = "negative".to_string();
+            term.field = field.to_string();
+        }
+        FieldError::OutOfRange {
+            field,
+            min,
+            max,
+            upper_inclusive,
+        } => {
+            term.kind = "out_of_range".to_string();
+            term.field = field.to_string();
+            term.min = Some(min);
+            term.max = Some(max);
+            term.upper_inclusive = Some(upper_inclusive);
+        }
+        FieldError::FloatParse { field, value } => {
+            term.kind = "float_parse".to_string();
+            term.field = field.to_string();
+            term.value = Some(value);
+        }
+        FieldError::IntParse { field, value } => {
+            term.kind = "int_parse".to_string();
+            term.field = field.to_string();
+            term.value = Some(value);
+        }
+        FieldError::InvalidCivilDate {
+            field,
+            year,
+            month,
+            day,
+        } => {
+            term.kind = "invalid_civil_date".to_string();
+            term.field = field.to_string();
+            term.year = Some(year);
+            term.month = Some(month);
+            term.day = Some(day);
+        }
+        FieldError::InvalidCivilTime {
+            field,
+            hour,
+            minute,
+            second,
+        } => {
+            term.kind = "invalid_civil_time".to_string();
+            term.field = field.to_string();
+            term.hour = Some(hour);
+            term.minute = Some(minute);
+            term.second = Some(second);
+        }
+    }
+    term
+}
+
+struct SkipReasonTerms {
+    reason: String,
+    detail: Option<String>,
+    reason_kind: String,
+    record_type: Option<String>,
+    unit: Option<String>,
+    block: Option<String>,
+    inconsistent_reason: Option<String>,
+    cause: Option<FieldErrorTerm>,
+}
+
+fn skip_reason(reason: SkipReason) -> SkipReasonTerms {
     match reason {
-        SkipReason::UnrepresentableSatellite => ("unrepresentable_satellite".to_string(), None),
-        SkipReason::UnsupportedRecordType(kind) => (
-            "unsupported_record_type".to_string(),
-            Some(kind.to_string()),
-        ),
-        SkipReason::MalformedField(error) => (
-            "malformed_field".to_string(),
-            Some(format!("{}: {}", error.field(), error.reason())),
-        ),
-        SkipReason::OutOfRangeEpoch => ("out_of_range_epoch".to_string(), None),
-        SkipReason::Truncated => ("truncated".to_string(), None),
-        SkipReason::UnsupportedUnit(unit) => {
-            ("unsupported_unit".to_string(), Some(unit.to_string()))
+        SkipReason::UnrepresentableSatellite => SkipReasonTerms {
+            reason: "unrepresentable_satellite".to_string(),
+            detail: None,
+            reason_kind: "unrepresentable_satellite".to_string(),
+            record_type: None,
+            unit: None,
+            block: None,
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::UnsupportedRecordType(kind) => SkipReasonTerms {
+            reason: "unsupported_record_type".to_string(),
+            detail: Some(kind.to_string()),
+            reason_kind: "unsupported_record_type".to_string(),
+            record_type: Some(kind.to_string()),
+            unit: None,
+            block: None,
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::MalformedField(error) => {
+            let detail = Some(format!("{}: {}", error.field(), error.reason()));
+            let cause = field_error_term(error);
+            SkipReasonTerms {
+                reason: "malformed_field".to_string(),
+                detail,
+                reason_kind: "malformed_field".to_string(),
+                record_type: None,
+                unit: None,
+                block: None,
+                inconsistent_reason: None,
+                cause: Some(cause),
+            }
         }
-        SkipReason::UnknownBlock(block) => ("unknown_block".to_string(), Some(block)),
-        SkipReason::InconsistentRecord(reason) => {
-            ("inconsistent_record".to_string(), Some(reason.to_string()))
-        }
+        SkipReason::OutOfRangeEpoch => SkipReasonTerms {
+            reason: "out_of_range_epoch".to_string(),
+            detail: None,
+            reason_kind: "out_of_range_epoch".to_string(),
+            record_type: None,
+            unit: None,
+            block: None,
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::Truncated => SkipReasonTerms {
+            reason: "truncated".to_string(),
+            detail: None,
+            reason_kind: "truncated".to_string(),
+            record_type: None,
+            unit: None,
+            block: None,
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::UnsupportedUnit(unit) => SkipReasonTerms {
+            reason: "unsupported_unit".to_string(),
+            detail: Some(unit.clone()),
+            reason_kind: "unsupported_unit".to_string(),
+            record_type: None,
+            unit: Some(unit),
+            block: None,
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::UnknownBlock(block) => SkipReasonTerms {
+            reason: "unknown_block".to_string(),
+            detail: Some(block.clone()),
+            reason_kind: "unknown_block".to_string(),
+            record_type: None,
+            unit: None,
+            block: Some(block),
+            inconsistent_reason: None,
+            cause: None,
+        },
+        SkipReason::InconsistentRecord(reason) => SkipReasonTerms {
+            reason: "inconsistent_record".to_string(),
+            detail: Some(reason.to_string()),
+            reason_kind: "inconsistent_record".to_string(),
+            record_type: None,
+            unit: None,
+            block: None,
+            inconsistent_reason: Some(reason.to_string()),
+            cause: None,
+        },
     }
 }
 
@@ -327,17 +645,23 @@ fn warning_kind(kind: WarningKind) -> String {
     .to_string()
 }
 
-fn diagnostics_term(diagnostics: Diagnostics) -> DiagnosticsTerm {
+pub(crate) fn diagnostics_term(diagnostics: Diagnostics) -> DiagnosticsTerm {
     DiagnosticsTerm {
         skips: diagnostics
             .skips
             .into_iter()
             .map(|skip| {
-                let (reason, detail) = skip_reason(skip.reason);
+                let mapped = skip_reason(skip.reason);
                 SkipTerm {
                     at: record_ref_term(skip.at),
-                    reason,
-                    detail,
+                    reason: mapped.reason,
+                    detail: mapped.detail,
+                    reason_kind: mapped.reason_kind,
+                    record_type: mapped.record_type,
+                    unit: mapped.unit,
+                    block: mapped.block,
+                    inconsistent_reason: mapped.inconsistent_reason,
+                    cause: mapped.cause,
                 }
             })
             .collect(),
@@ -929,6 +1253,20 @@ fn nmea_accumulator_finish<'a>(
         Ok(mut accumulator) => {
             let snapshot = accumulator.finish().map(snapshot_term);
             (atoms::ok(), snapshot).encode(env)
+        }
+        Err(_) => (atoms::error(), "NMEA accumulator lock poisoned").encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nmea_accumulator_finish_with_output<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<NmeaAccumulatorResource>,
+) -> Term<'a> {
+    match handle.accumulator.lock() {
+        Ok(mut accumulator) => {
+            let output = accumulator.finish_with_output();
+            (atoms::ok(), chunk_output_term(output)).encode(env)
         }
         Err(_) => (atoms::error(), "NMEA accumulator lock poisoned").encode(env),
     }

@@ -52,7 +52,10 @@ defmodule Sidereon.GNSS.PPPCorrectionsTest do
           fhr = i["fhr_hours"]["value"]
           [ex, ey, ez] = case["expected"]["dxtide_m"]["values"]
 
-          {gx, gy, gz} = Sidereon.NIF.solid_earth_tide(sx, sy, sz, y, mo, d, fhr, xsun, xmon)
+          # DEHANTTIDEINEL carries its own Step 2 constants, which the core
+          # keeps as `:iers_routine` for bit-level comparison with it.
+          {:ok, {gx, gy, gz}} =
+            Sidereon.solid_earth_tide({sx, sy, sz}, y, mo, d, fhr, xsun, xmon, constants: :iers_routine)
 
           assert_in_delta gx, ex, 1.0e-9
           assert_in_delta gy, ey, 1.0e-9
@@ -95,6 +98,25 @@ defmodule Sidereon.GNSS.PPPCorrectionsTest do
       %{sp3: sp3, epochs: epochs, approx: approx, antex: antex}
     end
 
+    test "explicit tide constants preserve the default and select the IERS routine", ctx do
+      default_options = %{solid_earth_tide: true}
+      conventions_options = Map.put(default_options, :solid_earth_tide_constants, :conventions)
+      routine_options = Map.put(default_options, :solid_earth_tide_constants, :iers_routine)
+
+      assert {:ok, default_corrections} =
+               PPPCorrections.build(ctx.sp3, ctx.epochs, ctx.approx, default_options)
+
+      assert {:ok, conventions_corrections} =
+               PPPCorrections.build(ctx.sp3, ctx.epochs, ctx.approx, conventions_options)
+
+      assert default_corrections == conventions_corrections
+
+      assert {:ok, routine_corrections} =
+               PPPCorrections.build(ctx.sp3, ctx.epochs, ctx.approx, routine_options)
+
+      assert map_size(routine_corrections.tide) == length(ctx.epochs)
+    end
+
     test "solid-earth tide table matches the NIF kernel per epoch", ctx do
       {:ok, c} = PPPCorrections.build(ctx.sp3, ctx.epochs, ctx.approx, %{solid_earth_tide: true})
       assert map_size(c.tide) > 0
@@ -104,7 +126,7 @@ defmodule Sidereon.GNSS.PPPCorrectionsTest do
         {sun, moon} = Sidereon.NIF.sun_moon_ecef(naive_to_tuple(epoch))
         {{y, mo, d}, {h, mi, s}} = naive_to_ymd_hms(epoch)
         fhr = h + mi / 60.0 + s / 3600.0
-        {ex, ey, ez} = Sidereon.NIF.solid_earth_tide(rx, ry, rz, y, mo, d, fhr, sun, moon)
+        {:ok, {ex, ey, ez}} = Sidereon.solid_earth_tide({rx, ry, rz}, y, mo, d, fhr, sun, moon)
         {gx, gy, gz} = d_tide
         assert_in_delta gx, ex, 1.0e-12
         assert_in_delta gy, ey, 1.0e-12

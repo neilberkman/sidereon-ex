@@ -1,0 +1,167 @@
+{
+  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b positioning::solve_static",
+  "receiver_truth_m": [
+    "0x41512a8800000000",
+    "0x411e848000000000",
+    "0x41512a8800000000"
+  ],
+  "initial_position_m": [
+    "0x4150c8e000000000",
+    "0x41186a0000000000",
+    "0x4150c8e000000000"
+  ],
+  "epochs": [
+    {
+      "epoch": "2020-06-24T12:00:00",
+      "observations": [
+        [
+          "G10",
+          "0x4175a6225a2e229b"
+        ],
+        [
+          "G16",
+          "0x417378eee3b0e168"
+        ],
+        [
+          "G18",
+          "0x4174bfe64a32048c"
+        ],
+        [
+          "G20",
+          "0x417440f4a996ece1"
+        ],
+        [
+          "G21",
+          "0x4173cebc7b1b7c15"
+        ],
+        [
+          "G26",
+          "0x41741be8d3a00dfd"
+        ],
+        [
+          "G27",
+          "0x417448acef88055b"
+        ]
+      ]
+    },
+    {
+      "epoch": "2020-06-24T12:15:00",
+      "observations": [
+        [
+          "G10",
+          "0x4175314c8c359e37"
+        ],
+        [
+          "G16",
+          "0x41737dcfafbff27b"
+        ],
+        [
+          "G18",
+          "0x417530fee93becb0"
+        ],
+        [
+          "G20",
+          "0x4174226cfa91155b"
+        ],
+        [
+          "G21",
+          "0x4173f9c3c96428dd"
+        ],
+        [
+          "G26",
+          "0x41748269fc988002"
+        ],
+        [
+          "G27",
+          "0x4173fe7680116df7"
+        ]
+      ]
+    },
+    {
+      "epoch": "2020-06-24T12:30:00",
+      "observations": [
+        [
+          "G10",
+          "0x4174cc68e1650b94"
+        ],
+        [
+          "G16",
+          "0x41739ac9f66c9e7c"
+        ],
+        [
+          "G18",
+          "0x4175aacd57e2341a"
+        ],
+        [
+          "G20",
+          "0x41741c53138751a4"
+        ],
+        [
+          "G21",
+          "0x4174310b7874d115"
+        ],
+        [
+          "G26",
+          "0x4174f931bae825ac"
+        ],
+        [
+          "G27",
+          "0x4173c016be070462"
+        ]
+      ]
+    }
+  ],
+  "solution": {
+    "position_m": [
+      "0x41512a8800004b44",
+      "0x411e847fffffb077",
+      "0x41512a87ffffeedd"
+    ],
+    "geodetic": {
+      "lat_rad": "0x3fe9244bae9b52d1",
+      "lon_rad": "0x3fbc54081a014fc0",
+      "height_m": "0x40cf6ca08952ae0f"
+    },
+    "per_epoch_clock": [
+      {
+        "epoch_index": 0,
+        "system": "G",
+        "clock_s": "0x3d33df46997cea67"
+      },
+      {
+        "epoch_index": 1,
+        "system": "G",
+        "clock_s": "0x3d2273bf42cebd8e"
+      },
+      {
+        "epoch_index": 2,
+        "system": "G",
+        "clock_s": "0x3d18f6ac206a4873"
+      }
+    ],
+    "status": "SelectionSettled",
+    "iterations": 11,
+    "converged": true,
+    "used_measurements": 21,
+    "n_parameters": 6,
+    "redundancy": 15,
+    "residual_rms_m": "0x3eef9bc64b77ced7",
+    "covariance_position_ecef_m2": [
+      [
+        "0x4051cf0e9a4b3000",
+        "0x4038e4c7c2822087",
+        "0x404cc14d983d9e7a"
+      ],
+      [
+        "0x4038e4c7c2822087",
+        "0x4035071c7fed2c56",
+        "0x4037e6d35460cb1b"
+      ],
+      [
+        "0x404cc14d983d9e7a",
+        "0x4037e6d35460cb1b",
+        "0x40500307528fc1df"
+      ]
+    ]
+  }
+}

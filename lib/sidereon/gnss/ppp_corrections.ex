@@ -23,12 +23,14 @@ defmodule Sidereon.GNSS.PPPCorrections do
   @type vec3 :: {float(), float(), float()}
 
   @type t :: %{
-          tide: %{optional(NaiveDateTime.t()) => vec3()},
-          windup_m: %{optional({String.t(), NaiveDateTime.t()}) => float()},
-          sat_pco_ecef: %{optional({String.t(), NaiveDateTime.t()}) => vec3()},
-          sat_pcv_m: %{optional({String.t(), NaiveDateTime.t()}) => float()},
-          pole_tide: %{optional(NaiveDateTime.t()) => vec3()},
-          ocean_loading: %{optional(NaiveDateTime.t()) => vec3()}
+          required(:tide) => %{optional(NaiveDateTime.t()) => vec3()},
+          required(:windup_m) => %{optional({String.t(), NaiveDateTime.t()}) => float()},
+          required(:sat_pco_ecef) => %{optional({String.t(), NaiveDateTime.t()}) => vec3()},
+          required(:sat_pcv_m) => %{optional({String.t(), NaiveDateTime.t()}) => float()},
+          required(:pole_tide) => %{optional(NaiveDateTime.t()) => vec3()},
+          required(:ocean_loading) => %{optional(NaiveDateTime.t()) => vec3()},
+          optional(:valid) => boolean(),
+          optional(:degraded) => :before_coverage | :after_coverage | nil
         }
 
   @doc """
@@ -46,6 +48,8 @@ defmodule Sidereon.GNSS.PPPCorrections do
       rows (radial, west, south) of constituent coefficients, to add the ocean
       tide loading displacement (folded into the `tide` table). The engine does
       not embed BLQ data; the caller supplies the per-station block.
+    * `:validity` - `:strict` (default) or `:permissive` for UT1 table coverage.
+    * `:solid_earth_tide_constants` - `:conventions` (default) or `:iers_routine`.
 
   `ref_pos` is the reference receiver ECEF `{x,y,z}` (the solve seed/approx).
   """
@@ -58,10 +62,12 @@ defmodule Sidereon.GNSS.PPPCorrections do
          {:ok, sat_ant_term} <- satellite_antenna_term(Map.get(config, :satellite_antenna)),
          {:ok, pole_tide_term} <- pole_tide_term(Map.get(config, :pole_tide)),
          {:ok, ocean_loading_term} <- ocean_loading_term(Map.get(config, :ocean_loading)),
+         {:ok, validity} <- validity_mode(Map.get(config, :validity, :strict)),
+         {:ok, tide_constants} <- tide_constants(Map.get(config, :solid_earth_tide_constants, :conventions)),
          {:ok, core_epochs} <- epoch_terms(epochs, windup? and is_nil(sat_ant_term)) do
       if not tide? and not windup? and is_nil(sat_ant_term) and is_nil(pole_tide_term) and
            is_nil(ocean_loading_term) do
-        {:ok, empty()}
+        {:ok, if(Map.has_key?(config, :validity), do: Map.merge(empty(), %{valid: true, degraded: nil}), else: empty())}
       else
         case NIF.ppp_corrections_build(
                handle,
@@ -71,20 +77,30 @@ defmodule Sidereon.GNSS.PPPCorrections do
                windup?,
                sat_ant_term,
                pole_tide_term,
-               ocean_loading_term
+               ocean_loading_term,
+               validity,
+               tide_constants
              ) do
-          {:ok, {tide, windup_m, sat_pco_ecef, sat_pcv_m, pole_tide, ocean_loading}} ->
+          {:ok, {tide, windup_m, sat_pco_ecef, sat_pcv_m, pole_tide, ocean_loading, degraded}} ->
             epoch_by_index = epoch_index(epochs)
 
-            {:ok,
-             %{
-               tide: tide_map(tide, epoch_by_index),
-               windup_m: sat_scalar_map(windup_m, epoch_by_index),
-               sat_pco_ecef: sat_vector_map(sat_pco_ecef, epoch_by_index),
-               sat_pcv_m: sat_scalar_map(sat_pcv_m, epoch_by_index),
-               pole_tide: tide_map(pole_tide, epoch_by_index),
-               ocean_loading: tide_map(ocean_loading, epoch_by_index)
-             }}
+            result = %{
+              tide: tide_map(tide, epoch_by_index),
+              windup_m: sat_scalar_map(windup_m, epoch_by_index),
+              sat_pco_ecef: sat_vector_map(sat_pco_ecef, epoch_by_index),
+              sat_pcv_m: sat_scalar_map(sat_pcv_m, epoch_by_index),
+              pole_tide: tide_map(pole_tide, epoch_by_index),
+              ocean_loading: tide_map(ocean_loading, epoch_by_index)
+            }
+
+            result =
+              if Map.has_key?(config, :validity) do
+                Map.merge(result, %{valid: is_nil(degraded), degraded: degrade_reason(degraded)})
+              else
+                result
+              end
+
+            {:ok, result}
 
           {:error, _reason} = err ->
             err
@@ -110,6 +126,18 @@ defmodule Sidereon.GNSS.PPPCorrections do
   end
 
   defp normalize_config(_config), do: {:error, {:invalid_argument, :config}}
+
+  defp validity_mode(:strict), do: {:ok, "strict"}
+  defp validity_mode(:permissive), do: {:ok, "permissive"}
+  defp validity_mode(_), do: {:error, {:invalid_argument, :validity}}
+
+  defp tide_constants(:conventions), do: {:ok, "conventions"}
+  defp tide_constants(:iers_routine), do: {:ok, "iers_routine"}
+  defp tide_constants(_), do: {:error, {:invalid_argument, :solid_earth_tide_constants}}
+
+  defp degrade_reason("before_coverage"), do: :before_coverage
+  defp degrade_reason("after_coverage"), do: :after_coverage
+  defp degrade_reason(_), do: nil
 
   defp boolean_option(config, key, default) do
     case Map.get(config, key, default) do
@@ -171,9 +199,8 @@ defmodule Sidereon.GNSS.PPPCorrections do
 
   defp epoch_term(%{epoch: %NaiveDateTime{} = epoch, observations: observations}, needs_frequency?)
        when is_list(observations) do
-    with {:ok, observation_terms} <- observation_terms(observations, needs_frequency?) do
-      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
-
+    with {:ok, observation_terms} <- observation_terms(observations, needs_frequency?),
+         {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
       {:ok, {Epoch.datetime_tuple(epoch), jd_whole, jd_fraction, observation_terms}}
     end
   end

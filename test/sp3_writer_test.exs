@@ -48,8 +48,8 @@ defmodule Sidereon.GNSS.SP3WriterTest do
           {"E11", [17_000.0, -22_000.0, 7000.0], 300.0}
         ])
 
-      text = sp3 |> SP3.to_iodata() |> IO.iodata_to_binary()
-      assert {:ok, reparsed} = SP3.parse(text)
+      assert {:ok, iodata} = SP3.to_iodata(sp3)
+      assert {:ok, reparsed} = SP3.parse(IO.iodata_to_binary(iodata))
 
       assert Enum.sort(SP3.satellite_ids(reparsed)) == ["E11", "G01", "G02"]
       assert SP3.satellite_ids(reparsed) == SP3.satellite_ids(sp3)
@@ -58,8 +58,8 @@ defmodule Sidereon.GNSS.SP3WriterTest do
     test "is deterministic (same product -> identical bytes)" do
       {:ok, sp3} = parse!([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}])
 
-      a = IO.iodata_to_binary(SP3.to_iodata(sp3))
-      b = IO.iodata_to_binary(SP3.to_iodata(sp3))
+      assert {:ok, a} = SP3.to_sp3_string(sp3)
+      assert {:ok, b} = SP3.to_sp3_string(sp3)
       assert a == b
     end
   end
@@ -86,7 +86,10 @@ defmodule Sidereon.GNSS.SP3WriterTest do
 
       on_exit(fn -> File.rm(path) end)
 
-      File.write!(path, IO.iodata_to_binary(SP3.to_iodata(merged)))
+      # Both centers give identical values, so the mean combine holds values the
+      # record columns state exactly and the writer accepts the product.
+      assert {:ok, text} = SP3.to_sp3_string(merged)
+      File.write!(path, text)
       assert {:ok, loaded} = SP3.load(path)
 
       # Union coverage survives the round trip to a single standard file: G03,

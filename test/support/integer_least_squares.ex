@@ -2,6 +2,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquares do
   @moduledoc false
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @doc """
   Integer least squares via the LAMBDA method (RTKLIB `lambda()` port).
@@ -27,7 +28,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquares do
       |> build_result(ids, float_cycles_by_id, :lambda)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ils_lambda_search)
   end
 
   @doc """
@@ -58,7 +59,7 @@ defmodule Sidereon.TestSupport.IntegerLeastSquares do
       |> build_result(ids, float_cycles_by_id, :bounded_ils)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ils_search)
   end
 
   # Reject malformed dimensions BEFORE the NIF: an undersized covariance would

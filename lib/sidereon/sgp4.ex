@@ -4,28 +4,48 @@ defmodule Sidereon.SGP4 do
   """
 
   alias Sidereon.Elements
+  alias Sidereon.NifCall
   alias Sidereon.TemeState
 
   defmodule Fit do
     @moduledoc """
     Result of inverse SGP4 TLE fitting.
     """
-    @enforce_keys [:elements, :line1, :line2, :omm_kvn, :stats]
-    defstruct [:elements, :line1, :line2, :omm_kvn, :stats]
+    @enforce_keys [
+      :elements,
+      :omm,
+      :line1,
+      :line2,
+      :omm_kvn,
+      :omm_exact_sgp4_epoch,
+      :omm_quantize_tle_derived_fields,
+      :stats
+    ]
+    defstruct [
+      :elements,
+      :omm,
+      :line1,
+      :line2,
+      :omm_kvn,
+      :omm_exact_sgp4_epoch,
+      :omm_quantize_tle_derived_fields,
+      :stats
+    ]
 
     @type t :: %__MODULE__{
             elements: map(),
+            omm: map(),
             line1: String.t(),
             line2: String.t(),
-            omm_kvn: String.t(),
+            omm_kvn: String.t() | nil,
+            omm_exact_sgp4_epoch: {float(), float()} | nil,
+            omm_quantize_tle_derived_fields: boolean(),
             stats: map()
           }
   end
 
   @required_float_fields [
     :bstar,
-    :mean_motion_dot,
-    :mean_motion_double_dot,
     :eccentricity,
     :arg_perigee_deg,
     :inclination_deg,
@@ -141,12 +161,23 @@ defmodule Sidereon.SGP4 do
   @spec fit_tle([map()], keyword()) :: {:ok, Fit.t()} | {:error, term()}
   def fit_tle(samples, opts \\ []) when is_list(samples) do
     case Sidereon.NIF.sgp4_fit_tle(Enum.map(samples, &fit_sample/1), fit_config(opts)) do
-      {:ok, fit} -> {:ok, decode_fit(fit)}
-      {:error, {:did_not_converge, fit}} -> {:error, {:did_not_converge, decode_fit(fit)}}
-      {:error, _reason} = err -> err
+      {:ok, fit} ->
+        {:ok, decode_fit(fit)}
+
+      {:error, {:did_not_converge, {:omm_kvn, reason, fit}}} ->
+        {:error, {:did_not_converge, {:omm_kvn, reason, decode_fit(fit)}}}
+
+      {:error, {:did_not_converge, fit}} ->
+        {:error, {:did_not_converge, decode_fit(fit)}}
+
+      {:error, {:omm_kvn, reason, fit}} ->
+        {:error, {:omm_kvn, reason, decode_fit(fit)}}
+
+      {:error, _reason} = err ->
+        err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sgp4_fit_tle)
   end
 
   defp to_nif_elements_maps(satellites) do
@@ -217,9 +248,12 @@ defmodule Sidereon.SGP4 do
   defp decode_fit(fit) do
     %Fit{
       elements: fit.elements,
+      omm: fit.omm,
       line1: fit.line1,
       line2: fit.line2,
       omm_kvn: fit.omm_kvn,
+      omm_exact_sgp4_epoch: fit.omm_exact_sgp4_epoch,
+      omm_quantize_tle_derived_fields: fit.omm_quantize_tle_derived_fields,
       stats: fit.stats
     }
   end
@@ -278,6 +312,8 @@ defmodule Sidereon.SGP4 do
       {:ok,
        %{
          catalog_number: fields.catalog_number,
+         epoch_jd: epoch_jd_term(tle.epoch_jd),
+         omm_epoch_days: tle.omm_epoch_days,
          bstar: fields.bstar,
          mean_motion_dot: fields.mean_motion_dot,
          mean_motion_double_dot: fields.mean_motion_double_dot,
@@ -293,11 +329,18 @@ defmodule Sidereon.SGP4 do
     end
   end
 
+  # The core's split Julian date of the epoch, which the native side uses in
+  # place of the epoch year and day when set.
+  defp epoch_jd_term(nil), do: nil
+
+  defp epoch_jd_term(%{jd_whole: whole, jd_fraction: fraction}) when is_number(whole) and is_number(fraction),
+    do: {whole / 1.0, fraction / 1.0}
+
   @doc false
   @spec validate_elements(Elements.t()) :: {:ok, map()} | {:error, element_error()}
   def validate_elements(%Elements{} = tle) do
     with {:ok, epoch} <- required_datetime(tle, :epoch),
-         {:ok, catalog_number} <- required_catalog_number(tle, :catalog_number),
+         {:ok, catalog_number} <- catalog_number_field(tle, :catalog_number),
          {:ok, floats} <- required_float_fields(tle) do
       {:ok, Map.merge(%{epoch: epoch, catalog_number: catalog_number}, floats)}
     end
@@ -317,10 +360,12 @@ defmodule Sidereon.SGP4 do
     end
   end
 
-  defp required_catalog_number(tle, field) do
+  defp catalog_number_field(tle, field) do
     case Map.fetch!(tle, field) do
+      # SGP4 propagates without a catalog number; elements whose source states
+      # none carry `nil`.
       nil ->
-        {:error, {:missing_field, field}}
+        {:ok, nil}
 
       value when is_binary(value) ->
         catalog_number = String.trim(value)
@@ -336,8 +381,29 @@ defmodule Sidereon.SGP4 do
     end
   end
 
+  # SGP4 stores the mean-motion derivatives with the element set but does not
+  # propagate with them, so an unstated derivative (`nil`) is carried as unstated
+  # and propagates exactly as a stated zero does.
+  @optional_float_fields [:mean_motion_dot, :mean_motion_double_dot]
+
   defp required_float_fields(tle) do
-    Enum.reduce_while(@required_float_fields, {:ok, %{}}, fn field, {:ok, acc} ->
+    optional =
+      Enum.reduce_while(@optional_float_fields, {:ok, %{}}, fn field, {:ok, acc} ->
+        case Map.fetch!(tle, field) do
+          nil -> {:cont, {:ok, Map.put(acc, field, nil)}}
+          value when is_float(value) -> {:cont, {:ok, Map.put(acc, field, value)}}
+          value when is_integer(value) -> {:cont, {:ok, Map.put(acc, field, value * 1.0)}}
+          value -> {:halt, {:error, {:invalid_field, field, value}}}
+        end
+      end)
+
+    with {:ok, optional} <- optional do
+      required_float_fields(tle, optional)
+    end
+  end
+
+  defp required_float_fields(tle, initial) do
+    Enum.reduce_while(@required_float_fields, {:ok, initial}, fn field, {:ok, acc} ->
       case required_float(tle, field) do
         {:ok, value} -> {:cont, {:ok, Map.put(acc, field, value)}}
         {:error, reason} -> {:halt, {:error, reason}}

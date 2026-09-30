@@ -359,6 +359,23 @@ defmodule Sidereon.GNSS.DataPublicationResilienceTest do
       # Cache-first: the second acquisition never touches FTP.
       assert {:ok, _again} = Data.acquire(request, cache_dir: tmp, ftp_client: ftp_client)
       refute_received {:ftp, _}
+
+      # Meaningful mismatch refusal: header start differing from requested is refused.
+      mismatched_content =
+        ExactSp3Fixture.build(~D[2026-08-03],
+          agency: "WHU",
+          issue: "0600",
+          span_s: 172_800
+        )
+
+      mismatched_archive = :zlib.gzip(mismatched_content)
+      mismatched_ftp = fn _url, _opts -> {:ok, mismatched_archive} end
+
+      assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, _reason}}} =
+               Data.acquire(request,
+                 cache_dir: Path.join(tmp, "mismatched"),
+                 ftp_client: mismatched_ftp
+               )
     end
 
     test "an absent FTP issue degrades a merge batch as a typed absence, never a halt" do

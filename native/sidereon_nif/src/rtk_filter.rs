@@ -9,8 +9,10 @@ use crate::geometry_quality::geometry_quality_to_term;
 use crate::rinex_obs::RinexObsResource;
 use crate::sp3::Sp3Resource;
 use crate::spp::atom_from;
+use crate::time::ExactEpochResource;
 use rustler::types::{atom, tuple::make_tuple};
 use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
+use sidereon_core::astro::time::ExactEpoch;
 use sidereon_core::carrier_phase::{SlipReason, FREQ_EPSILON_HZ};
 use sidereon_core::combinations::IonosphereFreeError;
 use sidereon_core::positioning::{
@@ -42,12 +44,12 @@ use sidereon_core::rtk_filter::{
     RtkDualCycleSlipConfig, RtkDualFrequencyArcEpoch, RtkDualFrequencyObservation,
     RtkDualFrequencySatelliteObservation, RtkIonosphereFreeArcConfig, RtkIonosphereFreeArcError,
     RtkIonosphereFreeArcSolution, RtkRinexArc, RtkRinexArcError, RtkRinexArcOptions,
-    RtkRinexDualArcOptions, RtkRinexDualFrequencyArc, RtkRinexDualSignalPair, RtkRinexSignalPair,
-    RtkStaticArcConfig, RtkStaticArcError, RtkStaticArcSolution, RtkWideLaneArcConfig,
-    RtkWideLaneArcError, RtkWideLaneArcSolution, RtkWideLaneFixedArcConfig,
-    RtkWideLaneFixedArcError, RtkWideLaneFixedArcIntegerMethod, RtkWideLaneFixedArcMetadata,
-    RtkWideLaneFixedArcSolution, RtkWideLaneFixedArcSolveConfig, SatMeas, SearchOpts,
-    StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
+    RtkRinexDualArcOptions, RtkRinexDualFrequencyArc, RtkRinexDualSignalPair, RtkRinexReceiver,
+    RtkRinexSignalPair, RtkRinexUnresolvedCarrier, RtkStaticArcConfig, RtkStaticArcError,
+    RtkStaticArcSolution, RtkWideLaneArcConfig, RtkWideLaneArcError, RtkWideLaneArcSolution,
+    RtkWideLaneFixedArcConfig, RtkWideLaneFixedArcError, RtkWideLaneFixedArcIntegerMethod,
+    RtkWideLaneFixedArcMetadata, RtkWideLaneFixedArcSolution, RtkWideLaneFixedArcSolveConfig,
+    SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts, ValidatedFixedBaselineSolution,
     ValidatedFixedSolveError, ValidatedFixedSolveOpts, WideLaneError, WideLaneOptions,
 };
 use sidereon_core::GnssSystem;
@@ -103,15 +105,6 @@ type MbFixedOptsTerm = (f64, f64, usize, f64, bool, usize);
 // Sequence opts: model, float, fixed, initial baseline, warm-start.
 type MbOptsTerm = (ModelTerm, MbFloatOptsTerm, MbFixedOptsTerm, Vec3, bool);
 type ArcObservationOutputTerm = (String, String, f64, f64, Option<i64>);
-type PreprocessedArcEpochTerm = (
-    Vec<ArcObservationOutputTerm>,
-    Vec<ArcObservationOutputTerm>,
-    Vec<(String, Vec3)>,
-    Vec<(String, Vec3)>,
-    Vec<(String, Vec3)>,
-    Option<Vec3>,
-    Option<f64>,
-);
 type ArcScaleTerm = (String, f64, Vec<(String, f64)>);
 
 /// Owned per-epoch storage so the borrowing `MovingBaselineEpoch`/`AmbiguitySet`
@@ -205,8 +198,9 @@ mod atoms {
         invalid_observation,
         no_signal_pairs,
         no_usable_epochs,
-        missing_frequency,
         ephemeris_failed,
+        base,
+        rover,
         rinex_observation_failed,
         unsupported_multi_gnss
     }
@@ -1081,7 +1075,7 @@ struct RtkArcPreprocessingTerm {
     elevation_mask_deg: Option<f64>,
 }
 
-#[derive(Debug, Clone, rustler::NifMap)]
+#[derive(Clone, rustler::NifMap)]
 struct RtkArcEpochTerm {
     base: Vec<RtkArcObservationTerm>,
     rover: Vec<RtkArcObservationTerm>,
@@ -1090,6 +1084,7 @@ struct RtkArcEpochTerm {
     rover_satellite_positions_m: Vec<(String, Vec3)>,
     velocity_mps: Option<Vec3>,
     prediction_time_s: Option<f64>,
+    prediction_epoch: Option<ResourceArc<ExactEpochResource>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -1149,18 +1144,20 @@ struct RtkDualFrequencySatelliteObservationTerm {
     rover: RtkDualFrequencyObservationTerm,
 }
 
-#[derive(Debug, Clone, rustler::NifMap)]
+#[derive(Clone, rustler::NifMap)]
 struct RtkDualFrequencyArcEpochTerm {
     jd_whole: f64,
     jd_fraction: f64,
     epoch_sort_key: Option<String>,
     gap_time_s: Option<f64>,
+    gap_epoch: Option<ResourceArc<ExactEpochResource>>,
     observations: Vec<RtkDualFrequencySatelliteObservationTerm>,
     satellite_positions_m: Vec<(String, Vec3)>,
     base_satellite_positions_m: Vec<(String, Vec3)>,
     rover_satellite_positions_m: Vec<(String, Vec3)>,
     velocity_mps: Option<Vec3>,
     prediction_time_s: Option<f64>,
+    prediction_epoch: Option<ResourceArc<ExactEpochResource>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -1274,6 +1271,10 @@ fn encode_rinex_arc_observation(observation: &RtkArcObservation) -> RtkArcObserv
     }
 }
 
+fn encode_exact_epoch_resource(epoch: ExactEpoch) -> ResourceArc<ExactEpochResource> {
+    ResourceArc::new(ExactEpochResource { epoch })
+}
+
 fn encode_rinex_arc_epoch(epoch: &RtkArcEpoch) -> RtkArcEpochTerm {
     RtkArcEpochTerm {
         base: epoch
@@ -1291,6 +1292,7 @@ fn encode_rinex_arc_epoch(epoch: &RtkArcEpoch) -> RtkArcEpochTerm {
         rover_satellite_positions_m: encode_position_map(epoch.rover_satellite_positions_m.clone()),
         velocity_mps: epoch.velocity_mps.map(tuple3),
         prediction_time_s: epoch.prediction_time_s,
+        prediction_epoch: epoch.prediction_epoch.map(encode_exact_epoch_resource),
     }
 }
 
@@ -1328,6 +1330,7 @@ fn encode_rinex_dual_frequency_arc_epoch(
         jd_fraction: epoch.jd_fraction,
         epoch_sort_key: epoch.epoch_sort_key.clone(),
         gap_time_s: epoch.gap_time_s,
+        gap_epoch: epoch.gap_epoch.map(encode_exact_epoch_resource),
         observations: epoch
             .observations
             .iter()
@@ -1338,6 +1341,7 @@ fn encode_rinex_dual_frequency_arc_epoch(
         rover_satellite_positions_m: encode_position_map(epoch.rover_satellite_positions_m.clone()),
         velocity_mps: epoch.velocity_mps.map(tuple3),
         prediction_time_s: epoch.prediction_time_s,
+        prediction_epoch: epoch.prediction_epoch.map(encode_exact_epoch_resource),
     }
 }
 
@@ -1442,6 +1446,16 @@ pub fn rtk_rinex_arc_skipped_epoch_count(handle: ResourceArc<RtkRinexArcResource
     handle.arc.skipped_epoch_count
 }
 
+/// Return the satellite measurements the single-frequency builder left out
+/// because no configured phase observable had a carrier frequency.
+#[rustler::nif]
+pub fn rtk_rinex_arc_unresolved_carriers<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<RtkRinexArcResource>,
+) -> Term<'a> {
+    encode_rinex_unresolved_carriers(env, &handle.arc.unresolved_carriers)
+}
+
 /// Return all core-generated dual-frequency RINEX RTK arc epochs.
 #[rustler::nif]
 pub fn rtk_rinex_dual_frequency_arc_epochs<'a>(
@@ -1471,6 +1485,16 @@ pub fn rtk_rinex_dual_frequency_arc_skipped_epoch_count(
     handle: ResourceArc<RtkRinexDualFrequencyArcResource>,
 ) -> usize {
     handle.arc.skipped_epoch_count
+}
+
+/// Return the satellite measurements the dual-frequency builder left out
+/// because no configured phase-observable pair had both carrier frequencies.
+#[rustler::nif]
+pub fn rtk_rinex_dual_frequency_arc_unresolved_carriers<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<RtkRinexDualFrequencyArcResource>,
+) -> Term<'a> {
+    encode_rinex_unresolved_carriers(env, &handle.arc.unresolved_carriers)
 }
 
 /// Solve a sequential RTK baseline arc from raw rover+base epochs.
@@ -1558,9 +1582,11 @@ pub fn rtk_prepare_ionosphere_free_arc<'a>(
 
     Ok(
         match prepare_ionosphere_free_rtk_arc(&epochs, &wide_lane_cycles, &config) {
-            Ok(solution) => {
-                (atoms::ok(), encode_ionosphere_free_arc_solution(solution)).encode(env)
-            }
+            Ok(solution) => (
+                atoms::ok(),
+                encode_ionosphere_free_arc_solution(env, solution),
+            )
+                .encode(env),
             Err(error) => {
                 (atoms::error(), encode_ionosphere_free_arc_error(env, error)).encode(env)
             }
@@ -1602,6 +1628,7 @@ pub fn rtk_solve_static_rinex_baseline<'a>(
                     encode_static_arc_solution(env, solution),
                     skipped_epoch_count.encode(env),
                     epoch_count.encode(env),
+                    encode_rinex_unresolved_carriers(env, &arc.unresolved_carriers),
                 ],
             ),
         )
@@ -1713,6 +1740,7 @@ pub fn rtk_solve_wide_lane_fixed_rinex_baseline<'a>(
                     encode_wide_lane_fixed_metadata(env, solution.metadata),
                     skipped_epoch_count.encode(env),
                     epoch_count.encode(env),
+                    encode_rinex_unresolved_carriers(env, &arc.unresolved_carriers),
                 ],
             ),
         )
@@ -1745,7 +1773,7 @@ pub fn rtk_preprocess_arc_epochs<'a>(
             Ok((prepared, dropped_sats, split_cycle_slip_arcs, elevation_masked_sats)) => (
                 atoms::ok(),
                 (
-                    encode_preprocessed_arc_epochs(prepared),
+                    encode_preprocessed_arc_epochs(env, prepared),
                     dropped_sats,
                     encode_arc_split_cycle_slip_arcs(split_cycle_slip_arcs),
                     elevation_masked_sats,
@@ -2198,8 +2226,21 @@ fn encode_static_reference_solution<'a>(
                 .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
                 .collect::<Vec<_>>()
                 .encode(env),
+            encode_ut1_degraded(env, solution.ut1_degraded),
         ],
     )
+}
+
+/// `nil`, or the side of the UT1 table a satellite state was read outside
+/// under a permissive UT1 policy.
+fn encode_ut1_degraded<'a>(
+    env: Env<'a>,
+    degraded: Option<sidereon_core::astro::time::DegradeReason>,
+) -> Term<'a> {
+    match degraded {
+        Some(reason) => crate::errors::degrade_reason_atom(reason).encode(env),
+        None => atom::nil().encode(env),
+    }
 }
 
 fn encode_optional_static_reference_code_solution<'a>(
@@ -2240,6 +2281,7 @@ fn encode_static_reference_code_solution<'a>(
                 .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
                 .collect::<Vec<_>>()
                 .encode(env),
+            encode_ut1_degraded(env, solution.ut1_degraded),
         ],
     )
 }
@@ -2264,6 +2306,7 @@ fn encode_static_reference_carrier_solution<'a>(
                 .map(|diagnostic| encode_static_reference_diagnostic(env, diagnostic))
                 .collect::<Vec<_>>()
                 .encode(env),
+            encode_ut1_degraded(env, solution.ut1_degraded),
         ],
     )
 }
@@ -2428,6 +2471,9 @@ fn encode_static_reference_mode_error<'a>(
             satellite_id,
         )
             .encode(env),
+        StaticReferenceModeError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, *reason)
+        }
     }
 }
 
@@ -2455,6 +2501,8 @@ fn decode_dual_frequency_arc_epoch(term: RtkDualFrequencyArcEpochTerm) -> RtkDua
         rover_satellite_positions_m: decode_position_map(term.rover_satellite_positions_m),
         velocity_mps: term.velocity_mps.map(vec3),
         prediction_time_s: term.prediction_time_s,
+        gap_epoch: term.gap_epoch.map(|handle| handle.epoch),
+        prediction_epoch: term.prediction_epoch.map(|handle| handle.epoch),
     }
 }
 
@@ -2763,6 +2811,11 @@ fn encode_dual_frequency_arc_epoch<'a>(env: Env<'a>, epoch: RtkDualFrequencyArcE
             encode_position_map(epoch.rover_satellite_positions_m).encode(env),
             epoch.velocity_mps.map(tuple3).encode(env),
             epoch.prediction_time_s.encode(env),
+            epoch.gap_epoch.map(encode_exact_epoch_resource).encode(env),
+            epoch
+                .prediction_epoch
+                .map(encode_exact_epoch_resource)
+                .encode(env),
         ],
     )
 }
@@ -2802,20 +2855,17 @@ fn encode_dual_frequency_observation<'a>(
 }
 
 #[allow(clippy::type_complexity)]
-fn encode_ionosphere_free_arc_solution(
+fn encode_ionosphere_free_arc_solution<'a>(
+    env: Env<'a>,
     solution: RtkIonosphereFreeArcSolution,
-) -> (
-    Vec<(String, String)>,
-    Vec<PreprocessedArcEpochTerm>,
-    Vec<(String, f64)>,
-    Vec<(String, f64)>,
-) {
+) -> Term<'a> {
     (
-        solution.references.into_iter().collect(),
-        encode_preprocessed_arc_epochs(solution.epochs),
-        solution.wavelengths_m.into_iter().collect(),
-        solution.offsets_m.into_iter().collect(),
+        solution.references.into_iter().collect::<Vec<_>>(),
+        encode_preprocessed_arc_epochs(env, solution.epochs),
+        solution.wavelengths_m.into_iter().collect::<Vec<_>>(),
+        solution.offsets_m.into_iter().collect::<Vec<_>>(),
     )
+        .encode(env)
 }
 
 fn encode_rinex_arc_error<'a>(env: Env<'a>, error: RtkRinexArcError) -> Term<'a> {
@@ -2839,11 +2889,43 @@ fn encode_rinex_arc_error<'a>(env: Env<'a>, error: RtkRinexArcError) -> Term<'a>
             .encode(env),
         RtkRinexArcError::NoSignalPairs => atoms::no_signal_pairs().encode(env),
         RtkRinexArcError::NoUsableEpochs => atoms::no_usable_epochs().encode(env),
-        RtkRinexArcError::MissingFrequency {
-            satellite_id,
-            observable_code,
-        } => (atoms::missing_frequency(), satellite_id, observable_code).encode(env),
+        RtkRinexArcError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, reason)
+        }
     }
+}
+
+/// One satellite measurement a RINEX arc builder left out of an epoch because
+/// no configured phase observable had a carrier frequency, as
+/// `{receiver, epoch_index, satellite_id, observable_code}` with `receiver`
+/// `:base` or `:rover` and `epoch_index` the epoch's index in that receiver's
+/// file.
+fn encode_rinex_unresolved_carrier<'a>(
+    env: Env<'a>,
+    carrier: &RtkRinexUnresolvedCarrier,
+) -> Term<'a> {
+    let receiver = match carrier.receiver {
+        RtkRinexReceiver::Base => atoms::base(),
+        RtkRinexReceiver::Rover => atoms::rover(),
+    };
+    (
+        receiver,
+        carrier.epoch_index,
+        carrier.satellite_id.as_str(),
+        carrier.observable_code.as_str(),
+    )
+        .encode(env)
+}
+
+fn encode_rinex_unresolved_carriers<'a>(
+    env: Env<'a>,
+    carriers: &[RtkRinexUnresolvedCarrier],
+) -> Term<'a> {
+    carriers
+        .iter()
+        .map(|carrier| encode_rinex_unresolved_carrier(env, carrier))
+        .collect::<Vec<_>>()
+        .encode(env)
 }
 
 fn encode_wide_lane_fixed_metadata<'a>(
@@ -3147,6 +3229,7 @@ fn apply_binding_prepared_observations(
             rover_satellite_positions_m: orig.rover_satellite_positions_m.clone(),
             velocity_mps: orig.velocity_mps,
             prediction_time_s: orig.prediction_time_s,
+            prediction_epoch: orig.prediction_epoch,
         })
         .collect()
 }
@@ -3173,21 +3256,29 @@ fn thin_binding_epoch_to_kept(epoch: &RtkArcEpoch, kept: &[String]) -> RtkArcEpo
         rover_satellite_positions_m: filter_positions(&epoch.rover_satellite_positions_m),
         velocity_mps: epoch.velocity_mps,
         prediction_time_s: epoch.prediction_time_s,
+        prediction_epoch: epoch.prediction_epoch,
     }
 }
 
-fn encode_preprocessed_arc_epochs(epochs: Vec<RtkArcEpoch>) -> Vec<PreprocessedArcEpochTerm> {
+fn encode_preprocessed_arc_epochs<'a>(env: Env<'a>, epochs: Vec<RtkArcEpoch>) -> Vec<Term<'a>> {
     epochs
         .into_iter()
         .map(|epoch| {
-            (
-                encode_preprocessed_arc_observations(epoch.base),
-                encode_preprocessed_arc_observations(epoch.rover),
-                encode_position_map(epoch.satellite_positions_m),
-                encode_position_map(epoch.base_satellite_positions_m),
-                encode_position_map(epoch.rover_satellite_positions_m),
-                epoch.velocity_mps.map(tuple3),
-                epoch.prediction_time_s,
+            make_tuple(
+                env,
+                &[
+                    encode_preprocessed_arc_observations(epoch.base).encode(env),
+                    encode_preprocessed_arc_observations(epoch.rover).encode(env),
+                    encode_position_map(epoch.satellite_positions_m).encode(env),
+                    encode_position_map(epoch.base_satellite_positions_m).encode(env),
+                    encode_position_map(epoch.rover_satellite_positions_m).encode(env),
+                    epoch.velocity_mps.map(tuple3).encode(env),
+                    epoch.prediction_time_s.encode(env),
+                    epoch
+                        .prediction_epoch
+                        .map(encode_exact_epoch_resource)
+                        .encode(env),
+                ],
             )
         })
         .collect()
@@ -3226,6 +3317,7 @@ fn decode_arc_epoch(term: RtkArcEpochTerm) -> RtkArcEpoch {
         rover_satellite_positions_m: decode_position_map(term.rover_satellite_positions_m),
         velocity_mps: term.velocity_mps.map(vec3),
         prediction_time_s: term.prediction_time_s,
+        prediction_epoch: term.prediction_epoch.map(|handle| handle.epoch),
     }
 }
 
@@ -3495,6 +3587,7 @@ mod mapping_tests {
             rover_satellite_positions_m: BTreeMap::new(),
             velocity_mps: Some([7.0, 8.0, 9.0]),
             prediction_time_s: Some(10.0),
+            prediction_epoch: None,
         };
 
         let term = encode_rinex_arc_epoch(&epoch);
@@ -3538,6 +3631,8 @@ mod mapping_tests {
             rover_satellite_positions_m: BTreeMap::new(),
             velocity_mps: None,
             prediction_time_s: Some(10.0),
+            gap_epoch: None,
+            prediction_epoch: None,
         };
 
         let term = encode_rinex_dual_frequency_arc_epoch(&epoch);

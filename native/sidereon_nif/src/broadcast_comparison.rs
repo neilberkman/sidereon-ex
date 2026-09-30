@@ -87,7 +87,7 @@ fn broadcast_comparison<'a>(
     let window = CompareWindow {
         broadcast_window_j2000_s: (broadcast_t0_j2000_s, broadcast_t1_j2000_s),
         precise_start: JulianDateSplit::new(precise_start_jd_whole, precise_start_fraction)
-            .map_err(crate::errors::invalid_input)?,
+            .map_err(crate::tropo::time_model_error_detail)?,
         step_s,
         velocity_half_s,
     };

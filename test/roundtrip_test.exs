@@ -47,14 +47,10 @@ defmodule Sidereon.RoundtripTest do
         {:ok, el} = TLE.parse(l1, l2)
         {:ok, {gen_l1, gen_l2}} = TLE.encode(el)
 
-        # Line 2 should be exact
+        # Both lines are restated exactly: the assumed-decimal fields keep the
+        # text they were read from, so `00000+0` stays `00000+0`.
         assert gen_l2 == l2, "Line 2 mismatch for #{el.catalog_number}"
-
-        # Line 1: allow +0 vs -0 for zero-valued exponent fields (nddot, bstar)
-        # and checksum differences that result from that
-        l1_norm = l1 |> String.replace("+0 ", "-0 ") |> String.slice(0, 68)
-        gen_l1_norm = gen_l1 |> String.slice(0, 68)
-        assert gen_l1_norm == l1_norm, "Line 1 mismatch for #{el.catalog_number}"
+        assert gen_l1 == l1, "Line 1 mismatch for #{el.catalog_number}"
       end
     end
   end

@@ -4,6 +4,7 @@ defmodule Sidereon.Conjunction do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_coarse_step_seconds 60.0
   @default_time_tolerance_seconds 1.0e-3
@@ -82,7 +83,7 @@ defmodule Sidereon.Conjunction do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tca_find_candidates)
   end
 
   @doc """
@@ -146,7 +147,7 @@ defmodule Sidereon.Conjunction do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tca_find_conjunctions)
   end
 
   @doc """
@@ -206,7 +207,7 @@ defmodule Sidereon.Conjunction do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tca_screen_candidates)
   end
 
   @doc """
@@ -276,7 +277,7 @@ defmodule Sidereon.Conjunction do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tca_screen_conjunctions)
   end
 
   defp split_jd({whole, fraction}) when is_number(whole) and is_number(fraction),

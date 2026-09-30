@@ -38,6 +38,7 @@ defmodule Sidereon.Ephemeris do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defstruct [:handle]
 
@@ -65,7 +66,7 @@ defmodule Sidereon.Ephemeris do
           target: integer(),
           center: integer(),
           position_km: vec3(),
-          velocity_km_s: vec3() | nil,
+          velocity_km_s: vec3(),
           frame: integer()
         }
 
@@ -141,7 +142,7 @@ defmodule Sidereon.Ephemeris do
       other -> {:error, {:parse_error, other}}
     end
   rescue
-    e in ErlangError -> {:error, {:parse_error, e.original}}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spk_load, :parse_error)
   end
 
   @doc """
@@ -183,9 +184,11 @@ defmodule Sidereon.Ephemeris do
   and chains segments as needed and returns both position and velocity. Returns
   `{:ok, state}` where `state` is a map with `:target`, `:center`,
   `:position_km` (a `{x, y, z}` tuple, km), `:velocity_km_s` (a `{vx, vy, vz}`
-  tuple in km/s, or `nil` when the resolved path runs through a position-only
-  type-2 segment), and `:frame` (the NAIF reference-frame id, J2000/ICRF for
-  standard kernels).
+  tuple in km/s; for a type-2 segment it is the time derivative of the
+  position Chebyshev expansion, as CSPICE `SPKE02` forms it), and `:frame`
+  (the NAIF reference-frame id of the first segment the query evaluated,
+  J2000/ICRF for standard kernels). Legs in different NAIF inertial frames
+  (1-21) are rotated into that frame.
 
   `target` and `center` are body atoms (see module docs) or NAIF integer codes.
 
@@ -284,7 +287,7 @@ defmodule Sidereon.Ephemeris do
       {:error, reason} -> {:error, {:nif_error, reason}}
     end
   rescue
-    e in ErlangError -> {:error, {:nif_error, e.original}}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spk_state, :nif_error)
   end
 
   # Convert a calendar epoch or Julian Date (TDB) to ephemeris seconds past
@@ -309,12 +312,12 @@ defmodule Sidereon.Ephemeris do
 
     et_from_split(whole, fraction)
   rescue
-    e in ErlangError -> {:error, {:nif_error, e.original}}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :utc_to_tdb_jd_split, :nif_error)
   end
 
   defp et_from_split(whole, fraction) do
     {:ok, NIF.j2000_seconds_from_split(whole, fraction)}
   rescue
-    e in ErlangError -> {:error, {:nif_error, e.original}}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :j2000_seconds_from_split, :nif_error)
   end
 end

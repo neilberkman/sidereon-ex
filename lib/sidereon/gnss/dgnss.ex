@@ -111,15 +111,21 @@ defmodule Sidereon.GNSS.DGNSS do
 
   For each base observation the modelled value
   `m_base = geometric_range(base, sat) - c*sat_clock(sat)` is taken from
-  `Sidereon.GNSS.Observables.predict/5` (light-time and Sagnac on) and the
-  correction is `PRC = pr_base - m_base`. A satellite whose ephemeris cannot be
-  evaluated at this epoch is dropped from the result (it cannot be corrected)
-  rather than failing the batch.
+  `Sidereon.GNSS.Observables.predict/5` (light-time and Sagnac on), the
+  satellite clock taking the relativistic term RTKLIB `peph2pos` applies to a
+  precise clock, less the broadcast single-frequency group delay where the
+  source states one, as the SPP model forms it; the correction is
+  `PRC = pr_base - m_base`. A satellite whose ephemeris cannot be evaluated at
+  this epoch is dropped from the result (it cannot be corrected) rather than
+  failing the batch.
 
   Returns `{:ok, %{sat => prc_m}}`, or a tagged error:
   `{:error, :invalid_base_position}` for a malformed base position,
-  `{:error, :empty_base_observations}`, or
-  `{:error, {:invalid_base_observations, term}}` for a bad shape. Never raises.
+  `{:error, :empty_base_observations}`,
+  `{:error, {:invalid_base_observations, term}}` for a bad shape,
+  `{:error, {:ut1_outside_coverage, :before_coverage | :after_coverage}}` when
+  the source refuses a base satellite state that reads UT1 outside the UT1
+  table, or `{:error, :invalid_input}` for input the core refuses. Never raises.
   """
   @spec corrections(SP3.t(), position(), [observation()], NaiveDateTime.t(), keyword()) ::
           {:ok, corrections()} | {:error, term()}
@@ -131,15 +137,15 @@ defmodule Sidereon.GNSS.DGNSS do
          :ok <- validate_observations(base_observations, :invalid_base_observations),
          :ok <- non_empty(base_observations, :empty_base_observations),
          {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
-      prc =
-        NIF.dgnss_corrections(
-          source.handle,
-          base,
-          observation_terms(base_observations),
-          t_rx_j2000_s
-        )
-
-      {:ok, Map.new(prc)}
+      case NIF.dgnss_corrections(
+             source.handle,
+             base,
+             observation_terms(base_observations),
+             t_rx_j2000_s
+           ) do
+        {:error, _reason} = error -> error
+        prc when is_list(prc) -> {:ok, Map.new(prc)}
+      end
     end
   end
 
@@ -176,7 +182,11 @@ defmodule Sidereon.GNSS.DGNSS do
   meteorology/Klobuchar options have no effect since the atmosphere terms are
   disabled. The result is a `Sidereon.GNSS.Positioning.Solution` paired with the
   baseline, exactly as a corrected-pseudorange `Sidereon.GNSS.Positioning.solve/4`
-  would produce.
+  would produce. The current public receive-time argument is a `NaiveDateTime`
+  compatibility input: the facade sends its J2000-seconds `f64` mirror to the
+  existing core `solve_position` API. Core derives and retains its binary exact
+  epoch for both base and rover state queries; this wrapper does not claim to
+  preserve precision beyond the input conversion.
 
   On success returns
 
@@ -210,15 +220,17 @@ defmodule Sidereon.GNSS.DGNSS do
          :ok <- non_empty(base_observations, :empty_base_observations),
          :ok <- validate_observations(rover_observations, :invalid_rover_observations),
          :ok <- non_empty(rover_observations, :empty_rover_observations),
-         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, second_of_day} <- Time.second_of_day(epoch),
+         {:ok, day_of_year} <- Time.day_of_year(epoch) do
       NIF.dgnss_position(
         source.handle,
         base,
         observation_terms(base_observations),
         observation_terms(rover_observations),
         t_rx_j2000_s,
-        Time.second_of_day(epoch),
-        Time.day_of_year(epoch),
+        second_of_day,
+        day_of_year,
         initial_guess(opts),
         Keyword.get(opts, :with_geodetic, true)
       )

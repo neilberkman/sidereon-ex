@@ -97,7 +97,12 @@ defmodule Sidereon.GNSS.Frequencies do
 
   `band` is the RINEX band digit from an observation code. For GLONASS band
   `"1"` (G1) and `"2"` (G2), pass the parsed FDMA channel from the observation
-  file's `GLONASS SLOT / FRQ #` header records.
+  file's `GLONASS SLOT / FRQ #` header records. A G1 or G2 carrier resolves only
+  for a channel in the `-7..6` FDMA allocation, as RTKLIB `code2freq_GLO` gives
+  it; any other channel, such as the `7` real IGS headers give `R28`, returns
+  `{:error, {:invalid_channel, channel}}`. The GLONASS CDMA bands `"3"` (G3),
+  `"4"` (G1a) and `"6"` (G2a), SBAS L1 and L5, and NavIC L5, S (`"9"`) and L1
+  resolve without a channel.
   """
   @spec rinex_band_frequency_hz(system(), rinex_band(), integer() | nil) ::
           {:ok, float()} | {:error, error()}
@@ -141,7 +146,8 @@ defmodule Sidereon.GNSS.Frequencies do
   The core policy uses both the observation code and `rinex_version`, so this
   preserves distinctions that a band-only lookup cannot represent (for
   example BeiDou `C1I` in RINEX 3.02 versus later RINEX 3 versions). For
-  GLONASS G1/G2 codes, pass the satellite's FDMA channel.
+  GLONASS G1/G2 codes, pass the satellite's FDMA channel; a channel outside the
+  `-7..6` allocation returns `{:error, {:invalid_channel, channel}}`.
   """
   @spec rinex_observation_frequency_hz(
           system(),

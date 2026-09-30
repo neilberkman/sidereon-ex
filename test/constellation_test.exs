@@ -4,6 +4,7 @@ defmodule Sidereon.ConstellationTest do
   import ExUnit.CaptureLog
 
   alias Sidereon.Format.TLE
+  alias Sidereon.Test.CoreGolden
 
   @fixtures_dir Path.join(__DIR__, "fixtures/celestrak")
 
@@ -36,6 +37,97 @@ defmodule Sidereon.ConstellationTest do
   test "from_tles creates constellation", %{constellation: c} do
     assert c.name == "stations"
     assert c.count > 10
+  end
+
+  test "detailed fleet outcomes retain typed failures at their satellite indices", %{
+    constellation: c,
+    epoch: dt
+  } do
+    c = %{c | satellites: Enum.take(c.satellites, 2), count: 2}
+    bad_station = %{latitude: 91.0, longitude: -75.0, altitude_m: 0.0}
+
+    assert {:ok, legacy_arcs} =
+             Sidereon.Constellation.look_angle_arcs(c, bad_station, [dt])
+
+    assert Enum.map(legacy_arcs, &length/1) == [0, 0]
+
+    assert {:ok, angle_outcomes} =
+             Sidereon.Constellation.look_angle_arcs_detailed(c, bad_station, [dt])
+
+    assert Enum.map(angle_outcomes, & &1.satellite_index) == [0, 1]
+    assert Enum.all?(angle_outcomes, &is_nil(&1.value))
+    assert Enum.all?(angle_outcomes, &(&1.error == {:invalid_input, "ground_station.latitude_deg", "out of range"}))
+
+    outside_ut1 = DateTime.from_unix!(-2_208_988_800, :second)
+    assert {:ok, legacy_tracks} = Sidereon.Constellation.ground_tracks(c, [outside_ut1])
+    assert Enum.map(legacy_tracks, &length/1) == [0, 0]
+
+    assert {:ok, track_outcomes} =
+             Sidereon.Constellation.ground_tracks_detailed(c, [outside_ut1])
+
+    assert Enum.map(track_outcomes, & &1.satellite_index) == [0, 1]
+    assert Enum.all?(track_outcomes, &is_nil(&1.value))
+    assert Enum.all?(track_outcomes, &(&1.error == {:frame_transform, {:ut1_outside_coverage, :before_coverage}}))
+
+    assert {:ok, legacy_passes} =
+             Sidereon.Constellation.passes(c, bad_station, dt, DateTime.add(dt, 3600, :second))
+
+    assert legacy_passes == []
+
+    assert {:ok, pass_outcomes} =
+             Sidereon.Constellation.passes_detailed(c, bad_station, dt, DateTime.add(dt, 3600, :second))
+
+    assert Enum.map(pass_outcomes, & &1.satellite_index) == [0, 1]
+    assert Enum.all?(pass_outcomes, &is_nil(&1.value))
+    assert Enum.all?(pass_outcomes, &(&1.error == {:invalid_input, "ground_station.latitude_deg", "out of range"}))
+  end
+
+  test "fleet detail keeps a failed second SGP4 initialization even for empty arcs", %{constellation: c} do
+    [first, second | _] = c.satellites
+    valid_fleet = %{c | satellites: [first, second], count: 2}
+    station = %{latitude: 40.0, longitude: -75.0, altitude_m: 0.0}
+
+    assert {:ok, empty_outcomes} =
+             Sidereon.Constellation.look_angle_arcs_detailed(valid_fleet, station, [])
+
+    assert Enum.map(empty_outcomes, & &1.satellite_index) == [0, 1]
+    assert Enum.all?(empty_outcomes, &(&1.error == nil and &1.value == []))
+
+    # This split epoch passes wrapper element validation and reaches the core,
+    # whose SGP4 epoch validator rejects totals above 5,000,000 during init.
+    invalid_second = %{second | epoch_jd: %{jd_whole: 9_000_000.0, jd_fraction: 0.0}}
+    c = %{c | satellites: [first, invalid_second], count: 2}
+
+    assert {:ok, outcomes} = Sidereon.Constellation.look_angle_arcs_detailed(c, station, [])
+    assert Enum.map(outcomes, & &1.satellite_index) == [0, 1]
+    assert is_nil(Enum.at(outcomes, 0).error)
+    assert is_nil(Enum.at(outcomes, 1).value)
+
+    assert Enum.at(outcomes, 1).error ==
+             {:init, {:invalid_input, :"element.epoch", :out_of_range}}
+  end
+
+  test "detailed fleet wrappers preserve outer invalid-input results", %{
+    constellation: c,
+    epoch: dt
+  } do
+    [first, second | _] = c.satellites
+    invalid_second = %{second | eccentricity: 1.2}
+    c = %{c | satellites: [first, invalid_second], count: 2}
+    station = %{latitude: 40.0, longitude: -75.0, altitude_m: 0.0}
+
+    assert {:error, :invalid_input} =
+             Sidereon.Constellation.look_angle_arcs_detailed(c, station, [])
+
+    assert {:error, :invalid_input} = Sidereon.Constellation.ground_tracks_detailed(c, [])
+
+    assert {:error, :invalid_input} =
+             Sidereon.Constellation.passes_detailed(
+               c,
+               station,
+               dt,
+               DateTime.add(dt, 3600, :second)
+             )
   end
 
   test "propagate_all propagates all satellites", %{constellation: c, epoch: dt} do
@@ -81,28 +173,28 @@ defmodule Sidereon.ConstellationTest do
   end
 
   test "visible_from returns core-sorted visible rows", %{constellation: c, epoch: dt} do
+    # The core's own visibility of the same ten satellites from the same station
+    # at the same instant (test/generators/core_goldens).
+    golden = CoreGolden.load("constellation_visibility.json")
+    assert DateTime.from_iso8601(golden["instant"]) == {:ok, dt, 0}
+
     constellation = %{c | satellites: Enum.take(c.satellites, 10), count: 10}
     station = %{latitude: 51.5074, longitude: -0.1278, altitude_m: 11.0}
 
     {:ok, visible} =
-      Sidereon.Constellation.visible_from(constellation, station, dt, min_elevation: -50.0)
+      Sidereon.Constellation.visible_from(constellation, station, dt, min_elevation: golden["min_elevation_deg"])
 
-    assert Enum.map(visible, & &1.catalog_number) == ["49271", "25544", "36086", "49044", "65586"]
+    assert Enum.map(visible, & &1.catalog_number) == Enum.map(golden["visible"], & &1["catalog_number"])
 
-    first = hd(visible)
-    # Elevation/azimuth/range derive from look-angle geometry (atan2/asin/sqrt);
-    # libm transcendentals differ by a few ULPs across CPU architectures
-    # (arm64 vs x86_64), so compare to a tight tolerance rather than exact bits.
-    # The raw SGP4 position below stays bit-exact across platforms.
-    assert_in_delta first.elevation, -29.164801873796932, 1.0e-9
-    assert_in_delta first.azimuth, 157.41771593250638, 1.0e-9
-    assert_in_delta first.range_km, 8438.433948592748, 1.0e-9
-
-    assert Tuple.to_list(first.position) |> Enum.map(&float_bits/1) == [
-             0x40B0_1A88_998C_FB44,
-             0x40B7_988C_0568_1811,
-             0xC0A3_68D5_167E_3886
-           ]
+    # The binding hands the core the same element sets, instant and station,
+    # and the core's results are bit-identical across x86_64 and arm64, so every
+    # row is the core's own, bit for bit.
+    for {row, expected} <- Enum.zip(visible, golden["visible"]) do
+      assert row.elevation == CoreGolden.f(expected["elevation_deg"])
+      assert row.azimuth == CoreGolden.f(expected["azimuth_deg"])
+      assert row.range_km == CoreGolden.f(expected["range_km"])
+      assert Tuple.to_list(row.position) == CoreGolden.f(expected["position_km"])
+    end
   end
 
   test "visible_from returns invalid satellite errors before calling the NIF", %{
@@ -259,10 +351,5 @@ defmodule Sidereon.ConstellationTest do
       assert {:error, {:invalid_field, :end_dt, :later}} =
                Sidereon.Constellation.passes(c, station, dt, :later)
     end
-  end
-
-  defp float_bits(float) do
-    <<bits::unsigned-64>> = <<float::float-64>>
-    bits
   end
 end

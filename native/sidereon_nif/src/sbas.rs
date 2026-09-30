@@ -1,11 +1,12 @@
-use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::astro::time::model::{GnssWeekTow, TimeScale};
 use sidereon_core::ephemeris::{self, EphemerisSampleStatus, EphemerisSource};
 use sidereon_core::sbas::{
-    parse_ems_lines, parse_rtklib_lines, sat_to_sbas_prn, sbas_prn_to_sat, SbasBlock,
-    SbasCorrectedEphemeris, SbasCorrectionStore, SbasIonoDelays, SbasIonoGrid, SbasLogBlock,
-    SbasLongTermHalf, SbasMessage, SbasMixedFastCorrections, SbasSolveMode, SbasWireForm,
-    SpareBits,
+    parse_ems_lines, parse_ems_log, parse_rtklib_lines, parse_rtklib_log, sat_to_sbas_prn,
+    sbas_prn_to_sat, SbasBlock, SbasCorrectedEphemeris, SbasCorrectionStore, SbasDeparture,
+    SbasEncodeError, SbasIonoDelays, SbasIonoGrid, SbasLineRefusal, SbasLog, SbasLogBlock,
+    SbasLogOptions, SbasLongTermHalf, SbasMessage, SbasMixedFastCorrections, SbasPolicy,
+    SbasSkippedLineKind, SbasSolveMode, SbasUnsupported, SbasWireForm, SpareBits,
 };
 use sidereon_core::sbas_pl::{
     sbas_protection_levels, AirborneModel, DegradationParams, ProtectionGeometry, SbasErrorModel,
@@ -17,6 +18,7 @@ use sidereon_core::GnssSatelliteId;
 use crate::broadcast::BroadcastResource;
 use crate::errors;
 use crate::spp;
+use crate::time::{ExactEpochQueryResource, ExactEpochResource};
 
 pub struct SbasStoreResource {
     pub store: SbasCorrectionStore,
@@ -31,6 +33,142 @@ type SbasPlSisTerm = (String, f64, f64, f64, f64);
 type SbasPlAirborneTerm = f64;
 type SbasPlDegradationTerm = (f64, f64, f64, f64, f64, f64, bool);
 
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SbasEncodeErrorFields {
+    variant: String,
+    message_type: Option<i64>,
+    field: Option<String>,
+    index: Option<u64>,
+    value: Option<String>,
+    width: Option<i64>,
+    signed: Option<bool>,
+    preamble: Option<i64>,
+    bytes: Option<u64>,
+    bits_past_payload: Option<bool>,
+    part: Option<String>,
+    expected: Option<Vec<i64>>,
+    found: Option<Vec<i64>>,
+    expected_count: Option<u64>,
+    found_count: Option<u64>,
+    half: Option<u64>,
+    velocity_code: Option<bool>,
+    record: Option<u64>,
+    reason: Option<String>,
+}
+
+fn sbas_encode_error_fields(error: &SbasEncodeError) -> SbasEncodeErrorFields {
+    let mut fields = SbasEncodeErrorFields {
+        variant: String::new(),
+        message_type: None,
+        field: None,
+        index: None,
+        value: None,
+        width: None,
+        signed: None,
+        preamble: None,
+        bytes: None,
+        bits_past_payload: None,
+        part: None,
+        expected: None,
+        found: None,
+        expected_count: None,
+        found_count: None,
+        half: None,
+        velocity_code: None,
+        record: None,
+        reason: None,
+    };
+    match error {
+        SbasEncodeError::FieldOutOfRange {
+            message_type,
+            field,
+            index,
+            value,
+            width,
+            signed,
+        } => {
+            fields.variant = "field_out_of_range".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.field = Some((*field).into());
+            fields.index = index.map(|index| index as u64);
+            fields.value = Some(value.to_string());
+            fields.width = Some(i64::from(*width));
+            fields.signed = Some(*signed);
+        }
+        SbasEncodeError::UnrecognizedPreamble { preamble } => {
+            fields.variant = "unrecognized_preamble".into();
+            fields.preamble = Some(i64::from(*preamble));
+        }
+        SbasEncodeError::MessageType {
+            message_type,
+            reason,
+        } => {
+            fields.variant = "message_type".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.reason = Some((*reason).into());
+        }
+        SbasEncodeError::RawPayload {
+            message_type,
+            bytes,
+            bits_past_payload,
+        } => {
+            fields.variant = "raw_payload".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.bytes = Some(*bytes as u64);
+            fields.bits_past_payload = Some(*bits_past_payload);
+        }
+        SbasEncodeError::ReservedLayout {
+            message_type,
+            part,
+            expected,
+            found,
+        } => {
+            fields.variant = "reserved_layout".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.part = Some((*part).into());
+            fields.expected = Some(expected.iter().map(|value| i64::from(*value)).collect());
+            fields.found = Some(found.iter().map(|value| i64::from(*value)).collect());
+        }
+        SbasEncodeError::LongTermRecordCount {
+            message_type,
+            half,
+            velocity_code,
+            expected,
+            found,
+        } => {
+            fields.variant = "long_term_record_count".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.half = Some(*half as u64);
+            fields.velocity_code = Some(*velocity_code);
+            fields.expected_count = Some(*expected as u64);
+            fields.found_count = Some(*found as u64);
+        }
+        SbasEncodeError::LongTermFieldNotCarried {
+            message_type,
+            half,
+            record,
+            field,
+        } => {
+            fields.variant = "long_term_field_not_carried".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.half = Some(*half as u64);
+            fields.record = Some(*record as u64);
+            fields.field = Some((*field).into());
+        }
+        SbasEncodeError::LongTermMissingTimeOfDay { message_type, half } => {
+            fields.variant = "long_term_missing_time_of_day".into();
+            fields.message_type = Some(i64::from(*message_type));
+            fields.half = Some(*half as u64);
+        }
+        SbasEncodeError::PadBits { value } => {
+            fields.variant = "pad_bits".into();
+            fields.value = Some(i128::from(*value).to_string());
+        }
+        _ => fields.variant = "unrecognized_sbas_encode_error".into(),
+    }
+    fields
+}
+
 mod atoms {
     rustler::atoms! {
         ok,
@@ -39,7 +177,13 @@ mod atoms {
         not_found,
         insufficient_geometry,
         numerical_failure,
-        invalid_error_model
+        invalid_error_model,
+        unrecognized_preamble,
+        declared_message_type,
+        other,
+        ambiguous_week,
+        checksum_mismatch,
+        sbas_encode_error
     }
 }
 
@@ -51,6 +195,8 @@ struct SbasBlockTerm {
     tow_s: f64,
     form: String,
     bytes: Vec<u8>,
+    declared_message_type: Option<i64>,
+    pad_bits: i64,
     message: SbasMessageTerm,
 }
 
@@ -219,7 +365,8 @@ fn parse_time_scale(value: &str) -> NifResult<TimeScale> {
 }
 
 fn week_tow(scale: String, week: u32, tow_s: f64) -> NifResult<GnssWeekTow> {
-    GnssWeekTow::new(parse_time_scale(&scale)?, week, tow_s).map_err(errors::invalid_input)
+    GnssWeekTow::new(parse_time_scale(&scale)?, week, tow_s)
+        .map_err(crate::tropo::time_model_error_detail)
 }
 
 fn wire_form(value: &str) -> NifResult<SbasWireForm> {
@@ -330,6 +477,9 @@ fn sbas_pl_geometry(
             .iter()
             .map(|system| crate::araim::system_from_term(system))
             .collect::<NifResult<_>>()?,
+        // Rows supplied by the caller were formed without evaluating an
+        // ephemeris source here, so no UT1 departure was accepted for them.
+        ut1_degraded: None,
     })
 }
 
@@ -375,12 +525,88 @@ fn sbas_pl_protection_term(value: SbasProtection) -> SbasPlProtectionTerm {
     }
 }
 
-fn sbas_pl_error_atom(error: SbasPlError) -> rustler::Atom {
+fn sbas_pl_error_term<'a>(env: Env<'a>, error: SbasPlError) -> Term<'a> {
     match error {
-        SbasPlError::InsufficientGeometry => atoms::insufficient_geometry(),
-        SbasPlError::NumericalFailure => atoms::numerical_failure(),
-        SbasPlError::InvalidErrorModel => atoms::invalid_error_model(),
+        SbasPlError::InsufficientGeometry => atoms::insufficient_geometry().encode(env),
+        SbasPlError::NumericalFailure => atoms::numerical_failure().encode(env),
+        SbasPlError::InvalidErrorModel => atoms::invalid_error_model().encode(env),
+        SbasPlError::Ut1OutsideCoverage(reason) => errors::ut1_outside_coverage_term(env, reason),
     }
+}
+
+fn parse_policy(label: &str) -> NifResult<SbasPolicy> {
+    match label {
+        "strict" => Ok(SbasPolicy::Strict),
+        "lenient" => Ok(SbasPolicy::Lenient),
+        _ => Err(Error::Term(Box::new("unknown SBAS policy"))),
+    }
+}
+
+/// `{:unrecognized_preamble, preamble}` or
+/// `{:declared_message_type, declared, carried}`.
+fn departure_term<'a>(env: Env<'a>, departure: &SbasDeparture) -> Term<'a> {
+    match departure {
+        SbasDeparture::UnrecognizedPreamble { preamble } => {
+            (atoms::unrecognized_preamble(), i64::from(*preamble)).encode(env)
+        }
+        SbasDeparture::DeclaredMessageType { declared, carried } => (
+            atoms::declared_message_type(),
+            i64::from(*declared),
+            i64::from(*carried),
+        )
+            .encode(env),
+        other => (atoms::other(), other.to_string()).encode(env),
+    }
+}
+
+fn refusal_term<'a>(env: Env<'a>, refusal: &SbasLineRefusal) -> Term<'a> {
+    match refusal {
+        SbasLineRefusal::AmbiguousWeek { week } => {
+            (atoms::ambiguous_week(), i64::from(*week)).encode(env)
+        }
+        SbasLineRefusal::ChecksumMismatch { written, computed } => (
+            atoms::checksum_mismatch(),
+            written.map(i64::from),
+            i64::from(*computed),
+        )
+            .encode(env),
+        other => (atoms::other(), format!("{other:?}")).encode(env),
+    }
+}
+
+fn skipped_line_kind(kind: SbasSkippedLineKind) -> &'static str {
+    match kind {
+        SbasSkippedLineKind::Blank => "blank",
+        SbasSkippedLineKind::Comment => "comment",
+        SbasSkippedLineKind::NonRecord => "non_record",
+    }
+}
+
+/// `{blocks, skipped_lines, refused_lines, departures}`: skipped lines as
+/// `{line, kind}`, refused lines as `{line, reason}`, departures as
+/// `{line, departure}`.
+fn log_term<'a>(env: Env<'a>, log: SbasLog, policy: SbasPolicy) -> NifResult<Term<'a>> {
+    let blocks = log
+        .blocks
+        .into_iter()
+        .map(|block| block_term(block, policy))
+        .collect::<NifResult<Vec<_>>>()?;
+    let skipped: Vec<(u64, &'static str)> = log
+        .skipped_lines
+        .iter()
+        .map(|line| (line.line as u64, skipped_line_kind(line.kind)))
+        .collect();
+    let refused: Vec<Term<'a>> = log
+        .refused_lines
+        .iter()
+        .map(|line| (line.line as u64, refusal_term(env, &line.reason)).encode(env))
+        .collect();
+    let departures: Vec<Term<'a>> = log
+        .departures
+        .iter()
+        .map(|line| (line.line as u64, departure_term(env, &line.departure)).encode(env))
+        .collect();
+    Ok((blocks, skipped, refused, departures).encode(env))
 }
 
 fn block_from_terms(
@@ -617,8 +843,8 @@ fn message_term(message: &SbasMessage) -> SbasMessageTerm {
     }
 }
 
-fn block_term(block: SbasLogBlock) -> NifResult<SbasBlockTerm> {
-    let decoded = SbasBlock::decode(&block.bytes, block.form)
+fn block_term(block: SbasLogBlock, policy: SbasPolicy) -> NifResult<SbasBlockTerm> {
+    let (decoded, _) = SbasBlock::decode_with_policy(&block.bytes, block.form, policy)
         .map_err(|e| Error::Term(Box::new(e.to_string())))?;
     let scale = match block.epoch.system {
         TimeScale::Gpst => "GPST",
@@ -634,6 +860,8 @@ fn block_term(block: SbasLogBlock) -> NifResult<SbasBlockTerm> {
         tow_s: block.epoch.tow_s,
         form: wire_form_label(block.form),
         bytes: block.bytes,
+        declared_message_type: block.declared_message_type.map(i64::from),
+        pad_bits: i64::from(decoded.pad_bits),
         message: message_term(&decoded.message),
     })
 }
@@ -721,7 +949,7 @@ fn sbas_pl_protection_levels<'a>(
     Ok(
         match sbas_protection_levels(&geometry, &model, sbas_pl_k(k)) {
             Ok(value) => (atoms::ok(), sbas_pl_protection_term(value)).encode(env),
-            Err(error) => (atoms::error(), sbas_pl_error_atom(error)).encode(env),
+            Err(error) => (atoms::error(), sbas_pl_error_term(env, error)).encode(env),
         },
     )
 }
@@ -761,15 +989,234 @@ fn sbas_pl_error_model_from_store<'a>(
                     .collect::<Vec<_>>(),
             )
                 .encode(env),
-            Err(error) => (atoms::error(), sbas_pl_error_atom(error)).encode(env),
+            Err(error) => (atoms::error(), sbas_pl_error_term(env, error)).encode(env),
         },
     )
 }
 
 #[rustler::nif]
-fn sbas_decode<'a>(env: Env<'a>, bytes: rustler::Binary, form: String) -> NifResult<Term<'a>> {
-    match SbasBlock::decode(bytes.as_slice(), wire_form(&form)?) {
-        Ok(block) => Ok((atoms::ok(), message_term(&block.message)).encode(env)),
+fn sbas_decode<'a>(
+    env: Env<'a>,
+    bytes: rustler::Binary,
+    form: String,
+    policy: String,
+) -> NifResult<Term<'a>> {
+    match SbasBlock::decode_with_policy(bytes.as_slice(), wire_form(&form)?, parse_policy(&policy)?)
+    {
+        Ok((block, departures)) => {
+            let departures: Vec<Term<'a>> = departures
+                .iter()
+                .map(|departure| departure_term(env, departure))
+                .collect();
+            Ok((
+                atoms::ok(),
+                (
+                    message_term(&block.message),
+                    i64::from(block.pad_bits),
+                    departures,
+                ),
+            )
+                .encode(env))
+        }
+        Err(error) => Ok((atoms::error(), error.to_string()).encode(env)),
+    }
+}
+
+#[cfg(test)]
+mod sbas_encode_error_tests {
+    use super::sbas_encode_error_fields;
+    use sidereon_core::sbas::SbasEncodeError;
+
+    #[test]
+    fn encoder_error_variants_keep_their_payloads() {
+        let errors = [
+            SbasEncodeError::FieldOutOfRange {
+                message_type: 2,
+                field: "prc",
+                index: Some(3),
+                value: 1_000,
+                width: 9,
+                signed: true,
+            },
+            SbasEncodeError::UnrecognizedPreamble { preamble: 0x12 },
+            SbasEncodeError::MessageType {
+                message_type: 1,
+                reason: "unsupported variant",
+            },
+            SbasEncodeError::RawPayload {
+                message_type: 63,
+                bytes: 26,
+                bits_past_payload: true,
+            },
+            SbasEncodeError::ReservedLayout {
+                message_type: 24,
+                part: "reserved",
+                expected: vec![2, 4],
+                found: vec![6],
+            },
+            SbasEncodeError::LongTermRecordCount {
+                message_type: 25,
+                half: 1,
+                velocity_code: true,
+                expected: 1,
+                found: 2,
+            },
+            SbasEncodeError::LongTermFieldNotCarried {
+                message_type: 25,
+                half: 0,
+                record: 1,
+                field: "x_rate_m_s",
+            },
+            SbasEncodeError::LongTermMissingTimeOfDay {
+                message_type: 25,
+                half: 1,
+            },
+            SbasEncodeError::PadBits { value: 64 },
+        ];
+        let expected_variants = [
+            "field_out_of_range",
+            "unrecognized_preamble",
+            "message_type",
+            "raw_payload",
+            "reserved_layout",
+            "long_term_record_count",
+            "long_term_field_not_carried",
+            "long_term_missing_time_of_day",
+            "pad_bits",
+        ];
+
+        for (error, expected_variant) in errors.iter().zip(expected_variants) {
+            assert_eq!(sbas_encode_error_fields(error).variant, expected_variant);
+        }
+
+        let field_error = sbas_encode_error_fields(&errors[0]);
+        assert_eq!(field_error.message_type, Some(2));
+        assert_eq!(field_error.field.as_deref(), Some("prc"));
+        assert_eq!(field_error.index, Some(3));
+        assert_eq!(field_error.value.as_deref(), Some("1000"));
+        assert_eq!(field_error.width, Some(9));
+        assert_eq!(field_error.signed, Some(true));
+
+        let raw_error = sbas_encode_error_fields(&errors[3]);
+        assert_eq!(raw_error.bytes, Some(26));
+        assert_eq!(raw_error.bits_past_payload, Some(true));
+
+        let reserved_error = sbas_encode_error_fields(&errors[4]);
+        assert_eq!(reserved_error.expected, Some(vec![2, 4]));
+        assert_eq!(reserved_error.found, Some(vec![6]));
+
+        let count_error = sbas_encode_error_fields(&errors[5]);
+        assert_eq!(count_error.expected_count, Some(1));
+        assert_eq!(count_error.found_count, Some(2));
+        assert_eq!(count_error.velocity_code, Some(true));
+
+        let record_error = sbas_encode_error_fields(&errors[6]);
+        assert_eq!(record_error.half, Some(0));
+        assert_eq!(record_error.record, Some(1));
+        assert_eq!(record_error.field.as_deref(), Some("x_rate_m_s"));
+
+        assert_eq!(sbas_encode_error_fields(&errors[1]).preamble, Some(0x12));
+        assert_eq!(
+            sbas_encode_error_fields(&errors[2]).reason.as_deref(),
+            Some("unsupported variant")
+        );
+        assert_eq!(sbas_encode_error_fields(&errors[7]).half, Some(1));
+        assert_eq!(
+            sbas_encode_error_fields(&errors[8]).value.as_deref(),
+            Some("64")
+        );
+    }
+
+    #[test]
+    fn usize_payloads_remain_exact_at_the_platform_limit() {
+        let maximum = usize::MAX;
+        let cases = [
+            SbasEncodeError::FieldOutOfRange {
+                message_type: 2,
+                field: "prc",
+                index: Some(maximum),
+                value: 0,
+                width: 1,
+                signed: false,
+            },
+            SbasEncodeError::RawPayload {
+                message_type: 63,
+                bytes: maximum,
+                bits_past_payload: false,
+            },
+            SbasEncodeError::LongTermRecordCount {
+                message_type: 25,
+                half: maximum,
+                velocity_code: true,
+                expected: maximum,
+                found: maximum,
+            },
+            SbasEncodeError::LongTermFieldNotCarried {
+                message_type: 25,
+                half: maximum,
+                record: maximum,
+                field: "x_rate_m_s",
+            },
+            SbasEncodeError::LongTermMissingTimeOfDay {
+                message_type: 25,
+                half: maximum,
+            },
+        ];
+
+        let field_error = sbas_encode_error_fields(&cases[0]);
+        assert_eq!(field_error.index, Some(maximum as u64));
+
+        let raw_error = sbas_encode_error_fields(&cases[1]);
+        assert_eq!(raw_error.bytes, Some(maximum as u64));
+
+        let count_error = sbas_encode_error_fields(&cases[2]);
+        assert_eq!(count_error.half, Some(maximum as u64));
+        assert_eq!(count_error.expected_count, Some(maximum as u64));
+        assert_eq!(count_error.found_count, Some(maximum as u64));
+
+        let record_error = sbas_encode_error_fields(&cases[3]);
+        assert_eq!(record_error.half, Some(maximum as u64));
+        assert_eq!(record_error.record, Some(maximum as u64));
+
+        assert_eq!(
+            sbas_encode_error_fields(&cases[4]).half,
+            Some(maximum as u64)
+        );
+    }
+}
+
+#[rustler::nif]
+fn sbas_encode_unsupported<'a>(
+    env: Env<'a>,
+    preamble: u8,
+    message_type: u8,
+    data: Binary<'_>,
+    form: String,
+    pad_bits: u8,
+    policy: String,
+) -> NifResult<Term<'a>> {
+    let block = SbasBlock {
+        form: wire_form(&form)?,
+        message: SbasMessage::Unsupported(SbasUnsupported {
+            preamble,
+            message_type,
+            data: data.as_slice().to_vec(),
+        }),
+        pad_bits,
+    };
+    match block.encode_with_policy(parse_policy(&policy)?) {
+        Ok((bytes, departures)) => {
+            let departures = departures
+                .iter()
+                .map(|departure| departure_term(env, departure))
+                .collect::<Vec<_>>();
+            Ok((atoms::ok(), (bytes, departures)).encode(env))
+        }
+        Err(sidereon_core::Error::SbasEncode(error)) => Ok((
+            atoms::error(),
+            (atoms::sbas_encode_error(), sbas_encode_error_fields(&error)),
+        )
+            .encode(env)),
         Err(error) => Ok((atoms::error(), error.to_string()).encode(env)),
     }
 }
@@ -779,7 +1226,7 @@ fn sbas_parse_ems(text: String) -> NifResult<Vec<SbasBlockTerm>> {
     parse_ems_lines(&text)
         .map_err(|e| Error::Term(Box::new(e.to_string())))?
         .into_iter()
-        .map(block_term)
+        .map(|block| block_term(block, SbasPolicy::Strict))
         .collect()
 }
 
@@ -788,8 +1235,46 @@ fn sbas_parse_rtklib(text: String) -> NifResult<Vec<SbasBlockTerm>> {
     parse_rtklib_lines(&text)
         .map_err(|e| Error::Term(Box::new(e.to_string())))?
         .into_iter()
-        .map(block_term)
+        .map(|block| block_term(block, SbasPolicy::Strict))
         .collect()
+}
+
+fn log_options(policy: SbasPolicy, reference_week: Option<u32>) -> SbasLogOptions {
+    let options = SbasLogOptions::default().with_policy(policy);
+    match reference_week {
+        Some(week) => options.with_reference_week(week),
+        None => options,
+    }
+}
+
+/// Read an EMS log under `policy`, keeping every line's disposition.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sbas_parse_ems_log<'a>(
+    env: Env<'a>,
+    text: String,
+    policy: String,
+    reference_week: Option<u32>,
+) -> NifResult<Term<'a>> {
+    let policy = parse_policy(&policy)?;
+    match parse_ems_log(&text, log_options(policy, reference_week)) {
+        Ok(log) => Ok((atoms::ok(), log_term(env, log, policy)?).encode(env)),
+        Err(error) => Ok((atoms::error(), error.to_string()).encode(env)),
+    }
+}
+
+/// Read an RTKLIB SBAS log under `policy`, keeping every line's disposition.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sbas_parse_rtklib_log<'a>(
+    env: Env<'a>,
+    text: String,
+    policy: String,
+    reference_week: Option<u32>,
+) -> NifResult<Term<'a>> {
+    let policy = parse_policy(&policy)?;
+    match parse_rtklib_log(&text, log_options(policy, reference_week)) {
+        Ok(log) => Ok((atoms::ok(), log_term(env, log, policy)?).encode(env)),
+        Err(error) => Ok((atoms::error(), error.to_string()).encode(env)),
+    }
 }
 
 #[rustler::nif]
@@ -852,6 +1337,30 @@ fn sbas_ready_geos(handle: ResourceArc<SbasStoreResource>, t_j2000_s: f64) -> Ve
         .into_iter()
         .map(|sat| sat_to_sbas_prn(sat).map_or_else(|| sat.to_string(), |prn| format!("S{prn}")))
         .collect()
+}
+
+/// Corrections a source GEO addressed to active PRN-mask bits that name no
+/// satellite, counted per 1-based PRN mask number, as `{:ok, [{mask_number,
+/// count}]}` in ascending mask-number order, or `{:error, :not_found}` when the
+/// GEO has no partition.
+#[rustler::nif]
+fn sbas_unassigned_mask_corrections<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<SbasStoreResource>,
+    geo_id: String,
+) -> NifResult<Term<'a>> {
+    let geo = sbas_geo(&geo_id)?;
+    Ok(match handle.store.unassigned_mask_corrections(geo) {
+        Some(counts) => (
+            atoms::ok(),
+            counts
+                .iter()
+                .map(|(mask_number, count)| (*mask_number, *count))
+                .collect::<Vec<(u8, u64)>>(),
+        )
+            .encode(env),
+        None => (atoms::error(), atoms::not_found()).encode(env),
+    })
 }
 
 #[rustler::nif]
@@ -997,6 +1506,79 @@ fn sbas_corrected_position<'a>(
     })
 }
 
+/// Keeps the established Elixir positional call contract intact.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn sbas_corrected_position_at_epoch_query<'a>(
+    env: Env<'a>,
+    broadcast: ResourceArc<BroadcastResource>,
+    store: ResourceArc<SbasStoreResource>,
+    geo_id: String,
+    satellite_id: String,
+    epoch: ResourceArc<ExactEpochQueryResource>,
+    selection_epoch: ResourceArc<ExactEpochQueryResource>,
+    mode: String,
+) -> NifResult<Term<'a>> {
+    let geo = sbas_geo(&geo_id)?;
+    let sat = sat_id(&satellite_id)?;
+    let source = corrected_source(&broadcast, &store, geo, &mode)?;
+    match source.try_position_clock_group_delay_selected_at_epoch_query(
+        sat,
+        &epoch.query,
+        &selection_epoch.query,
+    ) {
+        Ok(Some(checked)) => {
+            let (position, clock_s, _) = checked.value;
+            Ok((
+                atoms::ok(),
+                ((position[0], position[1], position[2]), clock_s),
+            )
+                .encode(env))
+        }
+        Ok(None) => Ok((atoms::error(), atoms::not_found()).encode(env)),
+        Err(sidereon_core::Error::Ut1OutsideCoverage(reason)) => {
+            Err(errors::ut1_outside_coverage(reason))
+        }
+        Err(error) => Err(errors::invalid_input(error)),
+    }
+}
+
+/// Keeps the established Elixir positional call contract intact.
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn sbas_source_exact_epoch_hook<'a>(
+    env: Env<'a>,
+    broadcast: ResourceArc<BroadcastResource>,
+    store: ResourceArc<SbasStoreResource>,
+    geo_id: String,
+    satellite_id: String,
+    state_epoch: ResourceArc<ExactEpochQueryResource>,
+    selection_epoch: ResourceArc<ExactEpochQueryResource>,
+    mode: String,
+    hook: String,
+    position_m: Option<Vec3>,
+) -> NifResult<Term<'a>> {
+    let geo = sbas_geo(&geo_id)?;
+    let satellite = sat_id(&satellite_id)?;
+    let source = corrected_source(&broadcast, &store, geo, &mode)?;
+    let position =
+        position_m.map(|(position_x, position_y, position_z)| [position_x, position_y, position_z]);
+    if hook == "clock_relativity" && position.is_none() {
+        return Err(Error::Term(Box::new(
+            "state position is required for clock relativity",
+        )));
+    }
+    Ok(crate::observable_states::source_hook_result(
+        env,
+        &source,
+        satellite,
+        &state_epoch.query,
+        &selection_epoch.query,
+        &hook,
+        position,
+    ))
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
 fn sbas_sample_broadcast(
@@ -1044,6 +1626,8 @@ fn sbas_spp_solve_broadcast<'a>(
     max_pdop: Term<'a>,
     coarse_search_seeds: Term<'a>,
     glonass_channels: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let geo = sbas_geo(&geo_id)?;
     let source = corrected_source(&broadcast, &store, geo, &mode)?;
@@ -1062,6 +1646,11 @@ fn sbas_spp_solve_broadcast<'a>(
         relative_humidity,
         None,
     )?;
+    spp::set_models(
+        &mut inputs,
+        spp::decode_qzss_clock(qzss_clock)?,
+        spp::decode_troposphere_model(troposphere_model)?,
+    );
     inputs.sbas_iono = source.iono_grid().cloned();
     inputs.glonass_channels = spp::decode_glonass_channels(glonass_channels)?;
     let mut validation = sidereon_core::quality::SolutionValidationOptions::default();
@@ -1088,6 +1677,68 @@ fn sbas_spp_solve_broadcast<'a>(
         env,
         &source,
         &inputs,
+        with_geodetic,
+        policy,
+    ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn sbas_spp_solve_broadcast_exact<'a>(
+    env: Env<'a>,
+    broadcast: ResourceArc<BroadcastResource>,
+    store: ResourceArc<SbasStoreResource>,
+    geo_id: String,
+    mode: String,
+    observations: Vec<(String, f64)>,
+    receive_epoch: ResourceArc<ExactEpochResource>,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    max_pdop: Term<'a>,
+    coarse_search_seeds: Term<'a>,
+    glonass_channels: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let geo = sbas_geo(&geo_id)?;
+    let source = corrected_source(&broadcast, &store, geo, &mode)?;
+    let mut inputs = spp::build_solve_inputs(
+        observations,
+        receive_epoch.epoch.j2000_seconds(),
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        None,
+    )?;
+    spp::set_models(
+        &mut inputs,
+        spp::decode_qzss_clock(qzss_clock)?,
+        spp::decode_troposphere_model(troposphere_model)?,
+    );
+    inputs.sbas_iono = source.iono_grid().cloned();
+    inputs.glonass_channels = spp::decode_glonass_channels(glonass_channels)?;
+    let policy = spp::decode_policy(max_pdop, coarse_search_seeds)?;
+    Ok(spp::solve_exact_to_term(
+        env,
+        &source,
+        inputs,
+        receive_epoch.epoch,
         with_geodetic,
         policy,
     ))

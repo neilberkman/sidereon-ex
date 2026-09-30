@@ -48,6 +48,65 @@ defmodule Sidereon.GNSS.SP3MergeTest do
   defp fmt(v), do: :io_lib.format(~c"~14.6f", [v]) |> IO.iodata_to_binary()
   defp interval(v), do: :io_lib.format(~c"~14.8f", [v]) |> IO.iodata_to_binary()
 
+  defp fixed(value, decimals, width), do: String.pad_leading(:erlang.float_to_binary(value, decimals: decimals), width)
+
+  defp padded(integer, width), do: String.pad_leading(Integer.to_string(integer), width)
+
+  # Six GPS satellites on circular trajectories on a 300 s grid from 2020-06-25
+  # 00:00, the core's merge-coverage fixture: `first` and `count` pick the
+  # epochs, in 300 s steps from 00:00.
+  defp coverage_sp3(first, count) do
+    epoch_fields = fn index -> "2020  6 25 #{padded(div(index, 12), 2)}#{padded(rem(index, 12) * 5, 3)}  0.00000000" end
+
+    header = [
+      "#cP#{epoch_fields.(first)}     #{padded(count, 3)} ORBIT IGS14 FIT  TST",
+      "## 2111 #{fixed(345_600.0 + first * 300, 8, 14)}   300.00000000 59025 #{fixed(first * 300 / 86_400, 13, 0)}",
+      "+    6   G01G02G03G04G05G06  0  0  0  0  0  0  0  0  0  0  0",
+      "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+      "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
+      "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "/* SYNTHETIC SP3 COVERAGE FIXTURE"
+    ]
+
+    records =
+      Enum.flat_map(first..(first + count - 1)//1, fn index ->
+        seconds = index * 300.0
+
+        ["*  " <> epoch_fields.(index)] ++
+          Enum.map(1..6, fn prn ->
+            angle = seconds * 2.0 * :math.pi() / 43_200.0 + prn * 0.3
+
+            "PG0#{prn}" <>
+              Enum.map_join(
+                [
+                  26_560.0 * :math.cos(angle),
+                  26_560.0 * :math.sin(angle) * 0.6,
+                  26_560.0 * :math.sin(angle) * 0.8,
+                  10.0 + prn
+                ],
+                &fixed(&1, 6, 14)
+              )
+          end)
+      end)
+
+    {:ok, sp3} = SP3.parse(Enum.join(header ++ records ++ ["EOF", ""], "\n"))
+    sp3
+  end
+
+  defp coverage_precedence(scope),
+    do: [combine: :precedence, precedence_scope: scope, min_agree: 1, position_tolerance_m: 5.0]
+
+  # A report epoch as seconds since J2000 in its own scale, whole days first,
+  # then the day fraction, as the core's split conversion forms them. For the
+  # whole-second epochs of these fixtures the result is the exact second the
+  # SP3 epoch axis holds.
+  defp merge_epoch_j2000_s(%{jd_whole: jd_whole, jd_fraction: jd_fraction}),
+    do: (jd_whole - 2_451_545.0) * 86_400.0 + jd_fraction * 86_400.0
+
   defp shifted_daily_product_with_x_offset(offset_km) do
     shifted =
       @daily_sp3
@@ -66,7 +125,8 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       end)
 
     {:ok, product} = SP3.parse(shifted)
-    {:ok, writer_derived} = product |> SP3.to_sp3_string() |> SP3.parse()
+    {:ok, text} = SP3.to_sp3_string(product)
+    {:ok, writer_derived} = SP3.parse(text)
     writer_derived
   end
 
@@ -143,7 +203,33 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert epoch.position_rms_m > 0.0
     end
 
-    test "quarantines a satellite all centers disagree on" do
+    test "a mean-combined merge finer than the record columns is refused by the writer, by name" do
+      # G01's X differs by 1 mm between the centers, well within tolerance, so
+      # the mean combine holds 15000.0000005 km, which an F14.6 kilometer column
+      # cannot state. The merge itself succeeds; writing it is refused naming
+      # the cell rather than rounded half a millimeter away.
+      a =
+        sp3_records([
+          {"G01", [15_000.000000, -20_000.0, 5000.0], 100.0},
+          {"G02", [16_000.0, -21_000.0, 6000.0], 200.0}
+        ])
+
+      b =
+        sp3_records([
+          {"G01", [15_000.000001, -20_000.0, 5000.0], 100.0},
+          {"G02", [16_000.0, -21_000.0, 6000.0], 200.0}
+        ])
+
+      assert {:ok, merged, _report} = SP3.merge([a, b])
+      assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02"]
+
+      assert {:error, {:record_value_not_representable, fields}} = SP3.to_sp3_string(merged)
+      assert %{field: "position x", satellite: "G01", epoch_index: 0} = fields
+      assert_in_delta fields.stored, 15_000_000.0005, 1.0e-6
+      assert {:error, {:record_value_not_representable, ^fields}} = SP3.to_iodata(merged)
+    end
+
+    test "quarantines a position all centers disagree on and keeps the clock" do
       # Three centers, mutually beyond the default 0.5 m tolerance on G01.
       a = sp3_records([{"G01", [15_000.000, -20_000.0, 5000.0], 100.0}])
       b = sp3_records([{"G01", [15_000.010, -20_000.0, 5000.0], 100.0}])
@@ -151,10 +237,34 @@ defmodule Sidereon.GNSS.SP3MergeTest do
 
       assert {:ok, merged, report} = SP3.merge([a, b, c])
 
-      refute "G01" in SP3.satellite_ids(merged),
-             "no consensus -> G01 omitted, not averaged across disagreeing centers"
+      # No position consensus: the position is omitted, not averaged across the
+      # disagreeing centers.
+      assert {:error, {:unknown_satellite, "G01"}} = SP3.state(merged, "G01", 0)
+      assert {:ok, []} = SP3.states_at(merged, 0)
+      assert [%{satellite: "G01", sources: [0, 1, 2]}] = report.quarantined
 
-      assert [%{satellite: "G01"}] = report.quarantined
+      # The clock is a separate channel. One satellite is fewer than the default
+      # `clock_min_common` of 5, so only the first center's clock is on the
+      # common datum; G01 stays in the product as that clock-only record.
+      assert SP3.satellite_ids(merged) == ["G01"]
+      assert [%{satellite: "G01", sources: [0]}] = report.single_source
+
+      assert [cell] = report.agreement.cells
+      assert %{satellite: "G01", position_members: 0, position_rms_m: nil, position_max_m: nil, clock_members: 1} = cell
+    end
+
+    test "omits a satellite with no agreed position and no clock" do
+      # G01 as above but with no clock anywhere; G02 agrees so the product is not
+      # empty.
+      a = sp3_records([{"G01", [15_000.000, -20_000.0, 5000.0], nil}, {"G02", [16_000.0, -21_000.0, 6000.0], nil}])
+      b = sp3_records([{"G01", [15_000.010, -20_000.0, 5000.0], nil}, {"G02", [16_000.0, -21_000.0, 6000.0], nil}])
+      c = sp3_records([{"G01", [15_000.020, -20_000.0, 5000.0], nil}, {"G02", [16_000.0, -21_000.0, 6000.0], nil}])
+
+      assert {:ok, merged, report} = SP3.merge([a, b, c])
+
+      assert SP3.satellite_ids(merged) == ["G02"]
+      assert {:error, {:unknown_satellite, "G01"}} = SP3.state(merged, "G01", 0)
+      assert [%{satellite: "G01", sources: [0, 1, 2]}] = report.quarantined
     end
 
     test "rejects an outlier and combines the agreeing centers" do
@@ -255,7 +365,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert reconciliation.rates.translation_mm_per_year == [0.0, -0.1, 0.2]
     end
 
-    test "accepts commensurate mixed epoch intervals and rejects non-divisible ones" do
+    test "accepts mixed epoch intervals on the greatest common grid" do
       {:ok, a} =
         SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS14", 900.0))
 
@@ -268,12 +378,13 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       # A finer target is valid: a coarse input contributes only its real cells.
       assert {:ok, _merged, _report} = SP3.merge([a], epoch_interval_s: 300.0)
 
-      # A non-divisible cadence (900 vs 400) is still rejected.
+      # 900 s and 400 s inputs merge on their 100 s greatest common grid, which
+      # holds every input epoch; the core no longer refuses them.
       {:ok, d} =
         SP3.parse(sp3_bytes([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}], "IGS14", 400.0))
 
-      assert {:error, reason} = SP3.merge([a, d])
-      assert to_string(reason) =~ "mismatched epoch intervals"
+      assert {:ok, merged, _report} = SP3.merge([a, d], min_agree: 1)
+      assert SP3.epochs_j2000_seconds(merged) == SP3.epochs_j2000_seconds(a)
     end
 
     test "filters the merged product to requested constellations" do
@@ -289,7 +400,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert {:error, {:unsupported_system, :bad}} = SP3.merge([multi], systems: [:bad])
     end
 
-    test "window verdict mapping follows the product-derived stencil at a daily seam" do
+    test "window verdict mapping follows the selected interpolation nodes at a daily seam" do
       first = SP3.load!(@daily_sp3)
       second = shifted_daily_product_with_x_offset(3_000.0)
       seam = first |> SP3.epochs_j2000_seconds() |> List.last()
@@ -315,7 +426,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
                 all_defects: [_ | _],
                 all_splices: [_ | _]
               }} =
-               SP3.merge_continuity_verdict(report, merged, elem(inside_one_day, 0), elem(inside_one_day, 1))
+               SP3.merge_continuity_verdict(report, elem(inside_one_day, 0), elem(inside_one_day, 1))
 
       assert {:ok,
               %{
@@ -323,13 +434,37 @@ defmodule Sidereon.GNSS.SP3MergeTest do
                 accepted: false,
                 influencing_defects: [_ | _],
                 influencing_splices: [%{from_sources: [0], to_sources: [1], crosses_contributors: true} | _]
-              }} = SP3.merge_continuity_verdict(report, merged, seam - 600.0, seam + 600.0)
+              }} = SP3.merge_continuity_verdict(report, seam - 600.0, seam + 600.0)
 
-      assert {:ok, %{decision: :refuse, accepted: false}} =
-               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 3_300.0)
+      # A merge verdict reads the nodes the window's interpolations select, as
+      # RTKLIB pephpos selects them: the last node strictly before the query and
+      # five either side of it. A window ending on the node five before the seam
+      # reaches the node before the seam; any later end reaches the seam record,
+      # a pair end of the violation. The stencil extent no longer decides a merge
+      # verdict, so a window ending at it is accepted.
+      assert {:ok, %{decision: :accept, accepted: true}} =
+               SP3.merge_continuity_verdict(report, seam - 7_200.0, seam - 3_300.0)
 
       assert {:ok, %{decision: :accept, accepted: true}} =
-               SP3.merge_continuity_verdict(report, merged, seam - 7_200.0, seam - 3_300.001)
+               SP3.merge_continuity_verdict(report, seam - 7_200.0, seam - 1_500.0)
+
+      assert {:ok, %{decision: :refuse, accepted: false}} =
+               SP3.merge_continuity_verdict(report, seam - 7_200.0, seam - 1_499.999)
+
+      # The nodes those verdicts read: the window ending five nodes before the
+      # seam reaches the node before it, and any later end reaches the seam
+      # record. They are the merged product's own node selection.
+      for satellite <- ["C08", "C21"] do
+        assert {:ok, miss} = SP3.merge_continuity_selected_nodes(report, satellite, seam - 7_200.0, seam - 1_500.0)
+        assert List.last(miss) == seam - 300.0
+
+        assert {:ok, reach} =
+                 SP3.merge_continuity_selected_nodes(report, satellite, seam - 7_200.0, seam - 1_499.999)
+
+        assert List.last(reach) == seam
+        assert reach == Enum.sort(reach)
+        assert {:ok, ^reach} = SP3.selected_nodes(merged, satellite, seam - 7_200.0, seam - 1_499.999)
+      end
 
       assert {:ok, %{decision: :refuse, influencing_splices: [], all_splices: []}} =
                SP3.continuity_verdict(merged, seam - 600.0, seam + 600.0,
@@ -338,14 +473,151 @@ defmodule Sidereon.GNSS.SP3MergeTest do
                )
     end
 
+    test "the merge continuity report names each splice's cells, contributors and measurements" do
+      first = SP3.load!(@daily_sp3)
+      second = shifted_daily_product_with_x_offset(3_000.0)
+      seam = first |> SP3.epochs_j2000_seconds() |> List.last()
+
+      assert {:ok, _merged, report} =
+               SP3.merge([first, second],
+                 combine: :precedence,
+                 min_agree: 1,
+                 verify_continuity: [orbit_class: :meo_gnss, residual_tolerance_m: nil]
+               )
+
+      # With the residual check off, the speed gate alone finds the seam pair
+      # of each satellite, the last record of the first day (source 0) and the
+      # first of the shifted day (source 1), 300 s apart.
+      assert %{splices: [_ | _] = splices, violations: violations} = report.continuity
+      assert violations == splices
+
+      for splice <- splices do
+        defect = splice.defect
+        assert defect.kind == :speed_bound
+        assert {defect.from_j2000_s, defect.to_j2000_s} == {seam, seam + 300.0}
+        assert defect.interval_s == 300.0
+        assert defect.implied_speed_m_s == defect.displacement_m / defect.interval_s
+        assert {defect.magnitude, defect.bound} == {defect.implied_speed_m_s, defect.bound_m_s}
+        assert defect.implied_speed_m_s > defect.bound_m_s
+        refute Map.has_key?(defect, :node_epochs_j2000_s)
+
+        assert splice.sources == [0, 1]
+
+        assert splice.cells == [
+                 %{epoch_j2000_s: seam, role: :pair_end, selection: %{kind: :single_source, source: 0}},
+                 %{epoch_j2000_s: seam + 300.0, role: :pair_end, selection: %{kind: :single_source, source: 1}}
+               ]
+      end
+    end
+
+    test "the report lists input epochs off an explicit target grid and what it did not write" do
+      first = SP3.load!(@daily_sp3)
+      epochs = SP3.epochs_j2000_seconds(first)
+      assert length(epochs) == 288
+
+      # A 600 s target over a 300 s product holds every other input epoch.
+      assert {:ok, merged, report} = SP3.merge([first], min_agree: 1, epoch_interval_s: 600.0)
+      assert length(SP3.epochs_j2000_seconds(merged)) == 144
+
+      assert length(report.dropped_input_epochs) == 144
+
+      assert Enum.all?(report.dropped_input_epochs, fn dropped ->
+               dropped.source == 0 and rem(dropped.epoch_index, 2) == 1 and
+                 dropped.reason == :off_target_grid and is_binary(dropped.epoch.time_scale)
+             end)
+
+      assert report.omitted_epochs == []
+      assert report.arc_withheld == []
+      # One source is its own clock datum, so no clock of it is left out.
+      assert report.clock_omissions == []
+    end
+
+    test "satellite-arc precedence omits empty epochs and reports withheld cells and clocks" do
+      # Source A carries epochs 0-71 and source B epochs 60-83. A owns every
+      # satellite arc, so B's twelve epochs past A's end hold no cell: they are
+      # not written, and the report lists each of them, each withheld position
+      # and each of B's clocks there, whose datum offset to A is not observable
+      # past the overlap and is never extrapolated.
+      a = coverage_sp3(0, 72)
+      b = coverage_sp3(60, 24)
+      b_axis = SP3.epochs_j2000_seconds(b)
+
+      assert {:ok, merged, report} = SP3.merge([a, b], coverage_precedence(:satellite_arc))
+
+      assert SP3.epochs_j2000_seconds(merged) == SP3.epochs_j2000_seconds(a)
+      omitted = Enum.map(report.omitted_epochs, &merge_epoch_j2000_s/1)
+      assert omitted == Enum.drop(b_axis, 12)
+
+      assert length(report.arc_withheld) == 6 * 12
+
+      assert Enum.all?(report.arc_withheld, fn flag ->
+               flag.sources == [1] and merge_epoch_j2000_s(flag.epoch) in omitted
+             end)
+
+      assert length(report.clock_omissions) == 6 * 12
+
+      assert Enum.all?(report.clock_omissions, fn omission ->
+               omission.reason == :datum_not_observable and omission.source == 1 and
+                 omission.preferred == nil and omission.cell_has_clock == false and
+                 merge_epoch_j2000_s(omission.epoch) in omitted
+             end)
+
+      assert report.dropped_input_epochs == []
+    end
+
+    test "cell precedence writes positions past the overlap and names each clock it left out" do
+      a = coverage_sp3(0, 72)
+      b = coverage_sp3(60, 24)
+      past = b |> SP3.epochs_j2000_seconds() |> Enum.drop(12)
+
+      assert {:ok, merged, report} = SP3.merge([a, b], coverage_precedence(:cell))
+
+      assert length(SP3.epochs_j2000_seconds(merged)) == 84
+      assert report.omitted_epochs == []
+      assert report.arc_withheld == []
+
+      # B's positions fill epochs 72-83; its clocks there are not written.
+      assert length(report.clock_omissions) == 6 * 12
+
+      assert Enum.all?(report.clock_omissions, fn omission ->
+               omission.reason == :datum_not_observable and omission.source == 1 and
+                 omission.cell_has_clock == false and merge_epoch_j2000_s(omission.epoch) in past
+             end)
+    end
+
+    test "an explicit fractional target interval merges on its grid and lists the input epochs off it" do
+      # 450.5 s is a whole number of the 10 ns ticks an SP3 interval states.
+      # Anchored at 00:00, its grid meets the 300 s input grid again only after
+      # 270,300 s, so every input epoch after the first is off it.
+      a = coverage_sp3(0, 72)
+      axis = SP3.epochs_j2000_seconds(a)
+
+      assert {:ok, merged, report} = SP3.merge([a], min_agree: 1, epoch_interval_s: 450.5)
+      assert SP3.epochs_j2000_seconds(merged) == [hd(axis)]
+
+      assert Enum.map(report.dropped_input_epochs, &{&1.source, &1.epoch_index, &1.reason}) ==
+               Enum.map(1..71, &{0, &1, :off_target_grid})
+
+      assert Enum.map(report.dropped_input_epochs, &merge_epoch_j2000_s(&1.epoch)) == tl(axis)
+
+      # The core refuses a target no whole number of ticks states.
+      assert {:error, %{kind: "sp3_epoch_interval", field: "target_epoch_interval_s"} = reason} =
+               SP3.merge([coverage_sp3(0, 2)], min_agree: 1, epoch_interval_s: 1.0e-9)
+
+      assert is_binary(reason.value)
+    end
+
     test "merge verdict preserves nil when continuity verification was not requested" do
       first = SP3.load!(@daily_sp3)
       [from_j2000_s | _] = SP3.epochs_j2000_seconds(first)
-      assert {:ok, merged, report} = SP3.merge([first], min_agree: 1)
+      assert {:ok, _merged, report} = SP3.merge([first], min_agree: 1)
       assert report.continuity == nil
 
       assert {:ok, nil} =
-               SP3.merge_continuity_verdict(report, merged, from_j2000_s, from_j2000_s + 300.0)
+               SP3.merge_continuity_verdict(report, from_j2000_s, from_j2000_s + 300.0)
+
+      assert {:ok, nil} =
+               SP3.merge_continuity_selected_nodes(report, "C21", from_j2000_s, from_j2000_s + 300.0)
     end
   end
 

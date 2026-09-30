@@ -13,7 +13,14 @@ defmodule Sidereon.GNSS.SPP.RinexTest do
   test "assembles and solves RINEX OBS epochs from broadcast NAV" do
     obs = Observations.load!(@obs_path)
     nav = Broadcast.load!(@nav_path)
-    opts = [codes: %{"G" => ["C1C"]}, ionosphere: false, troposphere: true]
+
+    opts = [
+      codes: %{"G" => ["C1C"]},
+      ionosphere: false,
+      troposphere: true,
+      qzss_clock: :separate,
+      troposphere_model: :saastamoinen_niell
+    ]
 
     assert {:ok, [%EpochInputs{} = first | _] = inputs} = SPP.spp_inputs_from_rinex_obs(nav, obs, opts)
     assert length(inputs) == length(Observations.epochs(obs))
@@ -23,6 +30,8 @@ defmodule Sidereon.GNSS.SPP.RinexTest do
     assert Enum.all?(first.observations, fn {sat, range_m} -> String.starts_with?(sat, "G") and is_float(range_m) end)
     assert first.initial_guess == {3_582_105.291, 532_589.7313, 5_232_754.8054, 0.0}
     assert first.corrections == %{ionosphere: false, troposphere: true}
+    assert first.qzss_clock == :separate
+    assert first.troposphere_model == :saastamoinen_niell
 
     assert {:ok, [%EpochSolution{} = solved | _] = solutions} = SPP.solve_spp_from_rinex_obs(nav, obs, opts)
     assert length(solutions) == length(inputs)
@@ -34,5 +43,16 @@ defmodule Sidereon.GNSS.SPP.RinexTest do
     assert is_float(solution.position.y_m)
     assert is_float(solution.position.z_m)
     assert solution.used_sats != []
+  end
+
+  test "rejects unknown model selectors before calling the native assembler" do
+    obs = Observations.load!(@obs_path)
+    nav = Broadcast.load!(@nav_path)
+
+    assert {:error, {:invalid_option, :qzss_clock}} =
+             SPP.spp_inputs_from_rinex_obs(nav, obs, qzss_clock: :independent)
+
+    assert {:error, {:invalid_option, :troposphere_model}} =
+             SPP.solve_spp_from_rinex_obs(nav, obs, troposphere_model: :other)
   end
 end

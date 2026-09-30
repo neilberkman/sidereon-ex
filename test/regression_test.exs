@@ -17,7 +17,8 @@ defmodule Sidereon.RegressionTest do
         "ECCENTRICITY" => 0.0,
         "ARG_OF_PERICENTER" => 0.0,
         "MEAN_ANOMALY" => 0.0,
-        "MEAN_MOTION" => 1.0
+        "MEAN_MOTION" => 1.0,
+        "BSTAR" => 0.0
       }
 
       {:ok, el} = OMM.parse(omm)
@@ -35,7 +36,8 @@ defmodule Sidereon.RegressionTest do
         "ECCENTRICITY" => 0.0,
         "ARG_OF_PERICENTER" => 0.0,
         "MEAN_ANOMALY" => 0.0,
-        "MEAN_MOTION" => 1.0
+        "MEAN_MOTION" => 1.0,
+        "BSTAR" => 0.0
       }
 
       {:ok, el} = OMM.parse(omm)
@@ -51,7 +53,8 @@ defmodule Sidereon.RegressionTest do
         "ECCENTRICITY" => 0.0,
         "ARG_OF_PERICENTER" => 0.0,
         "MEAN_ANOMALY" => 0.0,
-        "MEAN_MOTION" => 1.0
+        "MEAN_MOTION" => 1.0,
+        "BSTAR" => 0.0
       }
 
       {:ok, el} = OMM.parse(omm)
@@ -67,11 +70,14 @@ defmodule Sidereon.RegressionTest do
                Sidereon.SGP4.propagate(el, ~U[2024-01-01 00:00:00Z])
     end
 
-    test "nil catalog_number returns error" do
-      el = struct(Sidereon.Elements, epoch: ~U[2024-01-01 00:00:00Z], catalog_number: nil)
+    test "nil catalog_number propagates as a stated one does" do
+      # SGP4 propagates without the catalog number, and an OMM need not state
+      # one, so elements without it propagate to the same state.
+      stated = valid_sgp4_elements()
+      unstated = %{stated | catalog_number: nil}
 
-      assert {:error, {:missing_field, :catalog_number}} =
-               Sidereon.SGP4.propagate(el, ~U[2024-01-01 00:00:00Z])
+      assert {:ok, teme} = Sidereon.SGP4.propagate(stated, ~U[2024-01-01 01:00:00Z])
+      assert {:ok, ^teme} = Sidereon.SGP4.propagate(unstated, ~U[2024-01-01 01:00:00Z])
     end
 
     test "empty struct returns error, not crash" do
@@ -84,8 +90,6 @@ defmodule Sidereon.RegressionTest do
     test "missing NIF element fields return tagged errors instead of zero-filling" do
       for field <- [
             :bstar,
-            :mean_motion_dot,
-            :mean_motion_double_dot,
             :eccentricity,
             :arg_perigee_deg,
             :inclination_deg,
@@ -98,6 +102,17 @@ defmodule Sidereon.RegressionTest do
                  |> Map.put(field, nil)
                  |> Sidereon.SGP4.to_nif_elements_map()
       end
+    end
+
+    test "unstated mean-motion derivatives are carried as nil and propagate as zeros do" do
+      unstated = %{valid_sgp4_elements() | mean_motion_dot: nil, mean_motion_double_dot: nil}
+
+      assert {:ok, %{mean_motion_dot: nil, mean_motion_double_dot: nil}} =
+               Sidereon.SGP4.to_nif_elements_map(unstated)
+
+      at = ~U[2024-01-01 06:00:00Z]
+      assert {:ok, state} = Sidereon.SGP4.propagate(unstated, at)
+      assert {:ok, ^state} = Sidereon.SGP4.propagate(valid_sgp4_elements(), at)
     end
 
     test "invalid NIF element fields return tagged errors" do
@@ -127,11 +142,16 @@ defmodule Sidereon.RegressionTest do
       assert TLE.encode(%{valid_tle_elements() | catalog_number: nil}) ==
                {:error, {:missing_field, :catalog_number}}
 
-      assert TLE.encode(%{valid_tle_elements() | elset_number: nil}) ==
-               {:error, {:missing_field, :elset_number}}
+      assert TLE.encode(%{valid_tle_elements() | mean_motion_dot: nil}) ==
+               {:error, {:missing_field, :mean_motion_dot}}
+    end
 
-      assert TLE.encode(%{valid_tle_elements() | rev_number: nil}) ==
-               {:error, {:missing_field, :rev_number}}
+    test "writes an unstated element set or revolution number as a blank field" do
+      assert {:ok, {line1, _line2}} = TLE.encode(%{valid_tle_elements() | elset_number: nil})
+      assert String.slice(line1, 64, 4) == "    "
+
+      assert {:ok, {_line1, line2}} = TLE.encode(%{valid_tle_elements() | rev_number: nil})
+      assert String.slice(line2, 63, 5) == "     "
     end
 
     test "returns tagged errors on bounded field overflows" do

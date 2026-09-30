@@ -11,6 +11,7 @@ defmodule Sidereon.GNSS.ARAIM do
   alias Sidereon.GNSS.ARAIM
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Row do
     @moduledoc """
@@ -62,7 +63,7 @@ defmodule Sidereon.GNSS.ARAIM do
           {:ok, new(id, {e_x, e_y, e_z}, elevation_deg * :math.pi() / 180.0, system)}
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :araim_line_of_sight_from_az_el_deg)
     end
 
     @doc false
@@ -624,7 +625,7 @@ defmodule Sidereon.GNSS.ARAIM do
       end
     end
   rescue
-    e in ErlangError -> {:error, Map.get(e, :original, e)}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :araim_solve)
   end
 
   @doc false

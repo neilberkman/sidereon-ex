@@ -29,6 +29,44 @@ defmodule Sidereon.GNSS.SP3Test do
   EOF
   """
 
+  # The same header and G01 track over eleven 15-minute epochs, 00:00 through
+  # 02:30, the node count the position interpolator takes (RTKLIB pephpos's
+  # NMAX + 1). G01 moves 100 km per epoch on each axis from the first record.
+  defp sp3c_eleven_epochs do
+    header = [
+      "#cP2020  6 24  0  0  0.00000000      11 ORBIT IGS14 FIT  TST",
+      "## 2111 432000.00000000   900.00000000 59024 0.0000000000000",
+      "+    1   G01  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+      "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+      "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+      "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
+      "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "%i    0    0    0    0      0      0      0      0         0",
+      "/* TEST SP3-c FIXTURE, ELEVEN EPOCHS"
+    ]
+
+    records =
+      Enum.flat_map(0..10, fn index ->
+        minutes = index * 15
+        hour = div(minutes, 60)
+        minute = rem(minutes, 60)
+        step = 100.0 * index
+
+        [
+          "*  2020  6 24 " <>
+            String.pad_leading(Integer.to_string(hour), 2) <>
+            " " <> String.pad_leading(Integer.to_string(minute), 2) <> "  0.00000000",
+          "PG01" <>
+            fmt(15_000.0 + step) <>
+            fmt(-20_000.0 - step) <> fmt(5_000.0 + step) <> fmt(123.456789 + index)
+        ]
+      end)
+
+    Enum.join(header ++ records ++ ["EOF", ""], "\n")
+  end
+
   defp sp3d_velocity_fixture do
     header = [
       "#dV2020  6 24  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
@@ -101,8 +139,15 @@ defmodule Sidereon.GNSS.SP3Test do
 
   describe "position/3" do
     setup do
-      {:ok, sp3} = SP3.parse(@sp3c)
+      {:ok, sp3} = SP3.parse(sp3c_eleven_epochs())
       {:ok, sp3: sp3}
+    end
+
+    test "refuses a query fewer than eleven nodes serve, naming the satellite and counts" do
+      {:ok, two_epochs} = SP3.parse(@sp3c)
+
+      assert {:error, {:insufficient_precise_nodes, "G01", 2, 11}} =
+               SP3.position(two_epochs, "G01", ~N[2020-06-24 00:00:00])
     end
 
     test "evaluates at a node epoch, returning ITRF meters + clock seconds", %{sp3: sp3} do
@@ -117,7 +162,7 @@ defmodule Sidereon.GNSS.SP3Test do
 
     test "exposes the parsed SP3 node coverage", %{sp3: sp3} do
       {:ok, start_s} = Time.epoch_to_j2000_seconds(~N[2020-06-24 00:00:00])
-      {:ok, end_s} = Time.epoch_to_j2000_seconds(~N[2020-06-24 00:15:00])
+      {:ok, end_s} = Time.epoch_to_j2000_seconds(~N[2020-06-24 02:30:00])
 
       assert SP3.coverage(sp3) == %{
                start_j2000_s: start_s / 1.0,
@@ -140,7 +185,7 @@ defmodule Sidereon.GNSS.SP3Test do
     end
 
     test "rejects out-of-coverage epochs unless extrapolation is explicit", %{sp3: sp3} do
-      epoch = ~N[2020-06-24 00:20:00]
+      epoch = ~N[2020-06-24 02:35:00]
 
       assert {:error, :outside_coverage} = SP3.position(sp3, "G01", epoch)
       assert {:ok, %SP3.State{}} = SP3.position(sp3, "G01", epoch, extrapolate: true)
@@ -164,10 +209,12 @@ defmodule Sidereon.GNSS.SP3Test do
     test "Python-style SP3 aliases serialize and interpolate through core paths", %{sp3: sp3} do
       {:ok, start_s} = Time.epoch_to_j2000_seconds(~N[2020-06-24 00:00:00])
 
-      assert {:ok, reparsed} = SP3.parse(SP3.to_sp3_string(sp3))
+      assert {:ok, text} = SP3.to_sp3_string(sp3)
+      assert {:ok, reparsed} = SP3.parse(text)
       assert SP3.satellite_ids(reparsed) == SP3.satellite_ids(sp3)
 
-      assert {:ok, batch} = SP3.interpolate(sp3, "G01", [start_s / 1.0])
+      {:ok, eleven} = SP3.parse(sp3c_eleven_epochs())
+      assert {:ok, batch} = SP3.interpolate(eleven, "G01", [start_s / 1.0])
 
       assert {:ok, %{position_ecef_m: {x_m, y_m, z_m}, clock_s: clock_s}} =
                StateBatch.element(batch, 0)

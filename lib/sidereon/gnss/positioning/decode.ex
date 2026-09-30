@@ -10,7 +10,7 @@ defmodule Sidereon.GNSS.Positioning.Decode do
     decode(
       {:ok,
        {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops, nil,
-        {nil, nil}}}
+        {nil, nil}, nil, nil}}
     )
   end
 
@@ -18,6 +18,18 @@ defmodule Sidereon.GNSS.Positioning.Decode do
         {:ok,
          {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops,
           rx_clock_drift_s_s, position_covariance}}
+      ) do
+    decode(
+      {:ok,
+       {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops,
+        rx_clock_drift_s_s, position_covariance, nil, nil}}
+    )
+  end
+
+  def decode(
+        {:ok,
+         {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops,
+          rx_clock_drift_s_s, position_covariance, pseudorange_variances_m2, weights}}
       ) do
     {:ok,
      %Solution{
@@ -30,6 +42,8 @@ defmodule Sidereon.GNSS.Positioning.Decode do
        position_covariance: covariance_map(position_covariance),
        dop: dop_map(dop),
        residuals_m: residuals,
+       pseudorange_variances_m2: pseudorange_variances_m2,
+       weights: weights,
        used_sats: used,
        rejected_sats: Enum.map(rejected, fn {sat, reason} -> {sat, reason} end),
        metadata: metadata_map(metadata)
@@ -47,7 +61,9 @@ defmodule Sidereon.GNSS.Positioning.Decode do
 
   def map_solve_error({:error, :ephemeris_lost, sat}), do: {:error, {:ephemeris_lost, sat}}
 
-  def map_solve_error({:error, :ionosphere_unsupported, sat}), do: {:error, {:ionosphere_unsupported, sat}}
+  def map_solve_error({:error, :ut1_outside_coverage, side}), do: {:error, {:ut1_outside_coverage, side}}
+
+  def map_solve_error({:error, :selection_unsettled, passes}), do: {:error, {:selection_unsettled, passes}}
 
   def map_solve_error({:error, reason}), do: {:error, reason}
 
@@ -68,7 +84,7 @@ defmodule Sidereon.GNSS.Positioning.Decode do
 
   defp metadata_map(
          {iterations, converged, status, iono, tropo, outer_iterations, final_robust_scale_m, used_count, systems,
-          redundancy, raim_checkable?, geometry_quality}
+          redundancy, raim_checkable?, geometry_quality, ut1_degraded}
        ) do
     base = %{
       iterations: iterations,
@@ -80,7 +96,8 @@ defmodule Sidereon.GNSS.Positioning.Decode do
       systems: systems,
       redundancy: redundancy,
       raim_checkable?: raim_checkable?,
-      geometry_quality: GeometryQuality.from_nif(geometry_quality)
+      geometry_quality: GeometryQuality.from_nif(geometry_quality),
+      ut1_degraded: ut1_degraded
     }
 
     case final_robust_scale_m do

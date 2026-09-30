@@ -60,7 +60,7 @@ Read by the broadcast-ephemeris parity recipe (`parity/generator/broadcast_eval.
 and `parity/generator/broadcast_golden_fixture.py`) to extract Keplerian elements and
 clock terms and emit the hex-float golden vectors. The same file is vendored into the
 consuming repos' test trees by `parity/sync_vendored_fixtures.sh` for the RINEX NAV
-parser test and the `Orbis.GNSS.Broadcast` wrapper test.
+parser test and the `Sidereon.GNSS.Broadcast` wrapper test.
 
 ## `KMS300DNK_R_20221591000_01H_MN.rnx` (RINEX 4.00)
 

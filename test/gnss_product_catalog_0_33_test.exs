@@ -3,6 +3,7 @@ defmodule Sidereon.GNSS.ProductCatalog033Test do
 
   alias Sidereon.GNSS.Data
   alias Sidereon.GNSS.Distribution
+  alias Sidereon.GNSS.SP3
 
   test "IGS final SP3 naming and CDDIS packaging follow the historical era" do
     assert {:error, {:unsupported_product, _reason}} = Data.mgex_sp3(:igs, ~D[1994-01-01])
@@ -287,12 +288,28 @@ defmodule Sidereon.GNSS.ProductCatalog033Test do
     assert {:error, {:unsupported_product, "cod_prd1/sp3"}} =
              Data.product(:cod_prd1, :sp3, ~D[2026-07-12])
 
+    # CODE finals before GPS week 2238 are AIUB's short-name MGEX products,
+    # COM<week><day>.EPH under CODE_MGEX/CODE/<year>, compressed with .Z, from
+    # 2014-01-01; earlier orbits have no cataloged name.
     assert {:error, {:unsupported_product, _reason}} =
-             Data.product(:cod, :sp3, ~D[2022-11-26])
+             Data.product(:cod, :sp3, ~D[2013-12-31])
+
+    assert {:ok, legacy} = Data.product(:cod, :sp3, ~D[2022-11-26])
+    assert {:ok, "COM22376.EPH"} = Data.canonical_filename(legacy)
+
+    assert {:ok, "https://www.aiub.unibe.ch/download/CODE_MGEX/CODE/2022/COM22376.EPH.Z"} =
+             Data.archive_url(legacy)
 
     assert {:error, {:unsupported_product, "cod_prd1/sp3"}} =
              Data.fetch_merged_sp3(~D[2026-07-12], [:cod_prd1],
                http_client: fn _url, _opts -> flunk("unsupported request reached transport") end
              )
+  end
+
+  test "SP3 validate_identity_policy confirms valid options and refuses invalid target cadence" do
+    assert :ok = SP3.validate_identity_policy([])
+    assert :ok = SP3.validate_identity_policy(epoch_interval_s: 300.0)
+    assert {:error, _reason} = SP3.validate_identity_policy(epoch_interval_s: 0.0)
+    assert {:error, _reason} = SP3.validate_identity_policy(epoch_interval_s: -300.0)
   end
 end

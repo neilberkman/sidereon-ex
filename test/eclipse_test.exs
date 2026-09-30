@@ -108,12 +108,12 @@ defmodule Sidereon.EclipseTest do
     @describetag :spk_file
 
     setup do
-      paths = [
-        Path.expand("~/.skyfield/de421.bsp"),
-        Path.expand("~/de421.bsp"),
-        "/tmp/de421.bsp",
-        Path.join(File.cwd!(), "de421.bsp")
-      ]
+      paths =
+        [
+          System.get_env("SIDEREON_DE421_BSP"),
+          Path.join(File.cwd!(), "de421.bsp")
+        ]
+        |> Enum.reject(&is_nil/1)
 
       path = Enum.find(paths, &File.exists?/1)
 

@@ -6,9 +6,10 @@
 
 use crate::sp3::Sp3Resource;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+use sidereon_core::astro::time::{DegradeReason, ValidityMode};
 use sidereon_core::observables::j2000_seconds_from_split;
 use sidereon_core::ppp_corrections as core;
-use sidereon_core::tides::{OceanLoadingBlq, NUM_OCEAN_CONSTITUENTS};
+use sidereon_core::tides::{OceanLoadingBlq, StationTideConstants, NUM_OCEAN_CONSTITUENTS};
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 
 type Vec3 = (f64, f64, f64);
@@ -20,8 +21,8 @@ type EpochTerm = (DateTimeTuple, f64, f64, Vec<ObservationTerm>);
 type FrequencyTerm = (String, Vec3, Vec<(f64, f64)>);
 type AntennaTerm = (
     String,
-    Option<DateTimeTuple>,
-    Option<DateTimeTuple>,
+    Option<ValidityTerm>,
+    Option<ValidityTerm>,
     Vec<FrequencyTerm>,
 );
 type SatelliteAntennaTerm = (String, f64, String, f64, Vec<AntennaTerm>);
@@ -49,6 +50,8 @@ pub fn ppp_corrections_build<'a>(
     satellite_antenna: Option<SatelliteAntennaTerm>,
     pole_tide: Option<PoleTideTerm>,
     ocean_loading: Option<OceanLoadingTerm>,
+    validity: String,
+    tide_constants: String,
 ) -> NifResult<Term<'a>> {
     let epochs = decode_epochs(epochs)?;
     let mut options = core::PppCorrectionsOptions::new();
@@ -58,13 +61,34 @@ pub fn ppp_corrections_build<'a>(
     options.phase_windup = phase_windup;
     options.satellite_antenna = decode_satellite_antenna_options(satellite_antenna)?;
     options.code_bias = None;
-    let corrections = core::build(
+    let validity = match validity.as_str() {
+        "strict" => ValidityMode::Strict,
+        "permissive" => ValidityMode::Permissive,
+        _ => {
+            return Err(Error::Term(Box::new(
+                "validity must be strict or permissive",
+            )))
+        }
+    };
+    let tide_constants = match tide_constants.as_str() {
+        "conventions" => StationTideConstants::Conventions,
+        "iers_routine" => StationTideConstants::IersRoutine,
+        _ => return Err(Error::Term(Box::new("invalid station tide constants"))),
+    };
+    let validated = core::build_with_validity_and_tide_constants(
         &handle.sp3,
         &epochs,
         vec3_to_array(receiver_ecef_m),
         &options,
+        validity,
+        tide_constants,
     )
     .map_err(crate::errors::invalid_input)?;
+    let corrections = validated.value;
+    let degraded = validated.degraded.map(|reason| match reason {
+        DegradeReason::BeforeCoverage => "before_coverage",
+        DegradeReason::AfterCoverage => "after_coverage",
+    });
 
     Ok((
         atoms::ok(),
@@ -75,6 +99,7 @@ pub fn ppp_corrections_build<'a>(
             encode_sat_scalars(&corrections.sat_pcv_m),
             encode_tide(&corrections.pole_tide),
             encode_tide(&corrections.ocean_loading),
+            degraded,
         ),
     )
         .encode(env))
@@ -125,8 +150,8 @@ fn decode_satellite_antenna_options(
                 .collect();
             Ok(core::SatelliteAntenna {
                 sat: sat_from_token(&sat)?,
-                valid_from: valid_from.map(civil_from_tuple),
-                valid_until: valid_until.map(civil_from_tuple),
+                valid_from: valid_from.map(civil_from_validity).transpose()?,
+                valid_until: valid_until.map(civil_from_validity).transpose()?,
                 frequencies,
             })
         })
@@ -195,6 +220,36 @@ fn civil_from_tuple(tuple: DateTimeTuple) -> core::CivilDateTime {
         minute: time.1 as u8,
         second: time.2 as f64 + time.3 as f64 / 1_000_000.0,
     }
+}
+
+/// A satellite antenna validity bound: date, whole clock fields and the exact
+/// fraction of the second as `(digits, scale)`, as the ANTEX reader keeps it.
+type ValidityTerm = ((i32, i32, i32), (i32, i32, i32), (u64, u64));
+
+/// A validity bound as the civil epoch the antenna selection compares, its
+/// seconds the nearest double to the exact decimal the bound states.
+fn civil_from_validity(term: ValidityTerm) -> NifResult<core::CivilDateTime> {
+    let ((year, month, day), (hour, minute, second), (digits, scale)) = term;
+    let field = |value: i32, name: &'static str| {
+        u8::try_from(value).map_err(|_| {
+            Error::Term(Box::new(format!(
+                "antenna validity {name} {value} is outside 0..=255"
+            )))
+        })
+    };
+    let second = field(second, "second")?;
+    Ok(core::CivilDateTime {
+        year,
+        month: field(month, "month")?,
+        day: field(day, "day")?,
+        hour: field(hour, "hour")?,
+        minute: field(minute, "minute")?,
+        second: crate::antex::validity_seconds(second, digits, scale).ok_or_else(|| {
+            Error::Term(Box::new(
+                "antenna validity fraction is not below one second",
+            ))
+        })?,
+    })
 }
 
 fn sat_from_token(token: &str) -> NifResult<GnssSatelliteId> {

@@ -164,13 +164,14 @@ defmodule Sidereon.EphemerisTest do
     @describetag :spk_file
 
     setup do
-      # Look for DE421 in common locations.
-      paths = [
-        Path.expand("~/.skyfield/de421.bsp"),
-        Path.expand("~/de421.bsp"),
-        "/tmp/de421.bsp",
-        Path.join(File.cwd!(), "de421.bsp")
-      ]
+      # A DE421 file named by SIDEREON_DE421_BSP, or de421.bsp in the working
+      # directory.
+      paths =
+        [
+          System.get_env("SIDEREON_DE421_BSP"),
+          Path.join(File.cwd!(), "de421.bsp")
+        ]
+        |> Enum.reject(&is_nil/1)
 
       path = Enum.find(paths, &File.exists?/1)
 

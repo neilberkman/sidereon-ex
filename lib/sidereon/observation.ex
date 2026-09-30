@@ -16,6 +16,7 @@ defmodule Sidereon.Observation do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type vec3 :: {number(), number(), number()}
   @type surface_point :: %{latitude_deg: float(), longitude_deg: float()}
@@ -35,7 +36,7 @@ defmodule Sidereon.Observation do
       {lat, lon} -> {:ok, %{latitude_deg: lat, longitude_deg: lon}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observation_sub_solar_point)
   end
 
   @doc """
@@ -52,7 +53,7 @@ defmodule Sidereon.Observation do
 
     wrap_scalar(NIF.observation_terminator_latitude_deg(sub_lat / 1.0, sub_lon / 1.0, longitude_deg / 1.0))
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observation_terminator_latitude_deg)
   end
 
   @doc """
@@ -74,7 +75,7 @@ defmodule Sidereon.Observation do
       )
     )
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observation_parallactic_angle_deg)
   end
 
   @doc """
@@ -96,7 +97,7 @@ defmodule Sidereon.Observation do
       )
     )
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observation_satellite_visual_magnitude)
   end
 
   @doc """
@@ -121,7 +122,7 @@ defmodule Sidereon.Observation do
       {lat, lon} -> {:ok, %{latitude_deg: lat, longitude_deg: lon}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observation_sub_observer_point)
   end
 
   defp floats3({x, y, z}), do: {x * 1.0, y * 1.0, z * 1.0}

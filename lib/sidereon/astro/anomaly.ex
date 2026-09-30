@@ -4,9 +4,10 @@ defmodule Sidereon.Astro.Anomaly do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
   alias Sidereon.OrbitalElements
 
-  @type scalar_result :: {:ok, float()} | {:error, atom()}
+  @type scalar_result :: {:ok, float()} | {:error, atom() | Sidereon.argument_error()}
   @type kepler_solution :: %{anomaly: float(), iterations: non_neg_integer()}
 
   @doc "Mean anomaly to eccentric anomaly."
@@ -34,14 +35,14 @@ defmodule Sidereon.Astro.Anomaly do
   def true_to_mean(true_anom, ecc), do: scalar(:anomaly_true_to_mean, true_anom, ecc)
 
   @doc "Solve Kepler's equation for the middle anomaly."
-  @spec solve_kepler(number(), number()) :: {:ok, kepler_solution()} | {:error, atom()}
+  @spec solve_kepler(number(), number()) :: {:ok, kepler_solution()} | {:error, atom() | Sidereon.argument_error()}
   def solve_kepler(mean_anom, ecc) do
     case NIF.anomaly_solve_kepler(mean_anom / 1.0, ecc / 1.0) do
       {:ok, fields} -> {:ok, %{anomaly: fields.anomaly, iterations: fields.iterations}}
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :anomaly_solve_kepler)
   end
 
   @doc "Propagate classical elements by `dt_s` under two-body Kepler motion."
@@ -53,7 +54,7 @@ defmodule Sidereon.Astro.Anomaly do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :anomaly_propagate_kepler)
   end
 
   def mean_to_eccentric!(m, e), do: bang(mean_to_eccentric(m, e))
@@ -70,7 +71,7 @@ defmodule Sidereon.Astro.Anomaly do
   defp scalar(fun, value, ecc) do
     apply(NIF, fun, [value / 1.0, ecc / 1.0])
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, fun)
   end
 
   defp classical_map(%OrbitalElements{} = elements) do

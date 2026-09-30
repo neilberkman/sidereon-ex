@@ -140,7 +140,9 @@ defmodule Sidereon.GNSS.ReducedOrbit do
   Returns `{:ok, %Sidereon.GNSS.ReducedOrbit{}}` or a tagged error:
   `{:too_few_samples, got, required}`, `:invalid_window`, `:invalid_cadence`,
   `:singular_plane_fit`, `:raan_ambiguous`, `{:unsupported_source_frame, frame}`,
-  `{:unsupported_model, model}`, `:transform_unavailable`, `:fit_did_not_converge`.
+  `{:unsupported_model, model}`, `:transform_unavailable`, `:fit_did_not_converge`,
+  and `{:ut1_outside_coverage, :before_coverage | :after_coverage}` when a
+  sample's frame transform needs UT1 outside the UT1 table.
   """
   @spec fit([{epoch(), {number(), number(), number()}}], keyword()) :: {:ok, t()} | {:error, term()}
   def fit(source, opts \\ [])

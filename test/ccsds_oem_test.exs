@@ -37,28 +37,59 @@ defmodule Sidereon.CCSDS.OEMTest do
       assert {_, _, _} = state.velocity_km_s
     end
 
-    test "auto-detects XML to the same struct as KVN", %{oem: oem, xml: xml} do
+    test "auto-detects XML to the same struct as KVN, less the KVN comments", %{oem: oem, xml: xml} do
       assert {:ok, from_xml} = OEM.parse(xml)
-      assert from_xml == oem
+      assert from_xml == without_comments(oem)
     end
 
-    test "maps a structurally invalid message to an atom reason" do
-      assert {:error, reason} = OEM.parse_kvn("not an oem at all")
-      assert reason in [:missing_field, :invalid_field, :malformed]
+    test "keeps header and ephemeris comments at their positions", %{oem: oem} do
+      assert oem.comments == ["Annotated OEM fixture for a GPS navigation spacecraft."]
+      [segment] = oem.segments
+
+      assert segment.data_comments == [
+               %OEM.Comment{
+                 position: 0,
+                 text: "Epoch X Y Z X_DOT Y_DOT Z_DOT with one acceleration-bearing sample."
+               }
+             ]
+    end
+
+    test "keeps each covariance as its 21 lower-triangle values", %{oem: oem} do
+      [segment] = oem.segments
+      [%OEM.Covariance{cov_ref_frame: "RTN", lower_triangle: values} = covariance] = segment.covariances
+      assert length(values) == 21
+      assert hd(values) == 0.0001
+      assert Enum.at(Enum.at(OEM.Covariance.to_matrix(covariance), 2), 2) == 0.0003
+    end
+
+    test "reports each skipped KVN ephemeris line with its reason", %{kvn: kvn} do
+      broken =
+        String.replace(
+          kvn,
+          "2026-06-28T00:15:00.000 17450.223456",
+          "2026-06-28T00:15:00.000 17450.223456 extra"
+        )
+
+      assert {:ok, oem} = OEM.parse_kvn(broken)
+      assert [%OEM.SkippedState{segment: 0, reason: {:item_count, 8}} = skipped] = oem.skipped_states
+      assert skipped.line == 22
+      assert String.starts_with?(skipped.text, "2026-06-28T00:15:00.000")
+    end
+
+    test "names the line a structurally invalid message fails on" do
+      assert {:error, {:malformed_line, 1, "not an oem at all"}} = OEM.parse_kvn("not an oem at all")
     end
   end
 
   describe "encode/2 round-trip" do
     test "KVN round-trips to an equal struct", %{oem: oem} do
-      kvn = OEM.encode(oem)
-      assert is_binary(kvn)
+      assert {:ok, kvn} = OEM.encode(oem)
       assert {:ok, reparsed} = OEM.parse_kvn(kvn)
       assert reparsed == oem
     end
 
     test "XML round-trips to an equal struct", %{oem: oem} do
-      xml = OEM.encode(oem, format: :xml)
-      assert is_binary(xml)
+      assert {:ok, xml} = OEM.encode(oem, format: :xml)
       assert {:ok, reparsed} = OEM.parse_xml(xml)
       assert reparsed == oem
     end
@@ -71,5 +102,30 @@ defmodule Sidereon.CCSDS.OEMTest do
     test "rejects an unsupported format", %{oem: oem} do
       assert_raise ArgumentError, fn -> OEM.encode(oem, format: :json) end
     end
+
+    test "refuses a covariance without 21 values", %{oem: oem} do
+      [segment] = oem.segments
+      [covariance] = segment.covariances
+      segment = %{segment | covariances: [%{covariance | lower_triangle: [1.0]}]}
+
+      assert {:error, {:invalid_length, :"covariance.lower_triangle", 21, 1}} =
+               OEM.encode_kvn(%{oem | segments: [segment]})
+    end
+  end
+
+  defp without_comments(%OEM{} = oem) do
+    %{
+      oem
+      | comments: [],
+        segments:
+          Enum.map(oem.segments, fn segment ->
+            %{
+              segment
+              | metadata: %{segment.metadata | comments: []},
+                data_comments: [],
+                covariance_comments: []
+            }
+          end)
+    }
   end
 end

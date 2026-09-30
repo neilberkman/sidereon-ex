@@ -5,6 +5,7 @@ defmodule Sidereon.GNSS.ObservablesBatchTest do
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
+  alias Sidereon.NIF
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @rx {3_512_900.0, 780_500.0, 5_248_700.0}
@@ -52,6 +53,31 @@ defmodule Sidereon.GNSS.ObservablesBatchTest do
     assert {:error, :invalid_receiver} = bad_rx
   end
 
+  test "detailed batch results retain causes at original request indexes", %{sp3: sp3, ids: ids} do
+    [id | _] = ids
+
+    requests = [
+      {id, @rx, @epoch},
+      {id, @rx, ~N[2020-06-26 12:00:00]},
+      {"not-a-sat", @rx, @epoch},
+      {id, @rx, @epoch}
+    ]
+
+    assert [first, out_of_range, malformed, last] = Observables.predict_batch_detailed(sp3, requests)
+    assert {:ok, _} = first
+    assert {:error, range_error} = out_of_range
+    assert range_error.family == "ObservablesError"
+    assert range_error.kind == "EPHEMERIS"
+    assert range_error.cause.family == "CoreError"
+    assert range_error.cause.kind == "EPOCH_OUT_OF_RANGE"
+    assert {:error, id_error} = malformed
+    assert id_error.family == "ElixirInputError"
+    assert id_error.cause.family == "ElixirInputError"
+    assert id_error.cause.raw == id_error.reason
+    assert is_tuple(id_error.reason)
+    assert {:ok, _} = last
+  end
+
   test "an empty request list returns an empty list", %{sp3: sp3} do
     assert [] = Observables.predict_batch(sp3, [])
   end
@@ -87,6 +113,45 @@ defmodule Sidereon.GNSS.ObservablesBatchTest do
     assert_in_delta tropo_0, 2.4261120112807175, 1.0e-15
     assert_in_delta tropo_1, 2.50692031875299, 1.0e-15
     assert_in_delta tropo_2, 2.906273871798339, 1.0e-15
+  end
+
+  test "detailed emission errors keep typed causes alongside successful rows", %{sp3: sp3, ids: ids} do
+    [id | _] = ids
+    {:ok, epoch} = Time.epoch_to_j2000_seconds_fractional(@epoch)
+
+    assert {:ok, batch} =
+             Observables.emission_media_batch_detailed(
+               sp3,
+               [{id, epoch}, {"G99", epoch}],
+               @surface_rx
+             )
+
+    assert [first, missing] = batch.element_errors
+    assert first == nil
+    assert missing.family == "ObservablesError"
+    assert missing.kind == "EPHEMERIS"
+    assert missing.cause.kind == "UNKNOWN_SATELLITE"
+    assert missing.cause.satellite == "G99"
+  end
+
+  test "detailed emission call errors retain typed input validation", %{sp3: sp3} do
+    # A finite receiver keeps validation focused on the carrier. Klobuchar
+    # requires a carrier, so zero exercises the whole-call option validator.
+    assert {:error, error} =
+             NIF.emission_media_batch_detailed(
+               sp3.handle,
+               [],
+               {6_378_137.0, 0.0, 0.0},
+               0.0,
+               nil,
+               {"klobuchar", {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}},
+               nil
+             )
+
+    assert error.family == "ObservablesError"
+    assert error.kind == "INVALID_INPUT"
+    assert error.field == "options.carrier_hz"
+    assert error.input_kind == "NotPositive"
   end
 
   test "emission_media_batch accepts artifact sources and surfaces typed row statuses", %{sp3: sp3} do

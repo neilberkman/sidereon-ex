@@ -61,7 +61,7 @@ defmodule Sidereon.ConstantsTest do
       # @default_huber_sigma and @default_huber_max_iter; outer-tol has no binding
       # mirror but is pinned here so a core change surfaces in the binding.
       assert core.robust_scale_floor_m === 1.0
-      assert core.robust_max_outer === 5
+      assert core.robust_max_outer === 100
       assert core.robust_outer_tol_m === 1.0e-4
 
       # Huber constant (sidereon_core::astro::math::robust::HUBER_K).

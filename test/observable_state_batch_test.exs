@@ -57,4 +57,20 @@ defmodule Sidereon.ObservableStateBatchTest do
     assert StateBatch.missing_position_ecef_m() == {:nan, :nan, :nan}
     assert Enum.at(batch.positions_ecef_m, 1) == StateBatch.missing_position_ecef_m()
   end
+
+  test "detailed observable state batch retains core causes for error rows" do
+    {:ok, sp3} = SP3.parse(File.read!(@sp3_path))
+    sat = hd(SP3.satellite_ids(sp3))
+    [epoch0, epoch1 | _] = SP3.epochs_j2000_seconds(sp3)
+    outside_epoch = epoch0 - 100.0 * (epoch1 - epoch0)
+
+    assert {:ok, batch} = Interpolant.states_at_j2000_s_detailed(sp3, [sat, sat], [epoch0, outside_epoch])
+    assert batch.statuses == [:valid, :gap]
+    assert :ok = Enum.at(batch.results, 0)
+    assert {:error, error} = Enum.at(batch.results, 1)
+    assert error.family == "ObservablesError"
+    assert error.kind == "EPHEMERIS"
+    assert error.cause.kind == "EPOCH_OUT_OF_RANGE"
+    assert is_binary(error.cause.message)
+  end
 end

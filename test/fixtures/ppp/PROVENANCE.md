@@ -26,10 +26,10 @@ Fixtures backing `test/gnss_ppp_corrections_test.exs` (ZIM200CHE, 2026 day 133).
 
 - **Source:** copied verbatim from the `astrodynamics-gnss` crate
   (`tests/fixtures/tides/tides_dehant_golden.json`); IERS DEHANTTIDEINEL
-  reference cases. Used to check `Orbis.NIF.solid_earth_tide` through the NIF.
+  reference cases. Used to check the solid-earth-tide model through the NIF.
 
 ## `golden/sun_moon_skyfield_golden.json`
 
 - **Source:** copied from the `astrodynamics` crate
   (`tests/fixtures/bodies/sun_moon_skyfield_golden.json`); Skyfield/JPL DE440
-  geocentric Sun/Moon positions in ITRS. Used to check `Orbis.NIF.sun_moon_ecef`.
+  geocentric Sun/Moon positions in ITRS. Used to check the Sun and Moon ECEF positions.

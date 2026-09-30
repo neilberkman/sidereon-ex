@@ -57,6 +57,7 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
 
   alias Sidereon.GeometryQuality
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type vec3 :: {number(), number(), number()}
   @type solution :: %{
@@ -88,7 +89,7 @@ defmodule Sidereon.GNSS.RTK.MovingBaseline do
       {:error, epoch_index, reason} -> {:error, {epoch_index, reason}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_moving_baseline)
   end
 
   # --- term builders -------------------------------------------------------

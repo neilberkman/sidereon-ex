@@ -2,7 +2,6 @@ defmodule Sidereon.GNSS.Core.AntennaTerms do
   @moduledoc false
 
   alias Sidereon.GNSS.Antex
-  alias Sidereon.GNSS.Core.Epoch
   alias Sidereon.GNSS.Frequencies
 
   def frequency_hz(<<system::binary-size(1), "0", band::binary-size(1)>> = frequency),
@@ -18,42 +17,53 @@ defmodule Sidereon.GNSS.Core.AntennaTerms do
     hz
   end
 
-  def satellite_terms(%Antex{antennas: antennas}) do
-    antennas
-    |> Map.values()
+  # Every satellite block in file order, each validity interval of one id
+  # included, so the correction selects the interval valid at each epoch.
+  def satellite_terms(%Antex{blocks: blocks}) do
+    blocks
     |> Enum.filter(&(&1.kind == :satellite))
     |> Enum.map(fn ant ->
       {
         String.trim(ant.serial),
-        Epoch.maybe_datetime_tuple(ant.valid_from),
-        Epoch.maybe_datetime_tuple(ant.valid_until),
+        validity_term(ant.valid_from),
+        validity_term(ant.valid_until),
         noazi_frequency_terms(ant)
       }
     end)
   end
 
   def receiver_frequency_terms(%Antex.Antenna{frequencies: frequencies}) do
-    Enum.map(frequencies, fn {label, %Antex.Frequency{} = frequency} ->
+    Enum.map(frequencies, fn %Antex.Frequency{} = frequency ->
       samples =
         Enum.map(frequency.pcv_samples, fn sample ->
           {Map.get(sample, :azimuth_deg), sample.zenith_deg, sample.value_m}
         end)
 
-      {label, frequency.pco_m, samples}
+      {frequency.frequency, frequency.pco_m, samples}
     end)
   end
 
   def noazi_frequency_terms(%Antex.Antenna{frequencies: frequencies}) do
-    Enum.map(frequencies, fn {label, %Antex.Frequency{} = frequency} ->
-      {label, frequency.pco_m, noazi_pcv_samples(frequency)}
+    Enum.map(frequencies, fn %Antex.Frequency{} = frequency ->
+      {frequency.frequency, frequency.pco_m, noazi_pcv_samples(frequency)}
     end)
   end
 
+  # The section the label selects, refusing an ambiguous label as the lookup
+  # does; the caller has checked the label resolves.
   def receiver_correction_term(%Antex.Antenna{} = antenna, frequency) when is_binary(frequency) do
-    frequency_block = Map.fetch!(antenna.frequencies, String.trim(frequency))
+    {:ok, frequency_block} = Antex.frequency(antenna, frequency)
     {noazi, azi} = split_pcv_samples(frequency_block)
 
     {frequency_block.pco_m, noazi, azi}
+  end
+
+  # A validity bound with its exact fraction of a second, `(digits, scale)`.
+  defp validity_term(nil), do: nil
+
+  defp validity_term(%Antex.Epoch{} = epoch) do
+    {{epoch.year, epoch.month, epoch.day}, {epoch.hour, epoch.minute, epoch.second},
+     {epoch.fraction_digits, epoch.fraction_scale}}
   end
 
   defp frequency_hz(system, band, frequency) do

@@ -4,12 +4,13 @@
 //! arc tuples, forward thresholds/window caps to the crate, and encode the
 //! unchanged Sidereon public result shapes.
 
-use rustler::{Encoder, Env, NifResult, Term};
+use crate::time::ExactEpochResource;
+use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 use sidereon_core::carrier_phase::{
     self, ArcEpoch, CarrierPhaseError, CycleSlipOptions, SlipReason,
 };
 
-#[derive(Debug, Clone, rustler::NifMap)]
+#[derive(Clone, rustler::NifMap)]
 struct ArcEpochTerm {
     phi1: Option<f64>,
     phi2: Option<f64>,
@@ -20,6 +21,7 @@ struct ArcEpochTerm {
     f1: Option<f64>,
     f2: Option<f64>,
     gap_time_s: Option<f64>,
+    gap_epoch: Option<ResourceArc<ExactEpochResource>>,
 }
 
 mod atoms {
@@ -227,6 +229,7 @@ fn decode_arc(arc: Vec<ArcEpochTerm>) -> Vec<ArcEpoch> {
             f1_hz: epoch.f1,
             f2_hz: epoch.f2,
             gap_time_s: epoch.gap_time_s,
+            gap_epoch: epoch.gap_epoch.map(|handle| handle.epoch),
         })
         .collect()
 }

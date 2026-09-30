@@ -70,4 +70,4 @@ mix test --only skyfield_parity --exclude spk_file          # parity tests
 ## Test Tags
 
 - `:skyfield_parity`: bit-exact 0 ULP coordinate transform verification
-- `:spk_file`: requires JPL DE421 BSP file at `/tmp/de421.bsp`
+- `:spk_file`: requires the JPL DE421 BSP file, named by `SIDEREON_DE421_BSP` or as `de421.bsp` in the working directory

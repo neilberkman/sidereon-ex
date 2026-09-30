@@ -1,0 +1,186 @@
+{
+  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b simulate_scenario of g01_two_epochs.json",
+  "observations": {
+    "epoch_offsets": [
+      0,
+      1,
+      2
+    ],
+    "epoch_index": [
+      0,
+      1
+    ],
+    "satellite_id": [
+      {
+        "system": "Gps",
+        "prn": 1
+      },
+      {
+        "system": "Gps",
+        "prn": 1
+      }
+    ],
+    "code_observable": [
+      "C1C",
+      "C1C"
+    ],
+    "phase_observable": [
+      "L1C",
+      "L1C"
+    ],
+    "doppler_observable": [
+      "D1C",
+      "D1C"
+    ],
+    "carrier_hz": [
+      1575420000.0,
+      1575420000.0
+    ],
+    "pseudorange_m": [
+      19950610.112837296,
+      19953170.849343482
+    ],
+    "carrier_phase_cycles": [
+      104841163.76258583,
+      104854620.5237515
+    ],
+    "doppler_hz": [
+      -438.2296198968573,
+      -458.88508705029
+    ]
+  },
+  "truth_terms": {
+    "geometric_range_m": [
+      19950610.112837296,
+      19953170.849343482
+    ],
+    "satellite_clock_m": [
+      -0.0,
+      -0.0
+    ],
+    "receiver_clock_m": [
+      0.0,
+      0.0
+    ],
+    "satellite_clock_error_m": [
+      -0.0,
+      -0.0
+    ],
+    "ionosphere_m": [
+      0.0,
+      0.0
+    ],
+    "troposphere_m": [
+      0.0,
+      0.0
+    ],
+    "thermal_noise_m": [
+      0.0,
+      0.0
+    ],
+    "multipath_m": [
+      0.0,
+      0.0
+    ],
+    "quantization_m": [
+      0.0,
+      0.0
+    ],
+    "carrier_phase_geometric_cycles": [
+      104841163.76258583,
+      104854620.5237515
+    ],
+    "carrier_phase_receiver_clock_cycles": [
+      0.0,
+      0.0
+    ],
+    "carrier_phase_satellite_clock_cycles": [
+      -0.0,
+      -0.0
+    ],
+    "carrier_phase_satellite_clock_error_cycles": [
+      -0.0,
+      -0.0
+    ],
+    "carrier_phase_ionosphere_cycles": [
+      -0.0,
+      -0.0
+    ],
+    "carrier_phase_troposphere_cycles": [
+      0.0,
+      0.0
+    ],
+    "carrier_phase_thermal_noise_cycles": [
+      0.0,
+      0.0
+    ],
+    "carrier_phase_bias_cycles": [
+      0.0,
+      0.0
+    ],
+    "carrier_phase_quantization_cycles": [
+      0.0,
+      0.0
+    ],
+    "doppler_satellite_motion_hz": [
+      -438.2296198968573,
+      -458.88508705029
+    ],
+    "doppler_receiver_motion_hz": [
+      0.0,
+      0.0
+    ],
+    "doppler_satellite_clock_hz": [
+      0.0,
+      0.0
+    ],
+    "doppler_receiver_clock_hz": [
+      -0.0,
+      -0.0
+    ],
+    "doppler_satellite_clock_error_hz": [
+      0.0,
+      0.0
+    ],
+    "doppler_thermal_noise_hz": [
+      0.0,
+      0.0
+    ],
+    "doppler_quantization_hz": [
+      0.0,
+      0.0
+    ]
+  },
+  "receiver_truth": [
+    {
+      "t_rx_j2000_s": 646229000.0,
+      "position_ecef_m": [
+        6378137.0,
+        0.0,
+        0.0
+      ],
+      "velocity_ecef_m_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clock_m": 0.0,
+      "clock_rate_m_s": 0.0
+    },
+    {
+      "t_rx_j2000_s": 646229030.0,
+      "position_ecef_m": [
+        6378137.0,
+        0.0,
+        0.0
+      ],
+      "velocity_ecef_m_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clock_m": 0.0,
+      "clock_rate_m_s": 0.0
+    }
+  ]
+}

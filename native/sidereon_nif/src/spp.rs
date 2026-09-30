@@ -16,6 +16,9 @@
 //! ITRF/IGS ECEF meters and the geodetic latitude/longitude are radians, exactly
 //! as the crate produces them.
 
+use sidereon_core::astro::time::DegradeReason;
+use sidereon_core::positioning::{QzssClock, TroposphereModel};
+use sidereon_core::Error as CoreError;
 use sidereon_core::{
     ephemeris::Sp3,
     estimation::{
@@ -26,10 +29,10 @@ use sidereon_core::{
         solve_spp_from_rinex_obs as core_solve_spp_from_rinex_obs, solve_with_doppler_velocity,
         solve_with_fallback, spp_inputs_from_rinex_obs as core_spp_inputs_from_rinex_obs,
         BroadcastReason, Corrections, DopplerObservation, EphemerisSource, FallbackError,
-        FixSource, KlobucharCoeffs, Observation, ReceiverSolution, RejectionReason,
-        RinexSppEpochInputs, RinexSppEpochSolution, RinexSppError, RinexSppOptions, RobustConfig,
-        SolveInputs, SolvePolicy, SolvePolicyError, SourcedSolution, SppDopplerSolution, SppError,
-        SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
+        FixSource, KlobucharCoeffs, Observation, PseudorangeCode, ReceiverSolution,
+        RejectionReason, RinexSppEpochInputs, RinexSppEpochSolution, RinexSppError,
+        RinexSppOptions, RobustConfig, SolveInputs, SolvePolicy, SolvePolicyError, SourcedSolution,
+        SppDopplerSolution, SppError, SurfaceMet, DEFAULT_ROBUST_OUTER_TOL_M,
     },
     quality::{SolutionValidationError, SolutionValidationOptions},
     staleness::StalenessPolicy,
@@ -46,11 +49,18 @@ use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
 use crate::rinex_obs::RinexObsResource;
 use crate::sp3::Sp3Resource;
+use crate::time::ExactEpochResource;
 use sidereon_core::rinex::observations::{ObsEpochTime, SignalPolicy};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 type DopplerObservationTerm = (String, f64, f64, f64);
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SsrCorrectionSizeFields {
+    orbit_m: f64,
+    clock_m: f64,
+}
 
 #[rustler::nif]
 fn spp_residual_rms_m(residuals_m: Vec<f64>) -> f64 {
@@ -76,12 +86,69 @@ fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
 /// encoder that turns this into the actual `{:error, ...}` term.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SppErrorReason {
-    InvalidInput,
-    TooFewSatellites { used: i64, required: i64 },
-    SingularGeometry,
+    InvalidInput { field: String, kind: String },
+    TooFewSatellites { used: usize, required: usize },
+    SingularGeometry { cause: LeastSquaresErrorReason },
     DuplicateObservation { satellite: String },
     EphemerisLost { satellite: String },
-    IonosphereUnsupported { satellite: String },
+    SelectionUnsettled { passes: usize },
+    Ut1OutsideCoverage { reason: DegradeReason },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LeastSquaresErrorReason {
+    SingularJacobian,
+    InvalidInput { field: String, reason: String },
+}
+
+fn least_squares_error_reason(
+    error: &sidereon_core::astro::math::least_squares::SolveError,
+) -> LeastSquaresErrorReason {
+    use sidereon_core::astro::math::least_squares::SolveError as E;
+    match error {
+        E::SingularJacobian => LeastSquaresErrorReason::SingularJacobian,
+        E::InvalidInput { field, reason } => LeastSquaresErrorReason::InvalidInput {
+            field: (*field).to_string(),
+            reason: (*reason).to_string(),
+        },
+    }
+}
+
+pub(crate) fn spp_input_error_kind_name(
+    kind: sidereon_core::positioning::SppInputErrorKind,
+) -> &'static str {
+    use sidereon_core::positioning::SppInputErrorKind as K;
+    match kind {
+        K::NonFinite => "non_finite",
+        K::NotPositive => "not_positive",
+        K::Negative => "negative",
+        K::OutOfRange => "out_of_range",
+        K::Missing => "missing",
+        K::FloatParse => "float_parse",
+        K::IntParse => "int_parse",
+        K::InvalidCivilDate => "invalid_civil_date",
+        K::InvalidCivilTime => "invalid_civil_time",
+    }
+}
+
+fn least_squares_error_term<'a>(env: Env<'a>, error: &LeastSquaresErrorReason) -> Term<'a> {
+    match error {
+        LeastSquaresErrorReason::SingularJacobian => atom_from(env, "singular_jacobian"),
+        LeastSquaresErrorReason::InvalidInput { field, reason } => (
+            atom_from(env, "invalid_input"),
+            field.as_str(),
+            reason.as_str(),
+        )
+            .encode(env),
+    }
+}
+
+pub(crate) fn least_squares_error_term_from_core<'a>(
+    env: Env<'a>,
+    error: &sidereon_core::astro::math::least_squares::SolveError,
+) -> Term<'a> {
+    let reason = least_squares_error_reason(error);
+    least_squares_error_term(env, &reason)
 }
 
 impl SppErrorReason {
@@ -90,12 +157,13 @@ impl SppErrorReason {
     /// rename here is a breaking change.
     fn atom_name(&self) -> &'static str {
         match self {
-            SppErrorReason::InvalidInput => "invalid_input",
+            SppErrorReason::InvalidInput { .. } => "invalid_input",
             SppErrorReason::TooFewSatellites { .. } => "too_few_satellites",
-            SppErrorReason::SingularGeometry => "singular_geometry",
+            SppErrorReason::SingularGeometry { .. } => "singular_geometry",
             SppErrorReason::DuplicateObservation { .. } => "duplicate_observation",
             SppErrorReason::EphemerisLost { .. } => "ephemeris_lost",
-            SppErrorReason::IonosphereUnsupported { .. } => "ionosphere_unsupported",
+            SppErrorReason::SelectionUnsettled { .. } => "selection_unsettled",
+            SppErrorReason::Ut1OutsideCoverage { .. } => "ut1_outside_coverage",
         }
     }
 }
@@ -105,21 +173,29 @@ impl SppErrorReason {
 /// that real SP3 inputs do not naturally reach, has a tested mapping.
 fn spp_error_reason(e: &SppError) -> SppErrorReason {
     match e {
-        SppError::InvalidInput { .. } => SppErrorReason::InvalidInput,
-        SppError::TooFewSatellites { used, required } => SppErrorReason::TooFewSatellites {
-            used: *used as i64,
-            required: *required as i64,
+        SppError::InvalidInput { field, kind } => SppErrorReason::InvalidInput {
+            field: (*field).to_string(),
+            kind: spp_input_error_kind_name(*kind).to_string(),
         },
-        SppError::Singular(_) => SppErrorReason::SingularGeometry,
+        SppError::TooFewSatellites { used, required } => SppErrorReason::TooFewSatellites {
+            used: *used,
+            required: *required,
+        },
+        SppError::Singular(cause) => SppErrorReason::SingularGeometry {
+            cause: least_squares_error_reason(cause),
+        },
         SppError::DuplicateObservation { satellite } => SppErrorReason::DuplicateObservation {
             satellite: satellite.to_string(),
         },
         SppError::EphemerisLost { satellite } => SppErrorReason::EphemerisLost {
             satellite: satellite.to_string(),
         },
-        SppError::IonosphereUnsupported { satellite } => SppErrorReason::IonosphereUnsupported {
-            satellite: satellite.to_string(),
-        },
+        SppError::SelectionUnsettled { passes } => {
+            SppErrorReason::SelectionUnsettled { passes: *passes }
+        }
+        SppError::Ut1OutsideCoverage(reason) => {
+            SppErrorReason::Ut1OutsideCoverage { reason: *reason }
+        }
     }
 }
 
@@ -134,12 +210,19 @@ pub(crate) fn spp_error_reason_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> 
     let reason = spp_error_reason(e);
     let tag = atom_from(env, reason.atom_name());
     match reason {
-        SppErrorReason::InvalidInput => tag,
+        SppErrorReason::InvalidInput { field, kind } => {
+            (tag, field.as_str(), kind.as_str()).encode(env)
+        }
         SppErrorReason::TooFewSatellites { used, required } => (tag, used, required).encode(env),
-        SppErrorReason::SingularGeometry => tag,
+        SppErrorReason::SingularGeometry { cause } => {
+            (tag, least_squares_error_term(env, &cause)).encode(env)
+        }
         SppErrorReason::DuplicateObservation { satellite } => (tag, satellite).encode(env),
         SppErrorReason::EphemerisLost { satellite } => (tag, satellite).encode(env),
-        SppErrorReason::IonosphereUnsupported { satellite } => (tag, satellite).encode(env),
+        SppErrorReason::SelectionUnsettled { passes } => (tag, passes).encode(env),
+        SppErrorReason::Ut1OutsideCoverage { reason } => {
+            crate::errors::ut1_outside_coverage_term(env, reason)
+        }
     }
 }
 
@@ -149,18 +232,22 @@ pub(crate) fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
     let reason = spp_error_reason(e);
     let tag = atom_from(env, reason.atom_name());
     match reason {
-        SppErrorReason::InvalidInput => (atom::error(), tag).encode(env),
+        SppErrorReason::InvalidInput { .. } => (atom::error(), tag).encode(env),
         SppErrorReason::TooFewSatellites { used, required } => {
             (atom::error(), tag, used, required).encode(env)
         }
-        SppErrorReason::SingularGeometry => (atom::error(), tag).encode(env),
+        SppErrorReason::SingularGeometry { .. } => (atom::error(), tag).encode(env),
         SppErrorReason::DuplicateObservation { satellite } => {
             (atom::error(), tag, satellite).encode(env)
         }
         SppErrorReason::EphemerisLost { satellite } => (atom::error(), tag, satellite).encode(env),
-        SppErrorReason::IonosphereUnsupported { satellite } => {
-            (atom::error(), tag, satellite).encode(env)
-        }
+        SppErrorReason::SelectionUnsettled { passes } => (atom::error(), tag, passes).encode(env),
+        SppErrorReason::Ut1OutsideCoverage { reason } => (
+            atom::error(),
+            tag,
+            crate::errors::degrade_reason_atom(reason),
+        )
+            .encode(env),
     }
 }
 
@@ -218,6 +305,9 @@ pub(crate) fn status_atom_name(
         Status::CostTolerance => "cost_tolerance",
         Status::StepTolerance => "step_tolerance",
         Status::MaxEvaluations => "max_evaluations",
+        Status::SelectionSettled => "selection_settled",
+        Status::OuterBudgetExhausted => "outer_budget_exhausted",
+        Status::OuterOscillation => "outer_oscillation",
     }
 }
 
@@ -246,11 +336,14 @@ pub(crate) fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///   final_robust_scale_m | nil,
 ///   used_count, ["G", ...], redundancy,
 ///   raim_checkable,
-///   geometry_quality},                   # observability diagnostics
+///   geometry_quality,                    # observability diagnostics
+///   ut1_degraded},                       # nil | :before_coverage | :after_coverage
 ///  [{"G", clock_s}, {"E", clock_s}],     # per-system receiver clocks, seconds
 ///  [{"G", tdop}, {"E", tdop}],           # per-system TDOP, ascending system order
 ///  rx_clock_drift_s_s | nil,             # populated by SPP+Doppler solves
-///  {ecef_m2, enu_m2}}                    # position covariance blocks
+///  {ecef_m2, enu_m2},                    # position covariance blocks
+///  [variance_m2, ...],                   # code variances, used_sats order
+///  [effective_weight, ...]}              # inverse variances, used_sats order
 /// ```
 pub(crate) fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
     (atom::ok(), encode_solution_body(env, sol)).encode(env)
@@ -298,10 +391,23 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
         .iter()
         .map(|r| {
             let reason = match r.reason {
-                RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris"),
-                RejectionReason::LowElevation => atom_from(env, "low_elevation"),
-                RejectionReason::SbasWithdrawn => atom_from(env, "sbas_withdrawn"),
-                RejectionReason::SbasIonoUncovered => atom_from(env, "sbas_iono_uncovered"),
+                RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris").encode(env),
+                RejectionReason::SsrCorrectionExceedsLimit(size) => (
+                    atom_from(env, "ssr_correction_exceeds_limit"),
+                    SsrCorrectionSizeFields {
+                        orbit_m: size.orbit_m,
+                        clock_m: size.clock_m,
+                    },
+                )
+                    .encode(env),
+                RejectionReason::LowElevation => atom_from(env, "low_elevation").encode(env),
+                RejectionReason::SbasWithdrawn => atom_from(env, "sbas_withdrawn").encode(env),
+                RejectionReason::SbasIonoUncovered => {
+                    atom_from(env, "sbas_iono_uncovered").encode(env)
+                }
+                RejectionReason::IonosphereCarrierUnresolved => {
+                    atom_from(env, "ionosphere_carrier_unresolved").encode(env)
+                }
             };
             (r.satellite_id.to_string(), reason)
         })
@@ -340,6 +446,10 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             (sol.metadata.redundancy as i64).encode(env),
             sol.metadata.raim_checkable.encode(env),
             geometry_quality_to_term(env, sol.geometry_quality),
+            match sol.metadata.ut1_degraded {
+                Some(reason) => crate::errors::degrade_reason_atom(reason).encode(env),
+                None => atom::nil().encode(env),
+            },
         ],
     );
 
@@ -360,6 +470,8 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             system_tdops.encode(env),
             rx_clock_drift,
             position_covariance.encode(env),
+            sol.pseudorange_variances_m2.encode(env),
+            sol.weights.encode(env),
         ],
     )
 }
@@ -520,9 +632,10 @@ pub(crate) fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
 /// boundaries), so the term decodes as `Vec<(u8, i8)>` and collects into the
 /// core's [`BTreeMap<u8, i8>`]. An empty list yields an empty map, leaving every
 /// non-GLONASS solve bit-identical. Channel-range validity ([-7, +6]) is the
-/// crate's concern: an out-of-range channel for an observed GLONASS satellite
-/// with the ionosphere requested surfaces as
-/// [`SppError::IonosphereUnsupported`], not a boundary rejection.
+/// crate's concern: with the ionosphere requested, an observed GLONASS
+/// satellite with no channel or a channel outside the allocation is left out of
+/// the solve and reported in `rejected_sats` as
+/// `RejectionReason::IonosphereCarrierUnresolved`, not a boundary rejection.
 pub(crate) fn decode_glonass_channels(term: Term<'_>) -> NifResult<BTreeMap<u8, i8>> {
     let pairs: Vec<(u8, i8)> = term.decode().map_err(|_| {
         Error::Term(Box::new(
@@ -558,7 +671,10 @@ fn decode_optional_usize(term: Term<'_>, name: &'static str) -> NifResult<Option
     Ok(Some(value as usize))
 }
 
-fn decode_policy(max_pdop: Term<'_>, coarse_search_seeds: Term<'_>) -> NifResult<SolvePolicy> {
+pub(crate) fn decode_policy(
+    max_pdop: Term<'_>,
+    coarse_search_seeds: Term<'_>,
+) -> NifResult<SolvePolicy> {
     let mut validation = SolutionValidationOptions::default();
     validation.max_pdop = decode_optional_f64(max_pdop, "max_pdop")?;
     Ok(SolvePolicy {
@@ -629,7 +745,10 @@ fn decode_rinex_spp_options(
     temperature_k: f64,
     relative_humidity: f64,
     robust: Term<'_>,
+    qzss_clock: Term<'_>,
+    troposphere_model: Term<'_>,
 ) -> NifResult<RinexSppOptions> {
+    let (qzss_clock, troposphere_model) = decode_models(qzss_clock, troposphere_model)?;
     let mut options = RinexSppOptions::new(decode_signal_policy(obs, codes)?)
         .with_corrections(Corrections {
             ionosphere: apply_iono,
@@ -640,7 +759,9 @@ fn decode_rinex_spp_options(
             temperature_k,
             relative_humidity,
         })
-        .with_robust(decode_robust(robust)?);
+        .with_robust(decode_robust(robust)?)
+        .with_qzss_clock(qzss_clock)
+        .with_troposphere_model(troposphere_model);
 
     if let Some(initial_guess) = decode_optional_tuple4(initial_guess, "initial_guess")? {
         options = options.with_initial_guess(initial_guess);
@@ -696,8 +817,24 @@ fn rinex_spp_epoch_inputs_term<'a>(env: Env<'a>, epoch: &RinexSppEpochInputs) ->
                 .encode(env),
             corrections.encode(env),
             glonass_channels.encode(env),
+            qzss_clock_name(epoch.inputs.qzss_clock).encode(env),
+            troposphere_model_name(epoch.inputs.troposphere_model).encode(env),
         ],
     )
+}
+
+fn qzss_clock_name(clock: QzssClock) -> &'static str {
+    match clock {
+        QzssClock::Gps => "gps",
+        QzssClock::Separate => "separate",
+    }
+}
+
+fn troposphere_model_name(model: TroposphereModel) -> &'static str {
+    match model {
+        TroposphereModel::Rtklib => "rtklib",
+        TroposphereModel::SaastamoinenNiell => "saastamoinen_niell",
+    }
 }
 
 fn rinex_spp_inputs_terms<'a>(env: Env<'a>, epochs: &[RinexSppEpochInputs]) -> Vec<Term<'a>> {
@@ -711,10 +848,48 @@ fn rinex_spp_error_reason<'a>(env: Env<'a>, error: RinexSppError) -> Term<'a> {
     match error {
         RinexSppError::MissingApproxPosition => atom_from(env, "missing_approx_position"),
         RinexSppError::Observation(error) => {
-            (atom_from(env, "observation"), error.to_string()).encode(env)
+            let (kind, message) = rinex_spp_core_error_reason(error);
+            (
+                atom_from(env, "observation"),
+                (atom_from(env, kind), message),
+            )
+                .encode(env)
         }
         _ => (atom_from(env, "rinex_spp"), error.to_string()).encode(env),
     }
+}
+
+fn rinex_spp_core_error_reason(error: CoreError) -> (&'static str, String) {
+    let kind = match &error {
+        CoreError::Parse(_) => "parse",
+        CoreError::UnknownSatellite(_) => "unknown_satellite",
+        CoreError::MissingGlonassChannel => "missing_glonass_channel",
+        CoreError::MissingTerrainTile { .. } => "missing_terrain_tile",
+        CoreError::UnknownTerrainElevation { .. } => "unknown_terrain_elevation",
+        CoreError::NonWgs84TerrainTile { .. } => "non_wgs84_terrain_tile",
+        CoreError::TerrainTile { .. } => "terrain_tile",
+        CoreError::TerrainTileOrigin { .. } => "terrain_tile_origin",
+        CoreError::IonexOutOfCoverage(_) => "ionex_out_of_coverage",
+        CoreError::IonexNodesNotAvailable(_) => "ionex_nodes_not_available",
+        CoreError::IonexSlantUnavailable(_) => "ionex_slant_unavailable",
+        CoreError::IonexEpoch(_) => "ionex_epoch",
+        CoreError::EpochOutOfRange => "epoch_out_of_range",
+        CoreError::InsufficientPreciseNodes { .. } => "insufficient_precise_nodes",
+        CoreError::InvalidInput(_) => "invalid_input",
+        CoreError::Sp3EpochInterval(_) => "sp3_epoch_interval",
+        CoreError::Sp3MergeTolerance(_) => "sp3_merge_tolerance",
+        CoreError::ContinuityOptions(_) => "continuity_options",
+        CoreError::SbasEncode(_) => "sbas_encode",
+        CoreError::RtcmEncode(_) => "rtcm_encode",
+        CoreError::RtcmConversion(_) => "rtcm_conversion",
+        CoreError::Ut1OutsideCoverage(_) => "ut1_outside_coverage",
+        _ => "unhandled",
+    };
+    let message = match error {
+        CoreError::Parse(message) | CoreError::InvalidInput(message) => message,
+        other => other.to_string(),
+    };
+    (kind, message)
 }
 
 fn rinex_spp_epoch_solution_term<'a>(env: Env<'a>, epoch: &RinexSppEpochSolution) -> Term<'a> {
@@ -806,8 +981,92 @@ pub(crate) fn build_solve_inputs(
             temperature_k,
             relative_humidity,
         },
+        qzss_clock: QzssClock::Gps,
+        troposphere_model: TroposphereModel::Rtklib,
         robust,
+        // Single-frequency code, the core default; entry points that expose
+        // `:pseudorange_code` set it after building the inputs.
+        pseudorange_code: PseudorangeCode::SingleFrequency,
     })
+}
+
+pub(crate) fn decode_qzss_clock(term: Term<'_>) -> NifResult<QzssClock> {
+    decode_qzss_clock_name(&term.atom_to_string()?)
+}
+
+fn decode_qzss_clock_name(name: &str) -> NifResult<QzssClock> {
+    match name {
+        "gps" => Ok(QzssClock::Gps),
+        "separate" => Ok(QzssClock::Separate),
+        _ => Err(Error::Term(Box::new(
+            "qzss_clock must be :gps or :separate",
+        ))),
+    }
+}
+
+pub(crate) fn decode_troposphere_model(term: Term<'_>) -> NifResult<TroposphereModel> {
+    decode_troposphere_model_name(&term.atom_to_string()?)
+}
+
+fn decode_troposphere_model_name(name: &str) -> NifResult<TroposphereModel> {
+    match name {
+        "rtklib" => Ok(TroposphereModel::Rtklib),
+        "saastamoinen_niell" => Ok(TroposphereModel::SaastamoinenNiell),
+        _ => Err(Error::Term(Box::new(
+            "troposphere_model must be :rtklib or :saastamoinen_niell",
+        ))),
+    }
+}
+
+pub(crate) fn decode_models(
+    qzss_clock: Term<'_>,
+    troposphere_model: Term<'_>,
+) -> NifResult<(QzssClock, TroposphereModel)> {
+    Ok((
+        decode_qzss_clock(qzss_clock)?,
+        decode_troposphere_model(troposphere_model)?,
+    ))
+}
+
+pub(crate) fn set_models(
+    inputs: &mut SolveInputs,
+    qzss_clock: QzssClock,
+    troposphere_model: TroposphereModel,
+) {
+    inputs.qzss_clock = qzss_clock;
+    inputs.troposphere_model = troposphere_model;
+}
+
+/// Decode the `:pseudorange_code` option: `:single_frequency`, whose
+/// pseudoranges take the broadcast single-frequency group delay, or
+/// `:ionosphere_free`, which takes none.
+pub(crate) fn decode_pseudorange_code(term: Term<'_>) -> NifResult<PseudorangeCode> {
+    match term.atom_to_string()?.as_str() {
+        "single_frequency" => Ok(PseudorangeCode::SingleFrequency),
+        "ionosphere_free" => Ok(PseudorangeCode::IonosphereFree),
+        other => Err(Error::Term(Box::new(format!(
+            "pseudorange_code must be :single_frequency or :ionosphere_free, got {other}"
+        )))),
+    }
+}
+
+mod pseudorange_code_atoms {
+    rustler::atoms! {
+        single_frequency,
+        ionosphere_free,
+    }
+}
+
+pub(crate) fn pseudorange_code_from_atom(atom: rustler::Atom) -> NifResult<PseudorangeCode> {
+    if atom == pseudorange_code_atoms::single_frequency() {
+        Ok(PseudorangeCode::SingleFrequency)
+    } else if atom == pseudorange_code_atoms::ionosphere_free() {
+        Ok(PseudorangeCode::IonosphereFree)
+    } else {
+        Err(Error::Term(Box::new(
+            "pseudorange_code must be :single_frequency or :ionosphere_free",
+        )))
+    }
 }
 
 /// Run the solve against any ephemeris source and encode the result term.
@@ -836,6 +1095,30 @@ pub(crate) fn solve_to_term<'a>(
     }
 }
 
+pub(crate) fn solve_exact_to_term<'a>(
+    env: Env<'a>,
+    ephemeris: &dyn EphemerisSource,
+    mut inputs: SolveInputs,
+    receive_epoch: sidereon_core::astro::time::ExactEpoch,
+    with_geodetic: bool,
+    policy: SolvePolicy,
+) -> Term<'a> {
+    inputs.t_rx_j2000_s = receive_epoch.j2000_seconds();
+    let exact_inputs = sidereon_core::positioning::ExactSolveInputs {
+        inputs,
+        receive_epoch,
+    };
+    match sidereon_core::positioning::solve_with_exact_epoch_and_policy(
+        ephemeris,
+        &exact_inputs,
+        with_geodetic,
+        policy,
+    ) {
+        Ok(solution) => encode_solution(env, &solution),
+        Err(error) => solve_policy_error_term(env, &error),
+    }
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
 fn spp_solve<'a>(
@@ -858,7 +1141,12 @@ fn spp_solve<'a>(
     max_pdop: Term<'a>,
     coarse_search_seeds: Term<'a>,
     glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
     let robust = decode_robust(robust)?;
     let policy = decode_policy(max_pdop, coarse_search_seeds)?;
     let glonass_channels = decode_glonass_channels(glonass_channels)?;
@@ -877,7 +1165,9 @@ fn spp_solve<'a>(
         relative_humidity,
         robust,
     )?;
+    set_models(&mut inputs, models.0, models.1);
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code;
     Ok(solve_to_term(
         env,
         &handle.sp3,
@@ -911,7 +1201,12 @@ fn spp_solve_broadcast<'a>(
     max_pdop: Term<'a>,
     coarse_search_seeds: Term<'a>,
     glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
     let robust = decode_robust(robust)?;
     let policy = decode_policy(max_pdop, coarse_search_seeds)?;
     let glonass_channels = decode_glonass_channels(glonass_channels)?;
@@ -930,7 +1225,9 @@ fn spp_solve_broadcast<'a>(
         relative_humidity,
         robust,
     )?;
+    set_models(&mut inputs, models.0, models.1);
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code;
     // A BeiDou satellite uses the NAV product's own broadcast Klobuchar
     // coefficients (BDSA/BDSB) when present, rather than the GPS set the caller
     // supplied; both feed the same model, frequency-scaled to B1I.
@@ -957,6 +1254,130 @@ fn spp_solve_broadcast<'a>(
 
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
+fn spp_solve_exact<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    receive_epoch: ResourceArc<ExactEpochResource>,
+    observations: Vec<(String, f64)>,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    robust: Term<'a>,
+    max_pdop: Term<'a>,
+    coarse_search_seeds: Term<'a>,
+    glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
+    let robust = decode_robust(robust)?;
+    let policy = decode_policy(max_pdop, coarse_search_seeds)?;
+    let mut inputs = build_solve_inputs(
+        observations,
+        receive_epoch.epoch.j2000_seconds(),
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    set_models(&mut inputs, models.0, models.1);
+    inputs.glonass_channels = decode_glonass_channels(glonass_channels)?;
+    inputs.pseudorange_code = pseudorange_code;
+    Ok(solve_exact_to_term(
+        env,
+        &handle.sp3,
+        inputs,
+        receive_epoch.epoch,
+        with_geodetic,
+        policy,
+    ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_solve_broadcast_exact<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<BroadcastResource>,
+    receive_epoch: ResourceArc<ExactEpochResource>,
+    observations: Vec<(String, f64)>,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+    robust: Term<'a>,
+    max_pdop: Term<'a>,
+    coarse_search_seeds: Term<'a>,
+    glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
+    let robust = decode_robust(robust)?;
+    let policy = decode_policy(max_pdop, coarse_search_seeds)?;
+    let mut inputs = build_solve_inputs(
+        observations,
+        receive_epoch.epoch.j2000_seconds(),
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+        robust,
+    )?;
+    set_models(&mut inputs, models.0, models.1);
+    inputs.glonass_channels = decode_glonass_channels(glonass_channels)?;
+    inputs.pseudorange_code = pseudorange_code;
+    let ionosphere = handle.store.iono_corrections();
+    if let Some(beidou) = ionosphere.beidou {
+        inputs.beidou_klobuchar = Some(KlobucharCoeffs {
+            alpha: beidou.alpha,
+            beta: beidou.beta,
+        });
+    }
+    inputs.galileo_nequick = ionosphere.galileo;
+    Ok(solve_exact_to_term(
+        env,
+        &handle.store,
+        inputs,
+        receive_epoch.epoch,
+        with_geodetic,
+        policy,
+    ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn spp_solve_with_doppler<'a>(
     env: Env<'a>,
     handle: ResourceArc<Sp3Resource>,
@@ -976,7 +1397,12 @@ fn spp_solve_with_doppler<'a>(
     with_geodetic: bool,
     robust: Term<'a>,
     glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
     let robust = decode_robust(robust)?;
     let glonass_channels = decode_glonass_channels(glonass_channels)?;
     let mut inputs = build_solve_inputs(
@@ -994,7 +1420,9 @@ fn spp_solve_with_doppler<'a>(
         relative_humidity,
         robust,
     )?;
+    set_models(&mut inputs, models.0, models.1);
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code;
     let doppler_observations = decode_doppler_observations(doppler_observations)?;
 
     Ok(
@@ -1031,7 +1459,12 @@ fn spp_solve_broadcast_with_doppler<'a>(
     with_geodetic: bool,
     robust: Term<'a>,
     glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
     let robust = decode_robust(robust)?;
     let glonass_channels = decode_glonass_channels(glonass_channels)?;
     let mut inputs = build_solve_inputs(
@@ -1049,7 +1482,9 @@ fn spp_solve_broadcast_with_doppler<'a>(
         relative_humidity,
         robust,
     )?;
+    set_models(&mut inputs, models.0, models.1);
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code;
     let iono = handle.store.iono_corrections();
     if let Some(bds) = iono.beidou {
         inputs.beidou_klobuchar = Some(KlobucharCoeffs {
@@ -1094,6 +1529,9 @@ struct BatchEpoch {
     temperature_k: f64,
     relative_humidity: f64,
     glonass_channels: Vec<(u8, i8)>,
+    pseudorange_code: rustler::Atom,
+    qzss_clock: String,
+    troposphere_model: String,
 }
 
 impl BatchEpoch {
@@ -1117,7 +1555,13 @@ impl BatchEpoch {
             self.relative_humidity,
             robust,
         )?;
+        set_models(
+            &mut inputs,
+            decode_qzss_clock_name(&self.qzss_clock)?,
+            decode_troposphere_model_name(&self.troposphere_model)?,
+        );
         inputs.glonass_channels = self.glonass_channels.into_iter().collect();
+        inputs.pseudorange_code = pseudorange_code_from_atom(self.pseudorange_code)?;
         Ok(inputs)
     }
 }
@@ -1219,6 +1663,8 @@ fn spp_inputs_from_rinex_obs<'a>(
     temperature_k: f64,
     relative_humidity: f64,
     robust: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let options = decode_rinex_spp_options(
         &obs.obs,
@@ -1231,6 +1677,8 @@ fn spp_inputs_from_rinex_obs<'a>(
         temperature_k,
         relative_humidity,
         robust,
+        qzss_clock,
+        troposphere_model,
     )?;
     Ok(
         match core_spp_inputs_from_rinex_obs(&obs.obs, &source.store, &options) {
@@ -1260,6 +1708,8 @@ fn solve_spp_from_rinex_obs<'a>(
     temperature_k: f64,
     relative_humidity: f64,
     robust: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
     with_geodetic: bool,
     max_pdop: Term<'a>,
     coarse_search_seeds: Term<'a>,
@@ -1275,6 +1725,8 @@ fn solve_spp_from_rinex_obs<'a>(
         temperature_k,
         relative_humidity,
         robust,
+        qzss_clock,
+        troposphere_model,
     )?;
     let policy = decode_policy(max_pdop, coarse_search_seeds)?;
     Ok(
@@ -1383,7 +1835,12 @@ fn spp_solve_with_fallback<'a>(
     with_geodetic: bool,
     max_staleness_s: f64,
     glonass_channels: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let pseudorange_code = decode_pseudorange_code(pseudorange_code)?;
+    let models = decode_models(qzss_clock, troposphere_model)?;
     let glonass_channels = decode_glonass_channels(glonass_channels)?;
     let mut inputs = build_solve_inputs(
         observations,
@@ -1402,7 +1859,9 @@ fn spp_solve_with_fallback<'a>(
         // Huber/IRLS reweighting is threaded here.
         None,
     )?;
+    set_models(&mut inputs, models.0, models.1);
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code;
     // The broadcast fallback solve uses the NAV product's own BeiDou (BDSA/BDSB)
     // and Galileo (NeQuick-G) broadcast ionosphere coefficients when present,
     // matching `spp_solve_broadcast`; the GPS Klobuchar set the caller supplied
@@ -1437,12 +1896,38 @@ mod mapping_tests {
     use super::*;
     use sidereon_core::astro::math::least_squares::{SolveError, Status};
 
+    #[test]
+    fn rinex_spp_observation_errors_keep_the_core_error_kind() {
+        assert_eq!(
+            rinex_spp_core_error_reason(CoreError::Parse("bad epoch record".to_owned())),
+            ("parse", "bad epoch record".to_owned())
+        );
+        assert_eq!(
+            rinex_spp_core_error_reason(CoreError::InvalidInput("invalid header event".to_owned())),
+            ("invalid_input", "invalid header event".to_owned())
+        );
+        assert_eq!(
+            rinex_spp_core_error_reason(CoreError::EpochOutOfRange),
+            ("epoch_out_of_range", "epoch out of range".to_owned())
+        );
+    }
+
     fn gps(prn: u8) -> GnssSatelliteId {
         GnssSatelliteId::new(GnssSystem::Gps, prn).expect("valid satellite id")
     }
 
     #[test]
     fn spp_error_reason_is_total_over_every_variant() {
+        assert_eq!(
+            spp_error_reason(&SppError::InvalidInput {
+                field: "pressure_hpa",
+                kind: sidereon_core::positioning::SppInputErrorKind::NotPositive,
+            }),
+            SppErrorReason::InvalidInput {
+                field: "pressure_hpa".to_string(),
+                kind: "not_positive".to_string(),
+            }
+        );
         assert_eq!(
             spp_error_reason(&SppError::TooFewSatellites {
                 used: 3,
@@ -1455,7 +1940,21 @@ mod mapping_tests {
         );
         assert_eq!(
             spp_error_reason(&SppError::Singular(SolveError::SingularJacobian)),
-            SppErrorReason::SingularGeometry
+            SppErrorReason::SingularGeometry {
+                cause: LeastSquaresErrorReason::SingularJacobian
+            }
+        );
+        assert_eq!(
+            spp_error_reason(&SppError::Singular(SolveError::InvalidInput {
+                field: "rows",
+                reason: "must be nonempty",
+            })),
+            SppErrorReason::SingularGeometry {
+                cause: LeastSquaresErrorReason::InvalidInput {
+                    field: "rows".to_string(),
+                    reason: "must be nonempty".to_string(),
+                }
+            }
         );
         assert_eq!(
             spp_error_reason(&SppError::DuplicateObservation { satellite: gps(7) }),
@@ -1470,12 +1969,17 @@ mod mapping_tests {
             }
         );
         assert_eq!(
-            spp_error_reason(&SppError::IonosphereUnsupported {
-                satellite: GnssSatelliteId::new(GnssSystem::BeiDou, 5).expect("valid satellite id")
-            }),
-            SppErrorReason::IonosphereUnsupported {
-                satellite: "C05".to_string()
+            spp_error_reason(&SppError::Ut1OutsideCoverage(DegradeReason::AfterCoverage)),
+            SppErrorReason::Ut1OutsideCoverage {
+                reason: DegradeReason::AfterCoverage
             }
+        );
+        assert_eq!(
+            SppErrorReason::Ut1OutsideCoverage {
+                reason: DegradeReason::BeforeCoverage
+            }
+            .atom_name(),
+            "ut1_outside_coverage"
         );
     }
 
@@ -1490,7 +1994,10 @@ mod mapping_tests {
             "too_few_satellites"
         );
         assert_eq!(
-            SppErrorReason::SingularGeometry.atom_name(),
+            SppErrorReason::SingularGeometry {
+                cause: LeastSquaresErrorReason::SingularJacobian
+            }
+            .atom_name(),
             "singular_geometry"
         );
         assert_eq!(
@@ -1507,13 +2014,6 @@ mod mapping_tests {
             .atom_name(),
             "ephemeris_lost"
         );
-        assert_eq!(
-            SppErrorReason::IonosphereUnsupported {
-                satellite: String::new()
-            }
-            .atom_name(),
-            "ionosphere_unsupported"
-        );
     }
 
     #[test]
@@ -1525,5 +2025,17 @@ mod mapping_tests {
         assert_eq!(status_atom_name(Status::CostTolerance), "cost_tolerance");
         assert_eq!(status_atom_name(Status::StepTolerance), "step_tolerance");
         assert_eq!(status_atom_name(Status::MaxEvaluations), "max_evaluations");
+        assert_eq!(
+            status_atom_name(Status::SelectionSettled),
+            "selection_settled"
+        );
+        assert_eq!(
+            status_atom_name(Status::OuterBudgetExhausted),
+            "outer_budget_exhausted"
+        );
+        assert_eq!(
+            status_atom_name(Status::OuterOscillation),
+            "outer_oscillation"
+        );
     }
 }

@@ -1,10 +1,12 @@
 defmodule Sidereon.GNSS.QCTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.SP3
+  alias Sidereon.Test.ModelClock
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
@@ -14,8 +16,6 @@ defmodule Sidereon.GNSS.QCTest do
 
   # Interior epoch of the SP3 span (2020-06-24 00:00 -> 23:45 GPST).
   @epoch ~N[2020-06-24 12:00:00]
-
-  @c 299_792_458.0
 
   # Chosen clean receiver clock bias (~30 km of range); GPS-only -> one clock.
   @rx_bias_s 1.0e-4
@@ -37,10 +37,11 @@ defmodule Sidereon.GNSS.QCTest do
       |> Enum.sort_by(fn {_id, obs} -> -obs.elevation_deg end)
       |> Enum.take(7)
 
-    # Clean pseudorange set: P = geometric_range + c*(rx_bias - sat_clock).
+    # Clean pseudorange set: P = geometric_range + c*(rx_bias - sat_clock), with
+    # each satellite placed from its pseudorange as the solver places it.
     clean_obs =
-      Enum.map(visible, fn {id, obs} ->
-        {id, obs.geometric_range_m + @c * (@rx_bias_s - obs.sat_clock_s)}
+      Enum.map(visible, fn {id, _obs} ->
+        {id, ModelClock.spp_pseudorange(sp3, id, @rx, @epoch, @rx_bias_s)}
       end)
 
     {:ok, sp3: sp3, visible: visible, clean_obs: clean_obs}
@@ -81,9 +82,12 @@ defmodule Sidereon.GNSS.QCTest do
       assert strong < weak
     end
 
-    test "invalid (non-positive) elevation is a tagged error" do
+    test "elevation validation is delegated to the core variance model" do
       assert QC.pseudorange_variance(0.0) == {:error, :invalid_elevation}
-      assert QC.pseudorange_variance(-5.0) == {:error, :invalid_elevation}
+      assert_in_delta QC.pseudorange_variance(0.0, b: 0.0), 0.09, 1.0e-12
+      assert is_float(QC.pseudorange_variance(-5.0))
+      assert QC.pseudorange_variance(91.0) == {:error, :invalid_elevation}
+      assert QC.pseudorange_variance(30.0, a: -1.0) == {:error, :invalid_parameter}
     end
 
     test "C/N0 model without a cn0 value is a tagged error" do
@@ -92,12 +96,14 @@ defmodule Sidereon.GNSS.QCTest do
     end
 
     test "sigmas/2 and weight_vector/2 are consistent and drop invalid entries" do
-      entries = [{"G01", 90.0}, {"G02", 30.0}, {"G03", -1.0}]
+      entries = [{"G01", 90.0}, {"G02", 30.0}, {"G03", -1.0}, {"G04", 0.0}]
       sigmas = QC.sigmas(entries)
       weights = QC.weight_vector(entries)
 
-      refute Map.has_key?(sigmas, "G03")
-      refute Map.has_key?(weights, "G03")
+      assert Map.has_key?(sigmas, "G03")
+      assert Map.has_key?(weights, "G03")
+      refute Map.has_key?(sigmas, "G04")
+      refute Map.has_key?(weights, "G04")
 
       for {sat, sigma} <- sigmas do
         assert_in_delta weights[sat], 1.0 / (sigma * sigma), 1.0e-12
@@ -116,11 +122,18 @@ defmodule Sidereon.GNSS.QCTest do
       end
     end
 
-    test "rejects invalid probabilities and degrees of freedom at the public boundary" do
-      assert_raise ArgumentError, fn -> QC.chi2_inv(0.0, 1) end
-      assert_raise ArgumentError, fn -> QC.chi2_inv(1.0, 1) end
-      assert_raise ArgumentError, fn -> QC.chi2_inv(0.95, 0) end
+    test "core probability and degree refusals retain their typed quality kind" do
+      invalid_probability = assert_raise QC.QualityError, fn -> QC.chi2_inv(0.0, 1) end
+      assert invalid_probability.kind == :invalid_probability
+
+      invalid_dof = assert_raise QC.QualityError, fn -> QC.chi2_inv(0.95, 0) end
+      assert invalid_dof.kind == :invalid_dof
+      probability_first = assert_raise QC.QualityError, fn -> QC.chi2_inv(0.0, 0) end
+      assert probability_first.kind == :invalid_probability
+      negative_dof = assert_raise QC.QualityError, fn -> QC.chi2_inv(0.95, -1) end
+      assert negative_dof.kind == :invalid_dof
       assert_raise ArgumentError, fn -> QC.chi2_inv(0.95, 1.5) end
+      assert_raise ArgumentError, fn -> QC.chi2_inv(Integer.pow(10, 400), 1) end
     end
   end
 
@@ -140,6 +153,36 @@ defmodule Sidereon.GNSS.QCTest do
       assert result.dof == length(sol.used_sats) - 4
       assert result.test_statistic < result.threshold
     end
+
+    test "solution RAIM uses its stored variance vector and solved clock count", ctx do
+      assert {:ok, solution} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert length(solution.pseudorange_variances_m2) == length(solution.used_sats)
+      assert length(solution.weights) == length(solution.used_sats)
+
+      aliases = ["J01", "S20" | Enum.drop(solution.used_sats, 2)]
+
+      aliased_solution = %{
+        solution
+        | used_sats: aliases,
+          system_clocks_s: %{"G" => solution.rx_clock_s}
+      }
+
+      result = QC.raim_for_solution(aliased_solution)
+
+      assert result.dof == length(aliases) - 4
+      assert QC.raim_for_solution(aliased_solution, n_systems: nil) == result
+      assert QC.raim_for_solution(aliased_solution, n_systems: 3).dof == length(aliases) - 6
+
+      for invalid <- [1.5, :bad, 0] do
+        error =
+          assert_raise QC.QualityError, fn ->
+            QC.raim_for_solution(aliased_solution, n_systems: invalid)
+          end
+
+        assert error.kind == :invalid_system_count
+      end
+    end
   end
 
   describe "raim/2 direct post-solve input" do
@@ -158,7 +201,8 @@ defmodule Sidereon.GNSS.QCTest do
           acc + residual * residual * weights[sat]
         end)
 
-      expected_rms = :math.sqrt(Enum.reduce(residuals_m, 0.0, fn residual, acc -> acc + residual * residual end) / 5.0)
+      expected_rms =
+        :math.sqrt(Enum.reduce(residuals_m, 0.0, fn residual, acc -> acc + residual * residual end) / 5.0)
 
       assert %QC.RaimResult{} = result
       assert result.fault_detected == false
@@ -170,6 +214,32 @@ defmodule Sidereon.GNSS.QCTest do
       assert_in_delta result.rms_m, expected_rms, 1.0e-12
       assert Map.keys(result.normalized_residuals) == used_sats
       assert result.worst_sat in used_sats
+
+      no_overrides = QC.raim(input, weights: [], n_systems: 1)
+      assert no_overrides.testable
+      assert no_overrides.dof == 1
+    end
+
+    test "solution weighting requires actual variances and unit weighting ignores them" do
+      used_sats = ["G01", "G02", "G03", "G04", "G05"]
+      residuals_m = [0.15, -0.20, 0.05, 0.10, -0.12]
+      input = QC.RaimInput.new(used_sats, residuals_m)
+
+      missing = assert_raise QC.QualityError, fn -> QC.raim(input) end
+      assert missing.kind == :missing_variances
+
+      with_variances = QC.RaimInput.new(used_sats, residuals_m, [0.25, 0.25, 0.25, 0.25, 0.25])
+      result = QC.raim(with_variances)
+
+      expected =
+        Enum.reduce(residuals_m, 0.0, fn residual, sum -> sum + residual * residual / 0.25 end)
+
+      assert_in_delta result.test_statistic, expected, 1.0e-12
+
+      invalid_variances = QC.RaimInput.new(used_sats, residuals_m, [0.25, 0.25, 0.0, 0.25, 0.25])
+      invalid = assert_raise QC.QualityError, fn -> QC.raim(invalid_variances) end
+      assert invalid.kind == :invalid_variance
+      assert %QC.RaimResult{} = QC.raim(invalid_variances, weights: :unit)
     end
   end
 
@@ -214,6 +284,7 @@ defmodule Sidereon.GNSS.QCTest do
 
       assert fde.excluded == [{ctx.biased_sat, :raim_excluded}]
       assert fde.iterations == 1
+      assert fde.raim == QC.raim(fde.solution)
 
       recovered_error = position_error(fde.solution)
       assert recovered_error < 1.0e-2
@@ -230,17 +301,20 @@ defmodule Sidereon.GNSS.QCTest do
 
       assert fde.excluded == []
       assert fde.iterations == 0
+      assert fde.raim == QC.raim(fde.solution)
       assert position_error(fde.solution) < 1.0e-2
     end
   end
 
   describe "fde/4 option validation" do
-    test "malformed p_fa, weights, and max_iterations return tagged errors", ctx do
+    test "malformed p_fa, weights, exclusion budgets, and RMS caps return tagged errors", ctx do
       assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [p_fa: 0.0]) ==
                {:error, {:invalid_option, :p_fa}}
 
-      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [p_fa: 1.0e-20]) ==
-               {:error, {:invalid_option, :p_fa}}
+      assert {:error, %QC.QualityError{kind: :invalid_probability} = quality_error} =
+               QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [p_fa: 1.0e-20])
+
+      assert quality_error.message == "invalid probability"
 
       assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [weights: :bad]) ==
                {:error, {:invalid_option, :weights}}
@@ -248,11 +322,54 @@ defmodule Sidereon.GNSS.QCTest do
       assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [weights: %{"G01" => -1.0}]) ==
                {:error, {:invalid_option, :weights}}
 
-      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_iterations: :bad]) ==
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_exclusions: :bad]) ==
+               {:error, {:invalid_option, :max_exclusions}}
+
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_exclusions: -1]) ==
+               {:error, {:invalid_option, :max_exclusions}}
+
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_exclusion_rms_m: 0.0]) ==
+               {:error, {:invalid_option, :max_exclusion_rms_m}}
+
+      assert QC.fde(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [max_exclusions: 0, max_exclusion_rms_m: :nan]
+             ) ==
+               {:error, {:invalid_option, :max_exclusion_rms_m}}
+
+      huge = Integer.pow(10, 400)
+
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_exclusion_rms_m: huge]) ==
+               {:error, {:invalid_option, :max_exclusion_rms_m}}
+    end
+
+    test "removed max_iterations is refused on all SP3 and broadcast FDE routes" do
+      sp3 = %SP3{handle: nil, time_scale: "GPS", coverage_start: 0.0, coverage_end: 0.0}
+      broadcast = %Broadcast{handle: nil}
+
+      assert QC.fde(sp3, [], @epoch, max_iterations: nil) ==
                {:error, {:invalid_option, :max_iterations}}
 
-      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_iterations: -1]) ==
+      assert QC.robust_fde(sp3, [], @epoch, max_iterations: 0, max_exclusions: 0) ==
                {:error, {:invalid_option, :max_iterations}}
+
+      assert QC.fde(broadcast, [], @epoch, max_iterations: 0) ==
+               {:error, {:invalid_option, :max_iterations}}
+
+      assert QC.robust_fde(broadcast, [], @epoch, max_iterations: 1) ==
+               {:error, {:invalid_option, :max_iterations}}
+    end
+
+    test "range FDE rejects the removed option and unrepresentable RMS caps" do
+      huge = Integer.pow(10, 400)
+
+      assert QC.raim_fde_design([], max_iterations: 0) ==
+               {:error, {:invalid_option, :max_iterations}}
+
+      assert QC.raim_fde_design([], max_exclusion_rms_m: huge) ==
+               {:error, {:invalid_option, :max_exclusion_rms_m}}
     end
   end
 
@@ -294,22 +411,24 @@ defmodule Sidereon.GNSS.QCTest do
       {:ok, biased_sat: biased_sat, faulted_obs: faulted_obs}
     end
 
-    test "the loop refuses with {:fault_unresolved, T} at the cap, never a faulted fix", ctx do
-      # max_iterations: 0 means no exclusion is permitted; RAIM still flags the
+    test "the loop preserves the unresolved state and RAIM result at the cap", ctx do
+      # max_exclusions: 0 means no exclusion is permitted; RAIM still flags the
       # fix, so fde/4 must return the tagged refusal carrying the statistic.
-      opts = Keyword.put(@solve_opts, :max_iterations, 0)
+      opts = Keyword.merge(@solve_opts, max_exclusions: 0, weights: :unit)
 
-      assert {:error, {:fault_unresolved, statistic}} =
+      assert {:error, {:fault_unresolved, unresolved}} =
                QC.fde(ctx.sp3, ctx.faulted_obs, @epoch, opts)
 
-      assert is_float(statistic) and statistic > 0.0
+      assert unresolved.reason == "exclusion_budget_exhausted"
+      assert unresolved.solution.used_sats != []
+      assert unresolved.excluded == []
+      assert unresolved.iterations == 0
+      assert unresolved.raim.fault_detected?
+      assert is_float(unresolved.raim.test_statistic) and unresolved.raim.test_statistic > 0.0
 
-      # Sanity: that statistic is the RAIM statistic of the un-excluded faulted
-      # solve (it exceeds the chi-square threshold).
+      # The preserved RAIM result is the test for the last faulted solution.
       {:ok, faulted_sol} = Positioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
-      result = QC.raim(faulted_sol)
-      assert result.fault_detected?
-      assert_in_delta statistic, result.test_statistic, 1.0e-6
+      assert unresolved.raim == QC.raim(faulted_sol, weights: :unit)
     end
 
     test "a non-testable (dof <= 0) set is a legitimate {:ok} success, not a refusal", ctx do
@@ -323,7 +442,7 @@ defmodule Sidereon.GNSS.QCTest do
   end
 
   describe "raim/2 option validation" do
-    test "an out-of-range p_fa raises ArgumentError, not an obscure math error", ctx do
+    test "p_fa outside its documented interval raises ArgumentError", ctx do
       assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
 
       assert_raise ArgumentError, fn -> QC.raim(sol, p_fa: 0.0) end
@@ -336,6 +455,65 @@ defmodule Sidereon.GNSS.QCTest do
       bad_weights = Map.new(sol.used_sats, fn s -> {s, -1.0} end)
 
       assert_raise ArgumentError, fn -> QC.raim(sol, weights: bad_weights) end
+    end
+
+    test "tiny positive p_fa reaches the core and is only refused when a quantile is needed" do
+      four = QC.RaimInput.new(["G01", "G02", "G03", "G04"], [0.1, -0.2, 0.3, -0.1])
+      untestable = QC.raim(four, p_fa: 1.0e-20, weights: :unit, n_systems: 1)
+      refute untestable.testable
+
+      five = QC.RaimInput.new(["G01", "G02", "G03", "G04", "G05"], [0.1, -0.2, 0.3, -0.1, 0.2])
+
+      error =
+        assert_raise QC.QualityError, fn ->
+          QC.raim(five, p_fa: 1.0e-20, weights: :unit, n_systems: 1)
+        end
+
+      assert error.kind == :invalid_probability
+    end
+  end
+
+  describe "solve/4 :pseudorange_code" do
+    test "an SP3 source states no group delay; the code kind sets the RTKLIB pseudorange variance",
+         ctx do
+      assert {:ok, single} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert {:ok, iono_free} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [pseudorange_code: :ionosphere_free]
+               )
+
+      # RTKLIB rescode adds 0.3^2 m^2 and, with the ionosphere uncorrected,
+      # 25 (f_L1 / f)^4 m^2 to single-frequency code; ionosphere-free code takes
+      # neither and nine times the code error, at most 9 * 1.12 m^2 above the
+      # 5 degree floor. Every single-frequency variance is therefore larger, so
+      # its position covariance is larger on each axis, and the weights move
+      # the fix while the satellites used stay the same.
+      assert single.used_sats == iono_free.used_sats
+      assert single.position != iono_free.position
+
+      for axis <- 0..2 do
+        assert Enum.at(Enum.at(single.position_covariance.ecef_m2, axis), axis) >
+                 Enum.at(Enum.at(iono_free.position_covariance.ecef_m2, axis), axis)
+      end
+
+      assert single.metadata.ut1_degraded == nil
+    end
+
+    test "any other value is refused as an invalid option", ctx do
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [pseudorange_code: :dual]
+             ) ==
+               {:error, {:invalid_option, :pseudorange_code}}
+
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [pseudorange_code: "IF"]) ==
+               {:error, {:invalid_option, :pseudorange_code}}
     end
   end
 
@@ -392,9 +570,10 @@ defmodule Sidereon.GNSS.QCTest do
                )
 
       assert position_error(sol) < 1.0e-2
-      assert %{excluded: excluded, iterations: iterations} = sol.metadata.fde
+      assert %{excluded: excluded, iterations: iterations, raim: raim} = sol.metadata.fde
       assert excluded == []
       assert iterations == 0
+      assert raim.fault_detected? == false
     end
 
     test "malformed :huber options return tagged errors, never raise", ctx do
@@ -466,6 +645,16 @@ defmodule Sidereon.GNSS.QCTest do
       outlier = Enum.find(result.diagnostics, &(&1.id == "m4"))
       assert outlier.excluded
       assert abs(outlier.post_fit_residual_m) > 1.0
+
+      assert {:ok, uncapped} =
+               QC.raim_fde_design(rows, p_fa: 0.001, max_exclusion_rms_m: :infinity)
+
+      assert uncapped.excluded == ["m4"]
+
+      assert {:ok, budgeted} = QC.raim_fde_design(rows, p_fa: 0.001, max_exclusions: 0)
+      assert budgeted.excluded == []
+      assert budgeted.iterations == 0
+      assert budgeted.global_test.fault_detected
     end
 
     test "a rank-deficient design is reported as an error" do
@@ -474,8 +663,11 @@ defmodule Sidereon.GNSS.QCTest do
         %{id: "m1", residual_m: 0.0, design_row: [0.0], weight: 1.0}
       ]
 
-      assert {:error, reason} = QC.raim_fde_design(rows, p_fa: 0.001)
-      assert reason in [:singular_geometry, :invalid_design]
+      assert {:error, %QC.QualityError{kind: :singular_geometry} = error} =
+               QC.raim_fde_design(rows, p_fa: 0.001)
+
+      assert error.kind == :singular_geometry
+      assert error.message == "singular or rank-deficient geometry"
     end
   end
 end

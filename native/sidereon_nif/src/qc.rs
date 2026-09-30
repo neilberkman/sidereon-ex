@@ -2,7 +2,7 @@
 //!
 //! This module is glue over `sidereon_core::quality`: decode Sidereon terms,
 //! call the crate's pseudorange weighting, RAIM, and FDE functions, and encode
-//! the unchanged public result shapes.
+//! the public result maps.
 
 use std::collections::BTreeMap;
 
@@ -10,10 +10,10 @@ use rustler::types::atom;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use sidereon_core::positioning::{EphemerisSource, KlobucharCoeffs, RobustConfig, SppError};
 use sidereon_core::quality::{
-    self, FdeError, FdeOptions, FdeSppError, FdeSppOptions, PseudorangeVarianceModel,
-    PseudorangeVarianceOptions, QualityError, RaimInput, RaimOptions, RaimWeights,
-    RangeChiSquareTest, RangeFdeOptions, RangeFdeResult, RangeFdeRow, RangeMeasurementDiagnostic,
-    SolutionValidationError, SolutionValidationOptions, WeightEntry,
+    self, FdeError, FdeOptions, FdeSppError, FdeSppOptions, FdeUnresolvedReason,
+    PseudorangeVarianceModel, PseudorangeVarianceOptions, QualityError, RaimInput, RaimOptions,
+    RaimResult, RaimWeights, RangeChiSquareTest, RangeFdeOptions, RangeFdeResult, RangeFdeRow,
+    RangeMeasurementDiagnostic, SolutionValidationError, SolutionValidationOptions, WeightEntry,
 };
 
 use crate::broadcast::BroadcastResource;
@@ -112,11 +112,31 @@ struct RaimResultFields {
     testable: bool,
 }
 
+impl RaimResultFields {
+    fn from_core(result: RaimResult, residuals_m: &[f64]) -> Self {
+        let reduced_chi_square =
+            (result.dof > 0).then_some(result.test_statistic / result.dof as f64);
+        let rms_m = residual_rms_m(residuals_m);
+        Self {
+            fault_detected: result.fault_detected,
+            test_statistic: result.test_statistic,
+            threshold: result.threshold,
+            worst_sat: result.worst_sat,
+            reduced_chi_square,
+            normalized_residuals: result.normalized_residuals.into_iter().collect(),
+            rms_m,
+            dof: result.dof as i64,
+            testable: result.testable,
+        }
+    }
+}
+
 mod atoms {
     rustler::atoms! {
         ok,
         error,
         nil,
+        selection_unsettled,
         invalid_elevation,
         missing_cn0,
         invalid_probability,
@@ -129,7 +149,6 @@ mod atoms {
         singular_geometry,
         duplicate_observation,
         ephemeris_lost,
-        ionosphere_unsupported,
         degenerate_geometry,
         rank_deficient,
         implausible_position,
@@ -140,7 +159,9 @@ mod atoms {
         invalid_residuals,
         invalid_design,
         invalid_input,
-        invalid_options
+        invalid_options,
+        missing_variances,
+        invalid_variance
     }
 }
 
@@ -198,35 +219,40 @@ fn qc_chi2_inv<'a>(env: Env<'a>, p: f64, dof: i64) -> Term<'a> {
     let result = if dof >= 1 {
         quality::chi2_inv(p, dof as usize)
     } else {
-        Err(QualityError::InvalidDof)
+        // Let core preserve probability-first validation for inputs where
+        // both p and dof are invalid; zero is its typed invalid-dof sentinel.
+        quality::chi2_inv(p, 0)
     };
     encode_quality_float(env, result)
 }
 
+/// Keeps the established Elixir positional call contract intact.
 #[rustler::nif]
+#[allow(clippy::too_many_arguments)]
 fn qc_raim<'a>(
     env: Env<'a>,
     used_sats: Vec<String>,
     residuals_m: Vec<f64>,
+    variances_m2: Option<Vec<f64>>,
     p_fa: f64,
-    unit_weights: bool,
+    weights_mode: Term<'a>,
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let mut options = RaimOptions::default();
     options.p_fa = p_fa;
-    options.weights = raim_weights(unit_weights, weights);
+    options.weights = raim_weights(weights_mode, weights)?;
     options.n_systems = decode_optional_isize(n_systems)?;
     let input = RaimInput {
         used_sats,
         residuals_m,
+        variances_m2,
     };
     Ok(match quality::raim(&input, &options) {
         Ok(result) => {
             let reduced_chi_square =
                 (result.dof > 0).then_some(result.test_statistic / result.dof as f64);
             let rms_m = residual_rms_m(&input.residuals_m);
-            let normalized: Vec<(String, f64)> = result.normalized_residuals.into_iter().collect();
             (
                 atoms::ok(),
                 RaimResultFields {
@@ -235,7 +261,7 @@ fn qc_raim<'a>(
                     threshold: result.threshold,
                     worst_sat: result.worst_sat,
                     reduced_chi_square,
-                    normalized_residuals: normalized,
+                    normalized_residuals: result.normalized_residuals.into_iter().collect(),
                     rms_m,
                     dof: result.dof as i64,
                     testable: result.testable,
@@ -266,13 +292,20 @@ fn qc_fde_sp3<'a>(
     relative_humidity: f64,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
+    weights_mode: Term<'a>,
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: Term<'a>,
     max_pdop: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let inputs = crate::spp::build_solve_inputs(
+    let max_exclusion_rms_m = decode_exclusion_rms_cap(max_exclusion_rms_m)?;
+    let pseudorange_code = crate::spp::decode_pseudorange_code(pseudorange_code)?;
+    let models = crate::spp::decode_models(qzss_clock, troposphere_model)?;
+    let mut inputs = crate::spp::build_solve_inputs(
         observations,
         t_rx_j2000_s,
         t_rx_second_of_day_s,
@@ -287,6 +320,9 @@ fn qc_fde_sp3<'a>(
         relative_humidity,
         None,
     )?;
+    inputs.pseudorange_code = pseudorange_code;
+    crate::spp::set_models(&mut inputs, models.0, models.1);
+    let weights = raim_weights(weights_mode, weights)?;
 
     encode_fde_result(
         env,
@@ -294,10 +330,10 @@ fn qc_fde_sp3<'a>(
         inputs,
         with_geodetic,
         p_fa,
-        unit_weights,
         weights,
         n_systems,
-        max_iterations,
+        max_exclusions,
+        max_exclusion_rms_m,
         max_pdop,
     )
 }
@@ -321,12 +357,19 @@ fn qc_fde_broadcast<'a>(
     relative_humidity: f64,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
+    weights_mode: Term<'a>,
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: Term<'a>,
     max_pdop: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let max_exclusion_rms_m = decode_exclusion_rms_cap(max_exclusion_rms_m)?;
+    let pseudorange_code = crate::spp::decode_pseudorange_code(pseudorange_code)?;
+    let models = crate::spp::decode_models(qzss_clock, troposphere_model)?;
     let mut inputs = crate::spp::build_solve_inputs(
         observations,
         t_rx_j2000_s,
@@ -342,6 +385,8 @@ fn qc_fde_broadcast<'a>(
         relative_humidity,
         None,
     )?;
+    inputs.pseudorange_code = pseudorange_code;
+    crate::spp::set_models(&mut inputs, models.0, models.1);
 
     if let Some(bds) = handle.store.iono_corrections().beidou {
         inputs.beidou_klobuchar = Some(KlobucharCoeffs {
@@ -349,6 +394,7 @@ fn qc_fde_broadcast<'a>(
             beta: bds.beta,
         });
     }
+    let weights = raim_weights(weights_mode, weights)?;
 
     encode_fde_result(
         env,
@@ -356,10 +402,10 @@ fn qc_fde_broadcast<'a>(
         inputs,
         with_geodetic,
         p_fa,
-        unit_weights,
         weights,
         n_systems,
-        max_iterations,
+        max_exclusions,
+        max_exclusion_rms_m,
         max_pdop,
     )
 }
@@ -383,13 +429,20 @@ fn qc_robust_fde_sp3<'a>(
     relative_humidity: f64,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
+    weights_mode: Term<'a>,
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: Term<'a>,
     max_pdop: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
-    let inputs = crate::spp::build_solve_inputs(
+    let max_exclusion_rms_m = decode_exclusion_rms_cap(max_exclusion_rms_m)?;
+    let pseudorange_code = crate::spp::decode_pseudorange_code(pseudorange_code)?;
+    let models = crate::spp::decode_models(qzss_clock, troposphere_model)?;
+    let mut inputs = crate::spp::build_solve_inputs(
         observations,
         t_rx_j2000_s,
         t_rx_second_of_day_s,
@@ -404,6 +457,9 @@ fn qc_robust_fde_sp3<'a>(
         relative_humidity,
         None,
     )?;
+    inputs.pseudorange_code = pseudorange_code;
+    crate::spp::set_models(&mut inputs, models.0, models.1);
+    let weights = raim_weights(weights_mode, weights)?;
 
     encode_robust_fde_result(
         env,
@@ -411,10 +467,10 @@ fn qc_robust_fde_sp3<'a>(
         inputs,
         with_geodetic,
         p_fa,
-        unit_weights,
         weights,
         n_systems,
-        max_iterations,
+        max_exclusions,
+        max_exclusion_rms_m,
         max_pdop,
     )
 }
@@ -438,12 +494,19 @@ fn qc_robust_fde_broadcast<'a>(
     relative_humidity: f64,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
+    weights_mode: Term<'a>,
     weights: Vec<(String, f64)>,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: Term<'a>,
     max_pdop: Term<'a>,
+    pseudorange_code: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let max_exclusion_rms_m = decode_exclusion_rms_cap(max_exclusion_rms_m)?;
+    let pseudorange_code = crate::spp::decode_pseudorange_code(pseudorange_code)?;
+    let models = crate::spp::decode_models(qzss_clock, troposphere_model)?;
     let mut inputs = crate::spp::build_solve_inputs(
         observations,
         t_rx_j2000_s,
@@ -459,6 +522,8 @@ fn qc_robust_fde_broadcast<'a>(
         relative_humidity,
         None,
     )?;
+    inputs.pseudorange_code = pseudorange_code;
+    crate::spp::set_models(&mut inputs, models.0, models.1);
 
     if let Some(bds) = handle.store.iono_corrections().beidou {
         inputs.beidou_klobuchar = Some(KlobucharCoeffs {
@@ -466,6 +531,7 @@ fn qc_robust_fde_broadcast<'a>(
             beta: bds.beta,
         });
     }
+    let weights = raim_weights(weights_mode, weights)?;
 
     encode_robust_fde_result(
         env,
@@ -473,10 +539,10 @@ fn qc_robust_fde_broadcast<'a>(
         inputs,
         with_geodetic,
         p_fa,
-        unit_weights,
         weights,
         n_systems,
-        max_iterations,
+        max_exclusions,
+        max_exclusion_rms_m,
         max_pdop,
     )
 }
@@ -494,7 +560,9 @@ fn qc_raim_fde_design<'a>(
     p_fa: f64,
     max_exclusions: u64,
     min_redundancy: u64,
-) -> Term<'a> {
+    max_exclusion_rms_m: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let max_exclusion_rms_m = decode_exclusion_rms_cap(max_exclusion_rms_m)?;
     let rows: Vec<RangeFdeRow> = rows
         .into_iter()
         .map(|row| RangeFdeRow {
@@ -506,12 +574,15 @@ fn qc_raim_fde_design<'a>(
         .collect();
     let mut options = RangeFdeOptions::default();
     options.p_fa = p_fa;
-    options.max_exclusions = max_exclusions as usize;
-    options.min_redundancy = min_redundancy as usize;
-    match quality::raim_fde_design(&rows, &options) {
+    options.max_exclusions = usize::try_from(max_exclusions)
+        .map_err(|_| Error::Term(Box::new("max_exclusions exceeds platform range")))?;
+    options.min_redundancy = usize::try_from(min_redundancy)
+        .map_err(|_| Error::Term(Box::new("min_redundancy exceeds platform range")))?;
+    options.max_exclusion_rms_m = max_exclusion_rms_m;
+    Ok(match quality::raim_fde_design(&rows, &options) {
         Ok(result) => (atoms::ok(), RangeFdeResultFields::from(result)).encode(env),
         Err(error) => (atoms::error(), quality_error_atom(error)).encode(env),
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -521,10 +592,10 @@ fn encode_fde_result<'a>(
     inputs: sidereon_core::positioning::SolveInputs,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
-    weights: Vec<(String, f64)>,
+    weights: RaimWeights,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: f64,
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let mut validation = SolutionValidationOptions::default();
@@ -532,10 +603,13 @@ fn encode_fde_result<'a>(
 
     let mut raim = RaimOptions::default();
     raim.p_fa = p_fa;
-    raim.weights = raim_weights(unit_weights, weights);
+    raim.weights = weights;
     raim.n_systems = decode_optional_isize(n_systems)?;
 
-    let fde = FdeOptions::new(raim, max_iterations as usize);
+    let max_exclusions = usize::try_from(max_exclusions)
+        .map_err(|_| Error::Term(Box::new("max_exclusions exceeds platform range")))?;
+    let mut fde = FdeOptions::new(raim, max_exclusions);
+    fde.max_exclusion_rms_m = max_exclusion_rms_m;
     let options = FdeSppOptions::new(fde, validation);
 
     let result = quality::fde_spp(eph, &inputs, with_geodetic, &options);
@@ -550,10 +624,10 @@ fn encode_robust_fde_result<'a>(
     inputs: sidereon_core::positioning::SolveInputs,
     with_geodetic: bool,
     p_fa: f64,
-    unit_weights: bool,
-    weights: Vec<(String, f64)>,
+    weights: RaimWeights,
     n_systems: Term<'a>,
-    max_iterations: u64,
+    max_exclusions: u64,
+    max_exclusion_rms_m: f64,
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let mut validation = SolutionValidationOptions::default();
@@ -561,10 +635,13 @@ fn encode_robust_fde_result<'a>(
 
     let mut raim = RaimOptions::default();
     raim.p_fa = p_fa;
-    raim.weights = raim_weights(unit_weights, weights);
+    raim.weights = weights;
     raim.n_systems = decode_optional_isize(n_systems)?;
 
-    let fde = FdeOptions::new(raim, max_iterations as usize);
+    let max_exclusions = usize::try_from(max_exclusions)
+        .map_err(|_| Error::Term(Box::new("max_exclusions exceeds platform range")))?;
+    let mut fde = FdeOptions::new(raim, max_exclusions);
+    fde.max_exclusion_rms_m = max_exclusion_rms_m;
     let options = FdeSppOptions::new(fde, validation);
 
     let result = quality::spp_robust_fde_driver(
@@ -582,18 +659,23 @@ fn encode_fde_result_term<'a>(
     env: Env<'a>,
     result: Result<
         sidereon_core::quality::FdeResult<sidereon_core::positioning::ReceiverSolution>,
-        FdeError<FdeSppError>,
+        FdeError<sidereon_core::positioning::ReceiverSolution, FdeSppError>,
     >,
 ) -> NifResult<Term<'a>> {
     Ok(match result {
         Ok(result) => {
             let solution = crate::spp::encode_solution(env, &result.solution);
+            let raim = RaimResultFields::from_core(result.raim, &result.solution.residuals_m);
             let excluded: Vec<(String, Term<'a>)> = result
                 .excluded
                 .into_iter()
                 .map(|sat| (sat, atoms::raim_excluded().encode(env)))
                 .collect();
-            (atoms::ok(), (solution, excluded, result.iterations as i64)).encode(env)
+            (
+                atoms::ok(),
+                (solution, excluded, result.iterations as i64, raim),
+            )
+                .encode(env)
         }
         Err(error) => encode_fde_error(env, error),
     })
@@ -621,13 +703,8 @@ fn variance_options<'a>(
 }
 
 fn decode_weight_entries(entries: Vec<WeightEntryTerm>) -> Vec<WeightEntry> {
-    // The Sidereon public sigmas/weight_vector contract drops entries at or
-    // below the horizon. The hardened core variance now accepts the full
-    // [-90, 90] elevation range, so enforce the non-positive-elevation drop
-    // here to keep rejected entries out of the returned maps.
     entries
         .into_iter()
-        .filter(|entry| entry.elevation_deg > 0.0)
         .map(|entry| WeightEntry {
             satellite_id: entry.satellite_id,
             elevation_deg: entry.elevation_deg,
@@ -644,20 +721,38 @@ fn decode_optional_f64(term: Term<'_>) -> NifResult<Option<f64>> {
     }
 }
 
+fn decode_exclusion_rms_cap(term: Term<'_>) -> NifResult<f64> {
+    if term.is_atom() && term.atom_to_string().unwrap_or_default() == "infinity" {
+        Ok(f64::INFINITY)
+    } else {
+        term.decode::<f64>()
+    }
+}
+
 fn decode_optional_isize(term: Term<'_>) -> NifResult<Option<isize>> {
     if term.is_atom() && term.atom_to_string().unwrap_or_default() == "nil" {
         Ok(None)
     } else {
         let value = term.decode::<i64>()?;
-        Ok(Some(value as isize))
+        let value = isize::try_from(value)
+            .map_err(|_| Error::Term(Box::new("n_systems exceeds platform range")))?;
+        Ok(Some(value))
     }
 }
 
-fn raim_weights(unit_weights: bool, weights: Vec<(String, f64)>) -> RaimWeights {
-    if unit_weights {
-        RaimWeights::Unit
-    } else {
-        RaimWeights::BySatellite(weights.into_iter().collect::<BTreeMap<_, _>>())
+fn raim_weights(mode: Term<'_>, weights: Vec<(String, f64)>) -> NifResult<RaimWeights> {
+    let mode = mode
+        .atom_to_string()
+        .map_err(|_| Error::Term(Box::new("RAIM weights mode must be an atom")))?;
+    match mode.as_str() {
+        "solution" => Ok(RaimWeights::Solution),
+        "unit" => Ok(RaimWeights::Unit),
+        "satellite" => Ok(RaimWeights::BySatellite(
+            weights.into_iter().collect::<BTreeMap<_, _>>(),
+        )),
+        _ => Err(Error::Term(Box::new(
+            "RAIM weights mode must be :solution, :unit, or :satellite",
+        ))),
     }
 }
 
@@ -692,13 +787,37 @@ fn quality_error_atom(error: QualityError) -> atom::Atom {
         QualityError::InvalidResiduals => atoms::invalid_residuals(),
         QualityError::InvalidDesign => atoms::invalid_design(),
         QualityError::SingularGeometry => atoms::singular_geometry(),
+        QualityError::MissingVariances => atoms::missing_variances(),
+        QualityError::InvalidVariance => atoms::invalid_variance(),
     }
 }
 
-fn encode_fde_error<'a>(env: Env<'a>, error: FdeError<FdeSppError>) -> Term<'a> {
+fn encode_fde_error<'a>(
+    env: Env<'a>,
+    error: FdeError<sidereon_core::positioning::ReceiverSolution, FdeSppError>,
+) -> Term<'a> {
     match error {
-        FdeError::FaultUnresolved(statistic) => {
-            (atoms::error(), (atoms::fault_unresolved(), statistic)).encode(env)
+        FdeError::FaultUnresolved(unresolved) => {
+            let unresolved = *unresolved;
+            let reason = unresolved_reason_name(unresolved.reason);
+            let solution = crate::spp::encode_solution(env, &unresolved.solution);
+            let excluded: Vec<(String, Term<'a>)> = unresolved
+                .excluded
+                .iter()
+                .cloned()
+                .map(|sat| (sat, atoms::raim_excluded().encode(env)))
+                .collect();
+            let iterations = excluded.len() as i64;
+            let raim =
+                RaimResultFields::from_core(unresolved.raim, &unresolved.solution.residuals_m);
+            (
+                atoms::error(),
+                (
+                    atoms::fault_unresolved(),
+                    (reason, solution, excluded, iterations, raim),
+                ),
+            )
+                .encode(env)
         }
         FdeError::Solve(FdeSppError::Spp(error)) => encode_spp_public_error(env, &error),
         FdeError::Solve(FdeSppError::Validation(error)) => {
@@ -706,6 +825,46 @@ fn encode_fde_error<'a>(env: Env<'a>, error: FdeError<FdeSppError>) -> Term<'a> 
         }
         FdeError::Raim(error) => (atoms::error(), quality_error_atom(error)).encode(env),
     }
+}
+
+fn unresolved_reason_name(reason: FdeUnresolvedReason) -> String {
+    match reason {
+        FdeUnresolvedReason::ExclusionBudgetExhausted => "exclusion_budget_exhausted".to_string(),
+        FdeUnresolvedReason::NoAdmissibleExclusion => "no_admissible_exclusion".to_string(),
+        other => snake_case(&format!("{other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod fde_mapping_tests {
+    use super::{unresolved_reason_name, FdeUnresolvedReason};
+
+    #[test]
+    fn unresolved_reasons_keep_their_public_names() {
+        assert_eq!(
+            unresolved_reason_name(FdeUnresolvedReason::ExclusionBudgetExhausted),
+            "exclusion_budget_exhausted"
+        );
+        assert_eq!(
+            unresolved_reason_name(FdeUnresolvedReason::NoAdmissibleExclusion),
+            "no_admissible_exclusion"
+        );
+    }
+}
+
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (index, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn encode_spp_public_error<'a>(env: Env<'a>, error: &SppError) -> Term<'a> {
@@ -729,9 +888,14 @@ fn encode_spp_public_error<'a>(env: Env<'a>, error: &SppError) -> Term<'a> {
             (atoms::ephemeris_lost(), satellite.to_string()),
         )
             .encode(env),
-        SppError::IonosphereUnsupported { satellite } => (
+        SppError::SelectionUnsettled { passes } => (
             atoms::error(),
-            (atoms::ionosphere_unsupported(), satellite.to_string()),
+            (atoms::selection_unsettled(), *passes as i64),
+        )
+            .encode(env),
+        SppError::Ut1OutsideCoverage(reason) => (
+            atoms::error(),
+            crate::errors::ut1_outside_coverage_term(env, *reason),
         )
             .encode(env),
     }

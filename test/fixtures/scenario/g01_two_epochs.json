@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "seed": 12345,
+  "epochs": {
+    "start_j2000_s": 646229000.0,
+    "count": 2,
+    "cadence_s": 30.0
+  },
+  "receiver": {
+    "kind": "static_geodetic",
+    "position": {
+      "lat_rad": 0.0,
+      "lon_rad": 0.0,
+      "height_m": 0.0
+    }
+  },
+  "constellation": {
+    "kind": "synthetic_keplerian",
+    "satellites": [
+      {
+        "satellite_id": {
+          "system": "Gps",
+          "prn": 1
+        },
+        "semi_major_axis_m": 26560000.0,
+        "eccentricity": 0.01,
+        "inclination_rad": 0.9599310885968813,
+        "raan_rad": 0.0,
+        "arg_perigee_rad": 0.0,
+        "mean_anomaly_rad": 0.08726646259971647,
+        "epoch_j2000_s": 646229000.0,
+        "clock_bias_s": 0.0,
+        "clock_drift_s_s": 0.0
+      }
+    ]
+  },
+  "signals": [
+    {
+      "system": "Gps",
+      "code_observable": "C1C",
+      "phase_observable": "L1C",
+      "doppler_observable": "D1C",
+      "carrier_hz": 1575420000.0,
+      "carrier_phase_bias_cycles": 0.0
+    }
+  ],
+  "error_budget": {
+    "receiver_clock": {
+      "enabled": false,
+      "bias_s": 0.0,
+      "drift_s_s": 0.0,
+      "power_law_coefficients": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "satellite_clock": {
+      "enabled": false,
+      "bias_s": 0.0,
+      "drift_s_s": 0.0,
+      "power_law_coefficients": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "ionosphere": {
+      "kind": "off"
+    },
+    "troposphere": {
+      "kind": "off"
+    },
+    "thermal_noise": {
+      "enabled": false,
+      "pseudorange_sigma_m": 0.0,
+      "carrier_phase_sigma_m": 0.0,
+      "doppler_sigma_hz": 0.0
+    },
+    "multipath": {
+      "enabled": false,
+      "amplitude_m": 0.0,
+      "reflector_height_m": 0.0,
+      "phase_rad": 0.0
+    },
+    "elevation_mask_deg": -90.0
+  }
+}

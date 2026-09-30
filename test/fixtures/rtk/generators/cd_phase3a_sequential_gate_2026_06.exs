@@ -13,7 +13,7 @@ defmodule CDPhase3aSequentialGate202606 do
   #   (s2) sequential filter, :elixir kernel, with    corrections
   #
   # Usage (from the repo root):
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/cd_phase3a_sequential_gate_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/cd_phase3a_sequential_gate_2026_06.exs
 
   alias Sidereon.GNSS.Antex
   alias Sidereon.GNSS.RINEX.Observations

@@ -27,7 +27,7 @@ sidereon-*.tar
 
 
 # Rust binary artifacts
-/target/
+target/
 /sgp4_standalone/
 /priv/native/
 nx-worktree

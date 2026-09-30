@@ -20,7 +20,12 @@ defmodule Sidereon.Format.TLE do
   - Leading dots in floats (`.123` → `0.123`)
   - Spaces in numeric fields
 
-  Checksum validation is performed and reported but does not prevent parsing.
+  Column 69 holds the modulo-10 checksum of columns 1-68. Under the default
+  `policy: :strict`, a digit that disagrees with the checksum, or a column 69
+  that is not a digit, is refused. `policy: :lenient` reads such a line, as
+  Vallado's `twoline2rv` does, and reports each finding as a checksum warning.
+  A line that ends before column 69 carries no checksum; it is read and
+  reported under both policies.
 
   ## Examples
 
@@ -28,23 +33,68 @@ defmodule Sidereon.Format.TLE do
       {:ok, {line1, line2}} = Sidereon.Format.TLE.encode(elements)
   """
 
+  alias Sidereon.CCSDS.Error
   alias Sidereon.Elements
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   require Logger
 
   @microseconds_per_day 86_400 * 1_000_000
 
+  @typedoc "How column 69, the line checksum, is treated."
+  @type policy :: :strict | :lenient
+
+  @typedoc """
+  A line whose column 69 did not confirm its checksum: the line label
+  (`"line 1"` or `"line 2"`), what column 69 held (`{:mismatch, digit}`,
+  `{:not_digit, character}` or `:missing`), and the checksum computed from
+  columns 1-68.
+  """
+  @type checksum_warning ::
+          {String.t(), {:mismatch, 0..9} | {:not_digit, String.t()} | :missing, 0..9}
+
+  @typedoc """
+  Why a stretch of a TLE file did not become a satellite: `{:invalid, reason}`
+  for an element set refused by the TLE grammar, the checksum policy or SGP4
+  initialization, `:missing_line_2` for a line 1 with no line 2 after it,
+  `:orphan_line_2` for a line 2 with no line 1 before it, and `:orphan_name`
+  for a name line not followed by an element set.
+  """
+  @type record_issue ::
+          {:invalid, Error.sgp4()} | :missing_line_2 | :orphan_line_2 | :orphan_name
+
+  @typedoc "A rejected stretch of a TLE file, with the one-based line number of its first line."
+  @type rejected_record :: %{
+          line_number: pos_integer(),
+          name: String.t(),
+          issue: record_issue()
+        }
+
+  @typedoc "A satellite read from a TLE file."
+  @type file_satellite :: %{
+          name: String.t(),
+          tle: Elements.t(),
+          line_number: pos_integer(),
+          checksum_warnings: [checksum_warning()]
+        }
+
   @type encode_error ::
           {:missing_field, atom()}
           | {:invalid_field, atom(), term()}
-          | {:encode_error, String.t()}
+          | {:encode_error, Error.tle()}
+          | Sidereon.argument_error()
 
   @doc """
   Parse a two-line element set into an `%Sidereon.Elements{}` struct.
 
-  Returns `{:ok, elements}` or `{:error, reason}`.
-  Logs a warning if checksums are invalid but still parses.
+  Returns `{:ok, elements}` or `{:error, reason}`. Each checksum warning the
+  policy accepts is logged; `parse_with_warnings/3` returns them instead.
+
+  ## Options
+
+    * `:policy` - `:strict` (default) or `:lenient`; see the module
+      documentation.
 
   ## Examples
 
@@ -58,15 +108,35 @@ defmodule Sidereon.Format.TLE do
       51.6414
 
   """
-  @spec parse(String.t(), String.t()) :: {:ok, Elements.t()} | {:error, String.t()}
-  def parse(longstr1, longstr2) do
-    case NIF.tle_parse(longstr1, longstr2) do
-      {:ok, fields, checksum_warnings} ->
+  @spec parse(String.t(), String.t(), keyword()) ::
+          {:ok, Elements.t()} | {:error, Error.tle() | {:invalid_field, :policy, term()}}
+  def parse(longstr1, longstr2, opts \\ []) do
+    case parse_with_warnings(longstr1, longstr2, opts) do
+      {:ok, elements, checksum_warnings} ->
         log_checksum_warnings(checksum_warnings)
-        {:ok, build_elements(fields)}
+        {:ok, elements}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @doc """
+  Parse a two-line element set, returning the checksum warnings the policy
+  accepted alongside the elements instead of logging them.
+
+  Returns `{:ok, elements, checksum_warnings}` or `{:error, reason}`. Takes the
+  same options as `parse/3`.
+  """
+  @spec parse_with_warnings(String.t(), String.t(), keyword()) ::
+          {:ok, Elements.t(), [checksum_warning()]}
+          | {:error, Error.tle() | {:invalid_field, :policy, term()}}
+  def parse_with_warnings(longstr1, longstr2, opts \\ []) do
+    with {:ok, policy} <- policy_opt(opts) do
+      case NIF.tle_parse(longstr1, longstr2, policy) do
+        {:ok, fields, checksum_warnings} -> {:ok, build_elements(fields), checksum_warnings}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -78,13 +148,24 @@ defmodule Sidereon.Format.TLE do
   `0 NAME` name lines. Blank lines, CRLF endings, and surrounding whitespace are
   tolerated.
 
-  Returns `{:ok, %{satellites: [%{name: name, tle: %Sidereon.Elements{}}], skipped: n}}`.
-  Each `tle` is a fully populated `%Sidereon.Elements{}` (with `object_name` set
-  to the record's name, or `nil` for a bare two-line set) ready for
-  `Sidereon.propagate/2`, `Sidereon.look_angle/3`, and friends. `name` is the
-  empty string for a bare two-line record. `skipped` counts complete records
-  that were found but failed SGP4 initialization, so an empty file
-  (`satellites: []`, `skipped: 0`) is distinguishable from a fully corrupt one.
+  Returns `{:ok, %{satellites: satellites, rejected: rejected, skipped: n}}`.
+  Each satellite is a map with `name`, `tle`, `line_number` (the one-based line
+  of its line 1) and `checksum_warnings`. Each `tle` is a fully populated
+  `%Sidereon.Elements{}` (with `object_name` set to the record's name, or `nil`
+  for a bare two-line set) ready for `Sidereon.propagate/2`,
+  `Sidereon.look_angle/3`, and friends. `name` is the empty string for a bare
+  two-line record. `rejected` lists every other non-blank line in file order,
+  each with its line number, its name line and the reason (see
+  `t:record_issue/0`); one bad record never discards the others. `skipped` is
+  the length of `rejected`, so an empty file (`satellites: []`, `skipped: 0`)
+  is distinguishable from a fully corrupt one.
+
+  ## Options
+
+    * `:policy` - `:strict` (default) or `:lenient`; under `:strict` a record
+      whose checksum digit disagrees, or whose column 69 is not a digit, is
+      rejected, and under `:lenient` it is kept and each finding is listed in
+      its `checksum_warnings`.
 
   ## Examples
 
@@ -100,18 +181,44 @@ defmodule Sidereon.Format.TLE do
       "25544"
 
   """
-  @spec parse_file(String.t()) ::
-          {:ok, %{satellites: [%{name: String.t(), tle: Elements.t()}], skipped: non_neg_integer()}}
-  def parse_file(text) when is_binary(text) do
-    {:ok, satellites, skipped} = NIF.parse_tle_file(text)
+  @spec parse_file(String.t(), keyword()) ::
+          {:ok,
+           %{
+             satellites: [file_satellite()],
+             rejected: [rejected_record()],
+             skipped: non_neg_integer()
+           }}
+          | {:error, {:invalid_field, :policy, term()}}
+  def parse_file(text, opts \\ []) when is_binary(text) do
+    with {:ok, policy} <- policy_opt(opts) do
+      {:ok, satellites, rejected} = NIF.parse_tle_file(text, policy)
 
-    parsed =
-      Enum.map(satellites, fn {name, fields} ->
-        object_name = if name != "", do: name
-        %{name: name, tle: %{build_elements(fields) | object_name: object_name}}
-      end)
+      parsed =
+        Enum.map(satellites, fn {name, fields, line_number, checksum_warnings} ->
+          object_name = if name != "", do: name
 
-    {:ok, %{satellites: parsed, skipped: skipped}}
+          %{
+            name: name,
+            tle: %{build_elements(fields) | object_name: object_name},
+            line_number: line_number,
+            checksum_warnings: checksum_warnings
+          }
+        end)
+
+      rejected =
+        Enum.map(rejected, fn {line_number, name, issue} ->
+          %{line_number: line_number, name: name, issue: issue}
+        end)
+
+      {:ok, %{satellites: parsed, rejected: rejected, skipped: length(rejected)}}
+    end
+  end
+
+  defp policy_opt(opts) do
+    case Keyword.get(opts, :policy, :strict) do
+      policy when policy in [:strict, :lenient] -> {:ok, policy}
+      other -> {:error, {:invalid_field, :policy, other}}
+    end
   end
 
   @doc """
@@ -119,7 +226,10 @@ defmodule Sidereon.Format.TLE do
 
   Returns `{:ok, {line1, line2}}`: two 69-character strings with valid
   checksums, or `{:error, reason}` for malformed elements. Round-trips are
-  character-exact for standard TLEs.
+  character-exact for standard TLEs. A TLE states a catalog number, so
+  elements without one, as `Sidereon.Format.OMM.to_elements/1` gives for an
+  OMM without `NORAD_CAT_ID`, are refused with
+  `{:error, {:missing_field, :catalog_number}}`.
 
   ## Examples
 
@@ -164,7 +274,9 @@ defmodule Sidereon.Format.TLE do
       epoch: calculate_epoch(fields.epoch_year, fields.epoch_day_of_year),
       mean_motion_dot: fields.mean_motion_dot,
       mean_motion_double_dot: fields.mean_motion_double_dot,
+      mean_motion_double_dot_text: fields.mean_motion_double_dot_text,
       bstar: fields.bstar,
+      bstar_text: fields.bstar_text,
       ephemeris_type: fields.ephemeris_type,
       elset_number: fields.elset_number,
       inclination_deg: fields.inclination_deg,
@@ -178,8 +290,15 @@ defmodule Sidereon.Format.TLE do
   end
 
   defp log_checksum_warnings(warnings) do
-    Enum.each(warnings, fn {label, expected, computed} ->
-      Logger.warning("TLE #{label} checksum mismatch: expected #{expected}, computed #{computed}")
+    Enum.each(warnings, fn
+      {label, {:mismatch, expected}, computed} ->
+        Logger.warning("TLE #{label} checksum mismatch: column 69 holds #{expected}, computed #{computed}")
+
+      {label, {:not_digit, found}, computed} ->
+        Logger.warning("TLE #{label} column 69 holds #{inspect(found)}, not the checksum digit #{computed}")
+
+      {label, :missing, computed} ->
+        Logger.warning("TLE #{label} ends before column 69 and carries no checksum (computed #{computed})")
     end)
   end
 
@@ -207,15 +326,17 @@ defmodule Sidereon.Format.TLE do
          {:ok, mean_motion_dot} <- required_float(el, :mean_motion_dot),
          {:ok, mean_motion_double_dot} <- required_float(el, :mean_motion_double_dot),
          {:ok, bstar} <- required_float(el, :bstar),
-         {:ok, ephemeris_type} <- required_integer(el, :ephemeris_type),
-         {:ok, elset_number} <- required_bounded_integer(el, :elset_number, 0, 9999),
+         {:ok, bstar_text} <- optional_string(el, :bstar_text),
+         {:ok, mean_motion_double_dot_text} <- optional_string(el, :mean_motion_double_dot_text),
+         {:ok, ephemeris_type} <- optional_bounded_integer(el, :ephemeris_type, 0, 9),
+         {:ok, elset_number} <- optional_bounded_integer(el, :elset_number, 0, 9999),
          {:ok, inclination_deg} <- required_float(el, :inclination_deg),
          {:ok, raan_deg} <- required_float(el, :raan_deg),
          {:ok, eccentricity} <- required_float(el, :eccentricity),
          {:ok, arg_perigee_deg} <- required_float(el, :arg_perigee_deg),
          {:ok, mean_anomaly_deg} <- required_float(el, :mean_anomaly_deg),
          {:ok, mean_motion} <- required_float(el, :mean_motion),
-         {:ok, rev_number} <- required_bounded_integer(el, :rev_number, 0, 99_999) do
+         {:ok, rev_number} <- optional_bounded_integer(el, :rev_number, 0, 99_999) do
       {:ok,
        %{
          catalog_number: catalog_number,
@@ -225,7 +346,9 @@ defmodule Sidereon.Format.TLE do
          epoch_day_of_year: epoch_day_of_year(epoch),
          mean_motion_dot: mean_motion_dot,
          mean_motion_double_dot: mean_motion_double_dot,
+         mean_motion_double_dot_text: mean_motion_double_dot_text,
          bstar: bstar,
+         bstar_text: bstar_text,
          ephemeris_type: ephemeris_type,
          elset_number: elset_number,
          inclination_deg: inclination_deg,
@@ -252,7 +375,7 @@ defmodule Sidereon.Format.TLE do
       {:error, message} -> {:error, {:encode_error, message}}
     end
   rescue
-    e in ErlangError -> {:error, {:encode_error, Exception.message(e)}}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tle_encode)
   end
 
   defp required_catalog_number(%Elements{} = el) do
@@ -307,21 +430,20 @@ defmodule Sidereon.Format.TLE do
     end
   end
 
-  defp required_integer(%Elements{} = el, field) do
-    case Map.fetch!(el, field) do
-      nil -> {:error, {:missing_field, field}}
-      value when is_integer(value) -> {:ok, value}
+  defp optional_string(%Elements{} = el, field) do
+    case Map.get(el, field) do
+      nil -> {:ok, nil}
+      value when is_binary(value) -> {:ok, value}
       value -> {:error, {:invalid_field, field, value}}
     end
   end
 
-  defp required_bounded_integer(%Elements{} = el, field, min, max) do
-    with {:ok, value} <- required_integer(el, field) do
-      if value >= min and value <= max do
-        {:ok, value}
-      else
-        {:error, {:invalid_field, field, value}}
-      end
+  # A `nil` field is written blank, as a blank field reads back as `nil`.
+  defp optional_bounded_integer(%Elements{} = el, field, min, max) do
+    case Map.fetch!(el, field) do
+      nil -> {:ok, nil}
+      value when is_integer(value) and value >= min and value <= max -> {:ok, value}
+      value -> {:error, {:invalid_field, field, value}}
     end
   end
 end

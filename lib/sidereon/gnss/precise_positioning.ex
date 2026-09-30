@@ -53,6 +53,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_max_iterations 8
   @default_position_tolerance_m 1.0e-4
@@ -156,42 +157,281 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :residuals_m,
       :used_sats,
       :epochs,
-      :metadata
+      :metadata,
+      :solved_epoch_indices,
+      ssr_bias_exclusions: [],
+      unplaced_observations: [],
+      residual_screen_removals: []
     ]
 
     @type position :: %{x_m: float(), y_m: float(), z_m: float()}
 
+    @typedoc """
+    The receiver clock of one solved epoch. `epoch_index` is the epoch's
+    position in the input arc; an epoch left with no observations by the
+    elevation cutoff, SSR bias exclusion or the residual screen has no clock.
+    """
     @type epoch_clock :: %{
-            epoch: NaiveDateTime.t(),
-            rx_clock_s: float(),
-            rx_clock_m: float()
+            required(:epoch) => NaiveDateTime.t(),
+            required(:rx_clock_s) => float(),
+            required(:rx_clock_m) => float(),
+            optional(:epoch_index) => non_neg_integer()
           }
 
+    @typedoc """
+    One residual row. `epoch_index` is the input epoch index and
+    `ambiguity_id` the observation's ambiguity id, which identifies it within
+    its epoch.
+    """
     @type residual :: %{
             required(:epoch) => NaiveDateTime.t(),
             required(:satellite_id) => String.t(),
             required(:code_m) => float(),
             required(:phase_m) => float(),
+            required(:ambiguity_id) => String.t(),
+            optional(:epoch_index) => non_neg_integer(),
             optional(:code_weight) => float(),
             optional(:phase_weight) => float()
           }
 
+    @typedoc "An observation of the arc: its input epoch index and ambiguity id."
+    @type observation_key :: %{epoch_index: non_neg_integer(), ambiguity_id: String.t()}
+
+    @typedoc """
+    An observation left out of the solve because an SSR/HAS bias the
+    corrections require was not resolved for it, with every field the core
+    records: `transmit_time_failure`, why the recorded biases do not hold at
+    the observation's transmission time, and `application`, the row the bias
+    lookup reported for the observation, with each signal's query result.
+    `solve_ppp_fixed/4` takes the record back as it came out. A phase
+    continuity token and a source error, which the core does not let a caller
+    build, carry a `handle` holding the core value; the fields beside it have
+    to be the value's own. `:unrecognized` stands for a core value this
+    binding does not know, and a record holding one is refused on the way
+    back.
+    """
+    @type ssr_bias_exclusion :: %{
+            epoch_index: non_neg_integer(),
+            satellite_id: String.t(),
+            ambiguity_id: String.t(),
+            code_bias_missing: boolean(),
+            phase_bias_missing: boolean(),
+            transmit_time_failure: transmit_time_failure() | nil,
+            application: application_report() | nil
+          }
+
+    @typedoc "Provider and solution identity of SSR corrections."
+    @type ssr_solution :: %{
+            source: :rtcm_ssr | :galileo_has,
+            provider_id: non_neg_integer(),
+            solution_id: non_neg_integer()
+          }
+
+    @typedoc "A physical signal: the system letter and band and tracking attribute (`\"1C\"`)."
+    @type gnss_signal :: %{system: String.t(), code: String.t()}
+
+    @typedoc "A signal index as its source transmitted it."
+    @type raw_signal :: %{source: :rtcm_ssr | :galileo_has, system: String.t(), index: non_neg_integer()}
+
+    @typedoc "The key an SSR bias is stored under."
+    @type signal_key :: {:physical, gnss_signal()} | {:unknown, raw_signal()}
+
+    @type bias_status ::
+            :available
+            | :missing
+            | :unavailable
+            | :not_yet_valid
+            | :expired
+            | :excluded
+            | :invalid_epoch
+            | :phase_discontinuity_needs_reset
+            | :unknown_signal
+            | :unrecognized
+
+    @type transmit_time_failure ::
+            :source_without_ssr_corrections
+            | :transmit_time_unavailable
+            | {:orbit_clock_solution, %{transmit_time_j2000_s: float(), applied: ssr_solution() | nil}}
+            | {:bias_record, %{transmit_time_j2000_s: float(), signal: signal_key(), status: bias_status()}}
+            | {:source, %{transmit_time_j2000_s: float(), error: %{message: String.t(), handle: reference()}}}
+            | :unrecognized
+
+    @type if_combination_status ::
+            :applied
+            | :opted_out
+            | :signal_unavailable
+            | :invalid_frequencies
+            | :observation_signals_unknown
+            | :carrier_unresolved
+            | :observation_frequency_mismatch
+            | :incompatible_source_or_solution
+            | :incompatible_iod
+            | :orbit_clock_solution_unavailable
+            | :orbit_clock_solution_mismatch
+            | :satellite_excluded
+            | :transmit_time_unavailable
+            | :phase_discontinuity_needs_reset
+            | {:ut1_outside_coverage, :before_coverage | :after_coverage}
+            | :unrecognized
+
+    @type lifetime ::
+            {:galileo_has_validity_interval, float()} | {:rtcm_update_interval, float()} | :unrecognized
+
+    @type discontinuity_details ::
+            :initial_token_established
+            | :continuous
+            | {:has_pdi_changed, %{previous: non_neg_integer(), current: non_neg_integer()}}
+            | {:rtcm_discontinuity_counter_changed, %{previous: non_neg_integer(), current: non_neg_integer()}}
+            | {:solution_changed, %{previous: ssr_solution(), current: ssr_solution()}}
+            | :stale_token
+            | :future_token
+            | :mismatched_token
+            | :unrecognized
+
+    @type resolution_details ::
+            :available
+            | :no_record
+            | :transmitted_unavailable
+            | :conversion_unavailable
+            | {:epoch_before_reference, %{ref_epoch_j2000_s: float(), query_epoch_j2000_s: float()}}
+            | {:epoch_expired, %{expiry_epoch_j2000_s: float(), query_epoch_j2000_s: float()}}
+            | {:excluded_by_do_not_use, %{ref_epoch_j2000_s: float(), validity_interval_s: float()}}
+            | :invalid_epoch
+            | {:phase_discontinuity, discontinuity_details()}
+            | {:unknown_signal, raw_signal()}
+            | :unrecognized
+
+    @type code_bias_query :: %{
+            sat: String.t(),
+            signal: signal_key(),
+            source_signal: raw_signal() | nil,
+            status: bias_status(),
+            bias_m: float() | nil,
+            solution: ssr_solution() | nil,
+            iod_ssr: non_neg_integer() | nil,
+            ref_epoch_j2000_s: float() | nil,
+            lifetime: lifetime() | nil,
+            details: resolution_details()
+          }
+
+    @typedoc """
+    A phase continuity token: its fields as the core states them and the
+    `handle` holding the token.
+    """
+    @type continuity_token :: %{
+            satellite: String.t(),
+            signal: signal_key(),
+            source: :rtcm_ssr | :galileo_has,
+            provider_id: non_neg_integer(),
+            solution_id: non_neg_integer(),
+            continuity_ref_epoch_j2000_s: float(),
+            raw_indicator: non_neg_integer(),
+            generation: non_neg_integer(),
+            handle: reference()
+          }
+
+    @type phase_bias_query :: %{
+            sat: String.t(),
+            signal: signal_key(),
+            source_signal: raw_signal() | nil,
+            status: bias_status(),
+            bias_m: float() | nil,
+            bias_cycles: float() | nil,
+            solution: ssr_solution() | nil,
+            iod_ssr: non_neg_integer() | nil,
+            ref_epoch_j2000_s: float() | nil,
+            lifetime: lifetime() | nil,
+            continuity_token: continuity_token() | nil,
+            discontinuity_indicator:
+              {:galileo_has_pdi, non_neg_integer()} | {:rtcm_discontinuity_counter, non_neg_integer()} | nil,
+            discontinuity_details: discontinuity_details() | nil,
+            details: resolution_details()
+          }
+
+    @type signal_report(query) :: %{
+            epoch_index: non_neg_integer(),
+            sat: String.t(),
+            ambiguity_id: String.t(),
+            signal: gnss_signal(),
+            query_result: query
+          }
+
+    @type application_report :: %{
+            epoch_index: non_neg_integer(),
+            sat: String.t(),
+            satellite_id: String.t(),
+            ambiguity_id: String.t(),
+            transmit_time_j2000_s: float() | nil,
+            applied_orbit_clock_solution: ssr_solution() | nil,
+            observation_signals: %{code1: String.t(), code2: String.t(), phase1: String.t(), phase2: String.t()} | nil,
+            code_status: if_combination_status(),
+            applied_code_if_m: float() | nil,
+            code1_report: signal_report(code_bias_query()) | nil,
+            code2_report: signal_report(code_bias_query()) | nil,
+            phase_status: if_combination_status(),
+            applied_phase_if_m: float() | nil,
+            phase1_report: signal_report(phase_bias_query()) | nil,
+            phase2_report: signal_report(phase_bias_query()) | nil
+          }
+
+    @typedoc """
+    An observation left out of the solve before it solves because no
+    transmission epoch can be placed from it. `:code_not_positive`: its code
+    is zero or negative, which RTKLIB `satposs` reads as no pseudorange.
+    SSR correction-size refusal retains the orbit and clock magnitudes at the
+    rejected transmission epoch.
+    """
+    @type unplaced_reason ::
+            :code_not_positive
+            | {:ssr_correction_exceeds_limit, %{orbit_m: float(), clock_m: float()}}
+
+    @type unplaced_observation :: %{
+            epoch_index: non_neg_integer(),
+            satellite_id: String.t(),
+            ambiguity_id: String.t(),
+            reason: unplaced_reason()
+          }
+
+    @typedoc "The iteration and convergence options a float solve ran with."
+    @type solve_options :: %{
+            max_iterations: pos_integer(),
+            position_tolerance_m: float(),
+            clock_tolerance_m: float(),
+            ambiguity_tolerance_m: float(),
+            ztd_tolerance_m: float()
+          }
+
     @type covariance :: %{ecef_m2: [[float()]], enu_m2: [[float()]]}
 
+    @typedoc """
+    A static float solution. `epoch_clocks` holds one clock per solved epoch,
+    in the order of `solved_epoch_indices`. `unplaced_observations` lists the
+    observations left out because no transmission epoch can be placed from
+    them, and `residual_screen_removals` the observations the residual screen
+    removed, which `solve_ppp_fixed/4` leaves out too, and
+    `ssr_bias_exclusions` the observations left out for a missing SSR/HAS
+    bias, which the fixed solve starts from.
+    """
     @type t :: %__MODULE__{
             position: position(),
             position_covariance: covariance(),
             formal_position_covariance: covariance(),
             epoch_clocks: [epoch_clock()],
+            solved_epoch_indices: [non_neg_integer()] | nil,
             ambiguities_m: %{String.t() => float()},
             ztd_residual_m: float() | nil,
             residuals_m: [residual()],
             used_sats: [String.t()],
             epochs: [NaiveDateTime.t()],
+            ssr_bias_exclusions: [ssr_bias_exclusion()],
+            unplaced_observations: [unplaced_observation()],
+            residual_screen_removals: [observation_key()],
             metadata: %{
               iterations: pos_integer(),
               converged: boolean(),
               status: :state_tolerance | :max_iterations,
+              residual_screen: boolean(),
+              solve_options: solve_options(),
               n_epochs: pos_integer(),
               n_observations: pos_integer(),
               code_rms_m: float(),
@@ -241,29 +481,30 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       :residuals_m,
       :used_sats,
       :epochs,
-      :metadata
+      :metadata,
+      :solved_epoch_indices,
+      ssr_bias_exclusions: [],
+      unplaced_observations: []
     ]
 
     @type position :: %{x_m: float(), y_m: float(), z_m: float()}
 
-    @type epoch_clock :: %{
-            epoch: NaiveDateTime.t(),
-            rx_clock_s: float(),
-            rx_clock_m: float()
-          }
+    @type epoch_clock :: MultiEpochSolution.epoch_clock()
 
-    @type residual :: %{
-            required(:epoch) => NaiveDateTime.t(),
-            required(:satellite_id) => String.t(),
-            required(:code_m) => float(),
-            required(:phase_m) => float(),
-            optional(:code_weight) => float(),
-            optional(:phase_weight) => float()
-          }
+    @type residual :: MultiEpochSolution.residual()
 
+    @typedoc """
+    A static integer-fixed solution. `epoch_clocks` holds one clock per solved
+    epoch, in the order of `solved_epoch_indices`, and `ssr_bias_exclusions`
+    the observations left out for an unresolved SSR/HAS bias, which this
+    binding never requests.
+    """
     @type t :: %__MODULE__{
             position: position(),
             epoch_clocks: [epoch_clock()],
+            solved_epoch_indices: [non_neg_integer()],
+            ssr_bias_exclusions: [MultiEpochSolution.ssr_bias_exclusion()],
+            unplaced_observations: [MultiEpochSolution.unplaced_observation()],
             fixed_ambiguities_cycles: %{String.t() => integer()},
             fixed_ambiguities_m: %{String.t() => float()},
             ztd_residual_m: float() | nil,
@@ -298,10 +539,32 @@ defmodule Sidereon.GNSS.PrecisePositioning do
           }
   end
 
-  @typedoc "A dual-frequency ionosphere-free code/phase observation."
+  @typedoc """
+  A dual-frequency ionosphere-free code/phase observation.
+
+  `:signals` names the tracking codes of the two pseudoranges and two carrier
+  phases the combination was formed from, each a band and tracking attribute
+  (`"1C"`) or a RINEX 3 observation code (`"C1C"`, `"L2W"`) read as written.
+  It is optional and passed to the solver with the observation; a value of
+  another shape raises `ArgumentError`.
+  """
   @type observation ::
-          %{satellite_id: String.t(), code_m: number(), phase_m: number()}
+          %{
+            required(:satellite_id) => String.t(),
+            required(:code_m) => number(),
+            required(:phase_m) => number(),
+            optional(:signals) => observation_signals() | nil,
+            optional(atom()) => term()
+          }
           | {String.t(), number(), number()}
+
+  @typedoc "Tracking codes of an ionosphere-free observation's measurements."
+  @type observation_signals :: %{
+          code1: String.t(),
+          code2: String.t(),
+          phase1: String.t(),
+          phase2: String.t()
+        }
 
   @typedoc "A receiver ECEF position in metres."
   @type receiver ::
@@ -410,7 +673,20 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   `:no_epochs`, `{:too_few_epochs, used, 2}`, `{:duplicate_epoch, epoch}`,
   `{:too_few_epoch_observations, epoch, used, 4}`,
   `{:too_few_equations, equations, unknowns}`, and the same observation,
-  option, ephemeris, seeding, and geometry errors as `solve_float/4`.
+  option, ephemeris, seeding, and geometry errors as `solve_float/4`. The
+  solver also returns
+  `{:insufficient_observations_after_ssr_bias_exclusion, excluded, retained, required}`
+  when leaving out observations without a required SSR/HAS bias leaves too few,
+  and `{:ut1_outside_coverage, :before_coverage | :after_coverage}` when the
+  ephemeris source refuses a satellite state because it reads UT1 outside the
+  UT1 table.
+
+  An observation whose code is zero or negative places no transmission epoch,
+  as RTKLIB `satposs` reads it, and is left out and listed in
+  `unplaced_observations`. An epoch left with no observations, by that, the
+  elevation cutoff or the residual screen, is not solved: it has no entry in
+  `epoch_clocks` and `solved_epoch_indices`, and the remaining epochs are
+  solved.
   """
   @spec solve_float_epochs(SP3.t(), [epoch_observations()], keyword()) ::
           {:ok, MultiEpochSolution.t()} | {:error, term()}
@@ -464,7 +740,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         is_nil(get_in(tropo, [:corrections, :satellite_antenna]))
 
     Enum.map(epochs, fn %{epoch: %NaiveDateTime{} = epoch, observations: observations} ->
-      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
+      {:ok, {jd_whole, jd_fraction}} = Time.epoch_to_split_jd(epoch)
 
       {
         Epoch.datetime_tuple(epoch),
@@ -486,8 +762,31 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       Map.fetch!(observation, :code_m),
       Map.fetch!(observation, :phase_m),
       f1,
-      f2
+      f2,
+      observation_signals_term(if is_map(raw), do: Map.get(raw, :signals))
     }
+  end
+
+  # The tracking codes an ionosphere-free observation was formed from, as
+  # `%{code1:, code2:, phase1:, phase2:}`, each a band and tracking attribute
+  # (`"1C"`) or a RINEX 3 observation code (`"C1C"`, `"L1C"`).
+  defp observation_signals_term(nil), do: nil
+
+  defp observation_signals_term(%{code1: code1, code2: code2, phase1: phase1, phase2: phase2} = signals)
+       when map_size(signals) == 4 do
+    if Enum.all?([code1, code2, phase1, phase2], &is_binary/1) do
+      {code1, code2, phase1, phase2}
+    else
+      invalid_observation_signals(signals)
+    end
+  end
+
+  defp observation_signals_term(signals), do: invalid_observation_signals(signals)
+
+  defp invalid_observation_signals(signals) do
+    raise ArgumentError,
+          "observation :signals must be nil or %{code1:, code2:, phase1:, phase2:} of strings, got: " <>
+            inspect(signals)
   end
 
   defp core_single_initial_state_term(state) do
@@ -587,7 +886,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       |> Enum.with_index()
       |> Map.new()
 
-    with {:ok, residuals} <- float_solution_residuals(solution.residuals_m, epoch_index) do
+    with {:ok, residuals} <- float_solution_residuals(solution.residuals_m, epoch_index),
+         {:ok, solved_epoch_indices} <- float_solution_solved_epochs(solution, epoch_index) do
       {:ok,
        {
          position_tuple3(solution.position),
@@ -622,9 +922,98 @@ defmodule Sidereon.GNSS.PrecisePositioning do
              solution.tropo_gradient_covariance_m2,
              solution.formal_tropo_gradient_covariance_m2
            }
+         },
+         {
+           solution.ssr_bias_exclusions,
+           Enum.map(solution.unplaced_observations, &unplaced_observation_term/1),
+           Map.fetch!(solution.metadata, :residual_screen),
+           float_solve_options_term(Map.fetch!(solution.metadata, :solve_options)),
+           Enum.map(solution.residual_screen_removals, &observation_key_term/1),
+           solved_epoch_indices
          }
        }}
     end
+  end
+
+  # The input epoch index of each solved epoch: the clocks' own indices, or,
+  # for a solution whose clocks carry none, each clock's epoch in the arc.
+  defp float_solution_solved_epochs(%MultiEpochSolution{solved_epoch_indices: indices}, _epoch_index)
+       when is_list(indices), do: {:ok, indices}
+
+  defp float_solution_solved_epochs(%MultiEpochSolution{epoch_clocks: clocks}, epoch_index) do
+    Enum.reduce_while(clocks, {:ok, []}, fn clock, {:ok, acc} ->
+      case Map.fetch(epoch_index, clock.epoch) do
+        {:ok, idx} -> {:cont, {:ok, [idx | acc]}}
+        :error -> {:halt, {:error, {:unknown_float_solution_epoch, clock.epoch}}}
+      end
+    end)
+    |> case do
+      {:ok, indices} -> {:ok, Enum.reverse(indices)}
+      error -> error
+    end
+  end
+
+  defp observation_key_term(%{epoch_index: epoch_index, ambiguity_id: ambiguity_id}), do: {epoch_index, ambiguity_id}
+
+  defp observation_key_map({epoch_index, ambiguity_id}), do: %{epoch_index: epoch_index, ambiguity_id: ambiguity_id}
+
+  defp unplaced_observation_term(observation) do
+    {observation.epoch_index, observation.satellite_id, observation.ambiguity_id, observation.reason}
+  end
+
+  defp unplaced_observation_map({epoch_index, satellite_id, ambiguity_id, reason}) do
+    %{epoch_index: epoch_index, satellite_id: satellite_id, ambiguity_id: ambiguity_id, reason: reason}
+  end
+
+  defp float_solve_options_term(options) do
+    {Map.fetch!(options, :max_iterations), Map.fetch!(options, :position_tolerance_m),
+     Map.fetch!(options, :clock_tolerance_m), Map.fetch!(options, :ambiguity_tolerance_m),
+     Map.fetch!(options, :ztd_tolerance_m)}
+  end
+
+  defp float_solve_options_map(
+         {max_iterations, position_tolerance_m, clock_tolerance_m, ambiguity_tolerance_m, ztd_tolerance_m}
+       ) do
+    %{
+      max_iterations: max_iterations,
+      position_tolerance_m: position_tolerance_m,
+      clock_tolerance_m: clock_tolerance_m,
+      ambiguity_tolerance_m: ambiguity_tolerance_m,
+      ztd_tolerance_m: ztd_tolerance_m
+    }
+  end
+
+  # Clocks, one per solved epoch, each with the input epoch it belongs to.
+  defp solved_epoch_clocks(epochs, solved_epoch_indices, clocks_m) do
+    epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
+
+    solved_epoch_indices
+    |> Enum.zip(clocks_m)
+    |> Enum.map(fn {idx, clock_m} ->
+      %{
+        epoch: Map.fetch!(epoch_by_index, idx),
+        epoch_index: idx,
+        rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
+        rx_clock_m: clock_m
+      }
+    end)
+  end
+
+  defp residual_rows(residuals, epochs) do
+    epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
+
+    Enum.map(residuals, fn {idx, sat, ambiguity_id, code_m, phase_m, {code_weight, phase_weight}} ->
+      %{
+        epoch: Map.fetch!(epoch_by_index, idx),
+        epoch_index: idx,
+        satellite_id: sat,
+        ambiguity_id: ambiguity_id,
+        code_m: code_m,
+        phase_m: phase_m,
+        code_weight: code_weight,
+        phase_weight: phase_weight
+      }
+    end)
   end
 
   defp tropo_gradients_term(%{tropo_gradient_north_m: north, tropo_gradient_east_m: east})
@@ -646,23 +1035,28 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp float_solution_residuals(residuals, epoch_index) do
     Enum.reduce_while(residuals, {:ok, []}, fn residual, {:ok, acc} ->
-      case Map.fetch(epoch_index, residual.epoch) do
-        {:ok, idx} ->
+      case {residual_epoch_index(residual, epoch_index), residual} do
+        {{:ok, idx}, %{ambiguity_id: ambiguity_id}} when is_binary(ambiguity_id) ->
           {:cont,
            {:ok,
             [
               {
                 idx,
                 residual.satellite_id,
+                ambiguity_id,
                 residual.code_m,
                 residual.phase_m,
-                residual.code_weight,
-                residual.phase_weight
+                {residual.code_weight, residual.phase_weight}
               }
               | acc
             ]}}
 
-        :error ->
+        {{:ok, _idx}, _residual} ->
+          # A residual row names the observation it belongs to by its ambiguity
+          # id; a row without one cannot be matched to an observation.
+          {:halt, {:error, {:invalid_float_solution, :residual_ambiguity_id}}}
+
+        {:error, _residual} ->
           {:halt, {:error, {:unknown_float_solution_epoch, residual.epoch}}}
       end
     end)
@@ -671,6 +1065,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp residual_epoch_index(%{epoch_index: idx}, _epoch_index) when is_integer(idx), do: {:ok, idx}
+  defp residual_epoch_index(residual, epoch_index), do: Map.fetch(epoch_index, residual.epoch)
 
   defp core_tropo_term(%{enabled?: false} = tropo) do
     {false, false, false, @default_pressure_hpa, @default_temperature_k, @default_relative_humidity,
@@ -742,31 +1139,25 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp core_multi_solution(
          {position, clocks_m, {ambiguities, residual_ionosphere, ztd, tropo_gradients}, residuals, used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle}},
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle},
+          {exclusions, unplaced, residual_screen, solve_options, screen_removals, solved_epoch_indices}},
          epochs,
          tropo
        ) do
     {x, y, z} = position
     covariance = covariance_fields(covariance_bundle)
     {tropo_gradient_north_m, tropo_gradient_east_m} = tropo_gradient_fields(tropo_gradients)
-    epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
 
     %MultiEpochSolution{
       position: %{x_m: x, y_m: y, z_m: z},
       position_covariance: covariance.position_covariance,
       formal_position_covariance: covariance.formal_position_covariance,
       temporal_position_covariance: covariance.temporal_position_covariance,
-      epoch_clocks:
-        epochs
-        |> Enum.map(& &1.epoch)
-        |> Enum.zip(clocks_m)
-        |> Enum.map(fn {epoch, clock_m} ->
-          %{
-            epoch: epoch,
-            rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
-            rx_clock_m: clock_m
-          }
-        end),
+      epoch_clocks: solved_epoch_clocks(epochs, solved_epoch_indices, clocks_m),
+      solved_epoch_indices: solved_epoch_indices,
+      ssr_bias_exclusions: exclusions,
+      unplaced_observations: Enum.map(unplaced, &unplaced_observation_map/1),
+      residual_screen_removals: Enum.map(screen_removals, &observation_key_map/1),
       ambiguities_m: Map.new(ambiguities),
       residual_ionosphere_m: Map.new(residual_ionosphere),
       ztd_residual_m: ztd,
@@ -774,23 +1165,15 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       tropo_gradient_east_m: tropo_gradient_east_m,
       tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
       formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
-      residuals_m:
-        Enum.map(residuals, fn {idx, sat, code_m, phase_m, code_weight, phase_weight} ->
-          %{
-            epoch: Map.fetch!(epoch_by_index, idx),
-            satellite_id: sat,
-            code_m: code_m,
-            phase_m: phase_m,
-            code_weight: code_weight,
-            phase_weight: phase_weight
-          }
-        end),
+      residuals_m: residual_rows(residuals, epochs),
       used_sats: used_sats,
       epochs: Enum.map(epochs, & &1.epoch),
       metadata: %{
         iterations: iterations,
         converged: converged,
         status: status,
+        residual_screen: residual_screen,
+        solve_options: float_solve_options_map(solve_options),
         n_epochs: length(epochs),
         n_observations: multi_observation_count(epochs),
         code_rms_m: code_rms_m,
@@ -809,7 +1192,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp core_single_solution(
          {position, [clock_m], {ambiguities, residual_ionosphere, _ztd, tropo_gradients}, residuals, _used_sats,
-          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle}},
+          {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m, covariance_bundle}, _provenance},
          obs,
          tropo
        ) do
@@ -831,7 +1214,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
       formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
       residuals_m:
-        Map.new(residuals, fn {_idx, sat, code_m, phase_m, _code_weight, _phase_weight} ->
+        Map.new(residuals, fn {_idx, sat, _ambiguity_id, code_m, phase_m, _weights} ->
           {sat, %{code_m: code_m, phase_m: phase_m}}
         end),
       used_sats: Enum.map(obs, & &1.satellite_id),
@@ -893,8 +1276,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   defp core_single_status(status), do: status
 
   defp core_fixed_solution(
-         {position, clocks_m, {fixed_cycles, fixed_m, residual_ionosphere}, {ztd, tropo_gradients, float_payload},
-          residuals, used_sats,
+         {position, clocks_m, {fixed_cycles, fixed_m, residual_ionosphere},
+          {ztd, tropo_gradients, float_payload, {exclusions, solved_epoch_indices, unplaced}}, residuals, used_sats,
           {iterations, converged, status, code_rms_m, phase_rms_m, weighted_rms_m,
            {{integer_status, integer_ratio, integer_best_score, integer_second_best_score, integer_candidates,
              {search_order, search_float_cycles, covariance_cycles, covariance_inverse_cycles}}, covariance_bundle}}},
@@ -904,24 +1287,16 @@ defmodule Sidereon.GNSS.PrecisePositioning do
     {x, y, z} = position
     covariance = covariance_fields(covariance_bundle)
     {tropo_gradient_north_m, tropo_gradient_east_m} = tropo_gradient_fields(tropo_gradients)
-    epoch_by_index = epochs |> Enum.with_index() |> Map.new(fn {row, idx} -> {idx, row.epoch} end)
 
     %FixedSolution{
       position: %{x_m: x, y_m: y, z_m: z},
       position_covariance: covariance.position_covariance,
       formal_position_covariance: covariance.formal_position_covariance,
       temporal_position_covariance: covariance.temporal_position_covariance,
-      epoch_clocks:
-        epochs
-        |> Enum.map(& &1.epoch)
-        |> Enum.zip(clocks_m)
-        |> Enum.map(fn {epoch, clock_m} ->
-          %{
-            epoch: epoch,
-            rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
-            rx_clock_m: clock_m
-          }
-        end),
+      epoch_clocks: solved_epoch_clocks(epochs, solved_epoch_indices, clocks_m),
+      solved_epoch_indices: solved_epoch_indices,
+      ssr_bias_exclusions: exclusions,
+      unplaced_observations: Enum.map(unplaced, &unplaced_observation_map/1),
       fixed_ambiguities_cycles: Map.new(fixed_cycles),
       fixed_ambiguities_m: Map.new(fixed_m),
       residual_ionosphere_m: Map.new(residual_ionosphere),
@@ -931,17 +1306,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       tropo_gradient_covariance_m2: covariance.tropo_gradient_covariance_m2,
       formal_tropo_gradient_covariance_m2: covariance.formal_tropo_gradient_covariance_m2,
       float_solution: core_multi_solution(float_payload, epochs, tropo),
-      residuals_m:
-        Enum.map(residuals, fn {idx, sat, code_m, phase_m, code_weight, phase_weight} ->
-          %{
-            epoch: Map.fetch!(epoch_by_index, idx),
-            satellite_id: sat,
-            code_m: code_m,
-            phase_m: phase_m,
-            code_weight: code_weight,
-            phase_weight: phase_weight
-          }
-        end),
+      residuals_m: residual_rows(residuals, epochs),
       used_sats: used_sats,
       epochs: Enum.map(epochs, & &1.epoch),
       metadata: %{
@@ -1074,6 +1439,25 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   end
 
   def solve_ppp_fixed(%SP3{}, _epoch_observations, _float_solution, _opts), do: {:error, :no_epochs}
+
+  @doc false
+  # Carries `float_solution` through the native float-solution payload the fixed
+  # solve reads and back, as the fixed solve's own decoder and the float solve's
+  # encoder do, so a test can check that the boundary keeps every field.
+  @spec __float_solution_round_trip__(MultiEpochSolution.t(), [map()], keyword()) ::
+          {:ok, MultiEpochSolution.t()} | {:error, term()}
+  def __float_solution_round_trip__(%MultiEpochSolution{} = float_solution, epoch_observations, opts \\ []) do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, tropo} <- troposphere_options(opts),
+         {:ok, payload} <- float_solution_payload(float_solution, epochs) do
+      case NIF.precise_positioning_float_solution_round_trip(payload) do
+        {:error, _} = error -> error
+        payload -> {:ok, core_multi_solution(payload, epochs, tropo)}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :precise_positioning_float_solution_round_trip)
+  end
 
   defp solve_fixed_epochs_auto_init(%SP3{} = sp3, epoch_observations, opts) do
     spp_troposphere = Keyword.get(opts, :troposphere, false)

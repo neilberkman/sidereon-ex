@@ -1,89 +1,111 @@
 defmodule Sidereon.GNSS.PositioningDopplerTest do
   use ExUnit.Case, async: true
 
-  alias Sidereon.GNSS.Geometry
-  alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.SP3
-  alias Sidereon.GNSS.Velocity
+  alias Sidereon.Test.CoreGolden
 
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
-  @epoch ~N[2020-06-24 12:00:00]
-  @receiver {4_500_000.0, 500_000.0, 4_500_000.0}
-  @initial_guess {4_400_000.0, 400_000.0, 4_400_000.0, 0.0}
   @c 299_792_458.0
-  @f_l1 1_575_420_000.0
+
+  # The core's own SPP agreement bound (`AGREEMENT_BOUND_M` in its SPP tests):
+  # the binding's solve agrees with the core's solve of the same inputs to
+  # within it, and a clock to within it over c.
+  @core_agreement_bound_m 1.0e-6
 
   setup_all do
-    sp3 = SP3.load!(@sp3_path)
+    golden = CoreGolden.load("doppler_solve.json")
 
-    satellites =
-      sp3
-      |> Geometry.visible(@receiver, @epoch, systems: ["G"], elevation_mask_deg: 5.0)
-      |> Enum.map(& &1.satellite_id)
-      |> Enum.take(7)
+    doppler_rows =
+      Enum.map(golden["doppler"], fn [sat, doppler_hz, carrier_hz, drift] ->
+        {sat, CoreGolden.f(doppler_hz), CoreGolden.f(carrier_hz), CoreGolden.f(drift)}
+      end)
 
-    {:ok, sp3: sp3, satellites: satellites}
+    {:ok,
+     sp3: SP3.load!(@sp3_path),
+     golden: golden,
+     epoch: NaiveDateTime.from_iso8601!(golden["epoch"]),
+     pseudoranges: CoreGolden.observations(golden["observations"]),
+     doppler_rows: doppler_rows}
   end
 
-  test "pins receiver clock drift, position covariance, and Doppler velocity solve", ctx do
-    # Reference literals generated from sidereon-core through this binding
-    # against the patched core on 2026-07-05.
-    velocity_m_s = {12.0, -7.0, 3.0}
-    clock_drift_s_s = 1.0e-9
-    pseudoranges = pseudoranges(ctx.sp3, ctx.satellites)
-    doppler_rows = doppler_rows(ctx.sp3, ctx.satellites, velocity_m_s, clock_drift_s_s)
-
+  test "matches the core Doppler solve of the same pseudoranges and Doppler rows", ctx do
     assert {:ok, %Positioning.DopplerSolution{} = solution} =
-             Positioning.solve_with_doppler(ctx.sp3, pseudoranges, doppler_rows, @epoch, initial_guess: @initial_guess)
+             Positioning.solve_with_doppler(ctx.sp3, ctx.pseudoranges, ctx.doppler_rows, ctx.epoch,
+               initial_guess: ctx.golden["initial_guess"] |> CoreGolden.f() |> List.to_tuple()
+             )
 
     receiver = solution.receiver
+    expected = ctx.golden["receiver"]
 
-    # Position is pinned to the bit. A 1e-9 m delta on a 4.5e6 m coordinate is
-    # below one f64 ULP (0.93 nm), so the old assert_in_delta was a bit check
-    # written as a tolerance; say so explicitly.
-    assert bits(receiver.position.x_m) == 0x41512A88000564ED
-    assert bits(receiver.position.y_m) == 0x411E84800024C620
-    assert bits(receiver.position.z_m) == 0x41512A87FFFFCEA9
-    assert bits(receiver.rx_clock_s) == 0x3D6ADAC7E18F7721
-    assert bits(receiver.rx_clock_drift_s_s) == 0x3E112E0BFA639764
+    [ex, ey, ez] = CoreGolden.f(expected["position_m"])
+    assert_in_delta receiver.position.x_m, ex, @core_agreement_bound_m
+    assert_in_delta receiver.position.y_m, ey, @core_agreement_bound_m
+    assert_in_delta receiver.position.z_m, ez, @core_agreement_bound_m
+    assert_in_delta receiver.rx_clock_s, CoreGolden.f(expected["rx_clock_s"]), @core_agreement_bound_m / @c
 
-    assert bits(hd(hd(receiver.position_covariance.ecef_m2))) == 0x402318623D66BC17
-    assert bits(hd(hd(receiver.position_covariance.enu_m2))) == 0x3FFC34385FC8F1BE
+    assert_in_delta receiver.rx_clock_drift_s_s,
+                    CoreGolden.f(expected["rx_clock_drift_s_s"]),
+                    @core_agreement_bound_m / @c
+
+    assert receiver.used_sats == expected["used_sats"]
+    assert receiver.metadata.status == CoreGolden.status_atom(expected["status"])
+    assert receiver.metadata.iterations == expected["iterations"]
+
+    # The covariances are the geometry's, which moves with the solution only by
+    # the agreement bound over the satellite range, about 5e-14 relative;
+    # 1e-9 relative is far above that and far below any real change.
+    assert_matrix_relative(receiver.position_covariance.ecef_m2, CoreGolden.f(expected["position_covariance_ecef_m2"]))
+    assert_matrix_relative(receiver.position_covariance.enu_m2, CoreGolden.f(expected["position_covariance_enu_m2"]))
     assert receiver.system_clocks_s == %{"G" => receiver.rx_clock_s}
     assert receiver.system_tdops == %{"G" => receiver.dop.tdop}
 
+    velocity = ctx.golden["velocity"]
     assert solution.velocity_error == nil
-    assert solution.velocity.n_satellites == 7
-    assert solution.velocity.used_sats == ctx.satellites
+    assert solution.velocity.n_satellites == length(velocity["used_sats"])
+    assert solution.velocity.used_sats == velocity["used_sats"]
 
+    # The velocity rows are linearized at the solved position, so the velocity
+    # agrees with the core's to the agreement bound over the satellite range
+    # times the satellite speed, below 1e-9 m/s; 1e-9 bounds it.
     {vx, vy, vz} = solution.velocity.velocity_m_s
-    assert_in_delta vx, 11.999999990551714, 1.0e-9
-    assert_in_delta vy, -6.999999944154055, 1.0e-9
-    assert_in_delta vz, 3.0000000246636205, 1.0e-9
-    assert bits(solution.velocity.clock_drift_s_s) == 0x3E112E0BFA639764
-    assert_in_delta solution.velocity.speed_m_s, 14.212670373275376, 1.0e-12
-
-    assert length(solution.velocity.state_covariance) == 4
-    assert Enum.all?(solution.velocity.state_covariance, &(length(&1) == 4))
-    assert bits(hd(hd(solution.velocity.state_covariance))) == 0x4017B72E940B5D2C
+    [evx, evy, evz] = CoreGolden.f(velocity["velocity_m_s"])
+    assert_in_delta vx, evx, 1.0e-9
+    assert_in_delta vy, evy, 1.0e-9
+    assert_in_delta vz, evz, 1.0e-9
+    assert_in_delta solution.velocity.clock_drift_s_s, CoreGolden.f(velocity["clock_drift_s_s"]), 1.0e-9 / @c
+    assert_in_delta solution.velocity.speed_m_s, CoreGolden.f(velocity["speed_m_s"]), 1.0e-9
+    assert_matrix_relative(solution.velocity.state_covariance, CoreGolden.f(velocity["state_covariance"]))
   end
 
-  defp bits(value) when is_float(value), do: :binary.decode_unsigned(<<value::float-64>>)
+  test "recovers the receiver, velocity and clock drift the rows were formed at", ctx do
+    assert {:ok, solution} =
+             Positioning.solve_with_doppler(ctx.sp3, ctx.pseudoranges, ctx.doppler_rows, ctx.epoch,
+               initial_guess: {4_400_000.0, 400_000.0, 4_400_000.0, 0.0}
+             )
 
-  defp pseudoranges(sp3, satellites) do
-    Enum.map(satellites, fn sat ->
-      {:ok, obs} = Observables.predict(sp3, sat, @receiver, @epoch, light_time: true, sagnac: true)
-      {sat, obs.geometric_range_m + @c * -(obs.sat_clock_s || 0.0)}
-    end)
+    {tx, ty, tz} = CoreGolden.tuple3(ctx.golden["receiver_truth_m"])
+    assert_in_delta solution.receiver.position.x_m, tx, 1.0e-3
+    assert_in_delta solution.receiver.position.y_m, ty, 1.0e-3
+    assert_in_delta solution.receiver.position.z_m, tz, 1.0e-3
+
+    # The Doppler rows are formed from the forward prediction's range rate,
+    # the satellite velocity differenced over +/- 0.5 s in the rotated frame;
+    # the solve forms it from the state the pseudorange places and the
+    # first-order Sagnac rate, as RTKLIB does. The two differ by under 1 mm/s
+    # here, so the truth is recovered to that level.
+    {vx, vy, vz} = solution.velocity.velocity_m_s
+    [tvx, tvy, tvz] = CoreGolden.f(ctx.golden["velocity_truth_m_s"])
+    assert_in_delta vx, tvx, 1.0e-3
+    assert_in_delta vy, tvy, 1.0e-3
+    assert_in_delta vz, tvz, 1.0e-3
+    assert_in_delta solution.velocity.clock_drift_s_s, CoreGolden.f(ctx.golden["clock_drift_truth_s_s"]), 1.0e-3 / @c
   end
 
-  defp doppler_rows(sp3, satellites, {vx, vy, vz}, clock_drift_s_s) do
-    Enum.map(satellites, fn sat ->
-      {:ok, obs} = Observables.predict(sp3, sat, @receiver, @epoch, light_time: true, sagnac: true)
-      {ex, ey, ez} = obs.los_unit
-      rho_dot_m_s = obs.range_rate_m_s - (ex * vx + ey * vy + ez * vz) + @c * clock_drift_s_s
-      {sat, Velocity.range_rate_to_doppler(rho_dot_m_s, @f_l1), @f_l1, 0.0}
-    end)
+  defp assert_matrix_relative(actual, expected) do
+    for {row, expected_row} <- Enum.zip(actual, expected), {value, expected_value} <- Enum.zip(row, expected_row) do
+      assert abs(value - expected_value) <= 1.0e-9 * abs(expected_value),
+             "expected #{value} within 1e-9 relative of #{expected_value}"
+    end
   end
 end

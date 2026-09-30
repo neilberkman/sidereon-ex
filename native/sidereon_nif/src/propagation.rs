@@ -6,8 +6,8 @@ use rustler::Error;
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::astro::forces::{
     DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SolidEarthPoleTideGravity,
-    SolidEarthTideGravity, SpaceWeatherSource, SphericalHarmonicGravityConfig, ThirdBodyGravity,
-    ZonalCoefficients, ZonalDegrees, ZonalGravity,
+    SolidEarthTideGravity, SphericalHarmonicGravityConfig, ThirdBodyGravity, ZonalCoefficients,
+    ZonalDegrees, ZonalGravity,
 };
 use sidereon_core::astro::frames::TdbEarthOrientationProvider;
 use sidereon_core::astro::propagator::{
@@ -186,11 +186,24 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
     };
     let srp = srp_from_tokens(&tokens)?;
     let spherical_harmonic = spherical_harmonic_from_tokens(&tokens)?;
+    let tide_system = tide_system_from_tokens(&tokens)?;
+    let requests_solid_earth_tide =
+        has_force(&tokens, &["solid_earth_tide", "solid-earth-tide"]) || tide_system.is_some();
 
     if has_force(&tokens, &["earth_phase_a", "phase_a"]) {
+        if requests_solid_earth_tide {
+            return Err(Error::Term(Box::new(
+                "earth_phase_a does not accept a solid-earth-tide selector",
+            )));
+        }
         return Ok(ForceModelKind::earth_phase_a(srp));
     }
     if has_force(&tokens, &["earth_phase_b", "phase_b"]) && spherical_harmonic.is_none() {
+        if requests_solid_earth_tide {
+            return Err(Error::Term(Box::new(
+                "earth_phase_b does not accept a solid-earth-tide selector",
+            )));
+        }
         return ForceModelKind::earth_phase_b(
             sidereon_core::astro::forces::EGM96_EMBEDDED_MAX_DEGREE,
             sidereon_core::astro::forces::EGM96_EMBEDDED_MAX_ORDER,
@@ -208,7 +221,7 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
     let wants_moon = has_force(&tokens, &["moon", "third_body_moon"]);
     let wants_third_body = has_force(&tokens, &["third_body", "third-body", "sun_moon"]);
     let wants_relativity = has_force(&tokens, &["relativity", "schwarzschild"]);
-    let wants_solid_earth_tide = has_force(&tokens, &["solid_earth_tide", "solid-earth-tide"]);
+    let wants_solid_earth_tide = requests_solid_earth_tide;
     let wants_solid_earth_pole_tide =
         has_force(&tokens, &["solid_earth_pole_tide", "solid-earth-pole-tide"]);
     let wants_composite = has_force(&tokens, &["composite"])
@@ -235,9 +248,17 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
 
     let mut components = ForceModelComponents::earth_two_body();
     if wants_full_zonal {
-        components = components.with_zonal(ZonalGravity::earth_j2_through_j6());
+        let mut zonal = ZonalGravity::earth_j2_through_j6();
+        if let Some(tide_system) = tide_system {
+            zonal.coefficients.tide_system = tide_system;
+        }
+        components = components.with_zonal(zonal);
     } else if wants_j2 {
-        components = components.with_zonal(j2_only_zonal());
+        let mut zonal = j2_only_zonal();
+        if let Some(tide_system) = tide_system {
+            zonal.coefficients.tide_system = tide_system;
+        }
+        components = components.with_zonal(zonal);
     }
     if let Some(spherical_harmonic) = spherical_harmonic {
         components = components.with_spherical_harmonic(spherical_harmonic);
@@ -256,13 +277,34 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         components = components.with_relativity(SchwarzschildRelativity::default());
     }
     if wants_solid_earth_tide {
-        components = components.with_solid_earth_tide(SolidEarthTideGravity::default());
+        let mut tide = SolidEarthTideGravity::default();
+        if let Some(tide_system) = tide_system {
+            tide.tide_system = tide_system;
+        }
+        components = components.with_solid_earth_tide(tide);
     }
     if wants_solid_earth_pole_tide {
         components = components.with_solid_earth_pole_tide(SolidEarthPoleTideGravity::default());
     }
 
     Ok(ForceModelKind::composite(components))
+}
+
+fn tide_system_from_tokens(
+    tokens: &[String],
+) -> NifResult<Option<sidereon_core::astro::forces::TideSystem>> {
+    let Some(token) = tokens
+        .iter()
+        .find_map(|token| token.strip_prefix("solid_earth_tide:"))
+    else {
+        return Ok(None);
+    };
+    match token {
+        "tide_free" => Ok(Some(sidereon_core::astro::forces::TideSystem::TideFree)),
+        "zero_tide" => Ok(Some(sidereon_core::astro::forces::TideSystem::ZeroTide)),
+        "mean_tide" => Ok(Some(sidereon_core::astro::forces::TideSystem::MeanTide)),
+        _ => Err(Error::Term(Box::new("invalid solid-earth-tide system"))),
+    }
 }
 
 pub(crate) fn propagation_context_for_force_model(
@@ -287,6 +329,16 @@ fn force_model_requires_body_fixed_frame(force_model: ForceModelKind) -> bool {
     }
 }
 
+/// The catalog number a catalog field states: up to nine digits, as an OMM
+/// `NORAD_CAT_ID` may state it, or a five-character Alpha-5 TLE field.
+fn catalog_number_from_field(field: &str) -> NifResult<u32> {
+    let trimmed = field.trim();
+    if !trimmed.is_empty() && trimmed.len() <= 9 && trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return trimmed.parse::<u32>().map_err(errors::invalid_input);
+    }
+    sidereon_core::astro::tle::decode_catalog_number(trimmed).map_err(errors::invalid_input)
+}
+
 pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResult<ElementSet> {
     // The Elixir side carries the SGP4 mean elements plus the full four-digit
     // epoch year and fractional day (it derives the year from its own datetime,
@@ -294,29 +346,68 @@ pub(crate) fn elements_from_map<'a>(env: Env<'a>, tle_map: Term<'a>) -> NifResul
     // TLE-to-IR mapping (and the exact Vallado days2mdhms/jday epoch math) behind
     // `TleElements::to_element_set`, so build that public IR and convert through
     // the single canonical path.
+    // The mean-motion derivatives are `nil` when the source states none. SGP4
+    // stores them with the element set but does not propagate with them, so
+    // the TLE bridge runs with 0 in their place and the element set then
+    // carries them as stated.
+    let mean_motion_dot: Option<f64> = get_map_val(env, tle_map, "mean_motion_dot")?;
+    let mean_motion_double_dot: Option<f64> = get_map_val(env, tle_map, "mean_motion_double_dot")?;
+    // The catalog number as the element set carries it: `None` when the
+    // elements state none, as an OMM without `NORAD_CAT_ID` may; otherwise the
+    // number a TLE field (five digits or Alpha-5) or an OMM (up to nine digits)
+    // states.
+    let catalog_field: Option<String> = get_map_val(env, tle_map, "catalog_number")?;
+    let catalog_number = catalog_field
+        .as_deref()
+        .map(catalog_number_from_field)
+        .transpose()?;
     let elements = TleElements {
-        // The map path carries no catalog identity; "0" decodes to catalog 0,
-        // matching the pre-strict behavior for synthesized element sets.
-        catalog_number: "0".to_string(),
+        // The TLE bridge forms the epoch from the year and day and decodes a
+        // TLE catalog field. A catalog number no five-column field states (none,
+        // or more than five digits) is not a TLE field; the bridge then gets
+        // the TLE spelling of zero, and the element set is given the elements'
+        // own catalog number below, so the bridge's value is never used.
+        catalog_number: match (catalog_field.as_deref(), catalog_number) {
+            (Some(field), Some(_)) if field.trim().len() <= 5 => field.trim().to_string(),
+            _ => "00000".to_string(),
+        },
         classification: String::new(),
         international_designator: String::new(),
         epoch_year: get_map_val(env, tle_map, "epoch_year")?,
         epoch_day_of_year: get_map_val(env, tle_map, "epochdays")?,
-        mean_motion_dot: get_map_val(env, tle_map, "mean_motion_dot")?,
-        mean_motion_double_dot: get_map_val(env, tle_map, "mean_motion_double_dot")?,
+        mean_motion_dot: mean_motion_dot.unwrap_or(0.0),
+        mean_motion_double_dot: mean_motion_double_dot.unwrap_or(0.0),
+        mean_motion_double_dot_text: None,
         bstar: get_map_val(env, tle_map, "bstar")?,
-        ephemeris_type: 0,
-        elset_number: 0,
+        bstar_text: None,
+        // The ephemeris type only selects the propagator; SGP4 runs the same
+        // way for an unstated type as for 0, so the map path states none.
+        ephemeris_type: None,
+        elset_number: None,
         inclination_deg: get_map_val(env, tle_map, "inclination_deg")?,
         raan_deg: get_map_val(env, tle_map, "raan_deg")?,
         eccentricity: get_map_val(env, tle_map, "eccentricity")?,
         arg_perigee_deg: get_map_val(env, tle_map, "arg_perigee_deg")?,
         mean_anomaly_deg: get_map_val(env, tle_map, "mean_anomaly_deg")?,
         mean_motion: get_map_val(env, tle_map, "mean_motion")?,
-        rev_number: 0,
+        rev_number: None,
     };
 
-    elements.to_element_set().map_err(errors::invalid_input)
+    let mut element_set = elements.to_element_set().map_err(errors::invalid_input)?;
+    // Elements the core formed from an OMM carry its exact split Julian date,
+    // which keeps femtoseconds and a UTC leap second the year and day cannot.
+    let epoch_jd: Option<(f64, f64)> = get_map_val(env, tle_map, "epoch_jd")?;
+    if let Some((whole, fraction)) = epoch_jd {
+        element_set.epoch = sidereon_core::astro::sgp4::JulianDate(whole, fraction);
+    }
+    // Elements the core formed from an OMM whose epoch python-sgp4 reads carry
+    // that epoch's day count since 1949-12-31, with which SGP4 is initialised as
+    // python-sgp4 initialises an OMM.
+    element_set.omm_epoch_days = get_map_val(env, tle_map, "omm_epoch_days")?;
+    element_set.catalog_number = catalog_number;
+    element_set.mean_motion_dot = mean_motion_dot;
+    element_set.mean_motion_double_dot = mean_motion_double_dot;
+    Ok(element_set)
 }
 
 pub(crate) fn propagate_with_elements_impl<'a>(
@@ -444,6 +535,7 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
     rel_tol: f64,
     drag: DragParameters,
     table: rustler::ResourceArc<crate::space_weather::SpaceWeatherTableResource>,
+    policy: Option<crate::space_weather::SpaceWeatherPolicyTerm>,
 ) -> NifResult<Term<'_>> {
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
@@ -463,7 +555,7 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
         integrator: IntegratorKind::Dp54,
         options,
         drag: Some(drag),
-        space_weather: Some(SpaceWeatherSource::Table(table.table.clone())),
+        space_weather: Some(crate::space_weather::table_source(&table, policy)),
     };
 
     match propagator.ephemeris_with_context(&[epoch_tdb_seconds + dt_seconds], &context) {

@@ -88,7 +88,7 @@ defmodule Sidereon.MalformedInputTest do
                |> OMM.parse()
     end
 
-    test "missing NORAD_CAT_ID defaults to empty catalog_number" do
+    test "missing NORAD_CAT_ID gives no catalog_number" do
       {:ok, el} =
         OMM.parse(%{
           "EPOCH" => "2024-01-01T00:00:00",
@@ -97,10 +97,11 @@ defmodule Sidereon.MalformedInputTest do
           "ECCENTRICITY" => 0.0,
           "ARG_OF_PERICENTER" => 0.0,
           "MEAN_ANOMALY" => 0.0,
-          "MEAN_MOTION" => 1.0
+          "MEAN_MOTION" => 1.0,
+          "BSTAR" => 0.0
         })
 
-      assert el.catalog_number == ""
+      assert el.catalog_number == nil
     end
 
     test "handles string-typed numeric fields (Space-Track quirk)" do
@@ -113,7 +114,8 @@ defmodule Sidereon.MalformedInputTest do
           "ECCENTRICITY" => "0.0007",
           "ARG_OF_PERICENTER" => "90.0",
           "MEAN_ANOMALY" => "270.0",
-          "MEAN_MOTION" => "15.5"
+          "MEAN_MOTION" => "15.5",
+          "BSTAR" => 0.0
         })
 
       assert el.inclination_deg == 51.6
@@ -129,7 +131,8 @@ defmodule Sidereon.MalformedInputTest do
                  "ECCENTRICITY" => 0.0,
                  "ARG_OF_PERICENTER" => 0.0,
                  "MEAN_ANOMALY" => 0.0,
-                 "MEAN_MOTION" => 1.0
+                 "MEAN_MOTION" => 1.0,
+                 "BSTAR" => 0.0
                })
     end
   end
@@ -154,8 +157,8 @@ defmodule Sidereon.MalformedInputTest do
     test "returns empty for non-overlapping epochs" do
       l1 = "1 25544U 98067A   18184.80969102  .00001614  00000-0  31745-4 0  9993"
       l2 = "2 25544  51.6414 295.8524 0003435 262.6267 204.2868 15.54005638121106"
-      start_jd = Sidereon.GNSS.Time.epoch_to_split_jd(~N[2018-07-03 19:25:57])
-      end_jd = Sidereon.GNSS.Time.epoch_to_split_jd(~N[2018-07-03 19:35:57])
+      {:ok, start_jd} = Sidereon.GNSS.Time.epoch_to_split_jd(~N[2018-07-03 19:25:57])
+      {:ok, end_jd} = Sidereon.GNSS.Time.epoch_to_split_jd(~N[2018-07-03 19:35:57])
 
       assert {:ok, results} =
                Sidereon.Conjunction.find_tca_candidates(l1, l2, l1, l2, start_jd, end_jd)
@@ -173,7 +176,8 @@ defmodule Sidereon.MalformedInputTest do
       "ECCENTRICITY" => 0.0,
       "ARG_OF_PERICENTER" => 0.0,
       "MEAN_ANOMALY" => 0.0,
-      "MEAN_MOTION" => 1.0
+      "MEAN_MOTION" => 1.0,
+      "BSTAR" => 0.0
     }
   end
 end

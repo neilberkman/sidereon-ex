@@ -8,7 +8,9 @@ defmodule Sidereon.GNSS.DataTest do
 
   @postings 3601
   @dted_len 25_981_042
-  @synthetic_dt2_sha256 "e118d926f69b4889d8c3b888098cb18f128669f1db40871f501c2160d87fa687"
+  # The SRTM void sample (-32768) is written as the DTED null posting 0xFFFF
+  # (MIL-PRF-89020B 3.10.9.1), not as sea level.
+  @synthetic_dt2_sha256 "b1db7d97656f5be2acde26c2c750732e17466c2bfdff8488a995c2ef02b8ff55"
 
   setup do
     root = Path.join(System.tmp_dir!(), "sidereon-data-test-#{System.unique_integer([:positive])}")
@@ -306,14 +308,14 @@ defmodule Sidereon.GNSS.DataTest do
     assert [
              %Data.AbsentCenter{
                center: "cod_ult",
-               reason: "candidate_not_found",
+               reason: "product_not_published",
                pattern: "primary_01D_05M",
                url:
                  "https://www.aiub.unibe.ch/download/CODE/" <>
                    "COD0OPSULT_20261930000_01D_05M_ORB.SP3",
                http_status: 404
              },
-             %Data.AbsentCenter{center: "igs_ult", reason: "candidate_not_found"}
+             %Data.AbsentCenter{center: "igs_ult", reason: "product_not_published"}
            ] = report.absent
 
     assert report.requested_centers == ["cod_ult", "igs_ult", "esa_ult"]
@@ -337,7 +339,10 @@ defmodule Sidereon.GNSS.DataTest do
 
   test "a center outside its verified catalog era is absent without hiding configuration failures", %{root: root} do
     parent = self()
-    date = ~D[2022-11-26]
+    # ESA's final series starts 2014-01-01 and GFZ's rapid series 2020-05, so
+    # on this date ESA is cataloged and GFZ is not. (CODE's finals are
+    # cataloged from 2014-01-01 under AIUB's short names.)
+    date = ~D[2019-06-01]
     body = :zlib.gzip(sp3_body(15_000.0, date, 86_400, "ESOC"))
 
     http_client = fn url, _opts ->
@@ -346,17 +351,17 @@ defmodule Sidereon.GNSS.DataTest do
     end
 
     assert {:ok, _merged, report} =
-             Data.fetch_merged_sp3(date, [:esa, :cod],
+             Data.fetch_merged_sp3(date, [:esa, :gfz],
                cache_dir: root,
                http_client: http_client
              )
 
     assert [%Data.Contributor{center: "esa"}] = report.contributors
 
-    assert [%Data.AbsentCenter{center: "cod", reason: "catalog_unavailable"}] =
+    assert [%Data.AbsentCenter{center: "gfz", reason: "catalog_unavailable"}] =
              report.absent
 
-    assert report.requested_centers == ["esa", "cod"]
+    assert report.requested_centers == ["esa", "gfz"]
     assert_received {:url, esa_url}
     assert String.contains?(esa_url, "navigation-office.esa.int")
     refute_received {:url, _other_url}
@@ -366,6 +371,25 @@ defmodule Sidereon.GNSS.DataTest do
                cache_dir: Path.join(root, "invalid-center-product"),
                http_client: fn _url, _opts -> {:ok, 200, body} end
              )
+  end
+
+  test "invalid merge cadence is rejected by core before fetching products", %{root: root} do
+    parent = self()
+
+    http_client = fn url, _opts ->
+      send(parent, {:unexpected_sp3_fetch, url})
+      {:error, :unexpected_fetch}
+    end
+
+    assert {:error, %{kind: "sp3_epoch_interval", field: "target_epoch_interval_s"} = error} =
+             Data.fetch_merged_sp3(~D[2026-07-12], [:esa],
+               epoch_interval_s: 1.0e-9,
+               cache_dir: root,
+               http_client: http_client
+             )
+
+    assert is_binary(error.value)
+    refute_received {:unexpected_sp3_fetch, _url}
   end
 
   test "fetch_merged_sp3 forwards merge policy options", %{root: root} do
@@ -536,13 +560,48 @@ defmodule Sidereon.GNSS.DataTest do
 
     assert {:ok, tile} = Terrain.load_tile(path)
     assert {:ok, 1234} = Terrain.tile_elevation(tile, -107.0 + 200 / 3600, 36.0 + 100 / 3600)
-    assert {:ok, 0} = Terrain.tile_elevation(tile, -107.0 + 2345 / 3600, 36.0 + 1234 / 3600)
     assert {:ok, -415} = Terrain.tile_elevation(tile, -107.0 + 3000 / 3600, 36.0 + 2000 / 3600)
+
+    # The void is an unknown elevation, not a 0 m height.
+    assert {:error, {:null_posting, %{longitude_index: 2345, latitude_index: 1234}}} =
+             Terrain.tile_elevation(tile, -107.0 + 2345 / 3600, 36.0 + 1234 / 3600)
+
+    # The converter writes a blank DSI record, whose datum reads as WGS84.
+    assert Terrain.tile_horizontal_datum(tile) == :unstated
+
+    assert {:error, {:outside, %{origin_longitude: -107.0, origin_latitude: 36.0}}} =
+             Terrain.tile_elevation(tile, -105.0, 36.5)
 
     assert {:ok, terrain} = Terrain.dted(root)
 
     assert {:ok, 8848.0} =
              Terrain.height(terrain, -107.0 + 3600 / 3600, 36.0 + 3600 / 3600, interpolation: :nearest_posting)
+
+    void = {-107.0 + 2345 / 3600, 36.0 + 1234 / 3600}
+
+    unknown =
+      {:error,
+       {:unknown_terrain_elevation, %{lat_index: 36, lon_index: -107, latitude_posting: 1234, longitude_posting: 2345}}}
+
+    assert Terrain.height(terrain, elem(void, 0), elem(void, 1), interpolation: :nearest_posting) == unknown
+    assert Terrain.height_batch(terrain, [void], interpolation: :nearest_posting) == [unknown]
+  end
+
+  test "DTED tile metadata the reader places postings by is checked", %{root: root} do
+    {:ok, dt2} = Sidereon.NIF.data_hgt_to_dted(36, -107, synthetic_hgt())
+
+    # A UHL longitude origin 30 arc seconds off the whole degree.
+    <<prefix::binary-size(4), _longitude::binary-size(8), rest::binary>> = dt2
+    shifted = prefix <> "1070030W" <> rest
+    path = Path.join(root, "shifted-origin.dt2")
+    File.mkdir_p!(root)
+    File.write!(path, shifted)
+
+    assert {:error, {:origin_not_whole_degree, %{field: "longitude of origin", text: "1070030W"}}} =
+             Terrain.load_tile(path)
+
+    missing = Path.join(root, "absent.dt2")
+    assert {:error, {:io, %{path: ^missing}}} = Terrain.load_tile(missing)
   end
 
   test "terrain wrong-length HGT is a decompress error", %{root: root} do

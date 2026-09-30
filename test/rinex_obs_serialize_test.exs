@@ -15,16 +15,22 @@ defmodule Sidereon.GNSS.RINEX.ObservationsSerializeTest do
   end
 
   test "to_rinex_string/1 returns deterministic RINEX text", %{obs: obs} do
-    text = Observations.to_rinex_string(obs)
+    assert {:ok, text} = Observations.to_rinex_string(obs)
     assert is_binary(text)
-    assert Observations.to_rinex_string(obs) == text
+    assert Observations.to_rinex_string(obs) == {:ok, text}
   end
 
   test "round-trips through parse with identical header and epochs", %{obs: obs} do
-    text = Observations.to_rinex_string(obs)
+    assert {:ok, text} = Observations.to_rinex_string(obs)
     assert {:ok, reparsed} = Observations.parse(text)
 
     assert Observations.epochs(reparsed) == Observations.epochs(obs)
+
+    # Labels the reader read and does not keep describe the source text, not
+    # the product, and are not written.
+    assert %{Observations.header(reparsed) | unretained_header_labels: []} ==
+             %{Observations.header(obs) | unretained_header_labels: []}
+
     assert Observations.observation_codes(reparsed) == Observations.observation_codes(obs)
     assert Observations.approx_position(reparsed) == Observations.approx_position(obs)
   end

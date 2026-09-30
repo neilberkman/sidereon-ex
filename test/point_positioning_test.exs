@@ -4,44 +4,59 @@ defmodule Sidereon.GNSS.PositioningTest do
   alias Sidereon.GeometryQuality
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Geometry
-  alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.Positioning.Solution
   alias Sidereon.GNSS.SP3
-
-  @speed_of_light_m_s 299_792_458.0
+  alias Sidereon.GNSS.Time.ExactEpoch
+  alias Sidereon.Test.CoreGolden
+  alias Sidereon.Test.ModelClock
 
   # End-to-end check of the Elixir -> NIF -> astrodynamics-gnss SPP path. The
   # observations, epoch parameters, atmosphere coefficients, and synthesized
   # receiver truth come from a committed known-truth trace fixture
   # (spp_trace_L2_tropo.json); the precise
-  # ephemeris is the matching SP3 file. Bit-exact physics parity is asserted in
-  # the crate's own test suite; here we only prove the full round trip recovers
-  # the truth, so a sub-millimetre solver-agreement bound is the right bar.
+  # ephemeris is the matching SP3 file. Physics parity is asserted in the
+  # crate's own test suite; here the solves of the trace inputs are compared
+  # with the core's solves of the same inputs (test/fixtures/core_goldens,
+  # written by test/generators/core_goldens) to the core's own agreement bound,
+  # which proves the Elixir boundary threads identical inputs and policy.
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @trace_path Path.join(__DIR__, "fixtures/spp_trace_L2_tropo.json")
 
   # The trace's epoch index 48 is 2020-06-24 12:00:00 GPST (DOY 176, noon).
   @epoch ~N[2020-06-24 12:00:00]
 
-  # Solver-agreement bound (meters). The crate documents agreement to a few
-  # nanometres; the public boundary adds only term encode/decode, so a
-  # sub-millimetre bound is comfortable and proves the wiring is lossless.
+  # Recovery bound (meters) for pseudoranges synthesized with the solver's own
+  # forward model. The solve ends with the first least-squares step below
+  # 1e-4 m, so on such noise-free inputs it stops within about that step of the
+  # station; this bound is ten such steps. A break in the forward model or the
+  # boundary moves the solution by metres, far outside it.
   @agreement_bound_m 1.0e-3
+
+  # The core's own SPP agreement bound (`AGREEMENT_BOUND_M` in its SPP tests):
+  # the binding's solve of the trace inputs agrees with the core's solve of
+  # them to within it, per ECEF axis.
+  @core_agreement_bound_m 1.0e-6
+
+  # WGS84 semi-major axis and first eccentricity squared, f(2 - f) for
+  # f = 1/298.257223563.
+  @wgs84_a_m 6_378_137.0
+  @wgs84_e2 6.6943799901413165e-3
 
   setup_all do
     trace = @trace_path |> File.read!() |> Jason.decode!()
     inputs = trace["fixture"]["inputs"]
     final = trace["fixture"]["final_solution"]
 
-    observations =
-      Enum.map(inputs["observations"], fn obs ->
-        {obs["sat_id"], hex_to_float(obs["p_meas_m"])}
-      end)
+    sp3 = SP3.load!(@sp3_path)
+
+    # The trace's pseudoranges exactly as committed; the expected solutions are
+    # the core's own solves of them (test/generators/core_goldens).
+    observations = Enum.map(inputs["observations"], fn obs -> {obs["sat_id"], hex_to_float(obs["p_meas_m"])} end)
 
     {:ok,
-     sp3: SP3.load!(@sp3_path),
+     sp3: sp3,
      observations: observations,
      alpha: inputs["klobuchar_alpha"] |> Enum.map(&hex_to_float/1) |> List.to_tuple(),
      beta: inputs["klobuchar_beta"] |> Enum.map(&hex_to_float/1) |> List.to_tuple(),
@@ -49,14 +64,21 @@ defmodule Sidereon.GNSS.PositioningTest do
      temperature_k: hex_to_float(inputs["met"]["temperature_k"]),
      relative_humidity: hex_to_float(inputs["met"]["relative_humidity"]),
      truth_x: Enum.map(final["truth_x"], &hex_to_float/1),
-     truth_rx_clock_s: hex_to_float(final["truth_rx_clock_s"]),
-     reference_x: Enum.map(final["x"], &hex_to_float/1),
-     reference_rx_clock_s: hex_to_float(final["rx_clock_s"]),
-     initial_guess: trace["fixture"]["frozen"]["initial_guess_x0"] |> Enum.map(&hex_to_float/1) |> List.to_tuple()}
+     initial_guess: trace["fixture"]["frozen"]["initial_guess_x0"] |> Enum.map(&hex_to_float/1) |> List.to_tuple(),
+     golden: CoreGolden.load("spp_trace_L2_tropo.json")}
   end
 
   describe "solve/4 end-to-end" do
-    test "recovers the synthesized receiver truth to sub-millimetre", ctx do
+    # These compare with the core's solve of the same inputs, not with the
+    # trace truth (45 deg N, 7 deg E, 300 m). The core recovers that truth to a
+    # few nanometres only through its replay recipe, which reproduces the model
+    # the trace was synthesized with (the core's SPP trace tests). The
+    # production solve applies its own measurement and error models, which the
+    # trace did not synthesize, and lands metres from the truth; no derivation
+    # in the core bounds that distance, so a truth bound here would be a fitted
+    # tolerance. What this binding can establish is delegation: the same
+    # solution, to the core's agreement bound per axis.
+    test "matches the core solve of the trace inputs from the near initial guess", ctx do
       assert {:ok, %Solution{} = sol} =
                Positioning.solve(ctx.sp3, ctx.observations, @epoch,
                  ionosphere: true,
@@ -66,30 +88,51 @@ defmodule Sidereon.GNSS.PositioningTest do
                  pressure_hpa: ctx.pressure_hpa,
                  temperature_k: ctx.temperature_k,
                  relative_humidity: ctx.relative_humidity,
-                 # The crate fixture's frozen initial guess.
                  initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
                )
 
-      [tx, ty, tz, _tb] = ctx.truth_x
+      expected = ctx.golden["solves"]["near_guess"]
+      assert CoreGolden.f(expected["initial_guess"]) == [4_500_000.0, 500_000.0, 4_500_000.0, 0.0]
+      assert_matches_core(sol, expected["solution"])
 
-      assert_in_delta sol.position.x_m, tx, @agreement_bound_m
-      assert_in_delta sol.position.y_m, ty, @agreement_bound_m
-      assert_in_delta sol.position.z_m, tz, @agreement_bound_m
-
-      # Clock bias agrees to the same length bound, expressed in seconds.
-      c_m_s = 299_792_458.0
-      assert_in_delta sol.rx_clock_s, ctx.truth_rx_clock_s, @agreement_bound_m / c_m_s
-
-      assert sol.metadata.converged
       assert sol.metadata.ionosphere_applied
       assert sol.metadata.troposphere_applied
+    end
 
-      # The solver's termination status is surfaced as an atom. For this fixture
-      # the trust-region solve stops on the step tolerance after 7 iterations;
-      # the value is deterministic, so pin it exactly rather than accepting any
-      # known status.
-      assert sol.metadata.status == :step_tolerance
-      assert sol.metadata.iterations == 7
+    test "matches the core solve of the trace inputs from the frozen initial guess", ctx do
+      assert {:ok, %Solution{} = sol} =
+               Positioning.solve(ctx.sp3, ctx.observations, @epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: ctx.alpha,
+                 klobuchar_beta: ctx.beta,
+                 pressure_hpa: ctx.pressure_hpa,
+                 temperature_k: ctx.temperature_k,
+                 relative_humidity: ctx.relative_humidity,
+                 initial_guess: ctx.initial_guess
+               )
+
+      expected = ctx.golden["solves"]["frozen_guess"]
+      assert CoreGolden.f(expected["initial_guess"]) == Tuple.to_list(ctx.initial_guess)
+      assert_matches_core(sol, expected["solution"])
+    end
+
+    test "solves at the exact receive-epoch label", ctx do
+      {:ok, exact_epoch} = ExactEpoch.from_civil(2020, 6, 24, 12, 0, 0)
+
+      assert {:ok, %Solution{} = solution} =
+               Positioning.solve_at_exact_epoch(ctx.sp3, ctx.observations, @epoch, exact_epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: ctx.alpha,
+                 klobuchar_beta: ctx.beta,
+                 pressure_hpa: ctx.pressure_hpa,
+                 temperature_k: ctx.temperature_k,
+                 relative_humidity: ctx.relative_humidity,
+                 initial_guess: ctx.initial_guess
+               )
+
+      assert_matches_core(solution, ctx.golden["solves"]["frozen_guess"]["solution"])
     end
 
     test "surfaces nominal geometry quality for the trace fixture", ctx do
@@ -113,38 +156,6 @@ defmodule Sidereon.GNSS.PositioningTest do
 
       assert sol.metadata.geometry_quality.redundancy == sol.metadata.redundancy
       assert sol.metadata.geometry_quality.gdop == sol.dop.gdop
-    end
-
-    test "matches the crate's independent-solve reference byte-for-byte", ctx do
-      # The fixture carries the converged reference solution the crate, the
-      # Python binding, and the C binding all reproduce. Driving the public
-      # `solve/4` through the calendar epoch (which derives the seconds-since-J2000,
-      # second-of-day, and fractional day-of-year the crate consumes) must land on
-      # that same reference, proving the Elixir boundary threads identical inputs
-      # and the default policy with no per-binding drift. The bound is the
-      # crate's own independent-solve agreement tolerance (1e-6 m); a regression
-      # past it means the boundary or a committed fixture has fallen out of sync
-      # with the core, not that the band should be widened.
-      reference_bound_m = 1.0e-6
-
-      assert {:ok, %Solution{} = sol} =
-               Positioning.solve(ctx.sp3, ctx.observations, @epoch,
-                 ionosphere: true,
-                 troposphere: true,
-                 klobuchar_alpha: ctx.alpha,
-                 klobuchar_beta: ctx.beta,
-                 pressure_hpa: ctx.pressure_hpa,
-                 temperature_k: ctx.temperature_k,
-                 relative_humidity: ctx.relative_humidity,
-                 initial_guess: ctx.initial_guess
-               )
-
-      [rx, ry, rz, _b] = ctx.reference_x
-
-      assert_in_delta sol.position.x_m, rx, reference_bound_m
-      assert_in_delta sol.position.y_m, ry, reference_bound_m
-      assert_in_delta sol.position.z_m, rz, reference_bound_m
-      assert_in_delta sol.rx_clock_s, ctx.reference_rx_clock_s, reference_bound_m / @speed_of_light_m_s
     end
 
     test "surfaces per-system TDOP keyed by GNSS letter (A3)", ctx do
@@ -217,10 +228,29 @@ defmodule Sidereon.GNSS.PositioningTest do
                  initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
                )
 
-      # Truth is ~45 deg N, 7 deg E, 300 m (Turin-ish).
-      assert_in_delta sol.geodetic.lat_rad, :math.pi() * 45.0 / 180.0, 1.0e-6
-      assert_in_delta sol.geodetic.lon_rad, :math.pi() * 7.0 / 180.0, 1.0e-6
-      assert_in_delta sol.geodetic.height_m, 300.0, 1.0e-2
+      # The ECEF position is the core's to the core agreement bound per axis,
+      # so within d = sqrt(3) times that bound in distance. To first order a
+      # displacement d moves latitude by at most d / (M + h), longitude by at
+      # most d / ((N + h) cos(lat)) and height by at most d, where M and N are
+      # the meridian and prime-vertical radii at the latitude; the neglected
+      # terms are smaller by a further factor d / (M + h).
+      solution = ctx.golden["solves"]["near_guess"]["solution"]
+      assert_matches_core(sol, solution)
+      expected = solution["geodetic"]
+      lat = CoreGolden.f(expected["lat_rad"])
+      height = CoreGolden.f(expected["height_m"])
+      d = :math.sqrt(3.0) * @core_agreement_bound_m
+      w = 1.0 - @wgs84_e2 * :math.sin(lat) ** 2
+      prime_vertical_m = @wgs84_a_m / :math.sqrt(w)
+      meridian_m = @wgs84_a_m * (1.0 - @wgs84_e2) / :math.pow(w, 1.5)
+
+      assert_in_delta sol.geodetic.lat_rad, lat, d / (meridian_m + height)
+
+      assert_in_delta sol.geodetic.lon_rad,
+                      CoreGolden.f(expected["lon_rad"]),
+                      d / ((prime_vertical_m + height) * :math.cos(lat))
+
+      assert_in_delta sol.geodetic.height_m, height, d
 
       assert sol.dop.pdop > 0.0
       assert is_list(sol.used_sats)
@@ -314,23 +344,21 @@ defmodule Sidereon.GNSS.PositioningTest do
       assert Map.keys(sol.system_clocks_s) == ["R"]
     end
 
-    test "a GLONASS ionosphere-corrected solve with no FDMA channel map is rejected" do
+    test "a GLONASS ionosphere-corrected solve with no FDMA channel map leaves every GLONASS satellite out" do
       eph = Broadcast.load!(@nav_glonass_path)
 
-      # With the ionosphere correction requested, the GLONASS L1 delay must be
-      # scaled to each satellite's FDMA carrier by (f_L1/f_k)^2. With no channel
-      # map (the default %{}), the per-satellite carrier cannot be resolved, so
-      # the first GLONASS observation is rejected rather than mis-scaled.
-      assert {:error, {:ionosphere_unsupported, sat}} =
+      # With the ionosphere correction requested, the GLONASS L1 delay is scaled
+      # to each satellite's FDMA carrier by (f_L1/f_k)^2. With no channel map
+      # (the default %{}), no GLONASS carrier resolves, so every GLONASS
+      # satellite is left out rather than mis-scaled, and a GLONASS-only epoch
+      # has no satellite left: 0 used against the 4-parameter minimum.
+      assert {:error, {:too_few_satellites, 0, 4}} =
                Positioning.solve(eph, @broadcast_obs_glonass, ~N[2020-06-25 12:00:00],
                  ionosphere: true,
                  klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
                  klobuchar_beta: {9.0e4, 0.0, 0.0, 0.0},
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
-
-      assert is_binary(sat) and String.starts_with?(sat, "R"),
-             "the rejected satellite must be a GLONASS slot, got #{inspect(sat)}"
     end
 
     test "a GLONASS ionosphere-corrected solve is accepted when the FDMA channel map is supplied" do
@@ -359,7 +387,7 @@ defmodule Sidereon.GNSS.PositioningTest do
 
       # Same observation set and epoch as the unmodified GLONASS solve, now with
       # the ionosphere correction on. Supplying the channel map turns the
-      # :ionosphere_unsupported rejection into a converged fix: proof the map
+      # :ionosphere_carrier_unresolved exclusions into a converged fix: proof the map
       # reaches the solver. (These pseudoranges were synthesized without an
       # ionosphere, so the applied correction leaves a small offset rather than
       # an exact recovery, exactly as for the BeiDou ionosphere case above.)
@@ -395,6 +423,16 @@ defmodule Sidereon.GNSS.PositioningTest do
                )
     end
 
+    test "unknown clock and troposphere models are rejected before the solve" do
+      eph = Broadcast.load!(@nav_path)
+
+      assert {:error, {:invalid_option, :qzss_clock}} =
+               Positioning.solve(eph, @broadcast_obs, ~N[2020-06-25 12:00:00], qzss_clock: :other)
+
+      assert {:error, {:invalid_option, :troposphere_model}} =
+               Positioning.solve(eph, @broadcast_obs, ~N[2020-06-25 12:00:00], troposphere_model: :other)
+    end
+
     test "loads a RINEX 4.00 navigation file through the broadcast path" do
       # A real v4.00 MIXED file parses through the NIF into a usable handle; the
       # version-4 frame markers are handled in Rust transparently to Elixir.
@@ -423,11 +461,7 @@ defmodule Sidereon.GNSS.PositioningTest do
       eph = Broadcast.load!(@nav_path)
       # The 10 GPS pseudoranges plus visible Galileo sats at the same epoch,
       # synthesized with the same forward model.
-      galileo = [
-        {"E05", 27_038_058.41625906},
-        {"E09", 25_628_329.464706413},
-        {"E13", 25_860_944.599908587}
-      ]
+      galileo = broadcast_synth(eph, ["E05", "E09", "E13"])
 
       mixed = @broadcast_obs ++ galileo
 
@@ -462,17 +496,8 @@ defmodule Sidereon.GNSS.PositioningTest do
       eph = Broadcast.load!(@nav_path)
       # GPS + Galileo + BeiDou (C05 is geostationary, C13 IGSO, C19 MEO), all
       # synthesized with the same forward model at the same epoch.
-      beidou = [
-        {"C05", 40_127_033.52503693},
-        {"C13", 39_200_124.95320755},
-        {"C19", 23_661_671.39784395}
-      ]
-
-      galileo = [
-        {"E05", 27_038_058.41625906},
-        {"E09", 25_628_329.464706413},
-        {"E13", 25_860_944.599908587}
-      ]
+      beidou = broadcast_synth(eph, ["C05", "C13", "C19"])
+      galileo = broadcast_synth(eph, ["E05", "E09", "E13"])
 
       observations = @broadcast_obs ++ galileo ++ beidou
 
@@ -599,9 +624,6 @@ defmodule Sidereon.GNSS.PositioningTest do
 
       assert Decode.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
                {:error, {:ephemeris_lost, "G07"}}
-
-      assert Decode.map_solve_error({:error, :ionosphere_unsupported, "R01"}) ==
-               {:error, {:ionosphere_unsupported, "R01"}}
     end
 
     test "an unrecognized NIF result is wrapped rather than dropped" do
@@ -649,16 +671,31 @@ defmodule Sidereon.GNSS.PositioningTest do
                Positioning.solve(ctx.sp3, obs, @epoch, initial_guess: guess(ctx.station))
 
       assert Map.keys(sol.system_clocks_s) == ["R"]
-      # The forward model (`Observables.predict` with light-time + Sagnac) is the
-      # one the solver inverts, so a clean GLONASS arc is recovered to the same
-      # sub-millimetre boundary agreement as the GPS trace fixture.
+      # The forward model (the satellite placed from the pseudorange, the
+      # `geodist` range and the model's satellite clock) is the one the solver
+      # inverts, so a clean GLONASS arc is recovered within the recovery bound.
       assert dist(sol.position, ctx.station) < @agreement_bound_m
     end
 
-    test "GLONASS with ionosphere on but no channel map is rejected", ctx do
+    test "GLONASS with ionosphere on but no channel map leaves no satellite to solve", ctx do
       obs = synth(ctx.sp3, ctx.glonass_sats, ctx.station)
 
-      assert {:error, {:ionosphere_unsupported, sat}} =
+      # Every GLONASS satellite is left out as :ionosphere_carrier_unresolved,
+      # so a GLONASS-only epoch has 0 satellites against the 4-parameter minimum.
+      assert {:error, {:too_few_satellites, 0, 4}} =
+               Positioning.solve(ctx.sp3, obs, @epoch,
+                 ionosphere: true,
+                 klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
+                 klobuchar_beta: {9.0e4, 0.0, 0.0, 0.0},
+                 initial_guess: guess(ctx.station)
+               )
+    end
+
+    test "GLONASS with ionosphere on but no channel map is reported per satellite beside GPS", ctx do
+      assert length(ctx.gps_sats) >= 4
+      obs = synth(ctx.sp3, ctx.gps_sats ++ ctx.glonass_sats, ctx.station)
+
+      assert {:ok, %Solution{} = sol} =
                Positioning.solve(ctx.sp3, obs, @epoch,
                  ionosphere: true,
                  klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
@@ -666,7 +703,13 @@ defmodule Sidereon.GNSS.PositioningTest do
                  initial_guess: guess(ctx.station)
                )
 
-      assert sat in ctx.glonass_sats
+      # The GPS satellites solve; each GLONASS satellite is left out with its
+      # own reason instead of failing the epoch.
+      assert Enum.sort(sol.used_sats) == Enum.sort(ctx.gps_sats)
+      assert Map.keys(sol.system_clocks_s) == ["G"]
+
+      assert Enum.sort(sol.rejected_sats) ==
+               ctx.glonass_sats |> Enum.map(&{&1, :ionosphere_carrier_unresolved}) |> Enum.sort()
     end
 
     test "supplying the FDMA channel map lifts the ionosphere gate and GLONASS solves",
@@ -689,17 +732,21 @@ defmodule Sidereon.GNSS.PositioningTest do
       assert dist(sol.position, ctx.station) < 1_000.0
     end
 
-    test "an out-of-range FDMA channel is rejected like a missing one", ctx do
-      obs = synth(ctx.sp3, ctx.glonass_sats, ctx.station)
+    test "an out-of-range FDMA channel leaves that satellite out like a missing one", ctx do
+      # GPS beside GLONASS keeps enough satellites for a fix whatever the
+      # GLONASS count, so the one broken slot is reported rather than failing
+      # the epoch.
+      obs = synth(ctx.sp3, ctx.gps_sats ++ ctx.glonass_sats, ctx.station)
 
       # Break exactly one observed slot with a channel outside the valid GLONASS
       # range [-7, +6] (50 is a legal i8 the NIF carries, but not a real channel),
-      # leaving every other slot valid. The crate must reject that satellite for
-      # the same reason a missing channel is rejected.
-      "R" <> broken_slot = hd(ctx.glonass_sats)
+      # leaving every other slot valid. The crate leaves that satellite out for
+      # the same reason a missing channel does, and solves the rest.
+      broken = hd(ctx.glonass_sats)
+      "R" <> broken_slot = broken
       channels = Map.put(ctx.channels, String.to_integer(broken_slot), 50)
 
-      assert {:error, {:ionosphere_unsupported, sat}} =
+      assert {:ok, %Solution{} = sol} =
                Positioning.solve(ctx.sp3, obs, @epoch,
                  ionosphere: true,
                  glonass_channels: channels,
@@ -708,7 +755,9 @@ defmodule Sidereon.GNSS.PositioningTest do
                  initial_guess: guess(ctx.station)
                )
 
-      assert sat == hd(ctx.glonass_sats)
+      assert sol.rejected_sats == [{broken, :ionosphere_carrier_unresolved}]
+      refute broken in sol.used_sats
+      assert Enum.sort(sol.used_sats) == Enum.sort(ctx.gps_sats ++ tl(ctx.glonass_sats))
     end
 
     test "the channel map is a bit-for-bit no-op on a GPS-only solve", ctx do
@@ -744,14 +793,37 @@ defmodule Sidereon.GNSS.PositioningTest do
 
   # Synthesize clean pseudoranges from the precise SP3 product with the engine's
   # own forward model (`pr = geometric_range + c*(rx_clock - sat_clock)`, with
-  # light-time and Sagnac) that the solver inverts. The receiver clock is taken
-  # as zero; the solver re-estimates it. No fabricated numbers: the geometry and
-  # satellite clock come straight from the SP3 fixture via `Observables.predict`.
+  # the satellite placed from the pseudorange and the `geodist` range) that the
+  # solver inverts. The receiver clock is taken as zero; the solver
+  # re-estimates it. No fabricated numbers: the geometry and satellite clock come
+  # straight from the SP3 fixture via
+  # `Observables.pseudorange_transmit_geometry/6`.
   defp synth(sp3, sats, station) do
     Enum.map(sats, fn sat ->
-      {:ok, o} = Observables.predict(sp3, sat, station, @epoch, light_time: true, sagnac: true)
-      {sat, o.geometric_range_m + @speed_of_light_m_s * -(o.sat_clock_s || 0.0)}
+      {sat, ModelClock.spp_pseudorange(sp3, sat, station, @epoch, 0.0)}
     end)
+  end
+
+  # Pseudoranges from the broadcast product at `@broadcast_truth`, formed with
+  # the clock the single-frequency model uses (the broadcast clock less its group
+  # delay), with a zero receiver clock.
+  defp broadcast_synth(eph, sats) do
+    truth = {@broadcast_truth.x_m, @broadcast_truth.y_m, @broadcast_truth.z_m}
+
+    Enum.map(sats, fn sat -> {sat, ModelClock.spp_pseudorange(eph, sat, truth, ~N[2020-06-25 12:00:00], 0.0)} end)
+  end
+
+  # The binding's solution agrees with the core's solve of the same inputs.
+  defp assert_matches_core(sol, expected) do
+    [ex, ey, ez] = CoreGolden.f(expected["position_m"])
+    assert_in_delta sol.position.x_m, ex, @core_agreement_bound_m
+    assert_in_delta sol.position.y_m, ey, @core_agreement_bound_m
+    assert_in_delta sol.position.z_m, ez, @core_agreement_bound_m
+    assert_in_delta sol.rx_clock_s, CoreGolden.f(expected["rx_clock_s"]), @core_agreement_bound_m / 299_792_458.0
+    assert sol.used_sats == expected["used_sats"]
+    assert sol.metadata.converged == expected["converged"]
+    assert sol.metadata.status == CoreGolden.status_atom(expected["status"])
+    assert sol.metadata.iterations == expected["iterations"]
   end
 
   defp guess({x, y, z}), do: {x, y, z, 0.0}

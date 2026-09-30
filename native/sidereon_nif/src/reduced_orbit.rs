@@ -133,6 +133,9 @@ fn encode_error<'a>(env: Env<'a>, e: &ReducedOrbitError) -> Term<'a> {
         }
         // A non-finite or out-of-domain evaluation input.
         ReducedOrbitError::InvalidInput { .. } => atoms::invalid_input().encode(env),
+        ReducedOrbitError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, *reason)
+        }
     };
     (atoms::error(), reason).encode(env)
 }
@@ -156,6 +159,9 @@ fn encode_piecewise_error<'a>(env: Env<'a>, e: &PiecewiseOrbitError) -> Term<'a>
             }
             // A non-finite or out-of-domain evaluation input.
             ReducedOrbitError::InvalidInput { .. } => atoms::invalid_input().encode(env),
+            ReducedOrbitError::Ut1OutsideCoverage(reason) => {
+                crate::errors::ut1_outside_coverage_term(env, *reason)
+            }
         },
     };
     (atoms::error(), reason).encode(env)

@@ -8,7 +8,6 @@ defmodule Sidereon.GNSS.RinexNavFrequencyParityTest do
     GlonassParse,
     GlonassRecord,
     RinexNavParse,
-    SkippedGlonass,
     SkippedNavBlock
   }
 
@@ -46,16 +45,17 @@ defmodule Sidereon.GNSS.RinexNavFrequencyParityTest do
       assert {:ok,
               %RinexNavParse{
                 records: records,
-                skipped: [%SkippedNavBlock{satellite: "C05", message: message}]
+                skipped: [%SkippedNavBlock{satellite: "C05", message: message, line: line}]
               }} = Broadcast.parse_rinex_nav_lenient(text)
 
       assert length(records) == 2215
       assert message == "bad/missing af0 field in record for C05"
+      assert is_integer(line) and line > 0
     end
   end
 
   describe "raw GLONASS RINEX NAV records" do
-    test "keeps unhealthy records that the broadcast handle filters" do
+    test "keeps unhealthy records, as the broadcast handle does" do
       text = File.read!(@glonass_nav_path)
       {:ok, raw_records} = Broadcast.parse_rinex_glonass_records(text)
 
@@ -66,17 +66,28 @@ defmodule Sidereon.GNSS.RinexNavFrequencyParityTest do
       assert %GlonassRecord{satellite_id: "R26", sv_health: 4.0, freq_channel: -6} =
                Enum.find(raw_records, &(&1.sv_health != 0.0))
 
+      # Health does not filter the store's records; a selected record that is
+      # not healthy yields no state at query time.
       handle = Broadcast.load!(@glonass_nav_path)
-      assert Broadcast.glonass_record_count(handle) == 1104
+      assert Broadcast.glonass_record_count(handle) == 1152
     end
 
-    test "lenient parsing reports unrepresentable slots and keeps record order" do
+    test "lenient parsing keeps an extended slot as a record in file order" do
+      # R28 is inside the shared `01`..`99` satellite-token range, so it is read
+      # like any other slot (IGS and BKG navigation files carry it) rather than
+      # skipped.
       text = glonass_records_with_extended_slot(File.read!(@glonass_nav_path))
 
       assert {:ok,
               %GlonassParse{
-                records: [%GlonassRecord{satellite_id: "R01"}, %GlonassRecord{satellite_id: "R02"}],
-                skipped: [%SkippedGlonass{token: "R28"}]
+                records: [
+                  %GlonassRecord{satellite_id: "R01"},
+                  %GlonassRecord{satellite_id: "R02"},
+                  %GlonassRecord{satellite_id: "R28"}
+                ],
+                skipped: [],
+                invalid: [],
+                departures: []
               }} = Broadcast.parse_rinex_glonass_lenient(text)
     end
   end
@@ -101,6 +112,26 @@ defmodule Sidereon.GNSS.RinexNavFrequencyParityTest do
 
       assert {:error, {:missing_glonass_channel, "R", "C1C"}} =
                Frequencies.rinex_observation_frequency_hz("R", "C1C", 3.04)
+    end
+
+    test "resolves a GLONASS G1 carrier only for a channel in the FDMA allocation" do
+      # RTKLIB `code2freq_GLO` gives G1 and G2 for channels -7..6 only; the
+      # extended slot R28 carries channel 7 in real IGS headers.
+      assert {:ok, 1_598_062_500.0} = Frequencies.rinex_band_frequency_hz("R", "1", -7)
+      assert {:ok, 1_605_375_000.0} = Frequencies.rinex_band_frequency_hz("R", "1", 6)
+      assert {:error, {:invalid_channel, 7}} = Frequencies.rinex_band_frequency_hz("R", "1", 7)
+      assert {:error, {:invalid_channel, -8}} = Frequencies.rinex_band_wavelength_m("R", "2", -8)
+      assert {:error, {:invalid_channel, 7}} = Frequencies.rinex_observation_frequency_hz("R", "C1C", 3.04, 7)
+      assert {:error, {:invalid_channel, 7}} = Frequencies.rinex_observation_wavelength_m("R", "L2C", 3.04, 7)
+    end
+
+    test "resolves the GLONASS CDMA, SBAS L5 and NavIC S carriers" do
+      assert {:ok, 1_202_025_000.0} = Frequencies.rinex_band_frequency_hz("R", "3", nil)
+      assert {:ok, 1_202_025_000.0} = Frequencies.rinex_observation_frequency_hz("R", "C3Q", 3.04)
+      assert {:ok, 1_600_995_000.0} = Frequencies.rinex_band_frequency_hz("R", "4", nil)
+      assert {:ok, 1_248_060_000.0} = Frequencies.rinex_band_frequency_hz("R", "6", nil)
+      assert {:ok, 1_176_450_000.0} = Frequencies.rinex_band_frequency_hz("S", "5", nil)
+      assert {:ok, 2_492_028_000.0} = Frequencies.rinex_observation_frequency_hz("I", "C9A", 3.04)
     end
 
     test "preserves direct-code errors" do

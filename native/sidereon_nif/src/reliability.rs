@@ -30,6 +30,8 @@ mod atoms {
         invalid_reliability_parameter,
         invalid_residuals,
         invalid_design,
+        missing_variances,
+        invalid_variance,
         singular_geometry,
         insufficient_geometry,
         unmonitorable_fault_mass,
@@ -105,17 +107,23 @@ fn quality_error_atom(error: QualityError) -> rustler::Atom {
         QualityError::InvalidResiduals => atoms::invalid_residuals(),
         QualityError::InvalidDesign => atoms::invalid_design(),
         QualityError::SingularGeometry => atoms::singular_geometry(),
+        QualityError::MissingVariances => atoms::missing_variances(),
+        QualityError::InvalidVariance => atoms::invalid_variance(),
     }
 }
 
-fn araim_error_atom(error: AraimError) -> rustler::Atom {
-    match error {
+fn araim_error_term<'a>(env: Env<'a>, error: AraimError) -> Term<'a> {
+    let atom = match error {
         AraimError::InsufficientGeometry => atoms::insufficient_geometry(),
         AraimError::UnmonitorableFaultMass => atoms::unmonitorable_fault_mass(),
         AraimError::NumericalFailure => atoms::numerical_failure(),
         AraimError::InvalidIsm => atoms::invalid_ism(),
         AraimError::InvalidAllocation => atoms::invalid_allocation(),
-    }
+        AraimError::Ut1OutsideCoverage(reason) => {
+            return crate::errors::ut1_outside_coverage_term(env, reason);
+        }
+    };
+    atom.encode(env)
 }
 
 fn vec3(values: [f64; 3]) -> Vec3 {
@@ -176,6 +184,8 @@ fn geometry_from_terms(
             .iter()
             .map(|system| crate::araim::system_from_term(system))
             .collect::<NifResult<_>>()?,
+        // A geometry the caller supplies was formed without reading UT1.
+        ut1_degraded: None,
     })
 }
 
@@ -253,7 +263,7 @@ fn reliability_araim<'a>(
     Ok(
         match core_reliability_araim(&geometry, &ism, &decode_options(options)) {
             Ok(report) => (atoms::ok(), report_term(report)).encode(env),
-            Err(error) => (atoms::error(), araim_error_atom(error)).encode(env),
+            Err(error) => (atoms::error(), araim_error_term(env, error)).encode(env),
         },
     )
 }

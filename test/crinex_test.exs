@@ -2,6 +2,7 @@ defmodule Sidereon.CrinexTest do
   use ExUnit.Case, async: true
 
   alias Sidereon.GNSS.RINEX.Observations
+  alias Sidereon.GNSS.RINEX.Observations.PhaseShift
 
   @crx_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.crx")
   @rnx_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.rnx")
@@ -11,7 +12,7 @@ defmodule Sidereon.CrinexTest do
   @rnx_v1_path Path.join(__DIR__, "fixtures/obs/algo0010_2015001_v1_trim.rnx")
 
   # Same as @rnx_path but with the `G L1C` SYS / PHASE SHIFT record set to a
-  # non-zero 0.25000-cycle correction (every other record stays 0.0).
+  # non-zero 0.25000-cycle correction (every other record keeps its own).
   @phase_shift_path Path.join(
                       __DIR__,
                       "fixtures/obs/ESBC00DNK_phase_shift_nonzero_trim.rnx"
@@ -106,11 +107,14 @@ defmodule Sidereon.CrinexTest do
       shifts = Observations.phase_shifts(obs)
       assert length(shifts) >= 20
 
-      assert %{
+      # The fixture's `G L1C` record leaves its correction blank, which is kept
+      # as no value rather than read as 0.0; `E L5Q` writes 0.00000.
+      assert %PhaseShift{
                system: "G",
                code: "L1C",
-               correction_cycles: 0.0,
-               satellites: []
+               correction_cycles: nil,
+               satellites: [],
+               unrepresentable_satellites: []
              } in shifts
 
       assert Enum.any?(shifts, fn row ->
@@ -118,7 +122,7 @@ defmodule Sidereon.CrinexTest do
              end)
     end
 
-    test "phases/3 leaves value_cycles uncorrected when every shift is 0.0", %{obs: obs} do
+    test "phases/3 returns the recorded phase with the header's 0.0 correction beside it", %{obs: obs} do
       {:ok, by_sat} = Observations.phases(obs, 0, codes: %{"G" => ["L1C"]})
       g05 = Enum.find(Map.fetch!(by_sat, "G05"), &(&1.code == "L1C"))
 
@@ -142,14 +146,21 @@ defmodule Sidereon.CrinexTest do
     end
   end
 
-  describe "phases/3 applies SYS / PHASE SHIFT correction_cycles" do
+  describe "phases/3 reports SYS / PHASE SHIFT correction_cycles beside the phase" do
     setup do
       baseline = Observations.load!(@rnx_path)
       shifted = Observations.load!(@phase_shift_path)
       {:ok, baseline: baseline, shifted: shifted}
     end
 
-    test "a non-zero G L1C shift is added to value_cycles and folded into value_m",
+    # This test asserted the 0.25-cycle shift was added to value_cycles, which
+    # applied the correction a second time. RINEX 3 stores phases already
+    # aligned, and SYS / PHASE SHIFT reports the correction that alignment
+    # applied (RINEX 3.05 section 5.2.12); the core returns the recorded phase
+    # and the correction as metadata, and RTKLIB adds no shift from this record
+    # either. The two files differ only in the header record, so the phases are
+    # the same and only the reported correction differs.
+    test "a non-zero G L1C shift is reported and the recorded phase is returned unchanged",
          %{baseline: baseline, shifted: shifted} do
       {:ok, base_by_sat} = Observations.phases(baseline, 0, codes: %{"G" => ["L1C"]})
       {:ok, shift_by_sat} = Observations.phases(shifted, 0, codes: %{"G" => ["L1C"]})
@@ -158,17 +169,19 @@ defmodule Sidereon.CrinexTest do
       shift = Enum.find(Map.fetch!(shift_by_sat, "G05"), &(&1.code == "L1C"))
 
       # The fixture sets G L1C to +0.25 cycles for the whole system.
+      assert base.phase_shift == :available
       assert base.phase_shift_cycles == 0.0
+      assert shift.phase_shift == :available
       assert shift.phase_shift_cycles == 0.25
 
-      assert_in_delta shift.value_cycles, base.value_cycles + 0.25, 1.0e-9
-      assert_in_delta shift.value_m, shift.value_cycles * shift.wavelength_m, 1.0e-6
-      assert_in_delta shift.value_m, base.value_m + 0.25 * base.wavelength_m, 1.0e-6
+      assert shift.value_cycles == base.value_cycles
+      assert shift.value_m == base.value_m
+      assert_in_delta shift.value_cycles, 110_078_836.389, 1.0e-3
     end
 
-    test "the correction only touches the matching system/code, not others",
+    test "the correction reported for one system/code leaves others at theirs",
          %{baseline: baseline, shifted: shifted} do
-      # L2W has a 0.0 shift in both files; it must be untouched.
+      # L2W has a blank shift in both files, which is no correction.
       {:ok, base_by_sat} = Observations.phases(baseline, 0, codes: %{"G" => ["L2W"]})
       {:ok, shift_by_sat} = Observations.phases(shifted, 0, codes: %{"G" => ["L2W"]})
 

@@ -285,6 +285,65 @@ defmodule Sidereon.GNSS.IonosphereTest do
     end
   end
 
+  describe "model arguments the boundary cannot carry" do
+    @oversized Integer.pow(10, 400)
+    @epoch {{2021, 3, 21}, {0, 0, 0}}
+
+    test "Klobuchar names each argument and coefficient by field" do
+      klobuchar = fn params, lat, epoch, frequency ->
+        Ionosphere.klobuchar_delay(params, lat, -100.0, 30.0, 85.0, epoch, frequency)
+      end
+
+      assert klobuchar.(@klobuchar_params, :north, @epoch, 1.0e9) == {:error, {:invalid_double, :lat_deg, :north}}
+
+      assert klobuchar.(@klobuchar_params, 40.0, @epoch, @oversized) ==
+               {:error, {:value_out_of_range, :frequency_hz, @oversized}}
+
+      bad_alpha = %{@klobuchar_params | alpha: {1.0e-8, "0", 0.0, 0.0}}
+      assert klobuchar.(bad_alpha, 40.0, @epoch, 1.0e9) == {:error, {:invalid_double, :alpha, "0"}}
+
+      assert klobuchar.(@klobuchar_params, 40.0, {{2021, 3, 21}, {12.0, 0, 0}}, 1.0e9) ==
+               {:error, {:invalid_epoch_field, :hour, 12.0}}
+
+      assert klobuchar.(@klobuchar_params, 40.0, {{2021, 3, 21}, {0, 0, @oversized}}, 1.0e9) ==
+               {:error, {:value_out_of_range, :second, @oversized}}
+
+      # An integer argument that a double holds is read as that double.
+      assert {:ok, integer_lat} = klobuchar.(@klobuchar_params, 40, @epoch, 1_575_420_000)
+      assert {:ok, ^integer_lat} = klobuchar.(@klobuchar_params, 40.0, @epoch, 1_575_420_000.0)
+    end
+
+    test "compact NeQuick-G names each argument, coefficient and epoch field" do
+      nequick = fn coeffs, lat, epoch ->
+        Ionosphere.galileo_nequick_g_delay(coeffs, lat, 8.0, 122.0, 37.0, epoch, 1_575_420_000.0)
+      end
+
+      coeffs = %{ai0: 65.0, ai1: 0.25, ai2: -0.02}
+
+      assert nequick.(%{coeffs | ai1: nil}, 47.0, @epoch) == {:error, {:invalid_double, :ai1, nil}}
+      assert nequick.(coeffs, @oversized, @epoch) == {:error, {:value_out_of_range, :lat_deg, @oversized}}
+
+      assert nequick.(coeffs, 47.0, {{2_147_483_648, 3, 21}, {0, 0, 0}}) ==
+               {:error, {:value_out_of_range, :year, 2_147_483_648}}
+
+      assert nequick.(coeffs, 47.0, :equinox) == {:error, :bad_epoch}
+    end
+
+    test "full NeQuick-G names each ray field and the carrier" do
+      assert Ionosphere.nequick_g_stec(@nequick_coeffs, %{@nequick_ray | month: 4.0}) ==
+               {:error, {:invalid_integer, :month, 4.0}}
+
+      assert Ionosphere.nequick_g_stec(@nequick_coeffs, %{@nequick_ray | month: 256}) ==
+               {:error, {:value_out_of_range, :month, 256}}
+
+      assert Ionosphere.nequick_g_stec(@nequick_coeffs, %{@nequick_ray | station_height_m: "78"}) ==
+               {:error, {:invalid_double, :station_height_m, "78"}}
+
+      assert Ionosphere.nequick_g_delay(@nequick_coeffs, @nequick_ray, :e1) ==
+               {:error, {:invalid_double, :frequency_hz, :e1}}
+    end
+  end
+
   describe "parse_ionex/1 and ionex_slant_delay/7" do
     setup do
       {:ok, handle} = Ionosphere.parse_ionex(@ionex)

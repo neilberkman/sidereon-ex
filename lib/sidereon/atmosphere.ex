@@ -108,7 +108,7 @@ defmodule Sidereon.Atmosphere do
 
     {:ok, %{density: density, temperature: temperature}}
   rescue
-    e in ErlangError -> {:error, {:nif_error, e.original}}
+    e in ErlangError -> Sidereon.NifCall.error(e, __STACKTRACE__, :atmosphere_density, :nif_error)
   end
 
   defp validate_position(%{} = position) do

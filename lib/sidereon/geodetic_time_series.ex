@@ -6,6 +6,7 @@ defmodule Sidereon.GeodeticTimeSeries do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule PositionSample do
     @moduledoc """
@@ -246,7 +247,7 @@ defmodule Sidereon.GeodeticTimeSeries do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geodetic_velocity_midas)
   end
 
   @doc """
@@ -271,7 +272,7 @@ defmodule Sidereon.GeodeticTimeSeries do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geodetic_fit_trajectory)
   end
 
   @doc """
@@ -292,7 +293,7 @@ defmodule Sidereon.GeodeticTimeSeries do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geodetic_detect_steps)
   end
 
   @doc """
@@ -311,7 +312,7 @@ defmodule Sidereon.GeodeticTimeSeries do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geodetic_network_field)
   end
 
   defp options_map(%MidasOptions{} = opts), do: Map.from_struct(opts)

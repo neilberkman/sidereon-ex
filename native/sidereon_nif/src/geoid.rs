@@ -14,7 +14,7 @@ use sidereon_core::geoid::{
     egm96_undulations_rad as core_egm96_undulations_rad, ellipsoidal_height_m, geoid_undulation,
     geoid_undulations_deg as core_geoid_undulations_deg,
     geoid_undulations_rad as core_geoid_undulations_rad, orthometric_height_m, Egm2008GridSpacing,
-    Egm2008RasterWindow, GeoidGrid, ProjVgridshiftArithmetic, ProjVgridshiftError,
+    Egm2008RasterWindow, GeoidError, GeoidGrid, ProjVgridshiftArithmetic, ProjVgridshiftError,
 };
 
 mod atoms {
@@ -24,7 +24,11 @@ mod atoms {
         non_finite_coordinate,
         coordinate_outside_grid,
         latitude,
-        longitude
+        longitude,
+        geoid_invalid_dimensions,
+        geoid_invalid_spacing,
+        geoid_non_finite_value,
+        geoid_parse
     }
 }
 
@@ -113,7 +117,7 @@ fn egm96_ellipsoidal_height(orthometric_height: f64, lat_rad: f64, lon_rad: f64)
 fn geoid_grid_from_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
     match GeoidGrid::from_text(&text) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
     }
 }
 
@@ -122,7 +126,7 @@ fn geoid_grid_from_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
 fn geoid_grid_from_egm96_dac<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
     match GeoidGrid::from_egm96_dac(bytes.as_slice()) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
     }
 }
 
@@ -131,7 +135,7 @@ fn geoid_grid_from_egm96_dac<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
 fn geoid_grid_from_proj_egm96_gtx<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
     match GeoidGrid::from_proj_egm96_gtx(bytes.as_slice()) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
     }
 }
 
@@ -160,6 +164,19 @@ fn proj_vgridshift_error<'a>(env: Env<'a>, error: ProjVgridshiftError) -> Term<'
     (kind, field).encode(env)
 }
 
+fn geoid_error_term<'a>(env: Env<'a>, error: GeoidError) -> Term<'a> {
+    match error {
+        GeoidError::InvalidDimensions { expected, found } => {
+            (atoms::geoid_invalid_dimensions(), expected, found).encode(env)
+        }
+        GeoidError::InvalidSpacing { field } => (atoms::geoid_invalid_spacing(), field).encode(env),
+        GeoidError::NonFiniteValue { index } => {
+            (atoms::geoid_non_finite_value(), index).encode(env)
+        }
+        GeoidError::Parse { reason } => (atoms::geoid_parse(), reason).encode(env),
+    }
+}
+
 fn egm2008_spacing(value: String) -> Result<Egm2008GridSpacing, String> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "1" | "1m" | "1-min" | "1-minute" | "one-minute" => Ok(Egm2008GridSpacing::OneMinute),
@@ -177,10 +194,11 @@ fn geoid_grid_from_egm2008_raster<'a>(
     bytes: Binary<'a>,
     spacing: String,
 ) -> Term<'a> {
-    match egm2008_spacing(spacing).and_then(|spacing| {
-        GeoidGrid::from_egm2008_raster(bytes.as_slice(), spacing).map_err(|e| e.to_string())
-    }) {
-        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+    match egm2008_spacing(spacing) {
+        Ok(spacing) => match GeoidGrid::from_egm2008_raster(bytes.as_slice(), spacing) {
+            Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+            Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
+        },
         Err(error) => (atoms::error(), error).encode(env),
     }
 }
@@ -197,16 +215,19 @@ fn geoid_grid_from_egm2008_raster_window<'a>(
     n_lat: usize,
     n_lon: usize,
 ) -> Term<'a> {
-    let result = egm2008_spacing(spacing).and_then(|spacing| {
-        Egm2008RasterWindow::new(spacing, lat_min_deg, lon_min_deg, n_lat, n_lon)
-            .map_err(|e| e.to_string())
-            .and_then(|window| {
-                GeoidGrid::from_egm2008_raster_window(bytes.as_slice(), window)
-                    .map_err(|e| e.to_string())
-            })
-    });
-    match result {
-        Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
+    match egm2008_spacing(spacing) {
+        Ok(spacing) => {
+            match Egm2008RasterWindow::new(spacing, lat_min_deg, lon_min_deg, n_lat, n_lon) {
+                Ok(window) => match GeoidGrid::from_egm2008_raster_window(bytes.as_slice(), window)
+                {
+                    Ok(grid) => {
+                        (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env)
+                    }
+                    Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
+                },
+                Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
+            }
+        }
         Err(error) => (atoms::error(), error).encode(env),
     }
 }
@@ -235,7 +256,7 @@ fn geoid_grid_new<'a>(
         values_m,
     ) {
         Ok(grid) => (atoms::ok(), ResourceArc::new(GeoidGridResource { grid })).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), geoid_error_term(env, error)).encode(env),
     }
 }
 

@@ -138,10 +138,25 @@ defmodule Sidereon.GNSS.SP3ExactTest do
         expected_agency: "GFZ"
       )
 
-    assert {:error, {:exact_sp3_validation_failed, message}} =
+    assert {:error, {:exact_sp3_validation_failed, detail}} =
              SP3.parse_exact(bytes, same_date_request)
 
-    assert message =~ "declared start"
+    assert detail.kind == "declared_start_mismatch"
+    assert is_binary(detail.requested_tick)
+    assert is_binary(detail.declared_tick)
+  end
+
+  test "declared-start mismatch keeps exact ticks when J2000 seconds collapse" do
+    request = request!()
+    bytes = ExactSp3Fixture.build(@date)
+    [line1 | rest] = String.split(bytes, "\n")
+    changed_line1 = String.replace(line1, "0.00000000", "0.00000001", global: false)
+    changed = Enum.join([changed_line1 | rest], "\n")
+
+    assert {:error, {:exact_sp3_validation_failed, detail}} = SP3.parse_exact(changed, request)
+    assert detail.kind == "declared_start_mismatch"
+    assert detail.requested_tick != detail.declared_tick
+    assert detail.requested_j2000_s == detail.declared_j2000_s
   end
 
   defp request! do

@@ -1,0 +1,67 @@
+{
+  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b astro::passes::visible_from_satellites, AFSPC opsmode",
+  "instant": "2026-04-05T13:16:46.804800Z",
+  "station": {
+    "latitude_deg": 51.5074,
+    "longitude_deg": -0.1278,
+    "altitude_m": 11.0
+  },
+  "min_elevation_deg": -50.0,
+  "visible": [
+    {
+      "catalog_number": "49271",
+      "elevation_deg": "0xc03d2a3074a246e6",
+      "azimuth_deg": "0x4063ad5dedcda445",
+      "range_km": "0x40c07b378ba0a2f4",
+      "position_km": [
+        "0x40b01a88998cfb57",
+        "0x40b7988c05681809",
+        "0xc0a368d5167e3859"
+      ]
+    },
+    {
+      "catalog_number": "25544",
+      "elevation_deg": "0xc0461d41bee76c45",
+      "azimuth_deg": "0x40710d2c141f4b50",
+      "range_km": "0x40c28586d4cac1a1",
+      "position_km": [
+        "0x40aa30b125293e6a",
+        "0xc0b71ad777a8c3a0",
+        "0xbf268a4a85950338"
+      ]
+    },
+    {
+      "catalog_number": "36086",
+      "elevation_deg": "0xc0461d41bee76c45",
+      "azimuth_deg": "0x40710d2c141f4b50",
+      "range_km": "0x40c28586d4cac1a1",
+      "position_km": [
+        "0x40aa30b125293e6a",
+        "0xc0b71ad777a8c3a0",
+        "0xbf268a4a85950338"
+      ]
+    },
+    {
+      "catalog_number": "49044",
+      "elevation_deg": "0xc0461d41bee76c45",
+      "azimuth_deg": "0x40710d2c141f4b50",
+      "range_km": "0x40c28586d4cac1a1",
+      "position_km": [
+        "0x40aa30b125293e6a",
+        "0xc0b71ad777a8c3a0",
+        "0xbf268a4a85950338"
+      ]
+    },
+    {
+      "catalog_number": "65586",
+      "elevation_deg": "0xc0461d41bee76c45",
+      "azimuth_deg": "0x40710d2c141f4b50",
+      "range_km": "0x40c28586d4cac1a1",
+      "position_km": [
+        "0x40aa30b125293e6a",
+        "0xc0b71ad777a8c3a0",
+        "0xbf268a4a85950338"
+      ]
+    }
+  ]
+}

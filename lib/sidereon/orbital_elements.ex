@@ -15,6 +15,7 @@ defmodule Sidereon.OrbitalElements do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   # Earth's gravitational parameter, km^3/s^2 (matches sidereon_core MU_EARTH).
   @mu_earth_km3_s2 398_600.4418
@@ -31,6 +32,18 @@ defmodule Sidereon.OrbitalElements do
           | :elliptical_equatorial
           | :circular_inclined
           | :circular_equatorial
+
+  @type elements_error ::
+          {:orbital_elements, :non_positive_mu | :zero_position | :degenerate_orbit | :non_positive_semi_latus, nil}
+          | {:orbital_elements, :non_finite, String.t()}
+
+  @type native_call :: :elements_rv2coe | :elements_coe2rv
+
+  @type boundary_error ::
+          {:invalid_argument, native_call()} | {:arithmetic_error, native_call()}
+
+  @type rv2coe_error :: elements_error() | boundary_error()
+  @type coe2rv_error :: elements_error() | boundary_error() | {:unknown_orbit_type, term()}
 
   @type t :: %__MODULE__{
           p: float(),
@@ -60,10 +73,16 @@ defmodule Sidereon.OrbitalElements do
 
   `r` is the position `{x, y, z}` in km, `v` the velocity `{vx, vy, vz}` in km/s,
   and `mu` the gravitational parameter in km^3/s^2 (default Earth). Returns
-  `{:ok, %Sidereon.OrbitalElements{}}` (angles in radians) or `{:error, reason}`
-  for a degenerate or non-finite state.
+  `{:ok, %Sidereon.OrbitalElements{}}` (angles in radians) or a typed
+  `{:error, reason}`. Core refusals use
+  `{:orbital_elements, kind, field}`: `kind` is `:non_finite` (with the
+  offending input field as a string), `:non_positive_mu`, `:zero_position`,
+  `:degenerate_orbit`, or `:non_positive_semi_latus`. The field is `nil` for
+  finite-domain refusals. Invalid native-call arguments and BEAM numeric
+  conversion overflow retain the `{:invalid_argument, :elements_rv2coe}` and
+  `{:arithmetic_error, :elements_rv2coe}` boundary reasons.
   """
-  @spec rv2coe(vec3(), vec3(), number()) :: {:ok, t()} | {:error, term()}
+  @spec rv2coe(vec3(), vec3(), number()) :: {:ok, t()} | {:error, rv2coe_error()}
   def rv2coe(r, v, mu \\ @mu_earth_km3_s2) do
     case NIF.elements_rv2coe(floats3(r), floats3(v), mu / 1.0) do
       {:error, reason} ->
@@ -86,7 +105,7 @@ defmodule Sidereon.OrbitalElements do
          }}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :elements_rv2coe)
   end
 
   @doc """
@@ -96,10 +115,13 @@ defmodule Sidereon.OrbitalElements do
   gravitational parameter in km^3/s^2 (default Earth). The `orbit_type` tag
   selects which auxiliary angle the core reads for a degenerate orbit. Returns
   `{:ok, %{position_km: {x, y, z}, velocity_km_s: {vx, vy, vz}}}` or
-  `{:error, reason}`.
+  `{:error, reason}` with the same typed core reasons as `rv2coe/3`, or
+  `{:error, {:unknown_orbit_type, value}}` when the `orbit_type` tag is not
+  recognized. Invalid native-call arguments and BEAM numeric conversion
+  overflow retain the corresponding `:elements_coe2rv` boundary reasons.
   """
   @spec coe2rv(t(), number()) ::
-          {:ok, %{position_km: vec3(), velocity_km_s: vec3()}} | {:error, term()}
+          {:ok, %{position_km: vec3(), velocity_km_s: vec3()}} | {:error, coe2rv_error()}
   def coe2rv(%__MODULE__{} = coe, mu \\ @mu_earth_km3_s2) do
     with {:ok, orbit_type} <- orbit_type_name(coe.orbit_type) do
       # Angles undefined for this orbit type cross as nil; coe2rv reads only the
@@ -122,7 +144,7 @@ defmodule Sidereon.OrbitalElements do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :elements_coe2rv)
   end
 
   defp orbit_type_name(atom) do

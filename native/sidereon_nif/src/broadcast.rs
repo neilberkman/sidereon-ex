@@ -16,14 +16,16 @@ use sidereon_core::ephemeris::{
 use sidereon_core::rinex::nav::{
     cnav_ura_ned_m, cnav_ura_nominal_m, encode_nav, parse_glonass, parse_glonass_lenient,
     parse_leap_seconds, parse_nav, parse_nav_lenient, BroadcastGroupDelays, CnavParameters,
-    CnavSignal, GlonassRecord, KlobucharAlphaBeta, NavMessage, NavMessagePreference,
+    CnavSignal, GlonassRecord, KlobucharAlphaBeta, NavDiagnostic, NavMessage, NavMessagePreference,
+    NavWriteError, OtherNavBlock, OtherNavBlockKind, SkippedNavBlock, StatedNavFields,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 
 mod atoms {
     rustler::atoms! {
         ok,
-        error
+        error,
+        not_representable
     }
 }
 
@@ -36,7 +38,7 @@ pub struct BroadcastResource {
 type Vec3Tuple = (f64, f64, f64);
 type ElementsList = Vec<f64>;
 type ClockTuple = (f64, f64, f64, f64);
-type RecordMetaTuple = (f64, f64, f64, Option<f64>);
+type RecordMetaTuple = (f64, f64, Option<f64>, Option<f64>);
 type BroadcastRecordTuple = (
     String,
     &'static str,
@@ -109,11 +111,24 @@ struct CnavCorrectionsTerm {
     l1cd_s: Option<f64>,
 }
 
+/// The fields of a legacy record the orbit and clock models do not read, as the
+/// record states them; `nil` for a blank field or one the source does not carry.
+#[derive(Debug, Clone, rustler::NifMap)]
+struct StatedNavFieldsTerm {
+    orbit5_field2: Option<f64>,
+    orbit5_field4: Option<f64>,
+    orbit6_field4: Option<f64>,
+    transmission_time_sow: Option<f64>,
+    orbit7_field2: Option<f64>,
+    orbit7_field3: Option<f64>,
+    orbit7_field4: Option<f64>,
+}
+
 #[derive(Debug, Clone, rustler::NifMap)]
 struct BroadcastRecordDetailTerm {
     satellite_id: String,
     message: String,
-    issue_of_data: IssueTerm,
+    issue_of_data: Option<IssueTerm>,
     week: u32,
     toe: WeekTowTerm,
     toc: WeekTowTerm,
@@ -124,31 +139,64 @@ struct BroadcastRecordDetailTerm {
     cnav_corrections: CnavCorrectionsTerm,
     group_delay_s: f64,
     sv_health: f64,
-    sv_accuracy_m: f64,
+    sv_accuracy_m: Option<f64>,
     fit_interval_s: Option<f64>,
+    stated: StatedNavFieldsTerm,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct SkippedNavBlockTerm {
     satellite: String,
     message: String,
+    line: u64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct NavDiagnosticTerm {
+    line: u64,
+    satellite: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct OtherNavBlockTerm {
+    line: u64,
+    satellite: String,
+    message_token: Option<String>,
+    kind: String,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct RinexNavParseTerm {
     records: Vec<BroadcastRecordDetailTerm>,
     skipped: Vec<SkippedNavBlockTerm>,
+    departures: Vec<NavDiagnosticTerm>,
+    other: Vec<OtherNavBlockTerm>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct SkippedGlonassTerm {
     token: String,
+    line: u64,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct GlonassParseTerm {
     records: Vec<GlonassRecordTuple>,
     skipped: Vec<SkippedGlonassTerm>,
+    invalid: Vec<SkippedNavBlockTerm>,
+    departures: Vec<NavDiagnosticTerm>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct IonoCorrectionsTerm {
+    gps: Option<KlobucharTuple>,
+    beidou: Option<KlobucharTuple>,
+    qzss: Option<KlobucharTuple>,
+    navic: Option<KlobucharTuple>,
+    galileo: Option<(f64, f64, f64)>,
+    galileo_disturbance_flags: Option<f64>,
+    beidou_bdgim: Option<Vec<f64>>,
 }
 
 #[rustler::resource_impl]
@@ -175,8 +223,10 @@ fn nav_message_label(message: NavMessage) -> &'static str {
         NavMessage::QzssCnav2 => "qzss_cnav2",
         NavMessage::GalileoInav => "galileo_inav",
         NavMessage::GalileoFnav => "galileo_fnav",
+        NavMessage::GalileoUnclassified => "galileo_unclassified",
         NavMessage::BeidouD1 => "beidou_d1",
         NavMessage::BeidouD2 => "beidou_d2",
+        NavMessage::NavicLnav => "navic_lnav",
     }
 }
 
@@ -286,11 +336,84 @@ fn clock_tuple(record: &sidereon_core::ephemeris::BroadcastRecord) -> ClockTuple
     (clock.af0, clock.af1, clock.af2, clock.toc_sow)
 }
 
+fn stated_term(stated: StatedNavFields) -> StatedNavFieldsTerm {
+    StatedNavFieldsTerm {
+        orbit5_field2: stated.orbit5_field2,
+        orbit5_field4: stated.orbit5_field4,
+        orbit6_field4: stated.orbit6_field4,
+        transmission_time_sow: stated.transmission_time_sow,
+        orbit7_field2: stated.orbit7_field2,
+        orbit7_field3: stated.orbit7_field3,
+        orbit7_field4: stated.orbit7_field4,
+    }
+}
+
+fn decode_stated(term: &StatedNavFieldsTerm) -> StatedNavFields {
+    StatedNavFields {
+        orbit5_field2: term.orbit5_field2,
+        orbit5_field4: term.orbit5_field4,
+        orbit6_field4: term.orbit6_field4,
+        transmission_time_sow: term.transmission_time_sow,
+        orbit7_field2: term.orbit7_field2,
+        orbit7_field3: term.orbit7_field3,
+        orbit7_field4: term.orbit7_field4,
+    }
+}
+
+fn skipped_block_term(block: &SkippedNavBlock) -> SkippedNavBlockTerm {
+    SkippedNavBlockTerm {
+        satellite: block.satellite.clone(),
+        message: block.message.clone(),
+        line: block.line as u64,
+    }
+}
+
+fn nav_diagnostic_term(diagnostic: &NavDiagnostic) -> NavDiagnosticTerm {
+    NavDiagnosticTerm {
+        line: diagnostic.line as u64,
+        satellite: diagnostic.satellite.clone(),
+        message: diagnostic.error.to_string(),
+    }
+}
+
+fn other_block_kind_label(kind: OtherNavBlockKind) -> &'static str {
+    match kind {
+        OtherNavBlockKind::Glonass => "glonass",
+        OtherNavBlockKind::Sbas => "sbas",
+        OtherNavBlockKind::SystemTimeOffset => "system_time_offset",
+        OtherNavBlockKind::EarthOrientation => "earth_orientation",
+        OtherNavBlockKind::Ionosphere => "ionosphere",
+        OtherNavBlockKind::NotDecoded => "not_decoded",
+    }
+}
+
+fn other_block_term(block: &OtherNavBlock) -> OtherNavBlockTerm {
+    OtherNavBlockTerm {
+        line: block.line as u64,
+        satellite: block.satellite.clone(),
+        message_token: block.message_token.clone(),
+        kind: other_block_kind_label(block.kind).to_string(),
+    }
+}
+
+/// `{:ok, text}`, or `{:error, {:not_representable, line, reason}}` for a record
+/// set the writer refuses.
+fn encode_nav_result<'a>(env: Env<'a>, result: Result<String, NavWriteError>) -> Term<'a> {
+    match result {
+        Ok(text) => (atoms::ok(), text).encode(env),
+        Err(NavWriteError::NotRepresentable { line, reason }) => (
+            atoms::error(),
+            (atoms::not_representable(), line as u64, reason),
+        )
+            .encode(env),
+    }
+}
+
 fn record_detail_term(record: &BroadcastRecord) -> BroadcastRecordDetailTerm {
     BroadcastRecordDetailTerm {
         satellite_id: record.satellite_id.to_string(),
         message: nav_message_label(record.message).to_string(),
-        issue_of_data: issue_term(record.issue_of_data),
+        issue_of_data: record.issue_of_data.map(issue_term),
         week: record.week,
         toe: week_tow_term(record.toe),
         toc: week_tow_term(record.toc),
@@ -303,6 +426,7 @@ fn record_detail_term(record: &BroadcastRecord) -> BroadcastRecordDetailTerm {
         sv_health: record.sv_health,
         sv_accuracy_m: record.sv_accuracy_m,
         fit_interval_s: record.fit_interval_s,
+        stated: stated_term(record.stated),
     }
 }
 
@@ -332,8 +456,10 @@ fn message_from_label(label: &str) -> Result<NavMessage, String> {
         "qzss_cnav2" => Ok(NavMessage::QzssCnav2),
         "galileo_inav" => Ok(NavMessage::GalileoInav),
         "galileo_fnav" => Ok(NavMessage::GalileoFnav),
+        "galileo_unclassified" => Ok(NavMessage::GalileoUnclassified),
         "beidou_d1" => Ok(NavMessage::BeidouD1),
         "beidou_d2" => Ok(NavMessage::BeidouD2),
+        "navic_lnav" => Ok(NavMessage::NavicLnav),
         _ => Err(format!("unknown navigation message {label:?}")),
     }
 }
@@ -430,15 +556,18 @@ fn decode_record_detail(term: BroadcastRecordDetailTerm) -> Result<BroadcastReco
         .parse::<GnssSatelliteId>()
         .map_err(|_| format!("invalid GNSS satellite token {:?}", term.satellite_id))?;
     let message = message_from_label(&term.message)?;
-    let issue_message = message_from_label(&term.issue_of_data.message)?;
+    let issue_of_data = match &term.issue_of_data {
+        Some(issue) => Some(BroadcastIssue {
+            issue: issue.issue,
+            message: message_from_label(&issue.message)?,
+        }),
+        None => None,
+    };
 
     Ok(BroadcastRecord {
         satellite_id,
         message,
-        issue_of_data: BroadcastIssue {
-            issue: term.issue_of_data.issue,
-            message: issue_message,
-        },
+        issue_of_data,
         week: term.week,
         toe: decode_week_tow(&term.toe)?,
         toc: decode_week_tow(&term.toc)?,
@@ -454,6 +583,7 @@ fn decode_record_detail(term: BroadcastRecordDetailTerm) -> Result<BroadcastReco
         sv_health: term.sv_health,
         sv_accuracy_m: term.sv_accuracy_m,
         fit_interval_s: term.fit_interval_s,
+        stated: decode_stated(&term.stated),
     })
 }
 
@@ -478,14 +608,9 @@ fn rinex_nav_parse_lenient<'a>(env: Env<'a>, text: String) -> Term<'a> {
             atoms::ok(),
             RinexNavParseTerm {
                 records: parsed.records.iter().map(record_detail_term).collect(),
-                skipped: parsed
-                    .skipped
-                    .into_iter()
-                    .map(|block| SkippedNavBlockTerm {
-                        satellite: block.satellite,
-                        message: block.message,
-                    })
-                    .collect(),
+                skipped: parsed.skipped.iter().map(skipped_block_term).collect(),
+                departures: parsed.departures.iter().map(nav_diagnostic_term).collect(),
+                other: parsed.other.iter().map(other_block_term).collect(),
             },
         )
             .encode(env),
@@ -504,7 +629,7 @@ fn rinex_nav_encode<'a>(env: Env<'a>, terms: Vec<BroadcastRecordDetailTerm>) -> 
     match records
         .and_then(|records| BroadcastEphemeris::new(records).map_err(|err| err.to_string()))
     {
-        Ok(store) => (atoms::ok(), encode_nav(store.records())).encode(env),
+        Ok(store) => encode_nav_result(env, encode_nav(store.records())),
         Err(err) => (atoms::error(), err).encode(env),
     }
 }
@@ -535,8 +660,11 @@ fn rinex_nav_parse_glonass_lenient<'a>(env: Env<'a>, text: String) -> Term<'a> {
                     .into_iter()
                     .map(|record| SkippedGlonassTerm {
                         token: record.token,
+                        line: record.line as u64,
                     })
                     .collect(),
+                invalid: parsed.invalid.iter().map(skipped_block_term).collect(),
+                departures: parsed.departures.iter().map(nav_diagnostic_term).collect(),
             },
         )
             .encode(env),
@@ -586,13 +714,35 @@ fn broadcast_record_count(handle: ResourceArc<BroadcastResource>) -> u64 {
     handle.store.records().len() as u64
 }
 
-/// Serialize the held GPS/Galileo/BeiDou broadcast records to RINEX 3
-/// navigation text. Pure delegation to `rinex::nav::encode_nav` over the records
-/// the store already holds; re-parsing the output reconstructs the same records.
-/// No serialization grammar lives here.
+/// Serialize the held Keplerian broadcast records to RINEX navigation text:
+/// `{:ok, text}`, or `{:error, {:not_representable, line, reason}}` for a record
+/// set the writer refuses. Pure delegation to `rinex::nav::encode_nav` over the
+/// records the store already holds; no serialization grammar lives here.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn broadcast_encode_nav(handle: ResourceArc<BroadcastResource>) -> String {
-    encode_nav(handle.store.records())
+fn broadcast_encode_nav<'a>(env: Env<'a>, handle: ResourceArc<BroadcastResource>) -> Term<'a> {
+    encode_nav_result(env, encode_nav(handle.store.records()))
+}
+
+/// Blocks `BroadcastEphemeris::from_nav` could not read, with line and reason.
+#[rustler::nif]
+fn broadcast_skipped(handle: ResourceArc<BroadcastResource>) -> Vec<SkippedNavBlockTerm> {
+    handle
+        .store
+        .skipped()
+        .iter()
+        .map(skipped_block_term)
+        .collect()
+}
+
+/// Departures from the format `BroadcastEphemeris::from_nav` read through.
+#[rustler::nif]
+fn broadcast_departures(handle: ResourceArc<BroadcastResource>) -> Vec<NavDiagnosticTerm> {
+    handle
+        .store
+        .departures()
+        .iter()
+        .map(nav_diagnostic_term)
+        .collect()
 }
 
 /// Number of healthy GLONASS state-vector records held by the parsed product.
@@ -658,16 +808,33 @@ fn broadcast_glonass_records(handle: ResourceArc<BroadcastResource>) -> Vec<Glon
         .collect()
 }
 
-/// Broadcast ionosphere coefficients parsed from the NAV header.
+fn iono_corrections_term(iono: sidereon_core::rinex::nav::IonoCorrections) -> IonoCorrectionsTerm {
+    IonoCorrectionsTerm {
+        gps: iono.gps.map(alpha_beta_tuple),
+        beidou: iono.beidou.map(alpha_beta_tuple),
+        qzss: iono.qzss.map(alpha_beta_tuple),
+        navic: iono.navic.map(alpha_beta_tuple),
+        galileo: iono.galileo.map(|c| (c.ai0, c.ai1, c.ai2)),
+        galileo_disturbance_flags: iono.galileo_disturbance_flags,
+        beidou_bdgim: iono.beidou_bdgim.map(|alpha| alpha.to_vec()),
+    }
+}
+
+/// Broadcast ionosphere coefficients over the whole file: each set is the one of
+/// its system and model transmitted latest, from the header or a RINEX 4 frame.
 #[rustler::nif]
-fn broadcast_iono_corrections(
+fn broadcast_iono_corrections(handle: ResourceArc<BroadcastResource>) -> IonoCorrectionsTerm {
+    iono_corrections_term(handle.store.iono_corrections())
+}
+
+/// Broadcast ionosphere coefficients in effect at `t_j2000_s`: each set is the
+/// one of its system and model transmitted latest at or before that instant.
+#[rustler::nif]
+fn broadcast_iono_corrections_at(
     handle: ResourceArc<BroadcastResource>,
-) -> (Option<KlobucharTuple>, Option<KlobucharTuple>) {
-    let iono = handle.store.iono_corrections();
-    (
-        iono.gps.map(alpha_beta_tuple),
-        iono.beidou.map(alpha_beta_tuple),
-    )
+    t_j2000_s: f64,
+) -> IonoCorrectionsTerm {
+    iono_corrections_term(handle.store.iono_corrections_at(t_j2000_s))
 }
 
 /// Nominal CNAV URA meters for a URA ED/NED0 index.

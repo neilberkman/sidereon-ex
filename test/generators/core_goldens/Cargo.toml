@@ -1,0 +1,16 @@
+[package]
+name = "sidereon_ex_core_goldens"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Writes the core-derived expected values the Elixir tests compare against"
+
+# Standalone: not a member of the NIF workspace.
+[workspace]
+
+[dependencies]
+# The same requirement as native/sidereon_nif, so the goldens come from the
+# core the binding builds with; the remote staging rewrites both to the staged
+# core and patches them to its source.
+sidereon-core = { version = "3.0.0", git = "https://github.com/neilberkman/sidereon", rev = "e2fb3dfdc392d23087ed8aa1ee028a0056b4021b" }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }

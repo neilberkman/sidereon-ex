@@ -36,6 +36,62 @@ defmodule Sidereon.SpaceWeatherTest do
     assert coverage.end_j2000_s > epoch
   end
 
+  test "Ap history carries the row class and substitutions under a policy" do
+    assert {:ok, table} = SpaceWeather.parse(@csv)
+    epoch = Sidereon.NIF.civil_j2000_seconds(2000, 1, 3, 12, 0, 0.0)
+
+    assert {:ok, history} = SpaceWeather.ap_history_at_with_policy(table, epoch, %SpaceWeather.Policy{})
+    assert {:ok, history.ap} == SpaceWeather.ap_array_at(table, epoch)
+    assert history.class == :observed
+    refute history.ap_defaulted
+    assert history.bins_from_daily_ap == 0
+  end
+
+  test "the default policy is the core default and lenient/0 accepts every class" do
+    policy = %SpaceWeather.Policy{}
+    assert policy.require_geomagnetic
+    refute policy.allow_not_observed
+    assert policy.allow_interpolated
+    assert policy.allow_daily_predicted
+    assert policy.allow_monthly_predicted
+
+    lenient = SpaceWeather.Policy.lenient()
+    refute lenient.require_geomagnetic
+    assert lenient.allow_not_observed
+  end
+
+  test "a row out of date order is kept, sorted into place and reported" do
+    [header, first, second, third] = @csv |> String.trim_trailing() |> String.split("\n")
+    shuffled = Enum.join([header, first, third, second], "\n") <> "\n"
+
+    assert {:ok, table} = SpaceWeather.parse(shuffled)
+    assert %{warnings: [_ | _]} = SpaceWeather.diagnostics(table)
+
+    assert {:ok, sorted} = SpaceWeather.parse(@csv)
+    assert %{skips: [], warnings: []} = SpaceWeather.diagnostics(sorted)
+
+    epoch = Sidereon.NIF.civil_j2000_seconds(2000, 1, 3, 12, 0, 0.0)
+    assert SpaceWeather.ap_array_at(table, epoch) == SpaceWeather.ap_array_at(sorted, epoch)
+  end
+
+  test "drag propagation reads a table under the policy it is given" do
+    assert {:ok, table} = SpaceWeather.parse(@csv)
+    assert {:ok, drag} = Sidereon.Drag.from_area_mass(2.2, 1.0, 100.0)
+    state = {{6778.0, 0.0, 0.0}, {0.0, 7.6686, 0.0}}
+    # 2000-01-02 18:00 TDB, inside the table with the day before it.
+    opts = [forces: [:twobody], drag: drag, space_weather_table: table, epoch_tdb_seconds: 108_000.0]
+
+    assert {:ok, default} = Sidereon.Propagator.propagate(state, 60.0, opts)
+
+    assert {:ok, ^default} =
+             Sidereon.Propagator.propagate(state, 60.0, [space_weather_policy: %SpaceWeather.Policy{}] ++ opts)
+
+    # Every value the lookup reads is stated in the file, so the lenient policy
+    # substitutes nothing and propagates identically.
+    assert {:ok, ^default} =
+             Sidereon.Propagator.propagate(state, 60.0, [space_weather_policy: SpaceWeather.Policy.lenient()] ++ opts)
+  end
+
   test "fetch_space_weather is cache-first and offline-safe", %{root: root} do
     http_client = fn url, _opts ->
       assert String.ends_with?(url, "/SW-All.csv")

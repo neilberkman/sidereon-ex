@@ -12,6 +12,26 @@ checksum_current? =
 force_build =
   System.get_env("SIDEREON_BUILD") in ["1", "true"] or source_checkout? or not checksum_current?
 
+force_build_all =
+  Application.compile_env(
+    :rustler_precompiled,
+    :force_build_all,
+    System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"]
+  )
+
+rustler_compile_config = Application.compile_env(:sidereon, Sidereon.NIF, [])
+rustler_crate = Keyword.get(rustler_compile_config, :crate) || "sidereon_nif"
+
+rustler_crate_path =
+  Keyword.get(rustler_compile_config, :path, "native/#{rustler_crate}")
+  |> Path.expand()
+
+# RustlerPrecompiled applies force_build_all before selecting its source-build
+# branch, and its config also forces `dev` prereleases. Mirror those exact
+# selection inputs so every real Rust compilation is guarded before Rustler's
+# unguarded metadata call.
+source_build? = force_build || force_build_all || "dev" in Version.parse!(version).pre
+
 rustler_features =
   if Mix.env() == :test, do: ["exact-cache-test-failpoints"], else: []
 
@@ -36,6 +56,8 @@ linux_gnu_variants = [portable: portable?]
 
 defmodule Sidereon.NIF do
   @moduledoc false
+
+  use Sidereon.NIF.SourceLock, crate_path: rustler_crate_path, enabled: source_build?
 
   use RustlerPrecompiled,
     otp_app: :sidereon,
@@ -130,7 +152,56 @@ defmodule Sidereon.NIF do
         _abs_tol,
         _rel_tol,
         _drag,
-        _table
+        _table,
+        _policy
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def spp_solve_exact(
+        _handle,
+        _receive_epoch,
+        _observations,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _robust,
+        _max_pdop,
+        _coarse_search_seeds,
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def spp_solve_broadcast_exact(
+        _handle,
+        _receive_epoch,
+        _observations,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _robust,
+        _max_pdop,
+        _coarse_search_seeds,
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def predict_passes(
@@ -168,6 +239,29 @@ defmodule Sidereon.NIF do
 
   def constellation_ground_tracks(_tle_maps, _datetimes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
 
+  def constellation_look_angle_arcs_detailed(
+        _tle_maps,
+        _station_latitude_deg,
+        _station_longitude_deg,
+        _station_altitude_m,
+        _datetimes,
+        _opsmode
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def constellation_ground_tracks_detailed(_tle_maps, _datetimes, _opsmode), do: :erlang.nif_error(:nif_not_loaded)
+
+  def constellation_passes_detailed(
+        _tle_maps,
+        _station_latitude_deg,
+        _station_longitude_deg,
+        _station_altitude_m,
+        _start_datetime,
+        _end_datetime,
+        _min_elevation_deg,
+        _step_seconds,
+        _opsmode
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def constellation_passes(
         _tle_maps,
         _station_latitude_deg,
@@ -189,11 +283,11 @@ defmodule Sidereon.NIF do
         _opsmode
       ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def tle_parse(_line1, _line2), do: :erlang.nif_error(:nif_not_loaded)
+  def tle_parse(_line1, _line2, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
   def tle_encode(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
-  def parse_tle_file(_text), do: :erlang.nif_error(:nif_not_loaded)
+  def parse_tle_file(_text, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
   def cdm_parse_kvn(_text), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -203,17 +297,24 @@ defmodule Sidereon.NIF do
 
   def cdm_encode_xml(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
+  def omm_to_element_set(_fields), do: :erlang.nif_error(:nif_not_loaded)
   def omm_parse_kvn(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_parse_xml(_text), do: :erlang.nif_error(:nif_not_loaded)
 
+  def omm_parse_xml_all(_text), do: :erlang.nif_error(:nif_not_loaded)
+
   def omm_parse_json(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_parse_json_array(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_encode_kvn(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_encode_xml(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_encode_json(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_encode_json_discarding_comments(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def oem_parse_kvn(_text), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -234,6 +335,19 @@ defmodule Sidereon.NIF do
   def tdm_parse_kvn(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def tdm_encode_kvn(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_parse_kvn_with_policy(_text, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_encode_kvn_with_policy(_fields, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_metadata_from_raw(_fields, _comments), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_metadata_from_raw_with_policy(_fields, _comments, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_metadata_replace_raw(_current, _fields, _comments), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_metadata_replace_raw_with_policy(_current, _fields, _comments, _policy),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def geodesic_inverse(_lat1_deg, _lon1_deg, _lat2_deg, _lon2_deg), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -436,6 +550,8 @@ defmodule Sidereon.NIF do
 
   def coverage_look_angles(_tle_maps, _stations, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
 
+  def coverage_look_angles_detailed(_tle_maps, _stations, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
+
   def teme_to_gcrs(_x, _y, _z, _vx, _vy, _vz, _datetime, _skyfield_compat), do: :erlang.nif_error(:nif_not_loaded)
 
   def gcrs_to_itrs(_x, _y, _z, _datetime, _skyfield_compat), do: :erlang.nif_error(:nif_not_loaded)
@@ -489,7 +605,8 @@ defmodule Sidereon.NIF do
         _crossing_tolerance_s,
         _max_duration_s,
         _max_scan_samples,
-        _table
+        _table,
+        _policy
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spk_load(_bytes), do: :erlang.nif_error(:nif_not_loaded)
@@ -526,8 +643,26 @@ defmodule Sidereon.NIF do
 
   def sun_moon_ecef_batch(_epochs_unix_us), do: :erlang.nif_error(:nif_not_loaded)
 
-  def solid_earth_tide(_sta_x, _sta_y, _sta_z, _year, _month, _day, _fhr, _sun, _moon),
+  def solid_earth_tide(_sta_x, _sta_y, _sta_z, _year, _month, _day, _fhr, _sun, _moon, _constants),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def station_displacement(_request), do: :erlang.nif_error(:nif_not_loaded)
+
+  def station_displacement_batch(_requests), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_normal_gravity_mps2(_lat_rad, _height_m), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_gravity_ecef_mps2(_position_ecef_m), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_quaternion_from_dcm(_rows), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_dcm_from_quaternion(_quaternion), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_yaw_pitch_roll_rad(_rows), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_gauss_markov_bias_decay(_dt_s, _tau_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def inertial_gauss_markov_bias_variance_increment(_instability, _dt_s, _tau_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def solid_earth_pole_tide(_sta_x, _sta_y, _sta_z, _year, _month, _day, _fhr, _xp_arcsec, _yp_arcsec),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -539,7 +674,11 @@ defmodule Sidereon.NIF do
 
   def antex_encode(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def antex_satellite_antenna(_antennas, _prn, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
+  def antex_satellite_antenna(_handle, _prn, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def antex_antenna_at(_handle, _id, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def antex_frequency(_antenna, _frequency), do: :erlang.nif_error(:nif_not_loaded)
 
   def antex_pco(_antenna, _frequency), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -553,7 +692,9 @@ defmodule Sidereon.NIF do
         _phase_windup,
         _satellite_antenna,
         _pole_tide,
-        _ocean_loading
+        _ocean_loading,
+        _validity,
+        _tide_constants
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_positioning_solve_float(_handle, _epoch, _initial_state, _weights, _solve_options, _tropo, _corrections),
@@ -569,6 +710,8 @@ defmodule Sidereon.NIF do
         _corrections,
         _residual_screen
       ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_float_solution_round_trip(_float_solution), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_positioning_solve_ppp_fixed(
         _handle,
@@ -675,6 +818,27 @@ defmodule Sidereon.NIF do
 
   def sp3_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def exact_epoch_from_civil(_year, _month, _day, _hour, _minute, _second), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_from_j2000_seconds(_seconds), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_fields(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_seconds_since(_later, _earlier), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_query(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_from_binary_j2000_seconds(_seconds), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_epoch(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_add_binary_seconds(_handle, _seconds), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_sub_binary_seconds(_handle, _seconds), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_seconds_since(_query, _earlier), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_seconds_since_query(_query, _earlier), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_query_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
@@ -686,6 +850,8 @@ defmodule Sidereon.NIF do
   def sp3_epochs_j2000_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_stencil_extent(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_orbit_class_speed_bound_m_s(_orbit_class), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_check_continuity(_handle, _orbit_class, _residual_tolerance_m, _gap_threshold_factor \\ nil),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -699,7 +865,15 @@ defmodule Sidereon.NIF do
         _gap_threshold_factor \\ nil
       ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def sp3_merge_continuity_verdict(_report, _merged, _from_j2000_s, _through_j2000_s),
+  def sp3_merge_continuity_verdict(_report, _from_j2000_s, _through_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_merge_report_omissions(_report), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_merge_report_provenance(_report), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_selected_nodes(_handle, _satellite, _from_j2000_s, _through_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_merge_continuity_selected_nodes(_report, _satellite, _from_j2000_s, _through_j2000_s),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_exact_request_new(_year, _month, _day, _issue, _span, _sample, _expected_agency),
@@ -724,8 +898,16 @@ defmodule Sidereon.NIF do
   def sp3_to_iodata(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_precise_ephemeris_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def sp3_precise_ephemeris_accuracy_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_record_accuracy_codes(_handle, _system_letter, _prn, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_record_accuracy(_handle, _system_letter, _prn, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_samples_from_samples(_samples, _gap_threshold_factor \\ nil), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_samples_from_samples_with_accuracy(_samples, _accuracy, _gap_threshold_factor \\ nil),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_samples_gap_threshold_factor(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -735,6 +917,65 @@ defmodule Sidereon.NIF do
 
   def precise_interpolant_from_precise_samples(_handle, _gap_threshold_factor \\ nil),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_interpolant_position_at_epoch_query(_source, _system_letter, _prn, _query),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_source_exact_epoch_hook(_source, _system_letter, _prn, _state_epoch, _selection_epoch, _hook, _position),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def spp_solve_ssr_exact(
+        _broadcast,
+        _store,
+        _receive_epoch,
+        _observations,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _robust,
+        _max_pdop,
+        _coarse_search_seeds,
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model,
+        _fallback_to_broadcast,
+        _regional_providers,
+        _size_policy
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ssr_source_exact_epoch_hook(
+        _broadcast,
+        _store,
+        _satellite_id,
+        _state_epoch,
+        _selection_epoch,
+        _fallback_to_broadcast,
+        _regional_providers,
+        _size_policy,
+        _hook,
+        _position
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_source_exact_epoch_hook(
+        _broadcast,
+        _store,
+        _geo_id,
+        _satellite_id,
+        _state_epoch,
+        _selection_epoch,
+        _mode,
+        _hook,
+        _position
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_interpolant_gap_threshold_factor(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -768,6 +1009,9 @@ defmodule Sidereon.NIF do
 
   def observable_states_at_j2000_s(_source, _satellites, _epochs_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
 
+  def observable_states_at_j2000_s_detailed(_source, _satellites, _epochs_j2000_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def observable_states_at_shared_j2000_s(_source, _satellites, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
@@ -787,6 +1031,12 @@ defmodule Sidereon.NIF do
   def broadcast_glonass_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_iono_corrections(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_iono_corrections_at(_handle, _t_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_skipped(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_departures(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_leap_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -808,36 +1058,53 @@ defmodule Sidereon.NIF do
 
   def broadcast_cnav_ura_ned(_cnav, _system, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_parse_sinex(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_parse_sinex(_bytes, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_parse_sinex_lossy(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_parse_sinex_lossy(_bytes, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_load_sinex(_path), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_load_sinex(_path, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_load_sinex_lossy(_path), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_load_sinex_lossy(_path, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_parse_code_dcb(_bytes, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_parse_code_dcb(_bytes, _options, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_parse_code_dcb_lossy(_bytes, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_parse_code_dcb_lossy(_bytes, _options, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_load_code_dcb(_path, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_load_code_dcb(_path, _options, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def bias_load_code_dcb_lossy(_path, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def bias_load_code_dcb_lossy(_path, _options, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bias_write_sinex(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bias_write_sinex_bytes(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bias_write_code_dcb(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bias_write_code_dcb_bytes(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def bias_info(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def bias_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bias_notices(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def bias_code_osb(_handle, _satellite_id, _obs, _epoch_j2000_s, _scale), do: :erlang.nif_error(:nif_not_loaded)
 
   def bias_code_dsb(_handle, _satellite_id, _obs1, _obs2, _epoch_j2000_s, _scale),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def sbas_decode(_bytes, _form), do: :erlang.nif_error(:nif_not_loaded)
+  def sbas_decode(_bytes, _form, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_encode_unsupported(_preamble, _message_type, _data, _form, _pad_bits, _policy),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_parse_ems(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_parse_rtklib(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_parse_ems_log(_text, _policy, _reference_week), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_parse_rtklib_log(_text, _policy, _reference_week), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_store_new(_max_staleness_s, _allow_partial), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -851,6 +1118,8 @@ defmodule Sidereon.NIF do
 
   def sbas_fast(_handle, _geo_id, _satellite_id), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sbas_unassigned_mask_corrections(_handle, _geo_id), do: :erlang.nif_error(:nif_not_loaded)
+
   def sbas_long_term(_handle, _geo_id, _satellite_id), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_iono_grid(_handle, _geo_id), do: :erlang.nif_error(:nif_not_loaded)
@@ -859,6 +1128,16 @@ defmodule Sidereon.NIF do
 
   def sbas_corrected_position(_broadcast, _store, _geo_id, _satellite_id, _t_j2000_s, _mode),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_corrected_position_at_epoch_query(
+        _broadcast,
+        _store,
+        _geo_id,
+        _satellite_id,
+        _epoch_query,
+        _selection_epoch_query,
+        _mode
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_sample_broadcast(_broadcast, _store, _geo_id, _satellites, _start_j2000_s, _stop_j2000_s, _step_s, _mode),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -883,7 +1162,34 @@ defmodule Sidereon.NIF do
         _with_geodetic,
         _max_pdop,
         _coarse_search_seeds,
-        _glonass_channels
+        _glonass_channels,
+        _qzss_clock,
+        _troposphere_model
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sbas_spp_solve_broadcast_exact(
+        _broadcast,
+        _store,
+        _geo_id,
+        _mode,
+        _observations,
+        _receive_epoch,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic,
+        _max_pdop,
+        _coarse_search_seeds,
+        _glonass_channels,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_pl_k_precision_approach, do: :erlang.nif_error(:nif_not_loaded)
@@ -912,6 +1218,8 @@ defmodule Sidereon.NIF do
 
   def ssr_store_from_rtcm(_bytes, _scale, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
+  def ssr_store_from_rtcm_strict(_bytes, _scale, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
+
   def ssr_store_ingest(_handle, _message, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_orbit(_handle, _satellite_id), do: :erlang.nif_error(:nif_not_loaded)
@@ -926,7 +1234,19 @@ defmodule Sidereon.NIF do
         _satellite_id,
         _t_j2000_s,
         _fallback_to_broadcast,
-        _regional_providers
+        _regional_providers,
+        _size_policy
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ssr_corrected_position_at_epoch_query(
+        _broadcast,
+        _store,
+        _satellite_id,
+        _epoch_query,
+        _selection_epoch_query,
+        _fallback_to_broadcast,
+        _regional_providers,
+        _size_policy
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_sample_broadcast(
@@ -937,7 +1257,8 @@ defmodule Sidereon.NIF do
         _stop_j2000_s,
         _step_s,
         _fallback_to_broadcast,
-        _regional_providers
+        _regional_providers,
+        _size_policy
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ephemeris_sample_sp3(_handle, _satellites, _start_j2000_s, _stop_j2000_s, _step_s),
@@ -961,6 +1282,20 @@ defmodule Sidereon.NIF do
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_position_at_epoch_query(_handle, _system_letter, _prn, _query), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_selected_state_at_epoch_queries(_handle, _system_letter, _prn, _state_query, _selection_query),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_transmit_clock_at_epoch_queries(_handle, _system_letter, _prn, _state_query, _selection_query),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_clock_relativity_for_state_at_epoch_query(_handle, _system_letter, _prn, _query, _position),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_ephemeris_variance_at_epoch_queries(_handle, _system_letter, _prn, _state_query, _selection_query),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_observables(
         _handle,
         _system_letter,
@@ -974,6 +1309,29 @@ defmodule Sidereon.NIF do
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_observables(
+        _handle,
+        _system_letter,
+        _prn,
+        _t_rx_j2000_s,
+        _receiver_ecef_m,
+        _carrier_hz,
+        _light_time,
+        _sagnac
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_observables_detailed(
+        _handle,
+        _system_letter,
+        _prn,
+        _jd_whole,
+        _jd_fraction,
+        _receiver_ecef_m,
+        _carrier_hz,
+        _light_time,
+        _sagnac
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_observables_detailed(
         _handle,
         _system_letter,
         _prn,
@@ -1103,7 +1461,8 @@ defmodule Sidereon.NIF do
         _system_letters,
         _asserted_frame_label_sets,
         _helmert_frame_reconciliation,
-        _verify_continuity
+        _verify_continuity,
+        _provenance
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_merge_input_identity(
@@ -1121,6 +1480,8 @@ defmodule Sidereon.NIF do
         _helmert_frame_reconciliation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_validate_merge_target_interval(_target_epoch_interval_s), do: :erlang.nif_error(:nif_not_loaded)
+
   def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def crinex_encode(_text), do: :erlang.nif_error(:nif_not_loaded)
@@ -1129,9 +1490,51 @@ defmodule Sidereon.NIF do
 
   def rinex_clock_parse_lossy(_text), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rinex_clock_to_string(_series), do: :erlang.nif_error(:nif_not_loaded)
+  def rinex_clock_from_series_rows(_series), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rinex_clock_clock_s(_series, _satellite_id, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
+  def rinex_clock_from_clock_points(_time_scale, _rows), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_info(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_header_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_series(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_skipped_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_diagnostics(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_notices(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_source_line(_handle, _line), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_clock_s(_handle, _satellite_id, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_clock_s_at_instant(_handle, _satellite_id, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_clock_s_at_gps_seconds(_handle, _satellite_id, _gps_seconds), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_civil_to_instant(_time_scale, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_civil_to_gps_seconds(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_to_string(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_to_string_with_policy(_handle, _nearest_microsecond_epochs), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_set_time_system(_handle, _system), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_set_record_values(_handle, _index, _values), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_insert_record(_handle, _index, _record), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_remove_record(_handle, _index), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_retain_records(_handle, _keep), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_clock_edit_records(_handle, _edits), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1158,6 +1561,18 @@ defmodule Sidereon.NIF do
   def rinex_obs_values(_handle, _epoch_index, _overrides), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_phases(_handle, _epoch_index, _overrides), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_cycle_slips(_handle, _epoch_index, _overrides), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_header(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_header_at(_handle, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_header_segments(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_skipped_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_downgrade_to_rinex2(_handle, _version), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_band_frequency_hz(_system, _band, _channel), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1280,6 +1695,26 @@ defmodule Sidereon.NIF do
   def scenario_simulate_json(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_imu_spec_preset(_grade), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_strapdown_new(_state, _model, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_strapdown_state(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_strapdown_propagate(_handle, _sample), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_imu_simulator_new(_spec, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_imu_simulator_sample_increment(_handle, _truth), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_imu_simulator_bias(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_imu_simulator_rate_random_walk(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_true_imu_increment_between(_start, _end), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_simulate_imu_samples(_trajectory, _spec, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def fusion_simulate_imu_samples_from_increments(_increments, _spec, _options), do: :erlang.nif_error(:nif_not_loaded)
 
   def fusion_new(_state, _config), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1441,11 +1876,15 @@ defmodule Sidereon.NIF do
 
   def rtk_rinex_arc_skipped_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rtk_rinex_arc_unresolved_carriers(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def rtk_rinex_dual_frequency_arc_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_rinex_dual_frequency_arc_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_rinex_dual_frequency_arc_skipped_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rtk_rinex_dual_frequency_arc_unresolved_carriers(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_position(_epoch, _scale, _elements, _query, _frame), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1490,7 +1929,10 @@ defmodule Sidereon.NIF do
         _robust,
         _max_pdop,
         _coarse_search_seeds,
-        _glonass_channels
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_broadcast(
@@ -1511,7 +1953,10 @@ defmodule Sidereon.NIF do
         _robust,
         _max_pdop,
         _coarse_search_seeds,
-        _glonass_channels
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_with_doppler(
@@ -1531,7 +1976,10 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _robust,
-        _glonass_channels
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_broadcast_with_doppler(
@@ -1551,7 +1999,10 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _robust,
-        _glonass_channels
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_with_fallback(
@@ -1571,7 +2022,10 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _max_staleness_s,
-        _glonass_channels
+        _glonass_channels,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_batch_serial(_handle, _epochs, _with_geodetic, _robust, _max_pdop, _coarse_search_seeds),
@@ -1591,7 +2045,9 @@ defmodule Sidereon.NIF do
         _pressure_hpa,
         _temperature_k,
         _relative_humidity,
-        _robust
+        _robust,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def solve_spp_from_rinex_obs(
@@ -1606,16 +2062,32 @@ defmodule Sidereon.NIF do
         _temperature_k,
         _relative_humidity,
         _robust,
+        _qzss_clock,
+        _troposphere_model,
         _with_geodetic,
         _max_pdop,
         _coarse_search_seeds
       ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def static_positioning_solve_sp3(_handle, _epochs, _initial_position_m, _with_geodetic, _robust),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def static_positioning_solve_sp3(
+        _handle,
+        _epochs,
+        _initial_position_m,
+        _with_geodetic,
+        _robust,
+        _qzss_clock,
+        _troposphere_model
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def static_positioning_solve_broadcast(_handle, _epochs, _initial_position_m, _with_geodetic, _robust),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def static_positioning_solve_broadcast(
+        _handle,
+        _epochs,
+        _initial_position_m,
+        _with_geodetic,
+        _robust,
+        _qzss_clock,
+        _troposphere_model
+      ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_residual_rms_m(_residuals_m), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1639,10 +2111,11 @@ defmodule Sidereon.NIF do
 
   def qc_chi2_inv(_p, _dof), do: :erlang.nif_error(:nif_not_loaded)
 
-  def qc_raim(_used_sats, _residuals_m, _p_fa, _unit_weights, _weights, _n_systems),
+  def qc_raim(_used_sats, _residuals_m, _variances_m2, _p_fa, _weights_mode, _weights, _n_systems),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def qc_raim_fde_design(_rows, _p_fa, _max_exclusions, _min_redundancy), do: :erlang.nif_error(:nif_not_loaded)
+  def qc_raim_fde_design(_rows, _p_fa, _max_exclusions, _min_redundancy, _max_exclusion_rms_m),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def qc_fde_sp3(
         _handle,
@@ -1660,11 +2133,15 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _p_fa,
-        _unit_weights,
+        _weights_mode,
         _weights,
         _n_systems,
-        _max_iterations,
-        _max_pdop
+        _max_exclusions,
+        _max_exclusion_rms_m,
+        _max_pdop,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def qc_fde_broadcast(
@@ -1683,11 +2160,15 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _p_fa,
-        _unit_weights,
+        _weights_mode,
         _weights,
         _n_systems,
-        _max_iterations,
-        _max_pdop
+        _max_exclusions,
+        _max_exclusion_rms_m,
+        _max_pdop,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def qc_robust_fde_sp3(
@@ -1706,11 +2187,15 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _p_fa,
-        _unit_weights,
+        _weights_mode,
         _weights,
         _n_systems,
-        _max_iterations,
-        _max_pdop
+        _max_exclusions,
+        _max_exclusion_rms_m,
+        _max_pdop,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def qc_robust_fde_broadcast(
@@ -1729,11 +2214,15 @@ defmodule Sidereon.NIF do
         _relative_humidity,
         _with_geodetic,
         _p_fa,
-        _unit_weights,
+        _weights_mode,
         _weights,
         _n_systems,
-        _max_iterations,
-        _max_pdop
+        _max_exclusions,
+        _max_exclusion_rms_m,
+        _max_pdop,
+        _pseudorange_code,
+        _qzss_clock,
+        _troposphere_model
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def klobuchar_delay(_lat_deg, _lon_deg, _azimuth_deg, _elevation_deg, _t_gps_s, _frequency_hz, _alpha, _beta),
@@ -1783,19 +2272,61 @@ defmodule Sidereon.NIF do
 
   def ionex_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
+  def ionex_parse_with_warnings(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_header(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_skipped_records(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def ionex_to_string(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def ionex_from_samples(_samples), do: :erlang.nif_error(:nif_not_loaded)
 
-  def ionex_from_node_samples(_samples, _shell_height_km, _base_radius_km, _exponent),
+  def ionex_from_node_samples(_samples, _shell_height_km, _base_radius_km, _exponent, _header),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def ionex_tec_grid_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def ionex_tec_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
-  def ionex_slant(_handle, _lat_rad, _lon_rad, _elevation_rad, _azimuth_rad, _epoch_j2000_s, _frequency_hz),
+  def ionex_slant(_handle, _lat_deg, _lon_deg, _elevation_deg, _azimuth_deg, _epoch_j2000_s, _frequency_hz),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_slant_with_policy(
+        _handle,
+        _lat_deg,
+        _lon_deg,
+        _elevation_deg,
+        _azimuth_deg,
+        _epoch_j2000_s,
+        _frequency_hz,
+        _policy
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_slant_batch(_handle, _requests, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_new(_epochs_ns, _latitudes_deg, _longitudes_deg, _values), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_vtec_at_pierce_point(_handle, _unix_nanos, _longitude_deg, _latitude_deg, _missing_nodes),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_epochs_ns(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_latitudes_deg(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_longitudes_deg(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_values(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_tec_xyz_prepare(_handle, _unix_nanos, _satellite_xyz, _receiver_xyz, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_tec_xyz_resume(_stage, _lonlatalt), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_iono_delay_xyz_prepare(_handle, _unix_nanos, _frequency_hz, _satellite_xyz, _receiver_xyz, _options),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tec_grid_iono_delay_xyz_resume(_stage, _lonlatalt), do: :erlang.nif_error(:nif_not_loaded)
 
   def iono_free_frequencies, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1855,6 +2386,24 @@ defmodule Sidereon.NIF do
         _elevation_rad,
         _lat_rad,
         _lon_rad,
+        _height_m,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _jd_whole,
+        _jd_fraction
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_zenith_delay_detailed(_lat_deg, _height_m, _pressure_hpa, _temperature_k, _relative_humidity),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_mapping_factors_detailed(_elevation_deg, _lat_deg, _height_m, _jd_whole, _jd_fraction),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_slant_delay_detailed(
+        _elevation_deg,
+        _lat_deg,
+        _lon_deg,
         _height_m,
         _pressure_hpa,
         _temperature_k,
@@ -2081,6 +2630,8 @@ defmodule Sidereon.NIF do
 
   def terrain_dted_tile_elevation(_handle, _longitude_deg, _latitude_deg), do: :erlang.nif_error(:nif_not_loaded)
 
+  def terrain_dted_tile_horizontal_datum(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def terrain_store_dted_tree_to_mmap_store(_root), do: :erlang.nif_error(:nif_not_loaded)
 
   def terrain_store_write_dted_tree_to_mmap_store(_root, _out_path), do: :erlang.nif_error(:nif_not_loaded)
@@ -2162,7 +2713,9 @@ defmodule Sidereon.NIF do
   def data_centers, do: :erlang.nif_error(:nif_not_loaded)
   def data_content_types, do: :erlang.nif_error(:nif_not_loaded)
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
+
   def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_exact_cache_open(_path, _identity_fields, _source, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_exact_cache_open_single_flight(
@@ -2208,6 +2761,7 @@ defmodule Sidereon.NIF do
   def data_distribution_location_for_identity(_identity_fields, _source), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
+
   def data_archive_compression(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_unix_compress_decompress(_archive, _limit), do: :erlang.nif_error(:nif_not_loaded)
   def data_gps_week(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
@@ -2333,17 +2887,30 @@ defmodule Sidereon.NIF do
 
   def nmea_accumulator_finish(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def nmea_accumulator_finish_with_output(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def nmea_accumulator_retained_len(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def nmea_write_gga(_gga), do: :erlang.nif_error(:nif_not_loaded)
 
   def civil_utc_instant_split(_year, _month, _day, _hour, _minute, _second), do: :erlang.nif_error(:nif_not_loaded)
 
+  def civil_utc_instant_split_detailed(_year, _month, _day, _hour, _minute, _second),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def space_weather_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
   def space_weather_space_weather_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
   def space_weather_sample_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
   def space_weather_sample_at_with_policy(_handle, _epoch_j2000_s, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
   def space_weather_ap_array_at(_handle, _epoch_j2000_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def space_weather_ap_history_at_with_policy(_handle, _epoch_j2000_s, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def space_weather_diagnostics(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def space_weather_coverage(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def space_weather_to_csv_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def space_weather_to_txt_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
@@ -2354,10 +2921,14 @@ defmodule Sidereon.NIF do
   def ntrip_machine_new(_config), do: :erlang.nif_error(:nif_not_loaded)
   def ntrip_machine_push(_machine, _bytes), do: :erlang.nif_error(:nif_not_loaded)
   def ntrip_machine_finish(_machine), do: :erlang.nif_error(:nif_not_loaded)
+
   def ntrip_machine_gga(_machine, _now_s, _position, _utc_seconds_of_day), do: :erlang.nif_error(:nif_not_loaded)
+
   def ntrip_machine_reset(_machine), do: :erlang.nif_error(:nif_not_loaded)
   def ntrip_machine_state(_machine), do: :erlang.nif_error(:nif_not_loaded)
+
   def ntrip_classify_http_response(_status, _reason, _headers), do: :erlang.nif_error(:nif_not_loaded)
+
   def ntrip_parse_sourcetable(_bytes), do: :erlang.nif_error(:nif_not_loaded)
   def ntrip_sourcetable_to_text(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def ntrip_format_gga(_position, _utc_seconds_of_day), do: :erlang.nif_error(:nif_not_loaded)
@@ -2366,9 +2937,9 @@ defmodule Sidereon.NIF do
 
   def rtcm_decode_messages(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rtcm_decode_stream(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def rtcm_decode_stream(_bytes, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rtcm_decode_message(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def rtcm_decode_message(_bytes, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_message_number(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2385,15 +2956,27 @@ defmodule Sidereon.NIF do
 
   def rtcm_msm_lli(_messages), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rtcm_ssr_vtec_evaluate(_fields, _receiver_ecef_m, _satellite_transmit_ecef_m, _gps_seconds_of_day, _frequency_hz),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def rtcm_decode_frame(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
-  def rtcm_encode_frame_body(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def rtcm_encode_frame_body(_bytes, _reserved), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_encode_message(_kind, _fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtcm_encode(_kind, _fields), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rtcm_encode_with_policy(_kind, _fields, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
   def rtcm_encode_frame(_kind, _fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def exact_epoch_new(_seconds, _attoseconds), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_checked_add_seconds(_handle, _seconds), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_checked_sub_seconds(_handle, _seconds), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_split_julian_date(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_compare(_later, _earlier), do: :erlang.nif_error(:nif_not_loaded)
+  def exact_epoch_query_equal(_left, _right), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_solve_moving_baseline(_epoch_terms, _opts, _receiver_antenna_corrections),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -2583,9 +3166,32 @@ defmodule Sidereon.NIF do
 
   def sp3_predict_batch(_handle, _requests, _carrier_hz, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_predict_batch_detailed(_handle, _requests, _carrier_hz, _light_time, _sagnac),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def predict_ranges_batch(_source, _requests, _light_time, _sagnac), do: :erlang.nif_error(:nif_not_loaded)
 
+  def observables_pseudorange_transmit_geometry(
+        _source,
+        _system_letter,
+        _prn,
+        _receiver_ecef_m,
+        _t_rx_j2000_s,
+        _pseudorange_m,
+        _sagnac
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def emission_media_batch(
+        _source,
+        _requests,
+        _receiver_ecef_m,
+        _carrier_hz,
+        _troposphere,
+        _ionosphere,
+        _min_elevation_rad
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def emission_media_batch_detailed(
         _source,
         _requests,
         _receiver_ecef_m,

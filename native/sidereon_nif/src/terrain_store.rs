@@ -8,7 +8,8 @@
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use rustler::{Binary, Encoder, Env, Error, NifResult, OwnedBinary, ResourceArc, Term};
-use sidereon_core::terrain::{DtedInterpolation, DtedLookupOptions};
+use sidereon_core::geoid::GeoidError;
+use sidereon_core::terrain::{DtedHorizontalDatum, DtedInterpolation, DtedLookupOptions};
 use sidereon_core::terrain_store::{
     dted_tile_list_to_mmap_store, dted_tree_to_mmap_store, terrain_store_checksum64,
     write_dted_tile_list_to_mmap_store, write_dted_tree_to_mmap_store, DtedTileListEntry,
@@ -36,8 +37,129 @@ mod atoms {
         attested,
         terrain,
         geoid,
-        missing_egm96_dac
+        missing_egm96_dac,
+        tile_id_out_of_range,
+        tile_bounds_mismatch,
+        non_wgs84_tile,
+        unhandled,
+        unknown_terrain_elevation,
+        non_wgs84_terrain_tile,
+        missing_terrain_tile,
+        terrain_tile,
+        tile,
+        terrain_tile_origin,
+        geoid_invalid_dimensions,
+        geoid_invalid_spacing,
+        geoid_non_finite_value,
+        geoid_parse,
+        wgs84,
+        wgs72,
+        unstated,
+        other
     }
+}
+
+/// The horizontal datum a DTED tile's DSI record states: `:wgs84`, `:wgs72`,
+/// `:unstated` (blank or zero-filled), or `{:other, text}` as read.
+pub(crate) fn horizontal_datum_term<'a>(env: Env<'a>, datum: &DtedHorizontalDatum) -> Term<'a> {
+    match datum {
+        DtedHorizontalDatum::Wgs84 => atoms::wgs84().encode(env),
+        DtedHorizontalDatum::Wgs72 => atoms::wgs72().encode(env),
+        DtedHorizontalDatum::Unstated => atoms::unstated().encode(env),
+        DtedHorizontalDatum::Other(text) => (atoms::other(), text.as_str()).encode(env),
+        other => (atoms::other(), other.to_string()).encode(env),
+    }
+}
+
+/// The typed reason for a terrain lookup the core refuses because of the
+/// product rather than the query: a posting holding the DTED null value
+/// (`{:unknown_terrain_elevation, lat_index, lon_index, latitude_posting,
+/// longitude_posting}`), a tile on a horizontal datum other than WGS84
+/// (`{:non_wgs84_terrain_tile, lat_index, lon_index, datum}`), a missing tile
+/// (`{:missing_terrain_tile, lat_index, lon_index}`), a nested DTED tile error,
+/// a file/index origin mismatch, or a query refusal with its core message.
+/// `None` for any other error, which each caller reports as it did before.
+pub(crate) fn terrain_lookup_error_term<'a>(
+    env: Env<'a>,
+    error: &sidereon_core::Error,
+) -> Option<Term<'a>> {
+    match error {
+        sidereon_core::Error::UnknownTerrainElevation {
+            lat_index,
+            lon_index,
+            latitude_posting,
+            longitude_posting,
+        } => Some(
+            (
+                atoms::unknown_terrain_elevation(),
+                *lat_index,
+                *lon_index,
+                *latitude_posting,
+                *longitude_posting,
+            )
+                .encode(env),
+        ),
+        sidereon_core::Error::NonWgs84TerrainTile {
+            lat_index,
+            lon_index,
+            datum,
+        } => Some(
+            (
+                atoms::non_wgs84_terrain_tile(),
+                *lat_index,
+                *lon_index,
+                horizontal_datum_term(env, datum),
+            )
+                .encode(env),
+        ),
+        sidereon_core::Error::MissingTerrainTile {
+            lat_index,
+            lon_index,
+        } => Some((atoms::missing_terrain_tile(), *lat_index, *lon_index).encode(env)),
+        sidereon_core::Error::TerrainTile {
+            lat_index,
+            lon_index,
+            error,
+        } => Some(
+            (
+                atoms::terrain_tile(),
+                *lat_index,
+                *lon_index,
+                crate::astro_phase_b::dted_tile_error_term(env, error),
+            )
+                .encode(env),
+        ),
+        sidereon_core::Error::TerrainTileOrigin {
+            path,
+            lat_index,
+            lon_index,
+            origin_latitude,
+            origin_longitude,
+        } => Some(
+            (
+                atoms::terrain_tile_origin(),
+                path.display().to_string(),
+                *lat_index,
+                *lon_index,
+                *origin_latitude,
+                *origin_longitude,
+            )
+                .encode(env),
+        ),
+        sidereon_core::Error::InvalidInput(message) => {
+            Some((atoms::invalid_input(), message.as_str()).encode(env))
+        }
+        sidereon_core::Error::Parse(message) => {
+            Some((atoms::parse(), message.as_str()).encode(env))
+        }
+        _ => None,
+    }
+}
+
+/// A terrain lookup error as the store lookups report it: the typed reason
+/// where there is one, the error text otherwise.
+fn store_lookup_error_term<'a>(env: Env<'a>, error: &sidereon_core::Error) -> Term<'a> {
+    terrain_lookup_error_term(env, error).unwrap_or_else(|| error.to_string().encode(env))
 }
 
 /// Parsed memory-mappable terrain store held across calls.
@@ -192,6 +314,29 @@ fn store_error_term<'a>(env: Env<'a>, error: TerrainStoreError) -> Term<'a> {
         TerrainStoreError::AttestedChecksumMismatch { expected, found } => {
             (atoms::attested_checksum_mismatch(), expected, found).encode(env)
         }
+        TerrainStoreError::TileIdOutOfRange {
+            lat_index,
+            lon_index,
+        } => (atoms::tile_id_out_of_range(), lat_index, lon_index).encode(env),
+        TerrainStoreError::TileBoundsMismatch {
+            lat_index,
+            lon_index,
+            field,
+        } => (atoms::tile_bounds_mismatch(), lat_index, lon_index, field).encode(env),
+        TerrainStoreError::NonWgs84Tile { path, datum } => (
+            atoms::non_wgs84_tile(),
+            path.display().to_string(),
+            horizontal_datum_term(env, &datum),
+        )
+            .encode(env),
+        TerrainStoreError::Tile { path, error } => (
+            atoms::tile(),
+            path.display().to_string(),
+            error.to_string(),
+            crate::astro_phase_b::dted_tile_error_term(env, &error),
+        )
+            .encode(env),
+        other => (atoms::unhandled(), other.to_string()).encode(env),
     }
 }
 
@@ -204,8 +349,12 @@ fn digest_provenance_atom(provenance: DigestProvenance) -> rustler::Atom {
 
 fn datum_error_term<'a>(env: Env<'a>, error: TerrainDatumError) -> Term<'a> {
     match error {
-        TerrainDatumError::Terrain(error) => (atoms::terrain(), error.to_string()).encode(env),
-        TerrainDatumError::Geoid(error) => (atoms::geoid(), error.to_string()).encode(env),
+        TerrainDatumError::Terrain(error) => {
+            (atoms::terrain(), store_lookup_error_term(env, &error)).encode(env)
+        }
+        TerrainDatumError::Geoid(error) => {
+            (atoms::geoid(), geoid_error_term(env, error)).encode(env)
+        }
         TerrainDatumError::Io { path, message } => {
             (atoms::io(), path.display().to_string(), message).encode(env)
         }
@@ -218,10 +367,23 @@ fn datum_error_term<'a>(env: Env<'a>, error: TerrainDatumError) -> Term<'a> {
     }
 }
 
+fn geoid_error_term<'a>(env: Env<'a>, error: GeoidError) -> Term<'a> {
+    match error {
+        GeoidError::InvalidDimensions { expected, found } => {
+            (atoms::geoid_invalid_dimensions(), expected, found).encode(env)
+        }
+        GeoidError::InvalidSpacing { field } => (atoms::geoid_invalid_spacing(), field).encode(env),
+        GeoidError::NonFiniteValue { index } => {
+            (atoms::geoid_non_finite_value(), index).encode(env)
+        }
+        GeoidError::Parse { reason } => (atoms::geoid_parse(), reason).encode(env),
+    }
+}
+
 fn terrain_result_term<'a>(env: Env<'a>, result: sidereon_core::Result<f64>) -> Term<'a> {
     match result {
         Ok(height) => (atoms::ok(), height).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), store_lookup_error_term(env, &error)).encode(env),
     }
 }
 
@@ -231,7 +393,7 @@ fn orthometric_result_term<'a>(
 ) -> Term<'a> {
     match result {
         Ok(height) => (atoms::ok(), height.metres()).encode(env),
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+        Err(error) => (atoms::error(), store_lookup_error_term(env, &error)).encode(env),
     }
 }
 

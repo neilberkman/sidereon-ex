@@ -23,7 +23,9 @@ defmodule Sidereon.Terrain.MmapTerrain do
     TerrainTileId
   }
 
+  alias Sidereon.Geoid.GridError
   alias Sidereon.NIF
+  alias Sidereon.NifCall
   alias Sidereon.Terrain.MmapTerrain
 
   @max_checksum64 0xFFFF_FFFF_FFFF_FFFF
@@ -134,6 +136,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
 
     alias MmapTerrain.{EllipsoidalHeightM, TerrainDatumError, TerrainGeoidModel}
     alias Sidereon.NIF
+    alias Sidereon.NifCall
 
     @enforce_keys [:value_m]
     defstruct [:value_m]
@@ -179,7 +182,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
         |> ellipsoidal_result()
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_orthometric_to_ellipsoidal_height_deg)
     end
 
     @doc """
@@ -204,7 +207,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
         |> ellipsoidal_result()
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_orthometric_to_ellipsoidal_height_rad)
     end
 
     defp ellipsoidal_result({:ok, value_m}), do: {:ok, EllipsoidalHeightM.new(value_m)}
@@ -322,6 +325,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     """
 
     alias Sidereon.NIF
+    alias Sidereon.NifCall
     alias Sidereon.Terrain.MmapTerrain.TerrainDatumError
 
     @enforce_keys [:handle]
@@ -340,7 +344,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       NIF.terrain_store_egm96_fifteen_minute_geoid_from_bytes(bytes)
       |> geoid_result()
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_egm96_fifteen_minute_geoid_from_bytes)
     end
 
     @doc """
@@ -355,7 +359,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       NIF.terrain_store_egm96_fifteen_minute_geoid_from_path(path)
       |> geoid_result()
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_egm96_fifteen_minute_geoid_from_path)
     end
 
     defp geoid_result({:ok, handle}) when is_reference(handle), do: {:ok, %__MODULE__{handle: handle}}
@@ -409,7 +413,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
 
   defmodule TerrainStoreError do
     @moduledoc """
-    Terrain store conversion, parse, and checksum error.
+    Terrain store conversion, parse, and checksum error. A `:tile` error keeps
+    its source path, original message, and complete nested `Sidereon.Terrain.tile_error/0`.
     """
 
     @enforce_keys [:kind]
@@ -425,11 +430,21 @@ defmodule Sidereon.Terrain.MmapTerrain do
       :expected_tile_id,
       :found_tile_id,
       :expected,
-      :found
+      :found,
+      :field,
+      :datum,
+      :error
     ]
 
     @typedoc """
     Typed terrain store error.
+
+    `:tile_id_out_of_range` is an index record naming a tile id outside the
+    coordinate domain, and `:tile_bounds_mismatch` one whose bounds are not that
+    one-degree cell's edges (`field` names the bound). `:non_wgs84_tile` is a
+    DTED tile whose DSI names a horizontal datum other than WGS84 (`datum`),
+    refused by the converter because the store records no datum. `:tile`
+    retains the source path, original message, and nested tile error.
     """
     @type t :: %__MODULE__{
             kind:
@@ -440,7 +455,11 @@ defmodule Sidereon.Terrain.MmapTerrain do
               | :duplicate_tile
               | :tile_id_mismatch
               | :checksum
-              | :attested_checksum_mismatch,
+              | :attested_checksum_mismatch
+              | :tile_id_out_of_range
+              | :tile_bounds_mismatch
+              | :non_wgs84_tile
+              | :tile,
             path: String.t() | nil,
             message: String.t() | nil,
             reason: String.t() | nil,
@@ -451,7 +470,10 @@ defmodule Sidereon.Terrain.MmapTerrain do
             expected_tile_id: {integer(), integer()} | nil,
             found_tile_id: {integer(), integer()} | nil,
             expected: non_neg_integer() | nil,
-            found: non_neg_integer() | nil
+            found: non_neg_integer() | nil,
+            field: String.t() | nil,
+            datum: Sidereon.Terrain.horizontal_datum() | nil,
+            error: Sidereon.Terrain.tile_error() | nil
           }
 
     @doc false
@@ -488,12 +510,33 @@ defmodule Sidereon.Terrain.MmapTerrain do
       %__MODULE__{kind: :attested_checksum_mismatch, expected: expected, found: found}
     end
 
+    def from_nif({:tile_id_out_of_range, lat_index, lon_index}) do
+      %__MODULE__{kind: :tile_id_out_of_range, lat_index: lat_index, lon_index: lon_index}
+    end
+
+    def from_nif({:tile_bounds_mismatch, lat_index, lon_index, field}) do
+      %__MODULE__{kind: :tile_bounds_mismatch, lat_index: lat_index, lon_index: lon_index, field: field}
+    end
+
+    def from_nif({:non_wgs84_tile, path, datum}), do: %__MODULE__{kind: :non_wgs84_tile, path: path, datum: datum}
+
+    def from_nif({:tile, path, message, error}) do
+      %__MODULE__{
+        kind: :tile,
+        path: path,
+        message: message,
+        error: Sidereon.Terrain.tile_error(error)
+      }
+    end
+
     def from_nif(other), do: other
   end
 
   defmodule TerrainDatumError do
     @moduledoc """
     Terrain vertical-datum conversion and optional geoid-grid loading error.
+    A `:geoid` reason is a `Sidereon.Geoid.GridError` with the core variant's
+    complete fields.
     """
 
     @enforce_keys [:kind]
@@ -506,14 +549,14 @@ defmodule Sidereon.Terrain.MmapTerrain do
             kind: :terrain | :geoid | :io | :missing_egm96_dac,
             path: String.t() | nil,
             message: String.t() | nil,
-            reason: String.t() | nil,
+            reason: String.t() | Sidereon.Terrain.lookup_error() | GridError.t() | nil,
             remediation: String.t() | nil
           }
 
     @doc false
     @spec from_nif(term()) :: t() | term()
-    def from_nif({:terrain, reason}), do: %__MODULE__{kind: :terrain, reason: reason}
-    def from_nif({:geoid, reason}), do: %__MODULE__{kind: :geoid, reason: reason}
+    def from_nif({:terrain, reason}), do: %__MODULE__{kind: :terrain, reason: Sidereon.Terrain.lookup_error(reason)}
+    def from_nif({:geoid, reason}), do: %__MODULE__{kind: :geoid, reason: GridError.from_nif(reason)}
     def from_nif({:io, path, message}), do: %__MODULE__{kind: :io, path: path, message: message}
 
     def from_nif({:missing_egm96_dac, path, remediation}) do
@@ -531,7 +574,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     NIF.terrain_store_dted_tree_to_mmap_store(root)
     |> store_binary_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_dted_tree_to_mmap_store)
   end
 
   @doc """
@@ -545,7 +588,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_write_dted_tree_to_mmap_store)
   end
 
   @doc """
@@ -563,7 +606,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> store_binary_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_dted_tile_list_to_mmap_store)
   end
 
   def dted_tile_list_to_mmap_store(_entries), do: {:error, :invalid_tile_list}
@@ -582,7 +625,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_write_dted_tile_list_to_mmap_store)
   end
 
   def write_dted_tile_list_to_mmap_store(entries, _out_path) when is_list(entries), do: {:error, :invalid_output_path}
@@ -603,7 +646,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     NIF.terrain_store_mmap_from_bytes(bytes)
     |> store_handle_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_mmap_from_bytes)
   end
 
   @doc """
@@ -614,7 +657,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     NIF.terrain_store_mmap_from_vec(bytes)
     |> store_handle_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_mmap_from_vec)
   end
 
   @doc """
@@ -631,7 +674,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     NIF.terrain_store_mmap_from_path(path)
     |> store_handle_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_mmap_from_path)
   end
 
   @doc """
@@ -649,7 +692,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
     NIF.terrain_store_mmap_from_path_attested(path, claimed_checksum64)
     |> store_handle_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_mmap_from_path_attested)
   end
 
   def from_path_attested(path, claimed_checksum64) when is_binary(path) do
@@ -658,6 +701,14 @@ defmodule Sidereon.Terrain.MmapTerrain do
 
   @doc """
   Return orthometric terrain height at `(longitude_deg, latitude_deg)`.
+
+  A lookup that gives nonzero weight to a posting the store marks as null
+  (`-32767`, stored for the DTED null value) returns
+  `{:error, {:unknown_terrain_elevation, fields}}`, and a store without the
+  cell returns `{:error, {:missing_terrain_tile, fields}}`; see
+  `t:Sidereon.Terrain.lookup_error/0`. Any other refusal is the core's text.
+  Null postings in stores built before this release, which lookups formerly
+  returned as a -32767 m height, now read as unknown elevations.
   """
   @spec height_m(t(), number(), number(), keyword()) :: {:ok, OrthometricHeightM.t()} | {:error, term()}
   def height_m(%__MODULE__{} = terrain, longitude_deg, latitude_deg, opts \\ []) do
@@ -674,7 +725,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> orthometric_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_height_m_with_options)
   end
 
   @doc """
@@ -702,7 +753,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> orthometric_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_orthometric_height_m_with_options)
   end
 
   @doc """
@@ -726,7 +777,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> Enum.map(&orthometric_result/1)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_orthometric_height_batch)
   end
 
   @doc """
@@ -754,7 +805,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> ellipsoidal_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_ellipsoidal_height_m_with_options)
   end
 
   @doc """
@@ -784,7 +835,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       |> ellipsoidal_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_ellipsoidal_height_m_with_model)
   end
 
   @doc """
@@ -833,7 +884,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :terrain_store_mmap_verify)
   end
 
   @doc """
@@ -894,7 +945,7 @@ defmodule Sidereon.Terrain.MmapTerrain do
   defp store_handle_result(other), do: {:error, other}
 
   defp orthometric_result({:ok, value_m}), do: {:ok, OrthometricHeightM.new(value_m)}
-  defp orthometric_result({:error, reason}), do: {:error, reason}
+  defp orthometric_result({:error, reason}), do: {:error, Sidereon.Terrain.lookup_error(reason)}
   defp orthometric_result(other), do: {:error, other}
 
   defp ellipsoidal_result({:ok, value_m}), do: {:ok, EllipsoidalHeightM.new(value_m)}
