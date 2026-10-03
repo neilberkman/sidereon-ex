@@ -442,27 +442,62 @@ defmodule Sidereon.GNSS.RTCMTest do
     end
 
     test "round-trips a 1019 GPS ephemeris built from scratch" do
-      assert_roundtrip(:gps_ephemeris, gps_ephemeris_fields())
+      assert_lenient_roundtrip(:gps_ephemeris, gps_ephemeris_fields())
     end
 
     test "round-trips a 1020 GLONASS ephemeris built from scratch" do
-      assert_roundtrip(:glonass_ephemeris, glonass_ephemeris_fields())
+      assert_lenient_roundtrip(:glonass_ephemeris, glonass_ephemeris_fields())
+    end
+
+    test "round-trips a 1041 NavIC ephemeris built from scratch" do
+      assert_lenient_roundtrip(:navic_ephemeris, navic_ephemeris_fields())
+    end
+
+    test "round-trips every GLONASS negative-zero bit through lenient policy encoding" do
+      fields =
+        glonass_ephemeris_fields()
+        |> Map.merge(%{
+          xn_dot: 0,
+          xn: 0,
+          xn_dot_dot: 0,
+          yn_dot: 0,
+          yn: 0,
+          yn_dot_dot: 0,
+          zn_dot: 0,
+          zn: 0,
+          zn_dot_dot: 0,
+          gamma_n: 0,
+          tau_n: 0,
+          delta_tau_n: 0,
+          tau_c: 0,
+          m_tau_gps: 0,
+          negative_zero: 0x3FFF,
+          trailing_bits: []
+        })
+
+      assert assert_roundtrip(:glonass_ephemeris, fields) == fields
+      assert {:ok, body, []} = RTCM.encode_with_policy({:glonass_ephemeris, fields}, :lenient)
+
+      assert {:ok, {:glonass_ephemeris, decoded}, []} =
+               RTCM.decode_message_with_policy(body, :lenient)
+
+      assert decoded == fields
     end
 
     test "round-trips a 1042 BeiDou ephemeris built from scratch" do
-      assert_roundtrip(:beidou_ephemeris, beidou_ephemeris_fields())
+      assert_lenient_roundtrip(:beidou_ephemeris, beidou_ephemeris_fields())
     end
 
     test "round-trips a 1044 QZSS ephemeris built from scratch" do
-      assert_roundtrip(:qzss_ephemeris, qzss_ephemeris_fields())
+      assert_lenient_roundtrip(:qzss_ephemeris, qzss_ephemeris_fields())
     end
 
     test "round-trips a 1045 Galileo F/NAV ephemeris built from scratch" do
-      assert_roundtrip(:galileo_fnav_ephemeris, galileo_fnav_ephemeris_fields())
+      assert_lenient_roundtrip(:galileo_fnav_ephemeris, galileo_fnav_ephemeris_fields())
     end
 
     test "round-trips a 1046 Galileo I/NAV ephemeris built from scratch" do
-      assert_roundtrip(:galileo_inav_ephemeris, galileo_inav_ephemeris_fields())
+      assert_lenient_roundtrip(:galileo_inav_ephemeris, galileo_inav_ephemeris_fields())
     end
 
     test "decodes a real 1046 Galileo I/NAV frame and re-encodes it exactly" do
@@ -578,8 +613,11 @@ defmodule Sidereon.GNSS.RTCMTest do
                RTCM.encode({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 256}})
 
       # The widest value each field holds still encodes.
-      assert {:ok, _body} = RTCM.encode({:qzss_ephemeris, %{qzss_ephemeris_fields() | satellite_id: 15}})
-      assert {:ok, _body} = RTCM.encode({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 63}})
+      assert {:ok, _body} =
+               RTCM.encode({:qzss_ephemeris, %{qzss_ephemeris_fields() | satellite_id: 15, trailing_bits: []}})
+
+      assert {:ok, _body} =
+               RTCM.encode({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 63, trailing_bits: []}})
     end
   end
 
@@ -601,6 +639,41 @@ defmodule Sidereon.GNSS.RTCMTest do
     end)
 
     decoded
+  end
+
+  defp assert_lenient_roundtrip(type, fields) do
+    message_number = ephemeris_message_number(type)
+    trailing_bits = Map.fetch!(fields, :trailing_bits)
+
+    assert {:error, {:departure, {:trailing_bits, ^message_number, ^trailing_bits}}} =
+             RTCM.encode({type, fields})
+
+    assert {:ok, body, [{:trailing_bits, ^message_number, ^trailing_bits}]} =
+             RTCM.encode_with_policy({type, fields}, :lenient)
+
+    assert is_binary(body)
+
+    assert {:ok, {^type, decoded}, [{:trailing_bits, ^message_number, ^trailing_bits}]} =
+             RTCM.decode_message_with_policy(body, :lenient)
+
+    Enum.each(fields, fn {key, value} ->
+      assert Map.fetch!(decoded, key) == value, "field #{key} did not round-trip"
+    end)
+
+    decoded
+  end
+
+  defp ephemeris_message_number(:gps_ephemeris), do: 1019
+  defp ephemeris_message_number(:glonass_ephemeris), do: 1020
+  defp ephemeris_message_number(:navic_ephemeris), do: 1041
+  defp ephemeris_message_number(:beidou_ephemeris), do: 1042
+  defp ephemeris_message_number(:qzss_ephemeris), do: 1044
+  defp ephemeris_message_number(:galileo_fnav_ephemeris), do: 1045
+  defp ephemeris_message_number(:galileo_inav_ephemeris), do: 1046
+
+  defp ephemeris_trailing_bits(length) do
+    [true, false, true, true, false, false, true, false, true, false, true, true, false, true]
+    |> Enum.take(length)
   end
 
   defp gps_ephemeris_fields do
@@ -634,7 +707,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       t_gd: 1,
       sv_health: 1,
       l2_p_data_flag: false,
-      fit_interval: false
+      fit_interval: false,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 
@@ -649,7 +723,7 @@ defmodule Sidereon.GNSS.RTCMTest do
       b_n_msb: false,
       p2: false,
       t_b: 1,
-      xn_dot: 1,
+      xn_dot: 0,
       xn: 1,
       xn_dot_dot: 1,
       yn_dot: 1,
@@ -675,7 +749,45 @@ defmodule Sidereon.GNSS.RTCMTest do
       m_n4: 1,
       m_tau_gps: 1,
       m_l_n_fifth: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8),
+      negative_zero: 1
+    }
+  end
+
+  defp navic_ephemeris_fields do
+    %{
+      satellite_id: 9,
+      week_number: 389,
+      a_f0: -1_234_567,
+      a_f1: -12_345,
+      a_f2: -3,
+      ura: 2,
+      t_oc: 10_821,
+      t_gd: -5,
+      delta_n: 1_234_567,
+      iodec: 161,
+      reserved: 0x2A5,
+      l5_flag: true,
+      s_flag: false,
+      c_uc: -16_000,
+      c_us: 15_000,
+      c_ic: -1,
+      c_is: 2,
+      c_rc: 16_383,
+      c_rs: -16_384,
+      idot: -8_000,
+      m0: -2_000_000_000,
+      t_oe: 10_821,
+      eccentricity: 3_000_000,
+      sqrt_a: 3_404_000_000,
+      omega0: 1_500_000_000,
+      omega: -1_000_000_000,
+      omega_dot: -2_000_000,
+      i0: 400_000_000,
+      spare_df544: 3,
+      spare_df545: 1,
+      trailing_bits: ephemeris_trailing_bits(14)
     }
   end
 
@@ -708,7 +820,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       omega_dot: -100,
       t_gd1: 5,
       t_gd2: 7,
-      sv_health: false
+      sv_health: false,
+      trailing_bits: ephemeris_trailing_bits(9)
     }
   end
 
@@ -742,7 +855,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       sv_health: 1,
       t_gd: 1,
       iodc: 1,
-      fit_interval: false
+      fit_interval: false,
+      trailing_bits: ephemeris_trailing_bits(11)
     }
   end
 
@@ -775,7 +889,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       bgd_e5a_e1: 5,
       e5a_signal_health: 0,
       e5a_data_validity: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 
@@ -811,7 +926,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       e5b_data_validity: false,
       e1b_signal_health: 0,
       e1b_data_validity: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 

@@ -5635,6 +5635,12 @@ defmodule Sidereon.GNSS.Data do
   defp normalize_space_weather_product(value), do: normalize_code(value)
 
   defp core({:ok, value}), do: {:ok, value}
+
+  # Keep the established high-level Data API stable while the Native boundary
+  # exposes the complete typed catalog detail for callers which need it.
+  defp core({:error, {:unsupported_product, {:catalog_error, %{message: message}}}}) when is_binary(message),
+    do: {:error, {:unsupported_product, message}}
+
   defp core({:error, reason}), do: {:error, reason}
   defp core(value), do: {:ok, value}
 

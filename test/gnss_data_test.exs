@@ -275,7 +275,9 @@ defmodule Sidereon.GNSS.DataTest do
         else: {:ok, 200, :zlib.gzip(wrong_span)}
     end
 
-    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
+    assert {:error,
+            {:product_validation_failed,
+             {:exact_sp3_validation_failed, %{kind: "span_mismatch", parsed: "289", half_open: "576", inclusive: "577"}}}} =
              Data.fetch_merged_sp3(~D[2021-05-15], [:gfz_ult],
                issue: "0000",
                cache_dir: root,

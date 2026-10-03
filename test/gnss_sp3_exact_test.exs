@@ -47,10 +47,14 @@ defmodule Sidereon.GNSS.SP3ExactTest do
     assert is_float(SP3.declared_start_j2000_seconds(product))
     assert SP3.declared_start_j2000_s(product) == SP3.declared_start_j2000_seconds(product)
 
-    assert {:error, {:exact_sp3_validation_failed, message}} =
+    assert {:error, {:exact_sp3_validation_failed, detail}} =
              SP3.validate_exact(product, request!())
 
-    assert message =~ "header declares 287, parsed 288"
+    assert detail == %{
+             kind: "declared_epoch_count_mismatch",
+             declared: "287",
+             parsed: "288"
+           }
   end
 
   test "rejects shorter, longer, and irregular parsed grids" do
@@ -59,36 +63,46 @@ defmodule Sidereon.GNSS.SP3ExactTest do
     for count <- [287, 290] do
       bytes = ExactSp3Fixture.build(@date, count: count)
 
-      assert {:error, {:exact_sp3_validation_failed, message}} =
+      assert {:error, {:exact_sp3_validation_failed, detail}} =
                SP3.parse_exact(bytes, request)
 
-      assert message =~ "span mismatch"
+      assert detail == %{
+               kind: "span_mismatch",
+               parsed: Integer.to_string(count),
+               half_open: "288",
+               inclusive: "289"
+             }
     end
 
     offsets = ExactSp3Fixture.regular_offsets(288, 300) |> List.replace_at(100, 30_001)
     irregular = ExactSp3Fixture.build(@date, offsets_s: offsets, count: 288)
 
-    assert {:error, {:exact_sp3_validation_failed, message}} =
+    assert {:error, {:exact_sp3_validation_failed, detail}} =
              SP3.parse_exact(irregular, request)
 
-    assert message =~ "irregular"
+    assert detail == %{
+             kind: "irregular_epoch_grid",
+             epoch_index: "100",
+             requested_s: "300",
+             actual_s: "301"
+           }
   end
 
   test "rejects zero, non-finite, and mismatched header cadence" do
     request = request!()
 
-    for {cadence, expected} <- [
-          {"0.00000000", "positive"},
-          {"NaN", "finite"},
-          {"inf", "finite"},
-          {"900.00000000", "cadence mismatch"}
+    for {cadence, expected_kind} <- [
+          {"0.00000000", "non_positive_header_cadence"},
+          {"NaN", "non_finite_header_cadence"},
+          {"inf", "non_finite_header_cadence"},
+          {"900.00000000", "cadence_mismatch"}
         ] do
       bytes = ExactSp3Fixture.build(@date, header_cadence: cadence)
 
-      assert {:error, {:exact_sp3_validation_failed, message}} =
+      assert {:error, {:exact_sp3_validation_failed, detail}} =
                SP3.parse_exact(bytes, request)
 
-      assert message =~ expected
+      assert detail.kind == expected_kind
     end
   end
 
@@ -103,10 +117,10 @@ defmodule Sidereon.GNSS.SP3ExactTest do
     {:ok, required} = SP3.ExactRequest.new(@date, "01D", "05M", expected_agency: "IGS")
     wrong = ExactSp3Fixture.build(@date, agency: "TST")
 
-    assert {:error, {:exact_sp3_validation_failed, message}} =
+    assert {:error, {:exact_sp3_validation_failed, detail}} =
              SP3.parse_exact(wrong, required)
 
-    assert message =~ "agency mismatch"
+    assert detail == %{kind: "agency_mismatch", expected: "IGS", actual: "TST"}
 
     matching = ExactSp3Fixture.build(@date, agency: "IGS")
     assert {:ok, _product, :half_open} = SP3.parse_exact(matching, required)
@@ -183,14 +197,8 @@ defmodule Sidereon.GNSS.SP3ExactTest do
 
   defp terminal_result_class({:ok, %SP3{}, coverage}) when coverage in [:half_open, :inclusive], do: "accept"
 
-  defp terminal_result_class({:error, {:exact_sp3_validation_failed, message}}) do
-    cond do
-      String.contains?(message, "malformed EOF record") -> "malformed_eof_record"
-      String.contains?(message, "missing its EOF record") -> "missing_eof"
-      String.contains?(message, "nonblank records after EOF") -> "trailing_content_after_eof"
-      true -> flunk("terminal corpus reached unrelated exact error: #{inspect(message)}")
-    end
-  end
+  defp terminal_result_class({:error, {:exact_sp3_validation_failed, %{kind: kind}}})
+       when kind in ["malformed_eof_record", "missing_eof", "trailing_content_after_eof"], do: kind
 
   defp terminal_result_class(other), do: flunk("terminal corpus returned an unexpected result: #{inspect(other)}")
 end

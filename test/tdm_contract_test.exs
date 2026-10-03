@@ -184,7 +184,15 @@ defmodule Sidereon.CCSDS.TDMContractTest do
 
       expected =
         {:error,
-         {:conflicting_keyword, %{line: nil, keyword: "TIME_SYSTEM", section: :metadata, first: "UTC", second: "GPS"}}}
+         {:conflicting_keyword,
+          %{
+            line: nil,
+            keyword: "TIME_SYSTEM",
+            section: :metadata,
+            first: "UTC",
+            second: "GPS",
+            message: ~s(TDM metadata keyword TIME_SYSTEM carries both "UTC" and "GPS")
+          }}}
 
       assert Metadata.from_raw(conflicting, []) == expected
       assert Metadata.from_raw_with_policy(conflicting, [], WritePolicy.lenient()) == expected

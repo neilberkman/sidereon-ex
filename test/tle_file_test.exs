@@ -3,6 +3,7 @@ defmodule Sidereon.TLEFileTest do
 
   alias Sidereon.Elements
   alias Sidereon.Format.TLE
+  alias Sidereon.SGP4
 
   @iss_l1 "1 25544U 98067A   18184.80969102  .00001614  00000-0  31745-4 0  9993"
   @iss_l2 "2 25544  51.6414 295.8524 0003435 262.6267 204.2868 15.54005638121106"
@@ -133,6 +134,22 @@ defmodule Sidereon.TLEFileTest do
 
       assert {:ok, %Elements{catalog_number: "25544"}, [{"line 1", {:mismatch, 4}, 3}]} =
                TLE.parse_with_warnings(bad_l1, @iss_l2, policy: :lenient)
+    end
+
+    test "a leniently parsed pair propagates like the valid-line reference" do
+      bad_l1 = String.slice(@iss_l1, 0, 68) <> "4"
+
+      assert {:ok, lenient, [{"line 1", {:mismatch, 4}, 3}]} =
+               TLE.parse_with_warnings(bad_l1, @iss_l2, policy: :lenient)
+
+      assert {:ok, reference, []} = TLE.parse_with_warnings(@iss_l1, @iss_l2)
+
+      datetime = ~U[2018-07-04 00:00:00Z]
+      assert {:ok, lenient_state} = SGP4.propagate(lenient, datetime)
+      assert {:ok, reference_state} = SGP4.propagate(reference, datetime)
+
+      assert lenient_state.position == reference_state.position
+      assert lenient_state.velocity == reference_state.velocity
     end
 
     test "a line without column 69 is read and reported under both policies" do

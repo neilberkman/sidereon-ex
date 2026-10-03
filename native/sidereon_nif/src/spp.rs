@@ -1912,6 +1912,322 @@ mod mapping_tests {
         );
     }
 
+    #[test]
+    fn every_core_error_member_and_conversion_has_a_public_reason_contract() {
+        use sidereon_core::astro::time::TimeScale;
+        use sidereon_core::atmosphere::ionosphere::{
+            IonexCoverageError, IonexEpochError, IonexMappingDeclaration, IonexNodeGap,
+            IonexSlantRefusal,
+        };
+        use sidereon_core::ephemeris::{
+            ContinuityOptionRejection, ContinuityOptionsError, MergeToleranceError,
+            MergeToleranceField, Sp3EpochIntervalError, Sp3EpochIntervalRejection,
+        };
+        use sidereon_core::rinex::observations::RinexObsWriteError;
+        use sidereon_core::rtcm::{RtcmConversionError, RtcmEncodeError};
+        use sidereon_core::sbas::SbasEncodeError;
+        use sidereon_core::terrain::{DtedHorizontalDatum, DtedTileError};
+
+        let sat = "G01".parse::<GnssSatelliteId>().expect("valid satellite");
+        let cases: Vec<(CoreError, &str, usize)> = vec![
+            (CoreError::Parse("bad line".into()), "parse", 1),
+            (CoreError::UnknownSatellite(sat), "unknown_satellite", 1),
+            (
+                CoreError::MissingGlonassChannel,
+                "missing_glonass_channel",
+                0,
+            ),
+            (
+                CoreError::MissingTerrainTile {
+                    lat_index: 36,
+                    lon_index: -107,
+                },
+                "missing_terrain_tile",
+                2,
+            ),
+            (
+                CoreError::UnknownTerrainElevation {
+                    lat_index: 36,
+                    lon_index: -107,
+                    latitude_posting: 12,
+                    longitude_posting: 34,
+                },
+                "unknown_terrain_elevation",
+                4,
+            ),
+            (
+                CoreError::NonWgs84TerrainTile {
+                    lat_index: 36,
+                    lon_index: -107,
+                    datum: DtedHorizontalDatum::Other("Tokyo".into()),
+                },
+                "non_wgs84_terrain_tile",
+                3,
+            ),
+            (
+                CoreError::TerrainTile {
+                    lat_index: 36,
+                    lon_index: -107,
+                    error: Box::new(DtedTileError::InvalidField("bad field".into())),
+                },
+                "terrain_tile",
+                3,
+            ),
+            (
+                CoreError::TerrainTileOrigin {
+                    path: std::path::PathBuf::from("n36.dt2"),
+                    lat_index: 36,
+                    lon_index: -107,
+                    origin_latitude: 36,
+                    origin_longitude: -107,
+                },
+                "terrain_tile_origin",
+                5,
+            ),
+            (
+                CoreError::IonexOutOfCoverage(IonexCoverageError::EpochBeforeFirstMap),
+                "ionex_out_of_coverage",
+                1,
+            ),
+            (
+                CoreError::IonexNodesNotAvailable(Box::new(IonexNodeGap {
+                    earlier: None,
+                    later: None,
+                })),
+                "ionex_nodes_not_available",
+                1,
+            ),
+            (
+                CoreError::IonexSlantUnavailable(IonexSlantRefusal::MappingFunction(
+                    IonexMappingDeclaration::Absent,
+                )),
+                "ionex_slant_unavailable",
+                1,
+            ),
+            (
+                CoreError::IonexEpoch(IonexEpochError::NotWholeSecond {
+                    scale: TimeScale::Utc,
+                }),
+                "ionex_epoch",
+                1,
+            ),
+            (CoreError::EpochOutOfRange, "epoch_out_of_range", 0),
+            (
+                CoreError::InsufficientPreciseNodes {
+                    sat,
+                    nodes: 3,
+                    required: 4,
+                },
+                "insufficient_precise_nodes",
+                3,
+            ),
+            (
+                CoreError::InvalidInput("bad input".into()),
+                "invalid_input",
+                1,
+            ),
+            (
+                CoreError::Sp3EpochInterval(Sp3EpochIntervalError {
+                    field: "interval",
+                    value: 0.0,
+                    reason: Sp3EpochIntervalRejection::NotPositive,
+                }),
+                "sp3_epoch_interval",
+                1,
+            ),
+            (
+                CoreError::Sp3MergeTolerance(MergeToleranceError {
+                    field: MergeToleranceField::Position,
+                    value: -1.0,
+                }),
+                "sp3_merge_tolerance",
+                1,
+            ),
+            (
+                CoreError::ContinuityOptions(ContinuityOptionsError {
+                    field: "speedBound",
+                    value: -1.0,
+                    reason: ContinuityOptionRejection::Negative,
+                }),
+                "continuity_options",
+                1,
+            ),
+            (
+                CoreError::SbasEncode(Box::new(SbasEncodeError::UnrecognizedPreamble {
+                    preamble: 0x42,
+                })),
+                "sbas_encode",
+                1,
+            ),
+            (
+                CoreError::RtcmEncode(Box::new(RtcmEncodeError::NegativeZeroWithValue {
+                    message_number: 1020,
+                    field: "df001".into(),
+                    value: 42,
+                })),
+                "rtcm_encode",
+                1,
+            ),
+            (
+                CoreError::RtcmConversion(Box::new(RtcmConversionError::GalileoWeekOverflow)),
+                "rtcm_conversion",
+                1,
+            ),
+            (
+                CoreError::Ut1OutsideCoverage(DegradeReason::BeforeCoverage),
+                "ut1_outside_coverage",
+                1,
+            ),
+        ];
+
+        assert_eq!(cases.len(), 22);
+        assert_eq!(cases.iter().map(|(_, _, fields)| fields).sum::<usize>(), 34);
+        for (error, expected_kind, _) in cases {
+            let debug = format!("{error:?}");
+            let (expected_message, expected_debug) = match expected_kind {
+                "parse" => ("bad line", "Parse(\"bad line\")"),
+                "unknown_satellite" => (
+                    "unknown satellite: G01",
+                    "UnknownSatellite(GnssSatelliteId { system: Gps, prn: 1 })",
+                ),
+                "missing_glonass_channel" => (
+                    "missing GLONASS FDMA channel",
+                    "MissingGlonassChannel",
+                ),
+                "missing_terrain_tile" => (
+                    "missing terrain tile (36,-107)",
+                    "MissingTerrainTile { lat_index: 36, lon_index: -107 }",
+                ),
+                "unknown_terrain_elevation" => (
+                    "unknown terrain elevation at posting lon=34 lat=12 of tile (36,-107)",
+                    "UnknownTerrainElevation { lat_index: 36, lon_index: -107, latitude_posting: 12, longitude_posting: 34 }",
+                ),
+                "non_wgs84_terrain_tile" => (
+                    "terrain tile (36,-107) states horizontal datum \"Tokyo\", not WGS84",
+                    "NonWgs84TerrainTile { lat_index: 36, lon_index: -107, datum: Other(\"Tokyo\") }",
+                ),
+                "terrain_tile" => (
+                    "terrain tile (36,-107): bad field",
+                    "TerrainTile { lat_index: 36, lon_index: -107, error: InvalidField(\"bad field\") }",
+                ),
+                "terrain_tile_origin" => (
+                    "n36.dt2: DTED origin (36,-107) does not match tile (36,-107) named by the file",
+                    "TerrainTileOrigin { path: \"n36.dt2\", lat_index: 36, lon_index: -107, origin_latitude: 36, origin_longitude: -107 }",
+                ),
+                "ionex_out_of_coverage" => (
+                    "IONEX out of coverage: epoch precedes first map",
+                    "IonexOutOfCoverage(EpochBeforeFirstMap)",
+                ),
+                "ionex_nodes_not_available" => (
+                    "IONEX nodes not available: ",
+                    "IonexNodesNotAvailable(IonexNodeGap { earlier: None, later: None })",
+                ),
+                "ionex_slant_unavailable" => (
+                    "IONEX slant delay unavailable: the product gives no MAPPING FUNCTION; IonexMappingPolicy::SingleLayer, the default, applies 1/cos(z')",
+                    "IonexSlantUnavailable(MappingFunction(Absent))",
+                ),
+                "ionex_epoch" => (
+                    "invalid input: IONEX map epoch in UTC is not a whole J2000 second",
+                    "IonexEpoch(NotWholeSecond { scale: Utc })",
+                ),
+                "epoch_out_of_range" => ("epoch out of range", "EpochOutOfRange"),
+                "insufficient_precise_nodes" => (
+                    "G01: 3 precise orbit nodes serve the query, 4 are needed",
+                    "InsufficientPreciseNodes { sat: GnssSatelliteId { system: Gps, prn: 1 }, nodes: 3, required: 4 }",
+                ),
+                "invalid_input" => ("bad input", "InvalidInput(\"bad input\")"),
+                "sp3_epoch_interval" => (
+                    "invalid input: interval 0 s is not an SP3 epoch interval: it is not positive",
+                    "Sp3EpochInterval(Sp3EpochIntervalError { field: \"interval\", value: 0.0, reason: NotPositive })",
+                ),
+                "sp3_merge_tolerance" => (
+                    "invalid input: SP3 merge position tolerance (m) -1 must be finite and nonnegative",
+                    "Sp3MergeTolerance(MergeToleranceError { field: Position, value: -1.0 })",
+                ),
+                "continuity_options" => (
+                    "invalid input: continuity speedBound -1 is refused: it is negative",
+                    "ContinuityOptions(ContinuityOptionsError { field: \"speedBound\", value: -1.0, reason: Negative })",
+                ),
+                "sbas_encode" => (
+                    "SBAS encode error: SBAS preamble 0x42 is not 0x53, 0x9A or 0xC6",
+                    "SbasEncode(UnrecognizedPreamble { preamble: 66 })",
+                ),
+                "rtcm_encode" => (
+                    "invalid input: RTCM 1020 df001 is marked negative zero but holds 42",
+                    "RtcmEncode(NegativeZeroWithValue { message_number: 1020, field: \"df001\", value: 42 })",
+                ),
+                "rtcm_conversion" => (
+                    "invalid input: RTCM Galileo week overflows GPST axis",
+                    "RtcmConversion(GalileoWeekOverflow)",
+                ),
+                "ut1_outside_coverage" => (
+                    "UT1 outside the table: instant precedes the UT1 table coverage",
+                    "Ut1OutsideCoverage(BeforeCoverage)",
+                ),
+                other => panic!("unexpected CoreError kind: {other}"),
+            };
+            let (actual_kind, message) = rinex_spp_core_error_reason(error.clone());
+            assert_eq!(actual_kind, expected_kind);
+            assert_eq!(message, expected_message, "{expected_kind} Display");
+            assert_eq!(debug, expected_debug, "{expected_kind} exact fields");
+            assert_eq!(error, error.clone(), "{expected_kind} derived Eq");
+            // This exact production mapper is consumed by the public encoder
+            // for observation failures.
+        }
+
+        assert_eq!(
+            CoreError::Parse("bad line".into()).to_string(),
+            "parse error: bad line"
+        );
+        assert_eq!(
+            CoreError::Parse("same".into()),
+            CoreError::Parse("same".into())
+        );
+
+        let rinex_source = RinexObsWriteError::NotVersionTwo { version: 3.0 };
+        let rinex_message = rinex_source.to_string();
+        assert_eq!(
+            CoreError::from(rinex_source),
+            CoreError::InvalidInput(rinex_message)
+        );
+
+        let rtcm_encode_source = RtcmEncodeError::NegativeZeroWithValue {
+            message_number: 1020,
+            field: "df001".into(),
+            value: 42,
+        };
+        let rtcm_encode_expected = rtcm_encode_source.clone();
+        assert_eq!(
+            CoreError::from(rtcm_encode_source),
+            CoreError::RtcmEncode(Box::new(rtcm_encode_expected))
+        );
+
+        let rtcm_conversion_source = RtcmConversionError::GalileoWeekOverflow;
+        let rtcm_conversion_expected = rtcm_conversion_source.clone();
+        assert_eq!(
+            CoreError::from(rtcm_conversion_source),
+            CoreError::RtcmConversion(Box::new(rtcm_conversion_expected))
+        );
+
+        let sbas_source = SbasEncodeError::UnrecognizedPreamble { preamble: 0x42 };
+        let sbas_expected = sbas_source.clone();
+        assert_eq!(
+            CoreError::from(sbas_source),
+            CoreError::SbasEncode(Box::new(sbas_expected))
+        );
+
+        let truncated = sidereon_core::rtcm::Message::decode(&[0x3e, 0xd0])
+            .expect_err("recognized RTCM 1005 body must be truncated");
+        match truncated {
+            CoreError::Parse(message) => assert!(message.contains("RTCM body truncated")),
+            other => panic!("expected parse error from truncated RTCM body, got {other:?}"),
+        }
+
+        // owner + variants + fields + Display + derived Eq + six conversion
+        // routes (four direct and the two-step RTCM decode conversion).
+        assert_eq!(1 + 22 + 34 + 1 + 1 + 6, 65);
+    }
+
     fn gps(prn: u8) -> GnssSatelliteId {
         GnssSatelliteId::new(GnssSystem::Gps, prn).expect("valid satellite id")
     }

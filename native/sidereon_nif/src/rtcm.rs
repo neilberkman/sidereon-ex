@@ -505,6 +505,276 @@ fn rtcm_encode_error_fields(error: &sidereon_core::rtcm::RtcmEncodeError) -> Rtc
     fields
 }
 
+#[cfg(test)]
+mod rtcm_encode_error_contract_tests {
+    use super::rtcm_encode_error_fields;
+    use sidereon_core::rtcm::{
+        MsmKind, MsmMaskProblem, MsmOptionalField, MsmOptionalProblem, RtcmDeparture,
+        RtcmEncodeError as Encode, RtcmFieldEncoding, RtcmRecordKind, SsrKind,
+    };
+
+    #[test]
+    fn every_rtcm_encode_variant_and_field_has_the_documented_elixir_term() {
+        let mut count = 0;
+        macro_rules! check {
+            ($error:expr, $variant:literal $(, $field:ident => $expected:expr)* $(,)?) => {{
+                let actual = rtcm_encode_error_fields(&$error);
+                assert_eq!(actual.variant, $variant);
+                $(assert_eq!(actual.$field, $expected, "{}", stringify!($field));)*
+                count += 1;
+            }};
+        }
+
+        check!(
+            Encode::FieldOutOfRange {
+                message_number: 1005,
+                field: "ecef_x".into(),
+                value: -2,
+                width: 38,
+                encoding: RtcmFieldEncoding::TwosComplement,
+            },
+            "field_out_of_range",
+            message_number => Some(1005),
+            field => Some("ecef_x".into()),
+            value => Some("-2".into()),
+            width => Some(38),
+            encoding => Some("twos_complement".into()),
+        );
+        check!(
+            Encode::NegativeZeroWithValue {
+                message_number: 1020,
+                field: "tau_n".into(),
+                value: 7,
+            },
+            "negative_zero_with_value",
+            message_number => Some(1020),
+            field => Some("tau_n".into()),
+            value => Some("7".into()),
+        );
+        check!(
+            Encode::NegativeZeroMask { message_number: 1020, mask: 9 },
+            "negative_zero_mask",
+            message_number => Some(1020),
+            value => Some("9".into()),
+        );
+        check!(
+            Encode::MessageNumber {
+                message_number: 999,
+                record: RtcmRecordKind::StationCoordinates,
+            },
+            "message_number",
+            message_number => Some(999),
+            record => Some("station_coordinates".into()),
+        );
+        check!(
+            Encode::FieldPresence {
+                message_number: 1005,
+                record: RtcmRecordKind::StationCoordinates,
+                field: "antenna_height",
+                carried: false,
+            },
+            "field_presence",
+            message_number => Some(1005),
+            record => Some("station_coordinates".into()),
+            field => Some("antenna_height".into()),
+            carried => Some(false),
+        );
+        check!(
+            Encode::SatelliteFieldPresence {
+                message_number: 1074,
+                record: RtcmRecordKind::Msm {
+                    system: sidereon_core::GnssSystem::Gps,
+                    kind: MsmKind::Msm4,
+                },
+                satellite: 7,
+                field: "extended_info",
+                carried: false,
+            },
+            "satellite_field_presence",
+            message_number => Some(1074),
+            record => Some("msm:G:4".into()),
+            satellite => Some(7),
+            field => Some("extended_info".into()),
+            carried => Some(false),
+        );
+        check!(
+            Encode::CountMismatch {
+                message_number: 1015,
+                field: "satellites",
+                expected: 2,
+                actual: 1,
+            },
+            "count_mismatch",
+            message_number => Some(1015),
+            field => Some("satellites".into()),
+            expected => Some(2),
+            actual => Some(1),
+        );
+        check!(
+            Encode::ValueOutOfRange {
+                message_number: 1005,
+                field: "itrf".into(),
+                value: 64,
+                minimum: 0,
+                maximum: 63,
+            },
+            "value_out_of_range",
+            message_number => Some(1005),
+            field => Some("itrf".into()),
+            value => Some("64".into()),
+            minimum => Some("0".into()),
+            maximum => Some("63".into()),
+        );
+        check!(
+            Encode::NonLatin1Character { field: "descriptor".into(), character: 'λ' },
+            "non_latin1_character",
+            field => Some("descriptor".into()),
+            value => Some("955".into()),
+        );
+        check!(
+            Encode::SatelliteIdOutOfRange {
+                message_number: 1019,
+                field: "GPS PRN",
+                value: 64,
+                width: 6,
+            },
+            "satellite_id_out_of_range",
+            message_number => Some(1019),
+            field => Some("GPS PRN".into()),
+            value => Some("64".into()),
+            width => Some(6),
+        );
+        check!(
+            Encode::SsrSatelliteIdOutOfRange { message_number: 1057, value: 64, width: 6 },
+            "ssr_satellite_id_out_of_range",
+            message_number => Some(1057),
+            satellite => Some(64),
+            width => Some(6),
+        );
+        check!(
+            Encode::SsrRecordsNotCarried {
+                message_number: 1058,
+                kind: SsrKind::Clock,
+                records: "orbit",
+                count: 2,
+            },
+            "ssr_records_not_carried",
+            message_number => Some(1058),
+            record => Some("clock".into()),
+            field => Some("orbit".into()),
+            count => Some(2),
+        );
+        check!(
+            Encode::SsrCombinedRecordCounts { message_number: 1060, orbit: 2, clock: 1 },
+            "ssr_combined_record_counts",
+            message_number => Some(1060),
+            orbit => Some(2),
+            clock => Some(1),
+        );
+        check!(
+            Encode::SsrCombinedSatelliteMismatch {
+                message_number: 1060,
+                index: 1,
+                orbit_satellite: 4,
+                clock_satellite: 5,
+            },
+            "ssr_combined_satellite_mismatch",
+            message_number => Some(1060),
+            index => Some(1),
+            orbit_satellite => Some(4),
+            clock_satellite => Some(5),
+        );
+        check!(
+            Encode::SsrHighRateClockTerms {
+                message_number: 1062,
+                satellite: 3,
+                c1: -4,
+                c2: 5,
+            },
+            "ssr_high_rate_clock_terms",
+            message_number => Some(1062),
+            satellite => Some(3),
+            c1 => Some(-4),
+            c2 => Some(5),
+        );
+        check!(
+            Encode::SsrSatelliteCount { message_number: 1057, declared: 2, records: 1 },
+            "ssr_satellite_count",
+            message_number => Some(1057),
+            expected => Some(2),
+            actual => Some(1),
+        );
+        check!(
+            Encode::MsmMask {
+                message_number: 1074,
+                problem: MsmMaskProblem::SignalNotInMask { signal: 3, mask: 5 },
+            },
+            "msm_mask",
+            message_number => Some(1074),
+            problem => Some("signal_not_in_mask".into()),
+            signal => Some(3),
+            mask => Some(5),
+        );
+        check!(
+            Encode::MsmOptional {
+                message_number: 1077,
+                kind: MsmKind::Msm7,
+                satellite: 4,
+                signal: Some(6),
+                field: MsmOptionalField::FinePhaseRangeRate,
+                problem: MsmOptionalProblem::InvalidValue(-16384),
+            },
+            "msm_optional",
+            message_number => Some(1077),
+            record => Some("msm7".into()),
+            satellite => Some(4),
+            signal => Some(6),
+            field => Some("fine_phase_range_rate".into()),
+            problem => Some("invalid_value".into()),
+            value => Some("-16384".into()),
+        );
+        check!(
+            Encode::TrailingZeroBits { message_number: 1006, bits: 3 },
+            "trailing_zero_bits",
+            message_number => Some(1006),
+            count => Some(3),
+        );
+        check!(
+            Encode::StrictDeparture(RtcmDeparture::FrameReservedBits { reserved: 5 }),
+            "strict_departure",
+            detail => Some("frame_reserved_bits".into()),
+            value => Some("5".into()),
+        );
+        check!(
+            Encode::UnsupportedBodyTooShort { message_number: 4090 },
+            "unsupported_body_too_short",
+            message_number => Some(4090),
+        );
+        check!(
+            Encode::UnsupportedBodyNumber { message_number: 4090, carried: 4089 },
+            "unsupported_body_number",
+            message_number => Some(4090),
+            actual => Some(4089),
+        );
+        check!(
+            Encode::UnsupportedDecodedNumber { message_number: 4090 },
+            "unsupported_decoded_number",
+            message_number => Some(4090),
+        );
+        check!(
+            Encode::FrameBodyTooLong { len: 1024 },
+            "frame_body_too_long",
+            count => Some(1024),
+        );
+        check!(
+            Encode::FrameReservedOutOfRange { value: 64 },
+            "frame_reserved_out_of_range",
+            value => Some("64".into()),
+        );
+        assert_eq!(count, 25);
+    }
+}
+
 fn rtcm_conversion_error_fields(error: &RtcmConversionError) -> RtcmConversionErrorFields {
     let mut fields = RtcmConversionErrorFields {
         variant: String::new(),

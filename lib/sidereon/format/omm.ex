@@ -135,6 +135,10 @@ defmodule Sidereon.Format.OMM do
   message does not state them, since table 4-3 requires them only for
   SGP/SGP4 element sets. `bterm_m2_kg` and `agom_m2_kg` are the SGP4-XP `BTERM`
   and `AGOM` (m²/kg); `gm_km3_s2` is `GM` (km³/s²).
+
+  `exact_sgp4_epoch` and `quantize_tle_derived_fields` retain the core OMM's
+  in-memory SGP4 conversion policy across the NIF boundary. They are not CCSDS
+  wire fields.
   """
   @type t :: %__MODULE__{
           ccsds_omm_vers: String.t() | nil,
@@ -171,7 +175,9 @@ defmodule Sidereon.Format.OMM do
           agom_m2_kg: float() | nil,
           covariance: Covariance.t() | nil,
           user_defined: [UserDefined.t()],
-          comments: Comments.t()
+          comments: Comments.t(),
+          exact_sgp4_epoch: {float(), float()} | nil,
+          quantize_tle_derived_fields: boolean()
         }
 
   defstruct ccsds_omm_vers: nil,
@@ -210,7 +216,9 @@ defmodule Sidereon.Format.OMM do
             user_defined: [],
             # A call rather than `%Comments{}`: a struct literal cannot name a
             # module nested in the one whose struct is being defined.
-            comments: struct(Comments)
+            comments: struct(Comments),
+            exact_sgp4_epoch: nil,
+            quantize_tle_derived_fields: true
 
   @typedoc """
   A record `parse_xml_all/1` or `parse_json_array/1` could not read: its
@@ -596,7 +604,9 @@ defmodule Sidereon.Format.OMM do
     :bterm_m2_kg,
     :mean_motion_dot,
     :mean_motion_ddot,
-    :agom_m2_kg
+    :agom_m2_kg,
+    :exact_sgp4_epoch,
+    :quantize_tle_derived_fields
   ]
 
   defp build_omm(fields) do
@@ -689,7 +699,10 @@ defmodule Sidereon.Format.OMM do
          {:ok, spacecraft} <- spacecraft_fields(omm.spacecraft),
          {:ok, covariance} <- covariance_fields(omm.covariance),
          {:ok, user_defined} <- user_defined_fields(omm.user_defined),
-         {:ok, comments} <- comments_fields(omm.comments) do
+         {:ok, comments} <- comments_fields(omm.comments),
+         {:ok, exact_sgp4_epoch} <- exact_sgp4_epoch_fields(omm.exact_sgp4_epoch),
+         {:ok, quantize_tle_derived_fields} <-
+           boolean_field(omm.quantize_tle_derived_fields, :quantize_tle_derived_fields) do
       {:ok,
        required_floats
        |> Map.merge(optional_floats)
@@ -700,7 +713,9 @@ defmodule Sidereon.Format.OMM do
          spacecraft: spacecraft,
          covariance: covariance,
          user_defined: user_defined,
-         comments: comments
+         comments: comments,
+         exact_sgp4_epoch: exact_sgp4_epoch,
+         quantize_tle_derived_fields: quantize_tle_derived_fields
        })}
     end
   end
@@ -768,6 +783,16 @@ defmodule Sidereon.Format.OMM do
   end
 
   defp comments_fields(value), do: {:error, {:invalid_field, :comments, value}}
+
+  defp exact_sgp4_epoch_fields(nil), do: {:ok, nil}
+
+  defp exact_sgp4_epoch_fields({whole, fraction}) when is_float(whole) and is_float(fraction),
+    do: {:ok, {whole, fraction}}
+
+  defp exact_sgp4_epoch_fields(value), do: {:error, {:invalid_field, :exact_sgp4_epoch, value}}
+
+  defp boolean_field(value, _field) when is_boolean(value), do: {:ok, value}
+  defp boolean_field(value, field), do: {:error, {:invalid_field, field, value}}
 
   defp string_list(values, field) when is_list(values) do
     if Enum.all?(values, &is_binary/1),

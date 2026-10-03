@@ -117,7 +117,35 @@ mod atoms {
         message,
         not_applicable,
         unavailable,
-        term
+        term,
+
+        // Exact-SP3 validation detail fields
+        kind,
+        debug,
+        actual,
+        issue,
+        token,
+        canonical,
+        agency,
+        expected,
+        line_number,
+        record_length,
+        record,
+        tokens,
+        first_index,
+        duplicate_index,
+        requested_s,
+        header_s,
+        parsed,
+        requested_j2000_s,
+        declared_j2000_s,
+        actual_j2000_s,
+        requested_tick,
+        declared_tick,
+        requested,
+        actual_s,
+        span_s,
+        cadence_s
     }
 }
 
@@ -350,38 +378,264 @@ fn exact_error<'a>(env: Env<'a>, error: impl std::fmt::Display) -> Term<'a> {
         .encode(env)
 }
 
-#[derive(Debug, rustler::NifMap)]
-struct DeclaredStartMismatchTerm {
-    kind: String,
-    requested_j2000_s: f64,
-    declared_j2000_s: f64,
-    requested_tick: String,
-    declared_tick: Option<String>,
+fn exact_float_value(value: f64) -> serde_json::Value {
+    serde_json::Number::from_f64(value)
+        .map(serde_json::Value::Number)
+        .unwrap_or_else(|| serde_json::Value::String(format!("{value:?}")))
 }
 
-fn exact_validation_error<'a>(env: Env<'a>, error: ExactSp3ValidationError) -> Term<'a> {
+/// Stable, JSON-safe public detail for every current exact-SP3 validation
+/// failure. Counts and ticks cross as decimal strings so values wider than a
+/// BEAM integer remain exact; diagnostic floats use strings except for the
+/// already-public declared-start pair.
+fn exact_validation_error_detail(error: &ExactSp3ValidationError) -> serde_json::Value {
+    use ExactSp3ValidationError as E;
+
     match error {
-        ExactSp3ValidationError::DeclaredStartMismatch {
+        E::Parse(value) => serde_json::json!({
+            "kind": "parse", "error": value.to_string(), "debug": format!("{value:?}")
+        }),
+        E::Catalog(value) => serde_json::json!({
+            "kind": "catalog", "error": value.to_string(), "debug": format!("{value:?}")
+        }),
+        E::WrongProductFamily { actual } => {
+            serde_json::json!({"kind":"wrong_product_family","actual":actual.code()})
+        }
+        E::InvalidIssue { issue } => {
+            serde_json::json!({"kind":"invalid_issue","issue":issue})
+        }
+        E::UnsupportedSpanToken { token } => {
+            serde_json::json!({"kind":"unsupported_span_token","token":token})
+        }
+        E::UnsupportedSampleToken { token } => {
+            serde_json::json!({"kind":"unsupported_sample_token","token":token})
+        }
+        E::NonCanonicalSpanToken { token, canonical } => serde_json::json!({
+            "kind":"non_canonical_span_token","token":token,"canonical":canonical
+        }),
+        E::NonCanonicalSampleToken { token, canonical } => serde_json::json!({
+            "kind":"non_canonical_sample_token","token":token,"canonical":canonical
+        }),
+        E::InvalidExpectedAgency { agency } => {
+            serde_json::json!({"kind":"invalid_expected_agency","agency":agency})
+        }
+        E::AgencyMismatch { expected, actual } => serde_json::json!({
+            "kind":"agency_mismatch","expected":expected,"actual":actual
+        }),
+        E::MissingEof => serde_json::json!({"kind":"missing_eof"}),
+        E::MalformedEofRecord {
+            line_number,
+            record_length,
+        } => serde_json::json!({
+            "kind":"malformed_eof_record",
+            "line_number":line_number.to_string(),
+            "record_length":record_length.to_string()
+        }),
+        E::TrailingContentAfterEof => {
+            serde_json::json!({"kind":"trailing_content_after_eof"})
+        }
+        E::MandatoryHeaderRecordCount {
+            record,
+            expected,
+            actual,
+        } => serde_json::json!({
+            "kind":"mandatory_header_record_count","record":record,
+            "expected":expected.to_string(),"actual":actual.to_string()
+        }),
+        E::MissingDeclaredSatelliteCount => {
+            serde_json::json!({"kind":"missing_declared_satellite_count"})
+        }
+        E::DeclaredSatelliteCountMismatch { declared, tokens } => serde_json::json!({
+            "kind":"declared_satellite_count_mismatch",
+            "declared":declared.to_string(),"tokens":tokens.to_string()
+        }),
+        E::DuplicateDeclaredSatellite {
+            token,
+            first_index,
+            duplicate_index,
+        } => serde_json::json!({
+            "kind":"duplicate_declared_satellite","token":token,
+            "first_index":first_index.to_string(),"duplicate_index":duplicate_index.to_string()
+        }),
+        E::NoDeclaredSatellites => serde_json::json!({"kind":"no_declared_satellites"}),
+        E::SatelliteRecordSequenceMismatch {
+            record,
+            epoch_index,
+            expected,
+            actual,
+        } => serde_json::json!({
+            "kind":"satellite_record_sequence_mismatch","record":record,
+            "epoch_index":epoch_index.to_string(),"expected":expected,"actual":actual
+        }),
+        E::BodyRecordInterleavingMismatch {
+            epoch_index,
+            expected,
+            actual,
+        } => serde_json::json!({
+            "kind":"body_record_interleaving_mismatch",
+            "epoch_index":epoch_index.to_string(),"expected":expected,"actual":actual
+        }),
+        E::NonFiniteHeaderCadence => {
+            serde_json::json!({"kind":"non_finite_header_cadence"})
+        }
+        E::NonPositiveHeaderCadence { actual_s } => serde_json::json!({
+            "kind":"non_positive_header_cadence","actual_s":actual_s.to_string()
+        }),
+        E::UnsupportedHeaderCadence { actual_s } => serde_json::json!({
+            "kind":"unsupported_header_cadence","actual_s":actual_s.to_string()
+        }),
+        E::CadenceMismatch {
+            requested_s,
+            header_s,
+        } => serde_json::json!({
+            "kind":"cadence_mismatch","requested_s":requested_s.to_string(),
+            "header_s":header_s.to_string()
+        }),
+        E::DeclaredEpochCountMismatch { declared, parsed } => serde_json::json!({
+            "kind":"declared_epoch_count_mismatch",
+            "declared":declared.to_string(),"parsed":parsed.to_string()
+        }),
+        E::MissingDeclaredStart => serde_json::json!({"kind":"missing_declared_start"}),
+        E::DeclaredStartMismatch {
             requested_j2000_s,
             declared_j2000_s,
             requested_tick,
             declared_tick,
-        } => (
-            atoms::error(),
-            (
-                atoms::exact_sp3_validation_failed(),
-                DeclaredStartMismatchTerm {
-                    kind: "declared_start_mismatch".to_string(),
-                    requested_j2000_s,
-                    declared_j2000_s,
-                    requested_tick: requested_tick.to_string(),
-                    declared_tick: declared_tick.map(|tick| tick.to_string()),
-                },
-            ),
-        )
-            .encode(env),
-        other => exact_error(env, other),
+        } => serde_json::json!({
+            "kind":"declared_start_mismatch",
+            "requested_j2000_s":exact_float_value(*requested_j2000_s),
+            "declared_j2000_s":exact_float_value(*declared_j2000_s),
+            "requested_tick":requested_tick.to_string(),
+            "declared_tick":declared_tick.map(|tick| tick.to_string())
+        }),
+        E::RequestBeforeGpsEpoch => serde_json::json!({"kind":"request_before_gps_epoch"}),
+        E::NonFiniteHeaderStartMetadata { field } => serde_json::json!({
+            "kind":"non_finite_header_start_metadata","field":field
+        }),
+        E::InvalidHeaderStartMetadata { field, actual } => serde_json::json!({
+            "kind":"invalid_header_start_metadata","field":field,"actual":actual.to_string()
+        }),
+        E::HeaderStartMetadataMismatch {
+            field,
+            requested,
+            actual,
+        } => serde_json::json!({
+            "kind":"header_start_metadata_mismatch","field":field,
+            "requested":requested.to_string(),"actual":actual.to_string()
+        }),
+        E::EmptyEpochGrid => serde_json::json!({"kind":"empty_epoch_grid"}),
+        E::FirstEpochMismatch {
+            requested_j2000_s,
+            actual_j2000_s,
+        } => serde_json::json!({
+            "kind":"first_epoch_mismatch",
+            "requested_j2000_s":requested_j2000_s.to_string(),
+            "actual_j2000_s":actual_j2000_s.to_string()
+        }),
+        E::IrregularEpochGrid {
+            epoch_index,
+            requested_s,
+            actual_s,
+        } => serde_json::json!({
+            "kind":"irregular_epoch_grid","epoch_index":epoch_index.to_string(),
+            "requested_s":requested_s.to_string(),"actual_s":actual_s.to_string()
+        }),
+        E::SpanNotMultipleOfCadence { span_s, cadence_s } => serde_json::json!({
+            "kind":"span_not_multiple_of_cadence",
+            "span_s":span_s.to_string(),"cadence_s":cadence_s.to_string()
+        }),
+        E::SpanMismatch {
+            parsed,
+            half_open,
+            inclusive,
+        } => serde_json::json!({
+            "kind":"span_mismatch","parsed":parsed.to_string(),
+            "half_open":half_open.to_string(),"inclusive":inclusive.to_string()
+        }),
+        E::FormatVersionMismatch { requested, actual } => serde_json::json!({
+            "kind":"format_version_mismatch","requested":requested,"actual":actual
+        }),
+        other => serde_json::json!({
+            "kind":"unknown","error":other.to_string(),"debug":format!("{other:?}")
+        }),
     }
+}
+
+fn exact_detail_key(key: &str) -> rustler::Atom {
+    match key {
+        "kind" => atoms::kind(),
+        "error" => atoms::error(),
+        "debug" => atoms::debug(),
+        "actual" => atoms::actual(),
+        "issue" => atoms::issue(),
+        "token" => atoms::token(),
+        "canonical" => atoms::canonical(),
+        "agency" => atoms::agency(),
+        "expected" => atoms::expected(),
+        "line_number" => atoms::line_number(),
+        "record_length" => atoms::record_length(),
+        "record" => atoms::record(),
+        "declared" => atoms::declared(),
+        "tokens" => atoms::tokens(),
+        "first_index" => atoms::first_index(),
+        "duplicate_index" => atoms::duplicate_index(),
+        "epoch_index" => atoms::epoch_index(),
+        "actual_s" => atoms::actual_s(),
+        "requested_s" => atoms::requested_s(),
+        "header_s" => atoms::header_s(),
+        "parsed" => atoms::parsed(),
+        "requested_j2000_s" => atoms::requested_j2000_s(),
+        "declared_j2000_s" => atoms::declared_j2000_s(),
+        "actual_j2000_s" => atoms::actual_j2000_s(),
+        "requested_tick" => atoms::requested_tick(),
+        "declared_tick" => atoms::declared_tick(),
+        "field" => atoms::field(),
+        "requested" => atoms::requested(),
+        "half_open" => atoms::half_open(),
+        "inclusive" => atoms::inclusive(),
+        "span_s" => atoms::span_s(),
+        "cadence_s" => atoms::cadence_s(),
+        unknown => panic!("unexpected exact-SP3 detail key {unknown}"),
+    }
+}
+
+fn exact_detail_term<'a>(env: Env<'a>, value: &serde_json::Value) -> Term<'a> {
+    match value {
+        serde_json::Value::Null => rustler::types::atom::nil().encode(env),
+        serde_json::Value::Bool(value) => value.encode(env),
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .map(|value| value.encode(env))
+            .or_else(|| value.as_u64().map(|value| value.encode(env)))
+            .or_else(|| value.as_f64().map(|value| value.encode(env)))
+            .expect("serde number encodes on the BEAM"),
+        serde_json::Value::String(value) => value.encode(env),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(|value| exact_detail_term(env, value))
+            .collect::<Vec<_>>()
+            .encode(env),
+        serde_json::Value::Object(values) => {
+            values
+                .iter()
+                .fold(rustler::types::map::map_new(env), |map, (key, value)| {
+                    map.map_put(exact_detail_key(key), exact_detail_term(env, value))
+                        .unwrap_or(map)
+                })
+        }
+    }
+}
+
+fn exact_validation_error<'a>(env: Env<'a>, error: ExactSp3ValidationError) -> Term<'a> {
+    let detail = exact_validation_error_detail(&error);
+    (
+        atoms::error(),
+        (
+            atoms::exact_sp3_validation_failed(),
+            exact_detail_term(env, &detail),
+        ),
+    )
+        .encode(env)
 }
 
 /// Map a GNSS single-letter system identifier (as the Elixir side passes it,
@@ -2368,24 +2622,40 @@ fn sp3_writer_error_detail(error: &Sp3WriteError) -> Option<Sp3WriterErrorDetail
     })
 }
 
-/// A writer refusal as `{tag, %{field => value}}` with every field its variant
-/// carries. [`Sp3WriteError`] is `#[non_exhaustive]`; a variant this binding
-/// predates is `{:unhandled, %{message: text}}` with the core's own text, never
-/// another variant's tag.
-fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
-    let message = err.to_string();
-    if let Some(detail) = sp3_writer_error_detail(&err) {
-        let (tag, fields) = match detail {
+#[derive(Debug, PartialEq)]
+enum Sp3WriterProjectionValue {
+    Text(String),
+    Usize(usize),
+    U64(u64),
+    I64(i64),
+    U8(u8),
+    FloatBits(u64),
+    OptionalFloatBits(Option<u64>),
+    OptionalI16(Option<i16>),
+}
+
+#[derive(Debug, PartialEq)]
+struct Sp3WriterErrorProjection {
+    tag: &'static str,
+    fields: Vec<(&'static str, Sp3WriterProjectionValue)>,
+}
+
+fn sp3_writer_error_projection(error: &Sp3WriteError) -> Sp3WriterErrorProjection {
+    use Sp3WriterProjectionValue as Value;
+
+    let projection = |tag, fields| Sp3WriterErrorProjection { tag, fields };
+    if let Some(detail) = sp3_writer_error_detail(error) {
+        return match detail {
             Sp3WriterErrorDetail::SatelliteNotRepresentable {
                 satellite,
                 system,
                 prn,
-            } => (
-                atoms::satellite_not_representable(),
+            } => projection(
+                "satellite_not_representable",
                 vec![
-                    (atoms::satellite(), satellite.encode(env)),
-                    (atoms::system(), system.encode(env)),
-                    (atoms::prn(), prn.encode(env)),
+                    ("satellite", Value::Text(satellite)),
+                    ("system", Value::Text(system)),
+                    ("prn", Value::U8(prn)),
                 ],
             ),
             Sp3WriterErrorDetail::AccuracyNotRepresentable {
@@ -2394,113 +2664,112 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
                 component,
                 exponent,
                 message,
-            } => (
-                atoms::accuracy_not_representable(),
+            } => projection(
+                "accuracy_not_representable",
                 vec![
-                    (atoms::satellite(), satellite.encode(env)),
-                    (atoms::epoch_index(), epoch_index.encode(env)),
-                    (atoms::component(), component.encode(env)),
-                    (atoms::exponent(), exponent.encode(env)),
-                    (atoms::message(), message.encode(env)),
+                    ("satellite", Value::Text(satellite)),
+                    ("epoch_index", Value::Usize(epoch_index)),
+                    ("component", Value::Text(component.to_string())),
+                    ("exponent", Value::OptionalI16(exponent)),
+                    ("message", Value::Text(message)),
                 ],
             ),
             Sp3WriterErrorDetail::AccuracyRecordMismatch {
                 satellite,
                 epoch_index,
                 message,
-            } => (
-                atoms::accuracy_record_mismatch(),
+            } => projection(
+                "accuracy_record_mismatch",
                 vec![
-                    (atoms::satellite(), satellite.encode(env)),
-                    (atoms::epoch_index(), epoch_index.encode(env)),
-                    (atoms::message(), message.encode(env)),
+                    ("satellite", Value::Text(satellite)),
+                    ("epoch_index", Value::Usize(epoch_index)),
+                    ("message", Value::Text(message)),
                 ],
             ),
             Sp3WriterErrorDetail::AccuracyBasisMissing {
                 satellite,
                 epoch_index,
                 message,
-            } => (
-                atoms::accuracy_basis_missing(),
+            } => projection(
+                "accuracy_basis_missing",
                 vec![
-                    (atoms::satellite(), satellite.encode(env)),
-                    (atoms::epoch_index(), epoch_index.encode(env)),
-                    (atoms::message(), message.encode(env)),
+                    ("satellite", Value::Text(satellite)),
+                    ("epoch_index", Value::Usize(epoch_index)),
+                    ("message", Value::Text(message)),
                 ],
             ),
         };
-        return (tag, write_field_map(env, fields)).encode(env);
     }
-    let text = |value: String| value.encode(env);
-    let (tag, fields): (rustler::Atom, Vec<(rustler::Atom, Term<'a>)>) = match err {
-        Sp3WriteError::TextNotColumnSafe { field, value } => (
-            atoms::text_not_column_safe(),
+
+    match error {
+        Sp3WriteError::TextNotColumnSafe { field, value } => projection(
+            "text_not_column_safe",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::value(), text(value)),
+                ("field", Value::Text((*field).to_string())),
+                ("value", Value::Text(value.clone())),
             ],
         ),
-        Sp3WriteError::TextNotColumnStable { field, value } => (
-            atoms::text_not_column_stable(),
+        Sp3WriteError::TextNotColumnStable { field, value } => projection(
+            "text_not_column_stable",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::value(), text(value)),
+                ("field", Value::Text((*field).to_string())),
+                ("value", Value::Text(value.clone())),
             ],
         ),
-        Sp3WriteError::BlankDescriptor { field, value } => (
-            atoms::blank_descriptor(),
+        Sp3WriteError::BlankDescriptor { field, value } => projection(
+            "blank_descriptor",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::value(), text(value)),
+                ("field", Value::Text((*field).to_string())),
+                ("value", Value::Text(value.clone())),
             ],
         ),
-        Sp3WriteError::EmptyComment { index, value } => (
-            atoms::empty_comment(),
+        Sp3WriteError::EmptyComment { index, value } => projection(
+            "empty_comment",
             vec![
-                (atoms::index(), index.encode(env)),
-                (atoms::value(), text(value)),
+                ("index", Value::Usize(*index)),
+                ("value", Value::Text(value.clone())),
             ],
         ),
         Sp3WriteError::TextTooWide {
             field,
             columns,
             value,
-        } => (
-            atoms::text_too_wide(),
+        } => projection(
+            "text_too_wide",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::value(), text(value)),
+                ("field", Value::Text((*field).to_string())),
+                ("columns", Value::Usize(*columns)),
+                ("value", Value::Text(value.clone())),
             ],
         ),
         Sp3WriteError::IntegerTooWide {
             field,
             columns,
             value,
-        } => (
-            atoms::integer_too_wide(),
+        } => projection(
+            "integer_too_wide",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::value(), value.encode(env)),
+                ("field", Value::Text((*field).to_string())),
+                ("columns", Value::Usize(*columns)),
+                ("value", Value::U64(*value)),
             ],
         ),
-        Sp3WriteError::NonFinite { field } => (
-            atoms::non_finite(),
-            vec![(atoms::field(), field.encode(env))],
+        Sp3WriteError::NonFinite { field } => projection(
+            "non_finite",
+            vec![("field", Value::Text((*field).to_string()))],
         ),
         Sp3WriteError::NumberTooWide {
             field,
             columns,
             decimals,
             value,
-        } => (
-            atoms::number_too_wide(),
+        } => projection(
+            "number_too_wide",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::decimals(), decimals.encode(env)),
-                (atoms::value(), write_float_term(env, value)),
+                ("field", Value::Text((*field).to_string())),
+                ("columns", Value::Usize(*columns)),
+                ("decimals", Value::Usize(*decimals)),
+                ("value", Value::FloatBits(value.to_bits())),
             ],
         ),
         Sp3WriteError::PrecisionNotRepresentable {
@@ -2508,122 +2777,125 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
             columns,
             decimals,
             value,
-        } => (
-            atoms::precision_not_representable(),
+        } => projection(
+            "precision_not_representable",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::decimals(), decimals.encode(env)),
-                (atoms::value(), write_float_term(env, value)),
+                ("field", Value::Text((*field).to_string())),
+                ("columns", Value::Usize(*columns)),
+                ("decimals", Value::Usize(*decimals)),
+                ("value", Value::FloatBits(value.to_bits())),
             ],
         ),
-        Sp3WriteError::YearNotRepresentable { epoch_index, year } => (
-            atoms::year_not_representable(),
+        Sp3WriteError::YearNotRepresentable { epoch_index, year } => projection(
+            "year_not_representable",
             vec![
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::year(), year.encode(env)),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("year", Value::I64(*year)),
             ],
         ),
         Sp3WriteError::EpochNotRestatable {
             epoch_index,
             field_seconds,
             residual_s,
-        } => (
-            atoms::epoch_not_restatable(),
+        } => projection(
+            "epoch_not_restatable",
             vec![
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::field_seconds(), write_float_term(env, field_seconds)),
-                (atoms::residual_s(), write_float_term(env, residual_s)),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("field_seconds", Value::FloatBits(field_seconds.to_bits())),
+                ("residual_s", Value::FloatBits(residual_s.to_bits())),
             ],
         ),
         Sp3WriteError::EpochTimeScaleMismatch {
             epoch_index,
             epoch_scale,
             header_scale,
-        } => (
-            atoms::epoch_time_scale_mismatch(),
+        } => projection(
+            "epoch_time_scale_mismatch",
             vec![
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::epoch_scale(), epoch_scale.abbrev().encode(env)),
-                (atoms::header_scale(), header_scale.abbrev().encode(env)),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("epoch_scale", Value::Text(epoch_scale.abbrev().to_string())),
+                (
+                    "header_scale",
+                    Value::Text(header_scale.abbrev().to_string()),
+                ),
             ],
         ),
         Sp3WriteError::HeaderTimeScaleMismatch {
             time_system,
             time_scale,
-        } => (
-            atoms::header_time_scale_mismatch(),
+        } => projection(
+            "header_time_scale_mismatch",
             vec![
-                (atoms::time_system(), time_system.label().encode(env)),
-                (atoms::time_scale(), time_scale.abbrev().encode(env)),
+                ("time_system", Value::Text(time_system.label().to_string())),
+                ("time_scale", Value::Text(time_scale.abbrev().to_string())),
             ],
         ),
-        Sp3WriteError::EpochCountMismatch { declared, epochs } => (
-            atoms::epoch_count_mismatch(),
+        Sp3WriteError::EpochCountMismatch { declared, epochs } => projection(
+            "epoch_count_mismatch",
             vec![
-                (atoms::declared(), declared.encode(env)),
-                (atoms::epochs(), epochs.encode(env)),
+                ("declared", Value::U64(*declared)),
+                ("epochs", Value::Usize(*epochs)),
             ],
         ),
-        Sp3WriteError::AccuracyCodeCountMismatch { satellites, codes } => (
-            atoms::accuracy_code_count_mismatch(),
+        Sp3WriteError::AccuracyCodeCountMismatch { satellites, codes } => projection(
+            "accuracy_code_count_mismatch",
             vec![
-                (atoms::satellites(), satellites.encode(env)),
-                (atoms::codes(), codes.encode(env)),
+                ("satellites", Value::Usize(*satellites)),
+                ("codes", Value::Usize(*codes)),
             ],
         ),
-        Sp3WriteError::DuplicateSatellite { sat } => (
-            atoms::duplicate_satellite(),
-            vec![(atoms::satellite(), sat.to_string().encode(env))],
+        Sp3WriteError::DuplicateSatellite { sat } => projection(
+            "duplicate_satellite",
+            vec![("satellite", Value::Text(sat.to_string()))],
         ),
         Sp3WriteError::EpochArrayLengthMismatch {
             field,
             epochs,
             entries,
-        } => (
-            atoms::epoch_array_length_mismatch(),
+        } => projection(
+            "epoch_array_length_mismatch",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::epochs(), epochs.encode(env)),
-                (atoms::entries(), entries.encode(env)),
+                ("field", Value::Text((*field).to_string())),
+                ("epochs", Value::Usize(*epochs)),
+                ("entries", Value::Usize(*entries)),
             ],
         ),
-        Sp3WriteError::UndeclaredSatelliteRecord { sat, epoch_index } => (
-            atoms::undeclared_satellite_record(),
+        Sp3WriteError::UndeclaredSatelliteRecord { sat, epoch_index } => projection(
+            "undeclared_satellite_record",
             vec![
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
             ],
         ),
-        Sp3WriteError::ConflictingRecords { sat, epoch_index } => (
-            atoms::conflicting_records(),
+        Sp3WriteError::ConflictingRecords { sat, epoch_index } => projection(
+            "conflicting_records",
             vec![
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
             ],
         ),
         Sp3WriteError::VelocityStateInPositionProduct {
             field,
             sat,
             epoch_index,
-        } => (
-            atoms::velocity_state_in_position_product(),
+        } => projection(
+            "velocity_state_in_position_product",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
             ],
         ),
         Sp3WriteError::RecordValueNonFinite {
             field,
             sat,
             epoch_index,
-        } => (
-            atoms::record_value_non_finite(),
+        } => projection(
+            "record_value_non_finite",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
             ],
         ),
         Sp3WriteError::RecordValueTooWide {
@@ -2633,15 +2905,15 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
             columns,
             decimals,
             column_value,
-        } => (
-            atoms::record_value_too_wide(),
+        } => projection(
+            "record_value_too_wide",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::decimals(), decimals.encode(env)),
-                (atoms::column_value(), write_float_term(env, column_value)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("columns", Value::Usize(*columns)),
+                ("decimals", Value::Usize(*decimals)),
+                ("column_value", Value::FloatBits(column_value.to_bits())),
             ],
         ),
         Sp3WriteError::RecordValueNotRepresentable {
@@ -2652,16 +2924,16 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
             decimals,
             stored,
             column_value,
-        } => (
-            atoms::record_value_not_representable(),
+        } => projection(
+            "record_value_not_representable",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::columns(), columns.encode(env)),
-                (atoms::decimals(), decimals.encode(env)),
-                (atoms::stored(), write_float_term(env, stored)),
-                (atoms::column_value(), write_float_term(env, column_value)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("columns", Value::Usize(*columns)),
+                ("decimals", Value::Usize(*decimals)),
+                ("stored", Value::FloatBits(stored.to_bits())),
+                ("column_value", Value::FloatBits(column_value.to_bits())),
             ],
         ),
         Sp3WriteError::RecordReadsAsAbsent {
@@ -2669,13 +2941,13 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
             sat,
             epoch_index,
             column_value,
-        } => (
-            atoms::record_reads_as_absent(),
+        } => projection(
+            "record_reads_as_absent",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::column_value(), write_float_term(env, column_value)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("column_value", Value::FloatBits(column_value.to_bits())),
             ],
         ),
         Sp3WriteError::RecordFieldsDisagree {
@@ -2684,27 +2956,519 @@ fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
             epoch_index,
             stored,
             native,
-        } => (
-            atoms::record_fields_disagree(),
+        } => projection(
+            "record_fields_disagree",
             vec![
-                (atoms::field(), field.encode(env)),
-                (atoms::satellite(), sat.to_string().encode(env)),
-                (atoms::epoch_index(), epoch_index.encode(env)),
-                (atoms::stored(), write_optional_float_term(env, stored)),
-                (atoms::native(), write_optional_float_term(env, native)),
+                ("field", Value::Text((*field).to_string())),
+                ("satellite", Value::Text(sat.to_string())),
+                ("epoch_index", Value::Usize(*epoch_index)),
+                ("stored", Value::OptionalFloatBits(stored.map(f64::to_bits))),
+                ("native", Value::OptionalFloatBits(native.map(f64::to_bits))),
             ],
         ),
-        _ => (
-            atoms::unhandled(),
-            vec![(atoms::message(), message.encode(env))],
+        _ => projection(
+            "unhandled",
+            vec![("message", Value::Text(error.to_string()))],
         ),
-    };
-    (tag, write_field_map(env, fields)).encode(env)
+    }
+}
+
+fn sp3_writer_atom(name: &'static str) -> rustler::Atom {
+    match name {
+        "text_not_column_safe" => atoms::text_not_column_safe(),
+        "text_not_column_stable" => atoms::text_not_column_stable(),
+        "blank_descriptor" => atoms::blank_descriptor(),
+        "empty_comment" => atoms::empty_comment(),
+        "text_too_wide" => atoms::text_too_wide(),
+        "integer_too_wide" => atoms::integer_too_wide(),
+        "non_finite" => atoms::non_finite(),
+        "number_too_wide" => atoms::number_too_wide(),
+        "precision_not_representable" => atoms::precision_not_representable(),
+        "accuracy_not_representable" => atoms::accuracy_not_representable(),
+        "accuracy_record_mismatch" => atoms::accuracy_record_mismatch(),
+        "accuracy_basis_missing" => atoms::accuracy_basis_missing(),
+        "year_not_representable" => atoms::year_not_representable(),
+        "epoch_not_restatable" => atoms::epoch_not_restatable(),
+        "epoch_time_scale_mismatch" => atoms::epoch_time_scale_mismatch(),
+        "header_time_scale_mismatch" => atoms::header_time_scale_mismatch(),
+        "epoch_count_mismatch" => atoms::epoch_count_mismatch(),
+        "accuracy_code_count_mismatch" => atoms::accuracy_code_count_mismatch(),
+        "duplicate_satellite" => atoms::duplicate_satellite(),
+        "satellite_not_representable" => atoms::satellite_not_representable(),
+        "epoch_array_length_mismatch" => atoms::epoch_array_length_mismatch(),
+        "undeclared_satellite_record" => atoms::undeclared_satellite_record(),
+        "conflicting_records" => atoms::conflicting_records(),
+        "velocity_state_in_position_product" => atoms::velocity_state_in_position_product(),
+        "record_value_non_finite" => atoms::record_value_non_finite(),
+        "record_value_too_wide" => atoms::record_value_too_wide(),
+        "record_value_not_representable" => atoms::record_value_not_representable(),
+        "record_reads_as_absent" => atoms::record_reads_as_absent(),
+        "record_fields_disagree" => atoms::record_fields_disagree(),
+        "unhandled" => atoms::unhandled(),
+        "field" => atoms::field(),
+        "value" => atoms::value(),
+        "message" => atoms::message(),
+        "index" => atoms::index(),
+        "columns" => atoms::columns(),
+        "decimals" => atoms::decimals(),
+        "satellite" => atoms::satellite(),
+        "system" => atoms::system(),
+        "prn" => atoms::prn(),
+        "epoch_index" => atoms::epoch_index(),
+        "component" => atoms::component(),
+        "exponent" => atoms::exponent(),
+        "year" => atoms::year(),
+        "field_seconds" => atoms::field_seconds(),
+        "residual_s" => atoms::residual_s(),
+        "epoch_scale" => atoms::epoch_scale(),
+        "header_scale" => atoms::header_scale(),
+        "time_system" => atoms::time_system(),
+        "time_scale" => atoms::time_scale(),
+        "declared" => atoms::declared(),
+        "epochs" => atoms::epochs(),
+        "satellites" => atoms::satellites(),
+        "codes" => atoms::codes(),
+        "entries" => atoms::entries(),
+        "column_value" => atoms::column_value(),
+        "stored" => atoms::stored(),
+        "native" => atoms::native(),
+        _ => unreachable!("unknown SP3 writer projection atom"),
+    }
+}
+
+fn sp3_writer_projection_value_term<'a>(env: Env<'a>, value: Sp3WriterProjectionValue) -> Term<'a> {
+    match value {
+        Sp3WriterProjectionValue::Text(value) => value.encode(env),
+        Sp3WriterProjectionValue::Usize(value) => value.encode(env),
+        Sp3WriterProjectionValue::U64(value) => value.encode(env),
+        Sp3WriterProjectionValue::I64(value) => value.encode(env),
+        Sp3WriterProjectionValue::U8(value) => value.encode(env),
+        Sp3WriterProjectionValue::FloatBits(bits) => write_float_term(env, f64::from_bits(bits)),
+        Sp3WriterProjectionValue::OptionalFloatBits(bits) => {
+            write_optional_float_term(env, bits.map(f64::from_bits))
+        }
+        Sp3WriterProjectionValue::OptionalI16(value) => value.encode(env),
+    }
+}
+
+/// A writer refusal as `{tag, %{field => value}}` with every field its variant
+/// carries. [`Sp3WriteError`] is `#[non_exhaustive]`; a variant this binding
+/// predates is `{:unhandled, %{message: text}}` with the core's own text, never
+/// another variant's tag.
+fn sp3_write_error_term<'a>(env: Env<'a>, err: Sp3WriteError) -> Term<'a> {
+    let projection = sp3_writer_error_projection(&err);
+    let fields = projection
+        .fields
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                sp3_writer_atom(name),
+                sp3_writer_projection_value_term(env, value),
+            )
+        })
+        .collect();
+    (
+        sp3_writer_atom(projection.tag),
+        write_field_map(env, fields),
+    )
+        .encode(env)
+}
+
+#[cfg(test)]
+mod exact_sp3_validation_error_mapping_tests {
+    use super::*;
+    use serde_json::json;
+    use sidereon_core::data::{DataCatalogError, ProductType};
+
+    #[test]
+    fn every_current_exact_sp3_refusal_keeps_its_complete_public_payload() {
+        use ExactSp3ValidationError as E;
+
+        let cases = vec![
+            (
+                E::Parse(CoreError::Parse("bad product".to_string())),
+                json!({"kind":"parse","error":"parse error: bad product","debug":"Parse(\"bad product\")"}),
+            ),
+            (
+                E::Catalog(DataCatalogError::UnknownCenter("bad".to_string())),
+                json!({"kind":"catalog","error":"unknown analysis center \"bad\"","debug":"UnknownCenter(\"bad\")"}),
+            ),
+            (
+                E::WrongProductFamily {
+                    actual: ProductType::Clk,
+                },
+                json!({"kind":"wrong_product_family","actual":"clk"}),
+            ),
+            (
+                E::InvalidIssue {
+                    issue: "2460".to_string(),
+                },
+                json!({"kind":"invalid_issue","issue":"2460"}),
+            ),
+            (
+                E::UnsupportedSpanToken {
+                    token: "02Q".to_string(),
+                },
+                json!({"kind":"unsupported_span_token","token":"02Q"}),
+            ),
+            (
+                E::UnsupportedSampleToken {
+                    token: "00S".to_string(),
+                },
+                json!({"kind":"unsupported_sample_token","token":"00S"}),
+            ),
+            (
+                E::NonCanonicalSpanToken {
+                    token: "24H".to_string(),
+                    canonical: "01D".to_string(),
+                },
+                json!({"kind":"non_canonical_span_token","token":"24H","canonical":"01D"}),
+            ),
+            (
+                E::NonCanonicalSampleToken {
+                    token: "300S".to_string(),
+                    canonical: "05M".to_string(),
+                },
+                json!({"kind":"non_canonical_sample_token","token":"300S","canonical":"05M"}),
+            ),
+            (
+                E::InvalidExpectedAgency {
+                    agency: "ABCDE".to_string(),
+                },
+                json!({"kind":"invalid_expected_agency","agency":"ABCDE"}),
+            ),
+            (
+                E::AgencyMismatch {
+                    expected: "IGS0".to_string(),
+                    actual: "COD0".to_string(),
+                },
+                json!({"kind":"agency_mismatch","expected":"IGS0","actual":"COD0"}),
+            ),
+            (E::MissingEof, json!({"kind":"missing_eof"})),
+            (
+                E::MalformedEofRecord {
+                    line_number: 42,
+                    record_length: 79,
+                },
+                json!({"kind":"malformed_eof_record","line_number":"42","record_length":"79"}),
+            ),
+            (
+                E::TrailingContentAfterEof,
+                json!({"kind":"trailing_content_after_eof"}),
+            ),
+            (
+                E::MandatoryHeaderRecordCount {
+                    record: "++",
+                    expected: 5,
+                    actual: 4,
+                },
+                json!({"kind":"mandatory_header_record_count","record":"++","expected":"5","actual":"4"}),
+            ),
+            (
+                E::MissingDeclaredSatelliteCount,
+                json!({"kind":"missing_declared_satellite_count"}),
+            ),
+            (
+                E::DeclaredSatelliteCountMismatch {
+                    declared: 3,
+                    tokens: 2,
+                },
+                json!({"kind":"declared_satellite_count_mismatch","declared":"3","tokens":"2"}),
+            ),
+            (
+                E::DuplicateDeclaredSatellite {
+                    token: "G01".to_string(),
+                    first_index: 1,
+                    duplicate_index: 4,
+                },
+                json!({"kind":"duplicate_declared_satellite","token":"G01","first_index":"1","duplicate_index":"4"}),
+            ),
+            (
+                E::NoDeclaredSatellites,
+                json!({"kind":"no_declared_satellites"}),
+            ),
+            (
+                E::SatelliteRecordSequenceMismatch {
+                    record: "P",
+                    epoch_index: 7,
+                    expected: vec!["G01".to_string(), "G02".to_string()],
+                    actual: vec!["G02".to_string()],
+                },
+                json!({"kind":"satellite_record_sequence_mismatch","record":"P","epoch_index":"7","expected":["G01","G02"],"actual":["G02"]}),
+            ),
+            (
+                E::BodyRecordInterleavingMismatch {
+                    epoch_index: 8,
+                    expected: vec!["PG01".to_string(), "VG01".to_string()],
+                    actual: vec!["VG01".to_string(), "PG01".to_string()],
+                },
+                json!({"kind":"body_record_interleaving_mismatch","epoch_index":"8","expected":["PG01","VG01"],"actual":["VG01","PG01"]}),
+            ),
+            (
+                E::NonFiniteHeaderCadence,
+                json!({"kind":"non_finite_header_cadence"}),
+            ),
+            (
+                E::NonPositiveHeaderCadence { actual_s: -1.5 },
+                json!({"kind":"non_positive_header_cadence","actual_s":"-1.5"}),
+            ),
+            (
+                E::UnsupportedHeaderCadence { actual_s: 99_999.5 },
+                json!({"kind":"unsupported_header_cadence","actual_s":"99999.5"}),
+            ),
+            (
+                E::CadenceMismatch {
+                    requested_s: 300.0,
+                    header_s: 900.0,
+                },
+                json!({"kind":"cadence_mismatch","requested_s":"300","header_s":"900"}),
+            ),
+            (
+                E::DeclaredEpochCountMismatch {
+                    declared: u64::MAX,
+                    parsed: 288,
+                },
+                json!({"kind":"declared_epoch_count_mismatch","declared":u64::MAX.to_string(),"parsed":"288"}),
+            ),
+            (
+                E::MissingDeclaredStart,
+                json!({"kind":"missing_declared_start"}),
+            ),
+            (
+                E::DeclaredStartMismatch {
+                    requested_j2000_s: 1.25,
+                    declared_j2000_s: f64::NAN,
+                    requested_tick: i128::MAX,
+                    declared_tick: None,
+                },
+                json!({
+                    "kind":"declared_start_mismatch",
+                    "requested_j2000_s":1.25,
+                    "declared_j2000_s":"NaN",
+                    "requested_tick":i128::MAX.to_string(),
+                    "declared_tick":null
+                }),
+            ),
+            (
+                E::RequestBeforeGpsEpoch,
+                json!({"kind":"request_before_gps_epoch"}),
+            ),
+            (
+                E::NonFiniteHeaderStartMetadata { field: "mjd" },
+                json!({"kind":"non_finite_header_start_metadata","field":"mjd"}),
+            ),
+            (
+                E::InvalidHeaderStartMetadata {
+                    field: "seconds_of_week",
+                    actual: -1.5,
+                },
+                json!({"kind":"invalid_header_start_metadata","field":"seconds_of_week","actual":"-1.5"}),
+            ),
+            (
+                E::HeaderStartMetadataMismatch {
+                    field: "gps_week",
+                    requested: 2200.0,
+                    actual: 2201.0,
+                },
+                json!({"kind":"header_start_metadata_mismatch","field":"gps_week","requested":"2200","actual":"2201"}),
+            ),
+            (E::EmptyEpochGrid, json!({"kind":"empty_epoch_grid"})),
+            (
+                E::FirstEpochMismatch {
+                    requested_j2000_s: 1.25,
+                    actual_j2000_s: 2.5,
+                },
+                json!({"kind":"first_epoch_mismatch","requested_j2000_s":"1.25","actual_j2000_s":"2.5"}),
+            ),
+            (
+                E::IrregularEpochGrid {
+                    epoch_index: 100,
+                    requested_s: 300.0,
+                    actual_s: 301.0,
+                },
+                json!({"kind":"irregular_epoch_grid","epoch_index":"100","requested_s":"300","actual_s":"301"}),
+            ),
+            (
+                E::SpanNotMultipleOfCadence {
+                    span_s: 86_401,
+                    cadence_s: 300,
+                },
+                json!({"kind":"span_not_multiple_of_cadence","span_s":"86401","cadence_s":"300"}),
+            ),
+            (
+                E::SpanMismatch {
+                    parsed: 287,
+                    half_open: 288,
+                    inclusive: 289,
+                },
+                json!({"kind":"span_mismatch","parsed":"287","half_open":"288","inclusive":"289"}),
+            ),
+            (
+                E::FormatVersionMismatch {
+                    requested: "d".to_string(),
+                    actual: "c".to_string(),
+                },
+                json!({"kind":"format_version_mismatch","requested":"d","actual":"c"}),
+            ),
+        ];
+
+        assert_eq!(cases.len(), 37);
+        for (error, expected) in cases {
+            assert_eq!(exact_validation_error_detail(&error), expected, "{error:?}");
+        }
+    }
 }
 
 #[cfg(test)]
 mod sp3_writer_error_mapping_tests {
     use super::*;
+
+    enum ExpectedTerm {
+        Text(&'static str),
+        Message,
+        Usize(usize),
+        U64(u64),
+        I64(i64),
+        U8(u8),
+        Float(f64),
+        OptionalFloat(Option<f64>),
+        OptionalI16(Option<i16>),
+        Nonfinite(u64),
+    }
+
+    type AtomFn = fn() -> rustler::Atom;
+
+    struct TermCase {
+        error: Sp3WriteError,
+        tag: AtomFn,
+        fields: Vec<(AtomFn, ExpectedTerm)>,
+    }
+
+    fn atom_name(atom: AtomFn) -> &'static str {
+        macro_rules! known_atoms {
+            ($($name:ident),+ $(,)?) => {
+                $(
+                    if atom as usize == atoms::$name as AtomFn as usize {
+                        return stringify!($name);
+                    }
+                )+
+            };
+        }
+        known_atoms!(
+            text_not_column_safe,
+            text_not_column_stable,
+            blank_descriptor,
+            empty_comment,
+            text_too_wide,
+            integer_too_wide,
+            non_finite,
+            number_too_wide,
+            precision_not_representable,
+            accuracy_not_representable,
+            accuracy_record_mismatch,
+            accuracy_basis_missing,
+            year_not_representable,
+            epoch_not_restatable,
+            epoch_time_scale_mismatch,
+            header_time_scale_mismatch,
+            epoch_count_mismatch,
+            accuracy_code_count_mismatch,
+            duplicate_satellite,
+            satellite_not_representable,
+            epoch_array_length_mismatch,
+            undeclared_satellite_record,
+            conflicting_records,
+            velocity_state_in_position_product,
+            record_value_non_finite,
+            record_value_too_wide,
+            record_value_not_representable,
+            record_reads_as_absent,
+            record_fields_disagree,
+            field,
+            value,
+            message,
+            index,
+            columns,
+            decimals,
+            satellite,
+            system,
+            prn,
+            epoch_index,
+            component,
+            exponent,
+            year,
+            field_seconds,
+            residual_s,
+            epoch_scale,
+            header_scale,
+            time_system,
+            time_scale,
+            declared,
+            epochs,
+            satellites,
+            codes,
+            entries,
+            column_value,
+            stored,
+            native,
+        );
+        panic!("unknown expected atom function")
+    }
+
+    fn assert_complete_term(case: TermCase) {
+        let message = case.error.to_string();
+        let projection = sp3_writer_error_projection(&case.error);
+        assert_eq!(projection.tag, atom_name(case.tag));
+        assert_eq!(projection.fields.len(), case.fields.len());
+        for (key, expected) in case.fields {
+            let key = atom_name(key);
+            let value = &projection
+                .fields
+                .iter()
+                .find(|(name, _)| *name == key)
+                .unwrap_or_else(|| panic!("missing projected field {key}"))
+                .1;
+            match (expected, value) {
+                (ExpectedTerm::Text(expected), Sp3WriterProjectionValue::Text(actual)) => {
+                    assert_eq!(actual, expected)
+                }
+                (ExpectedTerm::Message, Sp3WriterProjectionValue::Text(actual)) => {
+                    assert_eq!(actual, &message)
+                }
+                (ExpectedTerm::Usize(expected), Sp3WriterProjectionValue::Usize(actual)) => {
+                    assert_eq!(*actual, expected)
+                }
+                (ExpectedTerm::U64(expected), Sp3WriterProjectionValue::U64(actual)) => {
+                    assert_eq!(*actual, expected)
+                }
+                (ExpectedTerm::I64(expected), Sp3WriterProjectionValue::I64(actual)) => {
+                    assert_eq!(*actual, expected)
+                }
+                (ExpectedTerm::U8(expected), Sp3WriterProjectionValue::U8(actual)) => {
+                    assert_eq!(*actual, expected)
+                }
+                (ExpectedTerm::Float(expected), Sp3WriterProjectionValue::FloatBits(actual)) => {
+                    assert_eq!(*actual, expected.to_bits())
+                }
+                (
+                    ExpectedTerm::OptionalFloat(expected),
+                    Sp3WriterProjectionValue::OptionalFloatBits(actual),
+                ) => assert_eq!(*actual, expected.map(f64::to_bits)),
+                (
+                    ExpectedTerm::OptionalI16(expected),
+                    Sp3WriterProjectionValue::OptionalI16(actual),
+                ) => assert_eq!(*actual, expected),
+                (
+                    ExpectedTerm::Nonfinite(expected_bits),
+                    Sp3WriterProjectionValue::FloatBits(actual),
+                ) => assert_eq!(*actual, expected_bits),
+                (expected, actual) => panic!(
+                    "projected field {key} has wrong value kind: expected index {:?}, actual {actual:?}",
+                    std::mem::discriminant(&expected)
+                ),
+            }
+        }
+    }
 
     #[test]
     fn current_epoch_and_accuracy_refusals_keep_their_complete_values() {
@@ -2801,5 +3565,436 @@ mod sp3_writer_error_mapping_tests {
         for (error, expected) in cases {
             assert_eq!(sp3_writer_error_detail(&error), Some(expected));
         }
+    }
+
+    #[test]
+    fn every_sp3_write_refusal_keeps_its_complete_public_payload() {
+        use sidereon_core::astro::time::TimeScale;
+        use sidereon_core::ephemeris::Sp3TimeSystem;
+
+        let satellite = "G07".parse().unwrap();
+        let unrepresentable = GnssSatelliteId {
+            system: GnssSystem::Gps,
+            prn: 100,
+        };
+        let cases = vec![
+            TermCase {
+                error: Sp3WriteError::TextNotColumnSafe {
+                    field: "agency",
+                    value: "A\nB".into(),
+                },
+                tag: atoms::text_not_column_safe,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("agency")),
+                    (atoms::value, ExpectedTerm::Text("A\nB")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::TextNotColumnStable {
+                    field: "orbit type",
+                    value: " FIT ".into(),
+                },
+                tag: atoms::text_not_column_stable,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("orbit type")),
+                    (atoms::value, ExpectedTerm::Text(" FIT ")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::BlankDescriptor {
+                    field: "data used",
+                    value: "".into(),
+                },
+                tag: atoms::blank_descriptor,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("data used")),
+                    (atoms::value, ExpectedTerm::Text("")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::EmptyComment {
+                    index: 3,
+                    value: "".into(),
+                },
+                tag: atoms::empty_comment,
+                fields: vec![
+                    (atoms::index, ExpectedTerm::Usize(3)),
+                    (atoms::value, ExpectedTerm::Text("")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::TextTooWide {
+                    field: "agency",
+                    columns: 4,
+                    value: "ABCDE".into(),
+                },
+                tag: atoms::text_too_wide,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("agency")),
+                    (atoms::columns, ExpectedTerm::Usize(4)),
+                    (atoms::value, ExpectedTerm::Text("ABCDE")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::IntegerTooWide {
+                    field: "epoch count",
+                    columns: 7,
+                    value: u64::MAX,
+                },
+                tag: atoms::integer_too_wide,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("epoch count")),
+                    (atoms::columns, ExpectedTerm::Usize(7)),
+                    (atoms::value, ExpectedTerm::U64(u64::MAX)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::NonFinite { field: "interval" },
+                tag: atoms::non_finite,
+                fields: vec![(atoms::field, ExpectedTerm::Text("interval"))],
+            },
+            TermCase {
+                error: Sp3WriteError::NumberTooWide {
+                    field: "clock base",
+                    columns: 10,
+                    decimals: 7,
+                    value: 12_345.25,
+                },
+                tag: atoms::number_too_wide,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("clock base")),
+                    (atoms::columns, ExpectedTerm::Usize(10)),
+                    (atoms::decimals, ExpectedTerm::Usize(7)),
+                    (atoms::value, ExpectedTerm::Float(12_345.25)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::PrecisionNotRepresentable {
+                    field: "position base",
+                    columns: 10,
+                    decimals: 7,
+                    value: 1.25000001,
+                },
+                tag: atoms::precision_not_representable,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("position base")),
+                    (atoms::columns, ExpectedTerm::Usize(10)),
+                    (atoms::decimals, ExpectedTerm::Usize(7)),
+                    (atoms::value, ExpectedTerm::Float(1.25000001)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::AccuracyNotRepresentable {
+                    sat: satellite,
+                    epoch_index: 5,
+                    component: "position",
+                    exponent: Some(-12),
+                },
+                tag: atoms::accuracy_not_representable,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(5)),
+                    (atoms::component, ExpectedTerm::Text("position")),
+                    (atoms::exponent, ExpectedTerm::OptionalI16(Some(-12))),
+                    (atoms::message, ExpectedTerm::Message),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::AccuracyRecordMismatch {
+                    sat: satellite,
+                    epoch_index: 6,
+                },
+                tag: atoms::accuracy_record_mismatch,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(6)),
+                    (atoms::message, ExpectedTerm::Message),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::AccuracyBasisMissing {
+                    sat: satellite,
+                    epoch_index: 8,
+                },
+                tag: atoms::accuracy_basis_missing,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(8)),
+                    (atoms::message, ExpectedTerm::Message),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::YearNotRepresentable {
+                    epoch_index: 9,
+                    year: -12_345,
+                },
+                tag: atoms::year_not_representable,
+                fields: vec![
+                    (atoms::epoch_index, ExpectedTerm::Usize(9)),
+                    (atoms::year, ExpectedTerm::I64(-12_345)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::EpochNotRestatable {
+                    epoch_index: 10,
+                    field_seconds: 59.125,
+                    residual_s: 0.000_000_01,
+                },
+                tag: atoms::epoch_not_restatable,
+                fields: vec![
+                    (atoms::epoch_index, ExpectedTerm::Usize(10)),
+                    (atoms::field_seconds, ExpectedTerm::Float(59.125)),
+                    (atoms::residual_s, ExpectedTerm::Float(0.000_000_01)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::EpochTimeScaleMismatch {
+                    epoch_index: 11,
+                    epoch_scale: TimeScale::Gpst,
+                    header_scale: TimeScale::Utc,
+                },
+                tag: atoms::epoch_time_scale_mismatch,
+                fields: vec![
+                    (atoms::epoch_index, ExpectedTerm::Usize(11)),
+                    (atoms::epoch_scale, ExpectedTerm::Text("GPST")),
+                    (atoms::header_scale, ExpectedTerm::Text("UTC")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::HeaderTimeScaleMismatch {
+                    time_system: Sp3TimeSystem::Galileo,
+                    time_scale: TimeScale::Gpst,
+                },
+                tag: atoms::header_time_scale_mismatch,
+                fields: vec![
+                    (atoms::time_system, ExpectedTerm::Text("GAL")),
+                    (atoms::time_scale, ExpectedTerm::Text("GPST")),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::EpochCountMismatch {
+                    declared: u64::MAX,
+                    epochs: 12,
+                },
+                tag: atoms::epoch_count_mismatch,
+                fields: vec![
+                    (atoms::declared, ExpectedTerm::U64(u64::MAX)),
+                    (atoms::epochs, ExpectedTerm::Usize(12)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::AccuracyCodeCountMismatch {
+                    satellites: 13,
+                    codes: 12,
+                },
+                tag: atoms::accuracy_code_count_mismatch,
+                fields: vec![
+                    (atoms::satellites, ExpectedTerm::Usize(13)),
+                    (atoms::codes, ExpectedTerm::Usize(12)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::DuplicateSatellite { sat: satellite },
+                tag: atoms::duplicate_satellite,
+                fields: vec![(atoms::satellite, ExpectedTerm::Text("G07"))],
+            },
+            TermCase {
+                error: Sp3WriteError::SatelliteNotRepresentable {
+                    sat: unrepresentable,
+                },
+                tag: atoms::satellite_not_representable,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G100")),
+                    (atoms::system, ExpectedTerm::Text("GPS")),
+                    (atoms::prn, ExpectedTerm::U8(100)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::EpochArrayLengthMismatch {
+                    field: "clocks",
+                    epochs: 14,
+                    entries: 13,
+                },
+                tag: atoms::epoch_array_length_mismatch,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("clocks")),
+                    (atoms::epochs, ExpectedTerm::Usize(14)),
+                    (atoms::entries, ExpectedTerm::Usize(13)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::UndeclaredSatelliteRecord {
+                    sat: satellite,
+                    epoch_index: 15,
+                },
+                tag: atoms::undeclared_satellite_record,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(15)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::ConflictingRecords {
+                    sat: satellite,
+                    epoch_index: 16,
+                },
+                tag: atoms::conflicting_records,
+                fields: vec![
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(16)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::VelocityStateInPositionProduct {
+                    field: "velocity x",
+                    sat: satellite,
+                    epoch_index: 17,
+                },
+                tag: atoms::velocity_state_in_position_product,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("velocity x")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(17)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::RecordValueNonFinite {
+                    field: "clock",
+                    sat: satellite,
+                    epoch_index: 18,
+                },
+                tag: atoms::record_value_non_finite,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("clock")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(18)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::RecordValueTooWide {
+                    field: "position x",
+                    sat: satellite,
+                    epoch_index: 19,
+                    columns: 14,
+                    decimals: 6,
+                    column_value: 123_456_789.25,
+                },
+                tag: atoms::record_value_too_wide,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("position x")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(19)),
+                    (atoms::columns, ExpectedTerm::Usize(14)),
+                    (atoms::decimals, ExpectedTerm::Usize(6)),
+                    (atoms::column_value, ExpectedTerm::Float(123_456_789.25)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::RecordValueNotRepresentable {
+                    field: "clock",
+                    sat: satellite,
+                    epoch_index: 20,
+                    columns: 14,
+                    decimals: 6,
+                    stored: 0.000_001_25,
+                    column_value: 1.250_000_01,
+                },
+                tag: atoms::record_value_not_representable,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("clock")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(20)),
+                    (atoms::columns, ExpectedTerm::Usize(14)),
+                    (atoms::decimals, ExpectedTerm::Usize(6)),
+                    (atoms::stored, ExpectedTerm::Float(0.000_001_25)),
+                    (atoms::column_value, ExpectedTerm::Float(1.250_000_01)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::RecordReadsAsAbsent {
+                    field: "clock",
+                    sat: satellite,
+                    epoch_index: 21,
+                    column_value: 999_999.999_999,
+                },
+                tag: atoms::record_reads_as_absent,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("clock")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(21)),
+                    (atoms::column_value, ExpectedTerm::Float(999_999.999_999)),
+                ],
+            },
+            TermCase {
+                error: Sp3WriteError::RecordFieldsDisagree {
+                    field: "velocity y",
+                    sat: satellite,
+                    epoch_index: 22,
+                    stored: Some(-0.0),
+                    native: None,
+                },
+                tag: atoms::record_fields_disagree,
+                fields: vec![
+                    (atoms::field, ExpectedTerm::Text("velocity y")),
+                    (atoms::satellite, ExpectedTerm::Text("G07")),
+                    (atoms::epoch_index, ExpectedTerm::Usize(22)),
+                    (atoms::stored, ExpectedTerm::OptionalFloat(Some(-0.0))),
+                    (atoms::native, ExpectedTerm::OptionalFloat(None)),
+                ],
+            },
+        ];
+        assert_eq!(cases.len(), 29);
+        for case in cases {
+            assert_complete_term(case);
+        }
+        assert_complete_term(TermCase {
+            error: Sp3WriteError::AccuracyNotRepresentable {
+                sat: satellite,
+                epoch_index: 23,
+                component: "clock",
+                exponent: None,
+            },
+            tag: atoms::accuracy_not_representable,
+            fields: vec![
+                (atoms::satellite, ExpectedTerm::Text("G07")),
+                (atoms::epoch_index, ExpectedTerm::Usize(23)),
+                (atoms::component, ExpectedTerm::Text("clock")),
+                (atoms::exponent, ExpectedTerm::OptionalI16(None)),
+                (atoms::message, ExpectedTerm::Message),
+            ],
+        });
+        assert_complete_term(TermCase {
+            error: Sp3WriteError::EpochNotRestatable {
+                epoch_index: 24,
+                field_seconds: 0.0,
+                residual_s: f64::NAN,
+            },
+            tag: atoms::epoch_not_restatable,
+            fields: vec![
+                (atoms::epoch_index, ExpectedTerm::Usize(24)),
+                (atoms::field_seconds, ExpectedTerm::Float(0.0)),
+                (
+                    atoms::residual_s,
+                    ExpectedTerm::Nonfinite(f64::NAN.to_bits()),
+                ),
+            ],
+        });
+        assert_complete_term(TermCase {
+            error: Sp3WriteError::RecordFieldsDisagree {
+                field: "clock rate",
+                sat: satellite,
+                epoch_index: 25,
+                stored: None,
+                native: Some(-2.5),
+            },
+            tag: atoms::record_fields_disagree,
+            fields: vec![
+                (atoms::field, ExpectedTerm::Text("clock rate")),
+                (atoms::satellite, ExpectedTerm::Text("G07")),
+                (atoms::epoch_index, ExpectedTerm::Usize(25)),
+                (atoms::stored, ExpectedTerm::OptionalFloat(None)),
+                (atoms::native, ExpectedTerm::OptionalFloat(Some(-2.5))),
+            ],
+        });
     }
 }

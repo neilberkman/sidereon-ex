@@ -206,6 +206,22 @@ defmodule Sidereon.OMMTest do
     test "keeps header, metadata, spacecraft, covariance, user-defined and comment items" do
       assert {:ok, omm} = OMM.parse_kvn(@full_kvn)
 
+      assert %OMM{
+               creation_date: "2026-06-17T00:00:00",
+               originator: "TEST",
+               center_name: "EARTH",
+               ref_frame_epoch: nil,
+               time_system: "UTC",
+               semi_major_axis_km: nil,
+               ephemeris_type: 0,
+               classification_type: "U",
+               rev_at_epoch: 57_175,
+               bterm_m2_kg: nil,
+               agom_m2_kg: nil,
+               exact_sgp4_epoch: nil,
+               quantize_tle_derived_fields: true
+             } = omm
+
       assert omm.ccsds_omm_vers == "3.0"
       assert omm.classification == "unclassified"
       assert omm.message_id == "OMM-0001"
@@ -366,6 +382,30 @@ defmodule Sidereon.OMMTest do
       assert {:ok, read} = TLE.parse(line1, line2)
       assert read.bstar == elements.bstar
       assert read.mean_motion_double_dot == elements.mean_motion_double_dot
+    end
+
+    test "retains the in-memory SGP4 epoch and derived-field policy across the NIF boundary" do
+      {:ok, omm} = OMM.parse_kvn(core_omm_fixture("25544", "kvn"))
+      {:ok, baseline} = OMM.to_elements(omm)
+      %{jd_whole: whole, jd_fraction: fraction} = baseline.epoch_jd
+
+      assert {:ok, exact_epoch} = OMM.to_elements(%{omm | exact_sgp4_epoch: {whole, fraction}})
+      assert exact_epoch.epoch_jd == %{jd_whole: whole, jd_fraction: fraction}
+
+      finer_epoch = %{omm.epoch | femtosecond: 100_000_000}
+
+      assert {:ok, unquantized} =
+               OMM.to_elements(%{
+                 omm
+                 | epoch: finer_epoch,
+                   exact_sgp4_epoch: nil,
+                   quantize_tle_derived_fields: false,
+                   bstar: 1.23456789e-4,
+                   mean_motion_ddot: -2.3456789e-12
+               })
+
+      assert unquantized.bstar == 1.23456789e-4
+      assert unquantized.mean_motion_double_dot == -2.3456789e-12
     end
 
     test "an epoch of whole microseconds is initialised as python-sgp4 initialises the OMM" do

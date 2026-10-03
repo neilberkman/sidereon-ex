@@ -28,6 +28,55 @@ mod atoms {
         no_open_mirror,
         unknown_product_type,
         exact_product_set,
+
+        // Lossless catalog-error detail. The eight historical public tuples
+        // keep their existing representation; variants which used to collapse
+        // to `unsupported_product` use this fixed vocabulary.
+        catalog_error,
+        unsupported_distribution,
+        unsupported_product_era,
+        unsupported_distribution_era,
+        no_distribution_sources,
+        invalid_official_filename,
+        inconsistent_product_identity,
+        invalid_date,
+        date_out_of_range,
+        date_before_gps_epoch,
+        invalid_gps_day_of_week,
+        invalid_sample,
+        unsupported_sample,
+        invalid_span,
+        invalid_issue,
+        missing_issue,
+        unexpected_issue,
+        unsupported_issue,
+        invalid_date_time,
+        no_ultra_issue,
+        no_available_ultra_issue,
+        unsupported_nominal_schedule,
+        invalid_station,
+        kind,
+        message,
+        value,
+        center,
+        product_type,
+        source,
+        date,
+        field,
+        year,
+        month,
+        day,
+        gps_day,
+        sample,
+        issue,
+        hour,
+        minute,
+        second,
+        reason,
+        lat_deg_bits,
+        lon_deg_bits,
+        lat_index,
+        lon_index,
     }
 }
 
@@ -214,7 +263,302 @@ fn nominal_coverage_interval_tuple(
     )
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum CatalogProjectionValue {
+    Text(String),
+    I32(i32),
+    U8(u8),
+    Date(ProductDate),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CatalogErrorProjection {
+    kind: &'static str,
+    fields: Vec<(&'static str, CatalogProjectionValue)>,
+    message: String,
+}
+
+fn catalog_error_projection(error: &DataCatalogError) -> CatalogErrorProjection {
+    use CatalogProjectionValue as Value;
+
+    let projection = |kind, fields| CatalogErrorProjection {
+        kind,
+        fields,
+        message: error.to_string(),
+    };
+
+    match error {
+        DataCatalogError::UnknownCenter(value) => projection(
+            "unknown_center",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+        DataCatalogError::UnknownProductType(value) => projection(
+            "unknown_product_type",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+        DataCatalogError::UnsupportedProduct {
+            center,
+            product_type,
+        } => projection(
+            "unsupported_product",
+            vec![
+                ("center", Value::Text(center.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+            ],
+        ),
+        DataCatalogError::UnsupportedDistribution {
+            source,
+            product_type,
+        } => projection(
+            "unsupported_distribution",
+            vec![
+                ("source", Value::Text(source.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+            ],
+        ),
+        DataCatalogError::UnsupportedProductEra {
+            center,
+            product_type,
+            date,
+        } => projection(
+            "unsupported_product_era",
+            vec![
+                ("center", Value::Text(center.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+                ("date", Value::Date(*date)),
+            ],
+        ),
+        DataCatalogError::UnsupportedDistributionEra {
+            source,
+            center,
+            product_type,
+            date,
+        } => projection(
+            "unsupported_distribution_era",
+            vec![
+                ("source", Value::Text(source.code().to_owned())),
+                ("center", Value::Text(center.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+                ("date", Value::Date(*date)),
+            ],
+        ),
+        DataCatalogError::NoDistributionSources => projection("no_distribution_sources", vec![]),
+        DataCatalogError::InvalidOfficialFilename(value) => projection(
+            "invalid_official_filename",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+        DataCatalogError::InconsistentProductIdentity { field } => projection(
+            "inconsistent_product_identity",
+            vec![("field", Value::Text((*field).to_owned()))],
+        ),
+        DataCatalogError::NoOpenMirror {
+            center,
+            product_type,
+        } => projection(
+            "no_open_mirror",
+            vec![
+                ("center", Value::Text(center.clone())),
+                ("product_type", Value::Text(product_type.clone())),
+            ],
+        ),
+        DataCatalogError::InvalidDate { year, month, day } => projection(
+            "invalid_date",
+            vec![
+                ("year", Value::I32(*year)),
+                ("month", Value::U8(*month)),
+                ("day", Value::U8(*day)),
+            ],
+        ),
+        DataCatalogError::DateOutOfRange => projection("date_out_of_range", vec![]),
+        DataCatalogError::DateBeforeGpsEpoch(date) => {
+            projection("date_before_gps_epoch", vec![("date", Value::Date(*date))])
+        }
+        DataCatalogError::InvalidGpsDayOfWeek(day) => projection(
+            "invalid_gps_day_of_week",
+            vec![("gps_day", Value::U8(*day))],
+        ),
+        DataCatalogError::InvalidSample(value) => projection(
+            "invalid_sample",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+        DataCatalogError::UnsupportedSample {
+            center,
+            product_type,
+            sample,
+        } => projection(
+            "unsupported_sample",
+            vec![
+                ("center", Value::Text(center.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+                ("sample", Value::Text(sample.clone())),
+            ],
+        ),
+        DataCatalogError::InvalidSpan(value) => {
+            projection("invalid_span", vec![("value", Value::Text(value.clone()))])
+        }
+        DataCatalogError::InvalidIssue(value) => {
+            projection("invalid_issue", vec![("value", Value::Text(value.clone()))])
+        }
+        DataCatalogError::MissingIssue { center } => projection(
+            "missing_issue",
+            vec![("center", Value::Text(center.code().to_owned()))],
+        ),
+        DataCatalogError::UnexpectedIssue { center } => projection(
+            "unexpected_issue",
+            vec![("center", Value::Text(center.code().to_owned()))],
+        ),
+        DataCatalogError::UnsupportedIssue { center, issue } => projection(
+            "unsupported_issue",
+            vec![
+                ("center", Value::Text(center.code().to_owned())),
+                ("issue", Value::Text(issue.clone())),
+            ],
+        ),
+        DataCatalogError::InvalidDateTime {
+            hour,
+            minute,
+            second,
+        } => projection(
+            "invalid_date_time",
+            vec![
+                ("hour", Value::U8(*hour)),
+                ("minute", Value::U8(*minute)),
+                ("second", Value::U8(*second)),
+            ],
+        ),
+        DataCatalogError::NoUltraIssue => projection("no_ultra_issue", vec![]),
+        DataCatalogError::NoAvailableUltraIssue => projection("no_available_ultra_issue", vec![]),
+        DataCatalogError::UnsupportedNominalSchedule {
+            center,
+            product_type,
+        } => projection(
+            "unsupported_nominal_schedule",
+            vec![
+                ("center", Value::Text(center.code().to_owned())),
+                ("product_type", Value::Text(product_type.code().to_owned())),
+            ],
+        ),
+        DataCatalogError::UnrecognizedArchiveListing { reason } => projection(
+            "unrecognized_archive_listing",
+            vec![("reason", Value::Text(reason.clone()))],
+        ),
+        DataCatalogError::InvalidStation(value) => projection(
+            "invalid_station",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+        DataCatalogError::InvalidCoordinate {
+            lat_deg_bits,
+            lon_deg_bits,
+        } => projection(
+            "invalid_coordinate",
+            vec![
+                ("lat_deg_bits", Value::Text(format!("{lat_deg_bits:016x}"))),
+                ("lon_deg_bits", Value::Text(format!("{lon_deg_bits:016x}"))),
+            ],
+        ),
+        DataCatalogError::InvalidTileIndex {
+            lat_index,
+            lon_index,
+        } => projection(
+            "invalid_tile_index",
+            vec![
+                ("lat_index", Value::I32(*lat_index)),
+                ("lon_index", Value::I32(*lon_index)),
+            ],
+        ),
+        DataCatalogError::InvalidTileId(value) => projection(
+            "invalid_tile_id",
+            vec![("value", Value::Text(value.clone()))],
+        ),
+    }
+}
+
+fn catalog_atom(name: &str) -> rustler::Atom {
+    match name {
+        "unknown_center" => atoms::unknown_center(),
+        "unknown_product_type" => atoms::unknown_product_type(),
+        "unsupported_product" => atoms::unsupported_product(),
+        "unsupported_distribution" => atoms::unsupported_distribution(),
+        "unsupported_product_era" => atoms::unsupported_product_era(),
+        "unsupported_distribution_era" => atoms::unsupported_distribution_era(),
+        "no_distribution_sources" => atoms::no_distribution_sources(),
+        "invalid_official_filename" => atoms::invalid_official_filename(),
+        "inconsistent_product_identity" => atoms::inconsistent_product_identity(),
+        "no_open_mirror" => atoms::no_open_mirror(),
+        "invalid_date" => atoms::invalid_date(),
+        "date_out_of_range" => atoms::date_out_of_range(),
+        "date_before_gps_epoch" => atoms::date_before_gps_epoch(),
+        "invalid_gps_day_of_week" => atoms::invalid_gps_day_of_week(),
+        "invalid_sample" => atoms::invalid_sample(),
+        "unsupported_sample" => atoms::unsupported_sample(),
+        "invalid_span" => atoms::invalid_span(),
+        "invalid_issue" => atoms::invalid_issue(),
+        "missing_issue" => atoms::missing_issue(),
+        "unexpected_issue" => atoms::unexpected_issue(),
+        "unsupported_issue" => atoms::unsupported_issue(),
+        "invalid_date_time" => atoms::invalid_date_time(),
+        "no_ultra_issue" => atoms::no_ultra_issue(),
+        "no_available_ultra_issue" => atoms::no_available_ultra_issue(),
+        "unsupported_nominal_schedule" => atoms::unsupported_nominal_schedule(),
+        "unrecognized_archive_listing" => atoms::unrecognized_archive_listing(),
+        "invalid_station" => atoms::invalid_station(),
+        "invalid_coordinate" => atoms::invalid_coordinate(),
+        "invalid_tile_index" => atoms::invalid_tile_index(),
+        "invalid_tile_id" => atoms::invalid_tile_id(),
+        "value" => atoms::value(),
+        "center" => atoms::center(),
+        "product_type" => atoms::product_type(),
+        "source" => atoms::source(),
+        "date" => atoms::date(),
+        "field" => atoms::field(),
+        "year" => atoms::year(),
+        "month" => atoms::month(),
+        "day" => atoms::day(),
+        "gps_day" => atoms::gps_day(),
+        "sample" => atoms::sample(),
+        "issue" => atoms::issue(),
+        "hour" => atoms::hour(),
+        "minute" => atoms::minute(),
+        "second" => atoms::second(),
+        "reason" => atoms::reason(),
+        "lat_deg_bits" => atoms::lat_deg_bits(),
+        "lon_deg_bits" => atoms::lon_deg_bits(),
+        "lat_index" => atoms::lat_index(),
+        "lon_index" => atoms::lon_index(),
+        other => panic!("unrecognized fixed catalog atom {other}"),
+    }
+}
+
+fn catalog_projection_value_term<'a>(env: Env<'a>, value: CatalogProjectionValue) -> Term<'a> {
+    match value {
+        CatalogProjectionValue::Text(value) => value.encode(env),
+        CatalogProjectionValue::I32(value) => value.encode(env),
+        CatalogProjectionValue::U8(value) => value.encode(env),
+        CatalogProjectionValue::Date(value) => (value.year, value.month, value.day).encode(env),
+    }
+}
+
+fn catalog_projection_term<'a>(env: Env<'a>, projection: CatalogErrorProjection) -> Term<'a> {
+    let mut map = rustler::types::map::map_new(env);
+    map = map
+        .map_put(atoms::kind(), catalog_atom(projection.kind))
+        .expect("catalog detail is a map");
+    map = map
+        .map_put(atoms::message(), projection.message)
+        .expect("catalog detail is a map");
+    for (name, value) in projection.fields {
+        map = map
+            .map_put(
+                catalog_atom(name),
+                catalog_projection_value_term(env, value),
+            )
+            .expect("catalog detail is a map");
+    }
+    map
+}
+
 fn encode_catalog_error<'a>(env: Env<'a>, err: DataCatalogError) -> Term<'a> {
+    let projection = catalog_error_projection(&err);
     match err {
         DataCatalogError::UnknownCenter(code) => {
             (atoms::error(), (atoms::unknown_center(), code)).encode(env)
@@ -280,9 +624,15 @@ fn encode_catalog_error<'a>(env: Env<'a>, err: DataCatalogError) -> Term<'a> {
             (atoms::unrecognized_archive_listing(), reason),
         )
             .encode(env),
-        other => (
+        _ => (
             atoms::error(),
-            (atoms::unsupported_product(), other.to_string()),
+            (
+                atoms::unsupported_product(),
+                (
+                    atoms::catalog_error(),
+                    catalog_projection_term(env, projection),
+                ),
+            ),
         )
             .encode(env),
     }
@@ -1068,5 +1418,310 @@ fn data_unix_compress_decompress<'a>(env: Env<'a>, archive: Binary<'a>, limit: u
             (atoms::decompress(), atoms::invalid_unix_compress()),
         )
             .encode(env),
+    }
+}
+
+#[cfg(test)]
+mod catalog_error_contract_tests {
+    use super::*;
+    use sidereon_core::data::{
+        AnalysisCenter, DataCatalogError as E, DistributionSource, ProductType,
+    };
+
+    #[test]
+    fn every_catalog_variant_field_and_display_value_has_a_lossless_projection() {
+        use CatalogProjectionValue as Value;
+
+        type ExpectedCase = (E, &'static str, Vec<(&'static str, Value)>);
+
+        let date = |year, month, day| ProductDate { year, month, day };
+        let cases: Vec<ExpectedCase> = vec![
+            (
+                E::UnknownCenter("unknown_c".into()),
+                "unknown_center",
+                vec![("value", Value::Text("unknown_c".into()))],
+            ),
+            (
+                E::UnknownProductType("unknown_pt".into()),
+                "unknown_product_type",
+                vec![("value", Value::Text("unknown_pt".into()))],
+            ),
+            (
+                E::UnsupportedProduct {
+                    center: AnalysisCenter::Cod,
+                    product_type: ProductType::Sp3,
+                },
+                "unsupported_product",
+                vec![
+                    ("center", Value::Text("cod".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                ],
+            ),
+            (
+                E::UnsupportedDistribution {
+                    source: DistributionSource::Direct,
+                    product_type: ProductType::Sp3,
+                },
+                "unsupported_distribution",
+                vec![
+                    ("source", Value::Text("direct".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                ],
+            ),
+            (
+                E::UnsupportedProductEra {
+                    center: AnalysisCenter::Cod,
+                    product_type: ProductType::Sp3,
+                    date: date(2020, 1, 2),
+                },
+                "unsupported_product_era",
+                vec![
+                    ("center", Value::Text("cod".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                    ("date", Value::Date(date(2020, 1, 2))),
+                ],
+            ),
+            (
+                E::UnsupportedDistributionEra {
+                    source: DistributionSource::Direct,
+                    center: AnalysisCenter::Cod,
+                    product_type: ProductType::Sp3,
+                    date: date(2020, 1, 2),
+                },
+                "unsupported_distribution_era",
+                vec![
+                    ("source", Value::Text("direct".into())),
+                    ("center", Value::Text("cod".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                    ("date", Value::Date(date(2020, 1, 2))),
+                ],
+            ),
+            (E::NoDistributionSources, "no_distribution_sources", vec![]),
+            (
+                E::InvalidOfficialFilename("bad..name".into()),
+                "invalid_official_filename",
+                vec![("value", Value::Text("bad..name".into()))],
+            ),
+            (
+                E::InconsistentProductIdentity {
+                    field: "official_filename",
+                },
+                "inconsistent_product_identity",
+                vec![("field", Value::Text("official_filename".into()))],
+            ),
+            (
+                E::NoOpenMirror {
+                    center: "cod".into(),
+                    product_type: "sp3".into(),
+                },
+                "no_open_mirror",
+                vec![
+                    ("center", Value::Text("cod".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                ],
+            ),
+            (
+                E::InvalidDate {
+                    year: 2026,
+                    month: 13,
+                    day: 40,
+                },
+                "invalid_date",
+                vec![
+                    ("year", Value::I32(2026)),
+                    ("month", Value::U8(13)),
+                    ("day", Value::U8(40)),
+                ],
+            ),
+            (E::DateOutOfRange, "date_out_of_range", vec![]),
+            (
+                E::DateBeforeGpsEpoch(date(1970, 1, 1)),
+                "date_before_gps_epoch",
+                vec![("date", Value::Date(date(1970, 1, 1)))],
+            ),
+            (
+                E::InvalidGpsDayOfWeek(7),
+                "invalid_gps_day_of_week",
+                vec![("gps_day", Value::U8(7))],
+            ),
+            (
+                E::InvalidSample("99X".into()),
+                "invalid_sample",
+                vec![("value", Value::Text("99X".into()))],
+            ),
+            (
+                E::UnsupportedSample {
+                    center: AnalysisCenter::Cod,
+                    product_type: ProductType::Sp3,
+                    sample: "99X".into(),
+                },
+                "unsupported_sample",
+                vec![
+                    ("center", Value::Text("cod".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                    ("sample", Value::Text("99X".into())),
+                ],
+            ),
+            (
+                E::InvalidSpan("99D".into()),
+                "invalid_span",
+                vec![("value", Value::Text("99D".into()))],
+            ),
+            (
+                E::InvalidIssue("9999".into()),
+                "invalid_issue",
+                vec![("value", Value::Text("9999".into()))],
+            ),
+            (
+                E::MissingIssue {
+                    center: AnalysisCenter::IgsUlt,
+                },
+                "missing_issue",
+                vec![("center", Value::Text("igs_ult".into()))],
+            ),
+            (
+                E::UnexpectedIssue {
+                    center: AnalysisCenter::Cod,
+                },
+                "unexpected_issue",
+                vec![("center", Value::Text("cod".into()))],
+            ),
+            (
+                E::UnsupportedIssue {
+                    center: AnalysisCenter::IgsUlt,
+                    issue: "0130".into(),
+                },
+                "unsupported_issue",
+                vec![
+                    ("center", Value::Text("igs_ult".into())),
+                    ("issue", Value::Text("0130".into())),
+                ],
+            ),
+            (
+                E::InvalidDateTime {
+                    hour: 25,
+                    minute: 61,
+                    second: 62,
+                },
+                "invalid_date_time",
+                vec![
+                    ("hour", Value::U8(25)),
+                    ("minute", Value::U8(61)),
+                    ("second", Value::U8(62)),
+                ],
+            ),
+            (E::NoUltraIssue, "no_ultra_issue", vec![]),
+            (E::NoAvailableUltraIssue, "no_available_ultra_issue", vec![]),
+            (
+                E::UnsupportedNominalSchedule {
+                    center: AnalysisCenter::WumNrt,
+                    product_type: ProductType::Sp3,
+                },
+                "unsupported_nominal_schedule",
+                vec![
+                    ("center", Value::Text("wum_nrt".into())),
+                    ("product_type", Value::Text("sp3".into())),
+                ],
+            ),
+            (
+                E::UnrecognizedArchiveListing {
+                    reason: "bad grammar".into(),
+                },
+                "unrecognized_archive_listing",
+                vec![("reason", Value::Text("bad grammar".into()))],
+            ),
+            (
+                E::InvalidStation("BADSTATION".into()),
+                "invalid_station",
+                vec![("value", Value::Text("BADSTATION".into()))],
+            ),
+            (
+                E::InvalidCoordinate {
+                    lat_deg_bits: (-0.0_f64).to_bits(),
+                    lon_deg_bits: f64::INFINITY.to_bits(),
+                },
+                "invalid_coordinate",
+                vec![
+                    ("lat_deg_bits", Value::Text("8000000000000000".into())),
+                    ("lon_deg_bits", Value::Text("7ff0000000000000".into())),
+                ],
+            ),
+            (
+                E::InvalidTileIndex {
+                    lat_index: -95,
+                    lon_index: 185,
+                },
+                "invalid_tile_index",
+                vec![
+                    ("lat_index", Value::I32(-95)),
+                    ("lon_index", Value::I32(185)),
+                ],
+            ),
+            (
+                E::InvalidTileId("invalid_tile".into()),
+                "invalid_tile_id",
+                vec![("value", Value::Text("invalid_tile".into()))],
+            ),
+        ];
+
+        assert_eq!(cases.len(), 30);
+        let field_count: usize = cases.iter().map(|(_, _, fields)| fields.len()).sum();
+        assert_eq!(field_count, 44);
+        // owner + 30 variants + 44 fields + Display
+        assert_eq!(1 + cases.len() + field_count + 1, 76);
+
+        for (error, expected_kind, expected_fields) in cases {
+            let expected_message = match expected_kind {
+                "unknown_center" => "unknown analysis center \"unknown_c\"",
+                "unknown_product_type" => "unknown product type \"unknown_pt\"",
+                "unsupported_product" => "cod does not serve sp3",
+                "unsupported_distribution" => "distributor direct does not serve sp3",
+                "unsupported_product_era" => "cod/sp3 has no cataloged naming convention for 2020-01-02",
+                "unsupported_distribution_era" => "distributor direct has no cataloged cod/sp3 layout for 2020-01-02",
+                "no_distribution_sources" => "exact product request has no distributors",
+                "invalid_official_filename" => "invalid official product filename \"bad..name\"",
+                "inconsistent_product_identity" => "product identity field \"official_filename\" disagrees with its official filename",
+                "no_open_mirror" => "cod/sp3 has no open mirror",
+                "invalid_date" => "invalid product date 2026-13-40",
+                "date_out_of_range" => "product date is out of range",
+                "date_before_gps_epoch" => "product date 1970-01-01 is before the GPS week epoch",
+                "invalid_gps_day_of_week" => "invalid GPS day-of-week 7",
+                "invalid_sample" => "invalid sample code \"99X\"",
+                "unsupported_sample" => "cod/sp3 does not publish sample interval \"99X\"",
+                "invalid_span" => "invalid coverage span \"99D\"",
+                "invalid_issue" => "invalid issue time \"9999\"",
+                "missing_issue" => "igs_ult requires an issue time",
+                "unexpected_issue" => "cod does not take an issue time",
+                "unsupported_issue" => "igs_ult does not publish issue \"0130\"",
+                "invalid_date_time" => "invalid product time 25:61:62",
+                "no_ultra_issue" => "no ultra-rapid issue at or before target",
+                "no_available_ultra_issue" => "no available ultra-rapid issue at or before target",
+                "unsupported_nominal_schedule" => "wum_nrt/sp3 has no nominal due-time schedule",
+                "unrecognized_archive_listing" => "unrecognized archive listing: bad grammar",
+                "invalid_station" => "invalid station code \"BADSTATION\"",
+                "invalid_coordinate" => "invalid terrain coordinate lat=-0 lon=inf",
+                "invalid_tile_index" => "invalid terrain tile index lat=-95 lon=185",
+                "invalid_tile_id" => "invalid skadi tile id \"invalid_tile\"",
+                other => panic!("unexpected DataCatalogError kind: {other}"),
+            };
+            assert_eq!(
+                error.to_string(),
+                expected_message,
+                "{expected_kind} Display"
+            );
+            let actual = catalog_error_projection(&error);
+            assert_eq!(actual.kind, expected_kind);
+            assert_eq!(actual.fields, expected_fields, "{expected_kind} fields");
+            assert_eq!(
+                actual.message, expected_message,
+                "{expected_kind} mapped message"
+            );
+            assert_eq!(
+                actual,
+                catalog_error_projection(&error),
+                "{expected_kind} repeat"
+            );
+            assert_eq!(error, error.clone(), "{expected_kind} derived Eq");
+        }
     }
 }

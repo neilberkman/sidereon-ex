@@ -258,10 +258,24 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
       assert {:ok, %{value: %Observations{} = v2, changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
       assert Enum.all?(changes, &match?(%DowngradeChange{}, &1))
 
-      assert changes |> Enum.map(&{&1.tag, &1.system, &1.from_code, &1.to_code}) |> Enum.sort() == [
-               {:code_renamed, "C", "C1I", "C2I"},
-               {:code_renamed, "C", "L1I", "L2I"}
-             ]
+      expected_changes = [
+        %DowngradeChange{
+          tag: :code_renamed,
+          system: "C",
+          from_code: "C1I",
+          to_code: "C2I",
+          message: ~s(CodeRenamed { system: BeiDou, from: "C1I", to: "C2I" })
+        },
+        %DowngradeChange{
+          tag: :code_renamed,
+          system: "C",
+          from_code: "L1I",
+          to_code: "L2I",
+          message: ~s(CodeRenamed { system: BeiDou, from: "L1I", to: "L2I" })
+        }
+      ]
+
+      assert Enum.sort_by(changes, & &1.from_code) == Enum.sort_by(expected_changes, & &1.from_code)
 
       assert %Header{version: 2.11} = Observations.header(v2)
       assert Observations.observation_codes(v2)["C"] == ["C2I", "L2I"]
@@ -274,6 +288,44 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
       assert written |> String.split("\n") |> hd() |> String.starts_with?("     2.11")
       assert {:ok, reparsed} = Observations.parse(written)
       assert Observations.epochs(reparsed) == Observations.epochs(v2)
+    end
+
+    test "the public downgrade route returns scale and rounded slip details from the NIF" do
+      obs =
+        parse!([
+          "     3.05           OBSERVATION DATA    M                   RINEX VERSION / TYPE",
+          "G    1 C1W                                                  SYS / # / OBS TYPES",
+          "R    1 C1C                                                  SYS / # / OBS TYPES",
+          "R   10   1 C1C                                              SYS / SCALE FACTOR",
+          "                                                            END OF HEADER",
+          "> 2020 01 01 00 00  0.0000000  0  2",
+          "G01  20000000.000",
+          "R02 200000001.230",
+          "> 2020 01 01 00 00 30.0000000  6  2",
+          "G01         1.000",
+          "R02        12.345"
+        ])
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      assert Enum.find(changes, &(&1.tag == :scale_factors_removed)) ==
+               %DowngradeChange{
+                 tag: :scale_factors_removed,
+                 count: 1,
+                 message: "ScaleFactorsRemoved { count: 1 }"
+               }
+
+      assert Enum.find(changes, &(&1.tag == :cycle_slip_rounded)) ==
+               %DowngradeChange{
+                 tag: :cycle_slip_rounded,
+                 epoch_index: 1,
+                 satellite: "R02",
+                 code: "C1C",
+                 from_value: 1.2345000000000002,
+                 to_value: 1.235,
+                 message:
+                   "CycleSlipRounded { epoch_index: 1, satellite: GnssSatelliteId { system: Glonass, prn: 2 }, code: \"C1C\", from: 1.2345000000000002, to: 1.235 }"
+               }
     end
 
     test "refuses a version that is not 2 and a version that is not a number" do
@@ -301,6 +353,72 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
       end
 
       assert Observations.observation_codes(obs)["C"] == ["C1P", "L1P"]
+    end
+  end
+
+  describe "DowngradeChange field mapping" do
+    test "every variant preserves its exact fields, nils, message, and nested change" do
+      variants = [
+        {:code_renamed, %{system: "C", from_code: "C1I", to_code: "C2I"},
+         ~s(CodeRenamed { system: BeiDou, from: "C1I", to: "C2I" })},
+        {:code_moved, %{system: "G", code: "L1C", from_position: 1, to_position: 0},
+         "CodeMoved { system: Gps, code: \"L1C\", from: 1, to: 0 }"},
+        {:code_added, %{system: "E", code: "C1C"}, "CodeAdded { system: Galileo, code: \"C1C\" }"},
+        {:code_list_removed, %{system: "R", codes: ["C1C", "L1C"]},
+         ~s(CodeListRemoved { system: Glonass, codes: ["C1C", "L1C"] })},
+        {:value_rounded, %{epoch_index: 3, satellite: "G01", code: "L1C", from_value: 100.000125, to_value: 100.0},
+         "ValueRounded { epoch_index: 3, satellite: GnssSatelliteId { system: Gps, prn: 1 }, code: \"L1C\", from: 100.000125, to: 100.0 }"},
+        {:cycle_slip_rounded, %{epoch_index: 3, satellite: "G01", code: "L1C", from_value: 0.125125, to_value: 0.125},
+         "CycleSlipRounded { epoch_index: 3, satellite: GnssSatelliteId { system: Gps, prn: 1 }, code: \"L1C\", from: 0.125125, to: 0.125 }"},
+        {:scale_factors_removed, %{count: 2}, "ScaleFactorsRemoved { count: 2 }"},
+        {:epoch_picoseconds_removed, %{epoch_index: 3, picoseconds: 123_456},
+         "EpochPicosecondsRemoved { epoch_index: 3, picoseconds: 123456 }"},
+        {:clock_offset_rounded, %{epoch_index: 3, from_value: 1.123456789123, to_value: 1.123456789},
+         "ClockOffsetRounded { epoch_index: 3, from: 1.123456789123, to: 1.123456789 }"},
+        {:deprecated_records_removed, %{label: "SYS / PHASE SHIFT", epoch_index: nil, records: ["G L1C  0.25000"]},
+         ~s(DeprecatedRecordsRemoved { label: "SYS / PHASE SHIFT", epoch_index: None, records: ["G L1C  0.25000"] })},
+        {:event_records_rewritten, %{epoch_index: 7, from_records: ["G    1 L1C"], to_records: ["     1    C1"]},
+         ~s(EventRecordsRewritten { epoch_index: 7, from: ["G    1 L1C"], to: ["     1    C1"] })}
+      ]
+
+      for {tag, fields, message} <- variants do
+        nif_map = Map.merge(%{tag: tag, change: nil, message: message}, fields)
+        expected = struct!(DowngradeChange, nif_map)
+        actual = DowngradeChange.from_nif_map(nif_map)
+        assert actual == expected
+        assert DowngradeChange.from_nif_map(nif_map) == actual
+      end
+
+      nested_map = %{
+        tag: :in_event_lists,
+        epoch_index: 7,
+        change: %{
+          tag: :code_moved,
+          system: "G",
+          code: "L1C",
+          from_position: 1,
+          to_position: 0,
+          change: nil,
+          message: "CodeMoved { system: Gps, code: \"L1C\", from: 1, to: 0 }"
+        },
+        message: "InEventLists { epoch_index: 7, change: CodeMoved { system: Gps, code: \"L1C\", from: 1, to: 0 } }"
+      }
+
+      assert DowngradeChange.from_nif_map(nested_map) ==
+               %DowngradeChange{
+                 tag: :in_event_lists,
+                 epoch_index: 7,
+                 change: %DowngradeChange{
+                   tag: :code_moved,
+                   system: "G",
+                   code: "L1C",
+                   from_position: 1,
+                   to_position: 0,
+                   message: "CodeMoved { system: Gps, code: \"L1C\", from: 1, to: 0 }"
+                 },
+                 message:
+                   "InEventLists { epoch_index: 7, change: CodeMoved { system: Gps, code: \"L1C\", from: 1, to: 0 } }"
+               }
     end
   end
 

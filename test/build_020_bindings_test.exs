@@ -16,6 +16,8 @@ defmodule Sidereon.Build020BindingsTest do
     expected_drms = :math.sqrt(2.0) * @sigma
 
     assert {:ok, %PositionErrorMetrics{} = metrics} = ErrorMetrics.from_enu_covariance(covariance)
+    assert {:ok, repeated_metrics} = ErrorMetrics.from_enu_covariance(covariance)
+    assert repeated_metrics == metrics
 
     assert_in_delta metrics.cep_m.radius_m, expected_cep, 1.0e-12
     assert_in_delta metrics.r95_m.radius_m, expected_r95, 1.0e-12
@@ -96,10 +98,19 @@ defmodule Sidereon.Build020BindingsTest do
   end
 
   defp assert_metrics_close(left, right) do
+    assert_in_delta left.ellipse.semi_major_m, right.ellipse.semi_major_m, 1.0e-12
+    assert_in_delta left.ellipse.semi_minor_m, right.ellipse.semi_minor_m, 1.0e-12
+    assert_in_delta left.ellipse.orientation_rad, right.ellipse.orientation_rad, 1.0e-12
+    assert_in_delta left.sigma_e_m, right.sigma_e_m, 1.0e-12
+    assert_in_delta left.sigma_n_m, right.sigma_n_m, 1.0e-12
+    assert_in_delta left.sigma_u_m, right.sigma_u_m, 1.0e-12
     assert_in_delta left.cep_m.radius_m, right.cep_m.radius_m, 1.0e-12
     assert_in_delta left.r95_m.radius_m, right.r95_m.radius_m, 1.0e-12
+    assert_in_delta left.r99_m.radius_m, right.r99_m.radius_m, 1.0e-12
     assert_in_delta left.drms_m, right.drms_m, 1.0e-12
+    assert_in_delta left.vep_m, right.vep_m, 1.0e-12
     assert_in_delta left.sep_m.radius_m, right.sep_m.radius_m, 1.0e-12
+    assert_in_delta left.mrse_m, right.mrse_m, 1.0e-12
   end
 
   defp diagonal(size, value) do

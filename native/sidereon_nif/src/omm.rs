@@ -11,6 +11,7 @@ use sidereon_core::astro::omm::{
     self as core_omm, Omm, OmmArray, OmmComments, OmmCovariance, OmmEpoch, OmmSpacecraft,
     OmmUserDefined,
 };
+use sidereon_core::astro::sgp4::JulianDate;
 
 mod atoms {
     rustler::atoms! {
@@ -100,6 +101,8 @@ pub(crate) struct OmmFields {
     covariance: Option<OmmCovarianceFields>,
     user_defined: Vec<OmmUserDefinedFields>,
     comments: OmmCommentsFields,
+    exact_sgp4_epoch: Option<(f64, f64)>,
+    quantize_tle_derived_fields: bool,
 }
 
 impl From<OmmEpoch> for OmmEpochFields {
@@ -179,6 +182,8 @@ impl From<Omm> for OmmFields {
                 tle_parameters: omm.comments.tle_parameters,
                 user_defined: omm.comments.user_defined,
             },
+            exact_sgp4_epoch: omm.exact_sgp4_epoch.map(|epoch| (epoch.0, epoch.1)),
+            quantize_tle_derived_fields: omm.quantize_tle_derived_fields,
         }
     }
 }
@@ -297,8 +302,16 @@ impl TryFrom<OmmFields> for Omm {
                 tle_parameters: fields.comments.tle_parameters,
                 user_defined: fields.comments.user_defined,
             },
-            exact_sgp4_epoch: None,
-            quantize_tle_derived_fields: true,
+            exact_sgp4_epoch: fields
+                .exact_sgp4_epoch
+                .map(|(whole, fraction)| {
+                    Ok(JulianDate(
+                        finite(whole, "exact_sgp4_epoch.whole")?,
+                        finite(fraction, "exact_sgp4_epoch.fraction")?,
+                    ))
+                })
+                .transpose()?,
+            quantize_tle_derived_fields: fields.quantize_tle_derived_fields,
         })
     }
 }

@@ -835,23 +835,6 @@ fn unresolved_reason_name(reason: FdeUnresolvedReason) -> String {
     }
 }
 
-#[cfg(test)]
-mod fde_mapping_tests {
-    use super::{unresolved_reason_name, FdeUnresolvedReason};
-
-    #[test]
-    fn unresolved_reasons_keep_their_public_names() {
-        assert_eq!(
-            unresolved_reason_name(FdeUnresolvedReason::ExclusionBudgetExhausted),
-            "exclusion_budget_exhausted"
-        );
-        assert_eq!(
-            unresolved_reason_name(FdeUnresolvedReason::NoAdmissibleExclusion),
-            "no_admissible_exclusion"
-        );
-    }
-}
-
 fn snake_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     for (index, c) in name.chars().enumerate() {
@@ -925,5 +908,22 @@ fn encode_validation_public_error<'a>(env: Env<'a>, error: SolutionValidationErr
         SolutionValidationError::NoConvergence(rms_m) => {
             (atoms::error(), (atoms::no_convergence(), rms_m)).encode(env)
         }
+    }
+}
+
+#[cfg(test)]
+mod fde_mapping_tests {
+    use super::{unresolved_reason_name, FdeUnresolvedReason};
+
+    #[test]
+    fn unresolved_reasons_keep_their_public_names() {
+        assert_eq!(
+            unresolved_reason_name(FdeUnresolvedReason::ExclusionBudgetExhausted),
+            "exclusion_budget_exhausted"
+        );
+        assert_eq!(
+            unresolved_reason_name(FdeUnresolvedReason::NoAdmissibleExclusion),
+            "no_admissible_exclusion"
+        );
     }
 }
