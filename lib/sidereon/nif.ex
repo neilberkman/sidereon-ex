@@ -2715,6 +2715,7 @@ defmodule Sidereon.NIF do
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
 
   def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
+  def data_validate_product_identity_catalog_details(_identity_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_exact_cache_open(_path, _identity_fields, _source, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2741,11 +2742,16 @@ defmodule Sidereon.NIF do
   def data_exact_cache_owner_publish(_owner, _product, _archive, _provenance), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_exact_cache_owner_abandon(_owner), do: :erlang.nif_error(:nif_not_loaded)
+  def data_open_mirror_catalog_details(_center, _product), do: :erlang.nif_error(:nif_not_loaded)
   def data_center_entry(_code), do: :erlang.nif_error(:nif_not_loaded)
   def data_default_sample(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_product_solution_class(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
+  def data_product_solution_class_catalog_details(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_sp3_content_start_convention(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_sp3_content_start_convention_catalog_details(_center, _year, _month, _day, _issue),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def data_default_sample_for_date(_center, _product_type, _year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2758,13 +2764,22 @@ defmodule Sidereon.NIF do
   def data_product_identity(_center, _product_type, _year, _month, _day, _sample, _issue),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_product_identity_catalog_details(_center, _product_type, _year, _month, _day, _sample, _issue),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def data_distribution_location_for_identity(_identity_fields, _source), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_distribution_location_for_identity_catalog_details(_identity_fields, _source),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_product_request_catalog_details(_identity_fields, _sources), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_ultra_sp3_locations(_center, _year, _month, _day, _issue), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_archive_compression(_center, _product_type), do: :erlang.nif_error(:nif_not_loaded)
   def data_unix_compress_decompress(_archive, _limit), do: :erlang.nif_error(:nif_not_loaded)
   def data_gps_week(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
+  def data_product_date_from_gps_week_day_catalog_details(_week, _day), do: :erlang.nif_error(:nif_not_loaded)
   def data_day_of_year(_year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
   def data_predicted_day_offset(_center), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2779,13 +2794,25 @@ defmodule Sidereon.NIF do
   def data_ultra_issue_candidates(_center, _year, _month, _day, _hour, _minute, _second),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_ultra_issue_candidates_catalog_details(_center, _year, _month, _day, _hour, _minute, _second),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_latest_ultra_issue_catalog_details(_center, _year, _month, _day, _hour, _minute, _second, _available),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def data_predicted_ionex_line_candidates(_year, _month, _day, _sample), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_publication_listing_urls(_center, _product, _year, _month, _day), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_parse_archive_listing(_body), do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_parse_archive_listing_catalog_details(_body), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_station_obs_filename_catalog_details(_station, _year, _month, _day, _sample),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def data_newest_published_product(_center, _product, _objects), do: :erlang.nif_error(:nif_not_loaded)
+  def data_newest_published_product_catalog_details(_center, _product, _objects), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_published_issue_age_minutes(
         _year,
@@ -2804,6 +2831,9 @@ defmodule Sidereon.NIF do
   def data_next_issue_due(_center, _product, _year, _month, _day, _hour, _minute, _second),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def data_next_issue_due_catalog_details(_center, _product, _year, _month, _day, _hour, _minute, _second),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def data_resolve_first_published(_candidates, _objects), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_skadi_source_entry, do: :erlang.nif_error(:nif_not_loaded)
@@ -2812,13 +2842,17 @@ defmodule Sidereon.NIF do
   def data_space_weather_archive_url(_product), do: :erlang.nif_error(:nif_not_loaded)
   def data_space_weather_cache_relpath(_product), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_tile_id(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
+  def data_skadi_tile_id_catalog_details(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_band(_lat_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_skadi_archive_url(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_terrain_tile_index(_lat_deg, _lon_deg), do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_terrain_tile_index_catalog_details(_lat_deg, _lon_deg), do: :erlang.nif_error(:nif_not_loaded)
   def data_dted_tile_filename(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_dted_block_dir(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_dted_cache_relpath(_lat_index, _lon_index), do: :erlang.nif_error(:nif_not_loaded)
   def data_parse_skadi_tile_id(_tile_id), do: :erlang.nif_error(:nif_not_loaded)
+  def data_parse_skadi_tile_id_catalog_details(_tile_id), do: :erlang.nif_error(:nif_not_loaded)
   def data_hgt_to_dted(_lat_index, _lon_index, _hgt), do: :erlang.nif_error(:nif_not_loaded)
 
   def geoid_undulation_rad(_lat_rad, _lon_rad), do: :erlang.nif_error(:nif_not_loaded)
