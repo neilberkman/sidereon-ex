@@ -99,6 +99,12 @@ defmodule Sidereon.GNSS.NtripTest do
              )
   end
 
+  test "request_bytes defaults its user agent to the core package version" do
+    assert {:ok, request} = Ntrip.request_bytes("caster.invalid", mountpoint: "MOUNT", version: :rev1)
+    package_version = Application.spec(:sidereon, :vsn) |> to_string()
+    assert request =~ "User-Agent: NTRIP sidereon/#{package_version}\r\n"
+  end
+
   test "sourcetable fetch can run over an injected raw transport" do
     transport = fn request, _opts ->
       assert request =~ "GET / HTTP/1.0"

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The default NTRIP user-agent product now follows the core package version.
+
 ## [3.0.0] - 2026-10-04
 
 ### Added
