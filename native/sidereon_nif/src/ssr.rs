@@ -7,7 +7,7 @@ use sidereon_core::ephemeris::{self, EphemerisSampleStatus};
 use sidereon_core::ssr::{
     MissingCorrectionAction, RegionalPolicy, SsrClockCorrection, SsrCorrectedEphemeris,
     SsrCorrectionSizePolicy, SsrCorrectionStore, SsrFallbackPolicy, SsrNavigationMessage,
-    SsrOrbitCorrection, SsrSource,
+    SsrOrbitCorrection, SsrReferencePoint, SsrSatelliteAttitude, SsrSource,
 };
 use sidereon_core::GnssSatelliteId;
 
@@ -106,11 +106,45 @@ struct SsrOversizedCorrectionTerm {
     size: SsrCorrectionSizeTerm,
 }
 
+fn reference_point(value: &str) -> NifResult<SsrReferencePoint> {
+    match value {
+        "antenna_phase_center" => Ok(SsrReferencePoint::AntennaPhaseCenter),
+        "center_of_mass" => Ok(SsrReferencePoint::CenterOfMass),
+        _ => Err(Error::Term(Box::new("invalid SSR reference point"))),
+    }
+}
+
 fn correction_size_policy(value: &str) -> NifResult<SsrCorrectionSizePolicy> {
     match value {
         "strict" => Ok(SsrCorrectionSizePolicy::Strict),
         "lenient" => Ok(SsrCorrectionSizePolicy::Lenient),
         _ => Err(Error::Term(Box::new("invalid correction size policy"))),
+    }
+}
+
+fn satellite_attitude(value: &str) -> NifResult<SsrSatelliteAttitude> {
+    match value {
+        "unavailable" => Ok(SsrSatelliteAttitude::Unavailable),
+        "nominal_sun_fixed" => Ok(SsrSatelliteAttitude::NominalSunFixed),
+        _ => Err(Error::Term(Box::new("invalid SSR satellite attitude"))),
+    }
+}
+
+fn configured_source<'a>(
+    broadcast: &'a BroadcastResource,
+    store: &'a SsrCorrectionStore,
+    fallback: SsrFallbackPolicy,
+    size_policy: SsrCorrectionSizePolicy,
+    attitude: SsrSatelliteAttitude,
+    satellite_antex: Option<&'a crate::antex::AntexResource>,
+) -> SsrCorrectedEphemeris<'a> {
+    let source = SsrCorrectedEphemeris::new(&broadcast.store, store)
+        .with_fallback(fallback)
+        .with_correction_size_policy(size_policy)
+        .with_satellite_attitude(attitude);
+    match satellite_antex {
+        Some(antex) => source.with_satellite_antennas(&antex.antex),
+        None => source,
     }
 }
 
@@ -256,10 +290,11 @@ fn sample_row(row: ephemeris::EphemerisSampleRow) -> EphemerisSampleRowTerm {
 }
 
 #[rustler::nif]
-fn ssr_store_new() -> ResourceArc<SsrStoreResource> {
-    ResourceArc::new(SsrStoreResource {
-        store: Mutex::new(SsrCorrectionStore::new()),
-    })
+fn ssr_store_new(reference_point_name: String) -> NifResult<ResourceArc<SsrStoreResource>> {
+    let reference_point = reference_point(&reference_point_name)?;
+    Ok(ResourceArc::new(SsrStoreResource {
+        store: Mutex::new(SsrCorrectionStore::new().with_reference_point(reference_point)),
+    }))
 }
 
 /// Build a store from every readable frame of framed RTCM bytes, read under
@@ -273,23 +308,71 @@ fn ssr_store_from_rtcm<'a>(
     scale: String,
     week: u32,
     tow_s: f64,
+    reference_point_name: String,
 ) -> NifResult<Term<'a>> {
-    let ingest = sidereon::ssr_store_from_rtcm(bytes.as_slice(), week_tow(scale, week, tow_s)?);
-    let refusals: Vec<Term<'a>> = ingest
-        .ingest_refusals
-        .iter()
-        .map(|refusal| {
+    let reference_point = reference_point(&reference_point_name)?;
+    let epoch = week_tow(scale, week, tow_s)?;
+    if reference_point == SsrReferencePoint::AntennaPhaseCenter {
+        let ingest = sidereon::ssr_store_from_rtcm(bytes.as_slice(), epoch);
+        let refusals: Vec<Term<'a>> = ingest
+            .ingest_refusals
+            .iter()
+            .map(|refusal| {
+                Term::map_from_pairs(
+                    env,
+                    &[
+                        (
+                            atoms::message_number().encode(env),
+                            i64::from(refusal.message_number).encode(env),
+                        ),
+                        (
+                            atoms::reason().encode(env),
+                            refusal.error.to_string().encode(env),
+                        ),
+                    ],
+                )
+            })
+            .collect::<NifResult<_>>()?;
+        let report = Term::map_from_pairs(
+            env,
+            &[
+                (
+                    atoms::diagnostics().encode(env),
+                    crate::rtcm::diagnostics_term(env, &ingest.diagnostics),
+                ),
+                (
+                    atoms::trailing_partial_frame_len().encode(env),
+                    (ingest.trailing_partial_frame_len as u64).encode(env),
+                ),
+                (atoms::ingest_refusals().encode(env), refusals.encode(env)),
+            ],
+        )?;
+        let handle = ResourceArc::new(SsrStoreResource {
+            store: Mutex::new(ingest.store),
+        });
+        return Ok((handle, report).encode(env));
+    }
+    let mut store = SsrCorrectionStore::new().with_reference_point(reference_point);
+    let mut assembler = sidereon_core::rtcm::SsrStreamAssembler::with_policy(
+        sidereon_core::rtcm::RtcmPolicy::Lenient,
+    );
+    let mut decoded = assembler.push(bytes.as_slice());
+    let trailing_partial_frame_len = assembler.retained_len();
+    decoded.extend(assembler.finish());
+    let mut refusals = Vec::new();
+    for message in decoded.into_iter().flatten() {
+        if let Err(error) = store.ingest(&message, epoch) {
+            refusals.push((message.message_number() as i64, error.to_string()));
+        }
+    }
+    let refusal_terms: Vec<Term<'a>> = refusals
+        .into_iter()
+        .map(|(number, reason)| {
             Term::map_from_pairs(
                 env,
                 &[
-                    (
-                        atoms::message_number().encode(env),
-                        i64::from(refusal.message_number).encode(env),
-                    ),
-                    (
-                        atoms::reason().encode(env),
-                        refusal.error.to_string().encode(env),
-                    ),
+                    (atoms::message_number().encode(env), number.encode(env)),
+                    (atoms::reason().encode(env), reason.encode(env)),
                 ],
             )
         })
@@ -299,17 +382,20 @@ fn ssr_store_from_rtcm<'a>(
         &[
             (
                 atoms::diagnostics().encode(env),
-                crate::rtcm::diagnostics_term(env, &ingest.diagnostics),
+                crate::rtcm::diagnostics_term(env, assembler.diagnostics()),
             ),
             (
                 atoms::trailing_partial_frame_len().encode(env),
-                (ingest.trailing_partial_frame_len as u64).encode(env),
+                (trailing_partial_frame_len as u64).encode(env),
             ),
-            (atoms::ingest_refusals().encode(env), refusals.encode(env)),
+            (
+                atoms::ingest_refusals().encode(env),
+                refusal_terms.encode(env),
+            ),
         ],
     )?;
     let handle = ResourceArc::new(SsrStoreResource {
-        store: Mutex::new(ingest.store),
+        store: Mutex::new(store),
     });
     Ok((handle, report).encode(env))
 }
@@ -322,10 +408,36 @@ fn ssr_store_from_rtcm_strict(
     scale: String,
     week: u32,
     tow_s: f64,
+    reference_point_name: String,
 ) -> NifResult<ResourceArc<SsrStoreResource>> {
-    let store =
-        sidereon::ssr_store_from_rtcm_strict(bytes.as_slice(), week_tow(scale, week, tow_s)?)
+    let reference_point = reference_point(&reference_point_name)?;
+    let epoch = week_tow(scale, week, tow_s)?;
+    if reference_point == SsrReferencePoint::AntennaPhaseCenter {
+        let store = sidereon::ssr_store_from_rtcm_strict(bytes.as_slice(), epoch)
             .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+        return Ok(ResourceArc::new(SsrStoreResource {
+            store: Mutex::new(store),
+        }));
+    }
+    let mut store = SsrCorrectionStore::new().with_reference_point(reference_point);
+    let mut assembler = sidereon_core::rtcm::SsrStreamAssembler::new();
+    let mut decoded = assembler.push(bytes.as_slice());
+    let trailing = assembler.retained_len();
+    decoded.extend(assembler.finish());
+    for message in decoded {
+        let message =
+            message.map_err(|e| Error::Term(Box::new(format!("SSR ingest failed: {e}"))))?;
+        store
+            .ingest(&message, epoch)
+            .map_err(|e| Error::Term(Box::new(format!("SSR ingest failed: {e}"))))?;
+    }
+    let diagnostics = assembler.diagnostics();
+    if diagnostics.resync_bytes > 0 {
+        return Err(Error::Term(Box::new(format!(
+            "SSR ingest failed: parse error: RTCM input has {} bytes outside CRC-valid frames ({} CRC-24Q failures, {trailing} bytes from an unfinished frame at the end)",
+            diagnostics.resync_bytes, diagnostics.crc_failures
+        ))));
+    }
     Ok(ResourceArc::new(SsrStoreResource {
         store: Mutex::new(store),
     }))
@@ -414,13 +526,21 @@ fn ssr_corrected_position<'a>(
     fallback_to_broadcast: bool,
     regional_providers: Vec<u16>,
     size_policy: String,
+    satellite_antex: Option<ResourceArc<crate::antex::AntexResource>>,
+    attitude: String,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
     let size_policy = correction_size_policy(&size_policy)?;
+    let attitude = satellite_attitude(&attitude)?;
     let store = lock_store(&store)?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
-        .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers))
-        .with_correction_size_policy(size_policy);
+    let source = configured_source(
+        &broadcast,
+        &store,
+        fallback_policy(fallback_to_broadcast, regional_providers),
+        size_policy,
+        attitude,
+        satellite_antex.as_deref(),
+    );
     if size_policy == SsrCorrectionSizePolicy::Strict {
         if let Some(size) = source.correction_size_refusal(sat, t_j2000_s, t_j2000_s) {
             return Ok((
@@ -457,13 +577,21 @@ fn ssr_corrected_position_at_epoch_query<'a>(
     fallback_to_broadcast: bool,
     regional_providers: Vec<u16>,
     size_policy: String,
+    satellite_antex: Option<ResourceArc<crate::antex::AntexResource>>,
+    attitude: String,
 ) -> NifResult<Term<'a>> {
     let sat = sat_id(&satellite_id)?;
     let size_policy = correction_size_policy(&size_policy)?;
+    let attitude = satellite_attitude(&attitude)?;
     let store = lock_store(&store)?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
-        .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers))
-        .with_correction_size_policy(size_policy);
+    let source = configured_source(
+        &broadcast,
+        &store,
+        fallback_policy(fallback_to_broadcast, regional_providers),
+        size_policy,
+        attitude,
+        satellite_antex.as_deref(),
+    );
     if size_policy == SsrCorrectionSizePolicy::Strict {
         if let Some(size) =
             source.correction_size_refusal_at_epoch_query(sat, &epoch.query, &selection_epoch.query)
@@ -514,13 +642,21 @@ fn ssr_source_exact_epoch_hook<'a>(
     size_policy: String,
     hook: String,
     position_m: Option<Vec3>,
+    satellite_antex: Option<ResourceArc<crate::antex::AntexResource>>,
+    attitude: String,
 ) -> NifResult<Term<'a>> {
     let satellite = sat_id(&satellite_id)?;
     let size_policy = correction_size_policy(&size_policy)?;
+    let attitude = satellite_attitude(&attitude)?;
     let store = lock_store(&store)?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
-        .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers))
-        .with_correction_size_policy(size_policy);
+    let source = configured_source(
+        &broadcast,
+        &store,
+        fallback_policy(fallback_to_broadcast, regional_providers),
+        size_policy,
+        attitude,
+        satellite_antex.as_deref(),
+    );
     if size_policy == SsrCorrectionSizePolicy::Strict
         && matches!(hook.as_str(), "selected_state" | "transmit_clock")
     {
@@ -645,16 +781,24 @@ fn ssr_sample_broadcast(
     fallback_to_broadcast: bool,
     regional_providers: Vec<u16>,
     size_policy: String,
+    satellite_antex: Option<ResourceArc<crate::antex::AntexResource>>,
+    attitude: String,
 ) -> NifResult<Vec<EphemerisSampleRowTerm>> {
     let sats: Vec<GnssSatelliteId> = satellites
         .iter()
         .map(|sat| sat_id(sat))
         .collect::<NifResult<_>>()?;
     let size_policy = correction_size_policy(&size_policy)?;
+    let attitude = satellite_attitude(&attitude)?;
     let store = lock_store(&store)?;
-    let source = SsrCorrectedEphemeris::new(&broadcast.store, &store)
-        .with_fallback(fallback_policy(fallback_to_broadcast, regional_providers))
-        .with_correction_size_policy(size_policy);
+    let source = configured_source(
+        &broadcast,
+        &store,
+        fallback_policy(fallback_to_broadcast, regional_providers),
+        size_policy,
+        attitude,
+        satellite_antex.as_deref(),
+    );
     let rows = ephemeris::sample(&source, &sats, start_j2000_s, stop_j2000_s, step_s)
         .map_err(errors::invalid_input)?;
     Ok(rows.into_iter().map(sample_row).collect())

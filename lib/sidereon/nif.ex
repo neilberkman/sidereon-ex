@@ -962,7 +962,9 @@ defmodule Sidereon.NIF do
         _regional_providers,
         _size_policy,
         _hook,
-        _position
+        _position,
+        _satellite_antex,
+        _attitude
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def sbas_source_exact_epoch_hook(
@@ -1214,11 +1216,12 @@ defmodule Sidereon.NIF do
         _degradation
       ), do: :erlang.nif_error(:nif_not_loaded)
 
-  def ssr_store_new, do: :erlang.nif_error(:nif_not_loaded)
+  def ssr_store_new(_reference_point), do: :erlang.nif_error(:nif_not_loaded)
 
-  def ssr_store_from_rtcm(_bytes, _scale, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
+  def ssr_store_from_rtcm(_bytes, _scale, _week, _tow_s, _reference_point), do: :erlang.nif_error(:nif_not_loaded)
 
-  def ssr_store_from_rtcm_strict(_bytes, _scale, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
+  def ssr_store_from_rtcm_strict(_bytes, _scale, _week, _tow_s, _reference_point),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_store_ingest(_handle, _message, _week, _tow_s), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -1235,7 +1238,9 @@ defmodule Sidereon.NIF do
         _t_j2000_s,
         _fallback_to_broadcast,
         _regional_providers,
-        _size_policy
+        _size_policy,
+        _satellite_antex,
+        _attitude
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_corrected_position_at_epoch_query(
@@ -1246,7 +1251,9 @@ defmodule Sidereon.NIF do
         _selection_epoch_query,
         _fallback_to_broadcast,
         _regional_providers,
-        _size_policy
+        _size_policy,
+        _satellite_antex,
+        _attitude
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ssr_sample_broadcast(
@@ -1258,7 +1265,9 @@ defmodule Sidereon.NIF do
         _step_s,
         _fallback_to_broadcast,
         _regional_providers,
-        _size_policy
+        _size_policy,
+        _satellite_antex,
+        _attitude
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def ephemeris_sample_sp3(_handle, _satellites, _start_j2000_s, _stop_j2000_s, _step_s),

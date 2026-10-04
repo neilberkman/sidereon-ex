@@ -7,6 +7,7 @@ defmodule Sidereon.GNSS.SSR do
   resource and evaluates corrected satellite states through the core.
   """
 
+  alias Sidereon.GNSS.Antex
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.RTCM
   alias Sidereon.GNSS.Time
@@ -19,6 +20,7 @@ defmodule Sidereon.GNSS.SSR do
 
   @type t :: %__MODULE__{handle: reference()}
   @type epoch :: NaiveDateTime.t() | tuple() | number()
+  @type satellite_attitude :: :unavailable | :nominal_sun_fixed
 
   defmodule Solution do
     @moduledoc "SSR solution identity."
@@ -184,9 +186,17 @@ defmodule Sidereon.GNSS.SSR do
           }
   end
 
-  @doc "Create an empty correction store."
-  @spec new() :: t()
-  def new, do: %__MODULE__{handle: NIF.ssr_store_new()}
+  @doc """
+  Create an empty correction store.
+
+  The reference_point option selects interpretation of incoming orbit
+  corrections: :antenna_phase_center (default) or :center_of_mass.
+  """
+  @spec new(keyword()) :: t()
+  def new(opts \\ []) do
+    point = reference_point_policy(Keyword.get(opts, :reference_point, :antenna_phase_center))
+    %__MODULE__{handle: NIF.ssr_store_new(point)}
+  end
 
   @doc """
   Build a correction store from every readable frame of framed RTCM SSR/HAS
@@ -217,7 +227,13 @@ defmodule Sidereon.GNSS.SSR do
   def from_rtcm(bytes, week, tow_s, opts \\ []) when is_binary(bytes) do
     scale = time_scale(Keyword.get(opts, :scale, :gpst))
 
-    case NIF.ssr_store_from_rtcm(bytes, scale, week, tow_s / 1.0) do
+    case NIF.ssr_store_from_rtcm(
+           bytes,
+           scale,
+           week,
+           tow_s / 1.0,
+           reference_point_policy(Keyword.get(opts, :reference_point, :antenna_phase_center))
+         ) do
       {handle, report} when is_reference(handle) -> {:ok, %__MODULE__{handle: handle}, report}
       {:error, _} = err -> err
       other -> {:error, other}
@@ -236,7 +252,13 @@ defmodule Sidereon.GNSS.SSR do
   def from_rtcm_strict(bytes, week, tow_s, opts \\ []) when is_binary(bytes) do
     scale = time_scale(Keyword.get(opts, :scale, :gpst))
 
-    case NIF.ssr_store_from_rtcm_strict(bytes, scale, week, tow_s / 1.0) do
+    case NIF.ssr_store_from_rtcm_strict(
+           bytes,
+           scale,
+           week,
+           tow_s / 1.0,
+           reference_point_policy(Keyword.get(opts, :reference_point, :antenna_phase_center))
+         ) do
       handle when is_reference(handle) -> {:ok, %__MODULE__{handle: handle}}
       {:error, _} = err -> err
       other -> {:error, other}
@@ -300,6 +322,12 @@ defmodule Sidereon.GNSS.SSR do
   Evaluate an SSR-corrected broadcast satellite state at an epoch.
 
   `:correction_size_policy` accepts `:strict` (the default) or `:lenient`.
+  `:satellite_antex` may be a parsed `Sidereon.GNSS.Antex` product, and
+  `:satellite_attitude` may be `:unavailable` (the default) or
+  `:nominal_sun_fixed`. These configure the same core source used by the
+  exact-query and sampling routes. A centre-of-mass correction needs both
+  antenna calibration and a usable attitude to convert to the antenna phase
+  centre; absent configuration leaves that correction unavailable.
   Strict mode returns `{:error, {:correction_exceeds_limit, details}}` when
   the applied orbit or clock correction exceeds the RTKLIB limits. This
   refusal is not replaced by a broadcast fallback.
@@ -313,7 +341,8 @@ defmodule Sidereon.GNSS.SSR do
            }}
           | {:error, term()}
   def corrected_position(%Broadcast{handle: broadcast}, %__MODULE__{handle: store}, satellite_id, epoch, opts \\ []) do
-    with {:ok, t_j2000_s} <- epoch_seconds(epoch) do
+    with {:ok, t_j2000_s} <- epoch_seconds(epoch),
+         {:ok, {satellite_antex, attitude}} <- source_options(opts) do
       fallback? = Keyword.get(opts, :fallback_to_broadcast, false)
       regional = Keyword.get(opts, :regional_providers, [])
       size_policy = correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict))
@@ -325,7 +354,9 @@ defmodule Sidereon.GNSS.SSR do
              t_j2000_s,
              fallback?,
              regional,
-             size_policy
+             size_policy,
+             satellite_antex,
+             attitude
            ) do
         {:ok, {position, clock_s}, oversized} ->
           {:ok,
@@ -374,30 +405,34 @@ defmodule Sidereon.GNSS.SSR do
     if is_nil(selection_epoch) do
       {:error, :invalid_exact_epoch_query}
     else
-      fallback? = Keyword.get(opts, :fallback_to_broadcast, false)
-      regional = Keyword.get(opts, :regional_providers, [])
-      size_policy = correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict))
+      with {:ok, {satellite_antex, attitude}} <- source_options(opts) do
+        fallback? = Keyword.get(opts, :fallback_to_broadcast, false)
+        regional = Keyword.get(opts, :regional_providers, [])
+        size_policy = correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict))
 
-      case NIF.ssr_corrected_position_at_epoch_query(
-             broadcast,
-             store,
-             satellite_id,
-             epoch,
-             selection_epoch,
-             fallback?,
-             regional,
-             size_policy
-           ) do
-        {:ok, {position, clock_s}, oversized} ->
-          {:ok,
-           %{
-             position_ecef_m: position,
-             clock_s: clock_s,
-             oversized_corrections: Enum.map(oversized, &oversized_correction_struct/1)
-           }}
+        case NIF.ssr_corrected_position_at_epoch_query(
+               broadcast,
+               store,
+               satellite_id,
+               epoch,
+               selection_epoch,
+               fallback?,
+               regional,
+               size_policy,
+               satellite_antex,
+               attitude
+             ) do
+          {:ok, {position, clock_s}, oversized} ->
+            {:ok,
+             %{
+               position_ecef_m: position,
+               clock_s: clock_s,
+               oversized_corrections: Enum.map(oversized, &oversized_correction_struct/1)
+             }}
 
-        {:error, _} = err ->
-          err
+          {:error, _} = err ->
+            err
+        end
       end
     end
   rescue
@@ -512,23 +547,27 @@ defmodule Sidereon.GNSS.SSR do
          position_ecef_m,
          opts
        ) do
-    case NIF.ssr_source_exact_epoch_hook(
-           broadcast,
-           store,
-           satellite_id,
-           state_epoch,
-           selection_epoch,
-           Keyword.get(opts, :fallback_to_broadcast, false),
-           Keyword.get(opts, :regional_providers, []),
-           correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict)),
-           hook,
-           position_ecef_m
-         ) do
-      {:error, {:correction_exceeds_limit, details}} ->
-        {:error, {:correction_exceeds_limit, correction_size_struct(details)}}
+    with {:ok, {satellite_antex, attitude}} <- source_options(opts) do
+      case NIF.ssr_source_exact_epoch_hook(
+             broadcast,
+             store,
+             satellite_id,
+             state_epoch,
+             selection_epoch,
+             Keyword.get(opts, :fallback_to_broadcast, false),
+             Keyword.get(opts, :regional_providers, []),
+             correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict)),
+             hook,
+             position_ecef_m,
+             satellite_antex,
+             attitude
+           ) do
+        {:error, {:correction_exceeds_limit, details}} ->
+          {:error, {:correction_exceeds_limit, correction_size_struct(details)}}
 
-      result ->
-        decode_source_hook(result)
+        result ->
+          decode_source_hook(result)
+      end
     end
   rescue
     error in ErlangError -> NifCall.error(error, __STACKTRACE__, :ssr_source_exact_epoch_hook)
@@ -555,10 +594,16 @@ defmodule Sidereon.GNSS.SSR do
   defp decode_source_hook(value) when is_number(value) or is_nil(value), do: value
   defp decode_source_hook(value), do: value
 
-  @doc "Sample an SSR-corrected broadcast source over a time grid."
+  @doc """
+  Sample an SSR-corrected broadcast source over a time grid.
+
+  Accepts the same `:satellite_antex` and `:satellite_attitude` options as
+  `corrected_position/5`.
+  """
   def sample(%Broadcast{handle: broadcast}, %__MODULE__{handle: store}, satellites, {from, to}, step_s, opts \\ []) do
     with {:ok, start_s} <- epoch_seconds(from),
-         {:ok, stop_s} <- epoch_seconds(to) do
+         {:ok, stop_s} <- epoch_seconds(to),
+         {:ok, {satellite_antex, attitude}} <- source_options(opts) do
       fallback? = Keyword.get(opts, :fallback_to_broadcast, false)
       regional = Keyword.get(opts, :regional_providers, [])
       size_policy = correction_size_policy(Keyword.get(opts, :correction_size_policy, :strict))
@@ -573,7 +618,9 @@ defmodule Sidereon.GNSS.SSR do
           step_s / 1.0,
           fallback?,
           regional,
-          size_policy
+          size_policy,
+          satellite_antex,
+          attitude
         )
 
       {:ok, Enum.map(rows, &sample_row/1)}
@@ -670,6 +717,30 @@ defmodule Sidereon.GNSS.SSR do
   defp solution_struct(fields), do: struct!(Solution, Map.update!(fields, :source, &string_atom/1))
 
   defp sample_row(row), do: %{row | status: string_atom(row.status)}
+
+  defp source_options(opts) do
+    attitude =
+      case Keyword.get(opts, :satellite_attitude, :unavailable) do
+        :unavailable -> "unavailable"
+        :nominal_sun_fixed -> "nominal_sun_fixed"
+        _ -> nil
+      end
+
+    case {Keyword.get(opts, :satellite_antex), attitude} do
+      {nil, attitude} when is_binary(attitude) ->
+        {:ok, {nil, attitude}}
+
+      {%Antex{handle: handle}, attitude} when is_reference(handle) and is_binary(attitude) ->
+        {:ok, {handle, attitude}}
+
+      _ ->
+        {:error, :invalid_ssr_satellite_configuration}
+    end
+  end
+
+  defp reference_point_policy(:antenna_phase_center), do: "antenna_phase_center"
+  defp reference_point_policy(:center_of_mass), do: "center_of_mass"
+  defp reference_point_policy(_), do: "invalid"
 
   defp correction_size_policy(:strict), do: "strict"
   defp correction_size_policy(:lenient), do: "lenient"
