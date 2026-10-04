@@ -831,6 +831,11 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Lint a parsed RINEX OBS file.
+
+  Each finding preserves :code, :severity, :spec_ref, :repairable, and :at,
+  and also reports :kind plus :details. A populated detail is a tagged tuple
+  such as {:obs_event_epoch, %{flag: 4}}; a fieldless detail is the variant
+  atom, such as :obs_interval_unavailable.
   """
   @spec lint_obs(Observations.t()) :: {:ok, map()} | {:error, term()}
   def lint_obs(%Observations{handle: handle}) do
@@ -844,6 +849,10 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Lint RINEX OBS or CRINEX text.
+
+  Findings include their tagged variant and typed payload in :details, while
+  retaining the existing code, severity, spec reference, repairability, and
+  source-location fields.
   """
   @spec lint_obs_text(String.t()) :: {:ok, map()} | {:error, term()}
   def lint_obs_text(text) when is_binary(text) do
@@ -857,6 +866,10 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Lint RINEX NAV text.
+
+  A NavImplausibleRecord detail keeps finite :value fields as floats;
+  non-finite values are represented by :nan, :infinity, or
+  :negative_infinity.
   """
   @spec lint_nav_text(String.t()) :: {:ok, map()} | {:error, term()}
   def lint_nav_text(text) when is_binary(text) do
