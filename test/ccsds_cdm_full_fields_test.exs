@@ -91,6 +91,83 @@ defmodule Sidereon.CCSDS.CDMFullFieldsTest do
     |> Enum.each(fn {got, expected} -> assert_in_delta got, expected, 1.0e-12 end)
   end
 
+  test "public KVN and XML routes retain every object DTO field and covariance row" do
+    {:ok, base} = @fixture_path |> File.read!() |> CDM.parse()
+
+    od = %CDM.OdParameters{
+      comments: ["OD details"],
+      time_lastob_start: "2010-03-11T00:00:00",
+      time_lastob_end: "2010-03-12T00:00:00",
+      recommended_od_span_d: 3.25,
+      actual_od_span_d: 2.5,
+      obs_available: 701,
+      obs_used: 699,
+      tracks_available: 81,
+      tracks_used: 80,
+      residuals_accepted_pct: 98.75,
+      weighted_rms: 0.125
+    }
+
+    additional = %CDM.AdditionalParameters{
+      comments: ["physical properties"],
+      area_pc_m2: 2.125,
+      area_drg_m2: 3.25,
+      area_srp_m2: 4.5,
+      mass_kg: 5.75,
+      cd_area_over_mass_m2_kg: 0.125,
+      cr_area_over_mass_m2_kg: 0.25,
+      thrust_acceleration_m_s2: 0.375,
+      sedr_w_kg: 0.5
+    }
+
+    object1 = %{
+      base.object1
+      | metadata_comments: ["metadata details"],
+        object_designator: "2024-001A",
+        catalog_name: "TEST-SATCAT",
+        object_name: "ALPHA",
+        international_designator: "2024-001A",
+        object_type: "PAYLOAD",
+        operator_contact_position: "FLIGHT DIRECTOR",
+        operator_organization: "SIDEREON OPS",
+        operator_phone: "+1-555-0199",
+        operator_email: "ops@example.test",
+        ephemeris_name: "EPHEM-1",
+        covariance_method: "CALCULATED",
+        maneuverable: "YES",
+        orbit_center: "EARTH",
+        ref_frame: "EME2000",
+        gravity_model: "EGM-96: 36D 36O",
+        atmospheric_model: "JACCHIA 70 DCA",
+        n_body_perturbations: "MOON, SUN",
+        solar_rad_pressure: "YES",
+        earth_tides: "NO",
+        intrack_thrust: "NO",
+        state_comments: ["state details"],
+        state: {{1.0, 2.0, 3.0}, {0.125, 0.25, 0.375}},
+        covariance_comments: ["covariance details"],
+        covariance_rtn: [1.0, 0.125, 2.0, 0.25, 0.375, 3.0],
+        od_parameters: od,
+        additional_parameters: additional,
+        velocity_covariance_rtn: Enum.map(1..15, &(&1 / 8)),
+        drag_covariance_rtn: Enum.map(1..7, &(&1 / 8)),
+        srp_covariance_rtn: Enum.map(1..8, &(&1 / 8)),
+        thrust_covariance_rtn: Enum.map(1..9, &(&1 / 8))
+    }
+
+    cdm = %{base | object1: object1}
+
+    for {encode, parse} <- [
+          {&CDM.encode_kvn/1, &CDM.parse_kvn/1},
+          {&CDM.encode_xml/1, &CDM.parse_xml/1}
+        ] do
+      assert {:ok, text} = encode.(cdm)
+      assert {:ok, reparsed} = parse.(text)
+      assert reparsed.object1 == object1
+      assert reparsed.object2 == base.object2
+    end
+  end
+
   describe "retained CDM items" do
     test "keeps the header, relative metadata/data and screening items" do
       {:ok, cdm} = @fixture_path |> File.read!() |> CDM.parse()
