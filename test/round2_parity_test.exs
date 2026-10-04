@@ -61,9 +61,31 @@ defmodule Sidereon.Round2ParityTest do
     assert parsed.sentence.talker == "GP"
     assert parsed.sentence.system == "G"
     assert parsed.sentence.body.time.seconds_of_day == 45_319.0
-    assert_close(parsed.sentence.body.latitude.degrees_float, 48.1173)
-    assert_close(parsed.sentence.body.longitude.degrees_float, 11.516666666666667)
+    latitude = parsed.sentence.body.latitude
+    assert latitude.degrees == 48
+    assert latitude.minutes_scaled == 7_038
+    assert latitude.decimals == 3
+    assert latitude.negative == false
+    assert latitude.degrees_float == 48.1173
+    assert_in_delta latitude.radians, 0.83980531216986753, 1.0e-15
+
+    longitude = parsed.sentence.body.longitude
+    assert longitude.degrees == 11
+    assert longitude.minutes_scaled == 31_000
+    assert longitude.decimals == 3
+    assert longitude.negative == false
+    assert longitude.degrees_float == 11.516666666666667
+    assert_in_delta longitude.radians, 0.20100375218801364, 1.0e-15
     assert parsed.diagnostics == %{skips: [], warnings: []}
+
+    southwest =
+      "$GPGGA,235959.99,3351.9085800,S,15112.5940000,W,4,07,0.75,58.7,M,,,,*3D\r\n"
+
+    assert {:ok, parsed_southwest} = NMEA.parse_sentence(southwest)
+    assert parsed_southwest.sentence.body.latitude.negative == true
+    assert parsed_southwest.sentence.body.longitude.negative == true
+    assert parsed_southwest.sentence.body.latitude.degrees_float == -33.865143
+    assert parsed_southwest.sentence.body.longitude.degrees_float == -151.2099
 
     text =
       "$GPGGA,123519.00,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*69\r\n" <>
