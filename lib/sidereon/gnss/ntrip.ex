@@ -19,7 +19,6 @@ defmodule Sidereon.GNSS.Ntrip do
 
   @default_port 2101
   @default_stall_timeout_s 30.0
-  @default_user_agent "sidereon/0.10.1"
 
   defmodule GgaPosition do
     @moduledoc """
@@ -325,7 +324,7 @@ defmodule Sidereon.GNSS.Ntrip do
       version: opts |> Keyword.get(:version, :rev2) |> version_string(),
       username: username,
       password: password,
-      user_agent_product: Keyword.get(opts, :user_agent_product, @default_user_agent),
+      user_agent_product: Keyword.get(opts, :user_agent_product),
       gga_interval_s: gga_interval(opts)
     }
 
