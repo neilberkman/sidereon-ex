@@ -952,6 +952,10 @@ defmodule Sidereon.GNSS.SP3 do
   @doc """
   Serialize the product to standard SP3-c / SP3-d text as iodata. Pure, no I/O.
 
+  In 3.0 this returns `{:ok, iodata}` or `{:error, {tag, fields}}`. Match the
+  result and unwrap the iodata before passing it to an iodata consumer; see the
+  [README migration example](README.md#sp3-writer-return-values-in-30).
+
   This is the inverse of `load/1` / `parse/1`: a read → (`merge/2`) → write
   pipeline round-trips to a single standard SP3 file any reader consumes. The
   output is deterministic (same product → identical bytes). A satellite absent
@@ -1009,6 +1013,9 @@ defmodule Sidereon.GNSS.SP3 do
 
   @doc """
   Serialize the product to an SP3 text binary.
+
+  In 3.0 this returns `{:ok, text}` or `{:error, {tag, fields}}`; callers
+  should match and unwrap the result. See the [README migration example](README.md#sp3-writer-return-values-in-30).
 
   Returns `{:ok, text}` or the refusal `to_iodata/2` documents.
   """

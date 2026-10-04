@@ -83,6 +83,51 @@ libc does not match the running system, naming this section - but it can only
 report the mismatch, not prevent it, because by then the wrong artifact is
 already packaged.
 
+## SP3 writer return values in 3.0
+
+Before 3.0, `Sidereon.GNSS.SP3.to_sp3_string/2` returned the text directly, so
+callers could pass it to byte-oriented functions such as `:zlib.gzip/1`:
+
+```elixir
+text = Sidereon.GNSS.SP3.to_sp3_string(sp3)
+compressed = :zlib.gzip(text)
+```
+
+In 3.0, `to_sp3_string/2` returns `{:ok, binary}` or
+`{:error, {tag, fields}}`; `to_iodata/2` returns `{:ok, iodata}` or the same
+typed refusal. Unwrap the success value before using it:
+
+```elixir
+case Sidereon.GNSS.SP3.to_sp3_string(sp3) do
+  {:ok, text} -> {:ok, :zlib.gzip(text)}
+  {:error, {tag, fields}} -> {:error, {:sp3_write_refused, tag, fields}}
+end
+```
+
+The same change applies to `to_iodata/2`. Before 3.0, a call site could pass
+its result straight to an iodata consumer:
+
+```elixir
+iodata = Sidereon.GNSS.SP3.to_iodata(sp3)
+compressed = :zlib.gzip(iodata)
+```
+
+In 3.0, unwrap the result and handle the typed refusal:
+
+```elixir
+case Sidereon.GNSS.SP3.to_iodata(sp3) do
+  {:ok, iodata} -> {:ok, :zlib.gzip(iodata)}
+  {:error, {tag, fields}} -> {:error, {:sp3_write_refused, tag, fields}}
+end
+```
+
+For example, a merged position finer than the SP3 columns can return
+`{:error, {:record_value_not_representable, fields}}`, where `fields` identifies
+the field, satellite, and epoch. The writer refuses that value rather than
+rounding it. Callers can preserve the named error and its fields as above, or
+match the tag and fields to handle a particular refusal. See the
+[complete 3.0 release notes](CHANGELOG.md#300---2026-10-04).
+
 ## Example: track a satellite
 
 Parse a two-line element set, run SGP4, and take a look angle from a ground
