@@ -6,9 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Opt-in `:http_client_exception_diagnostics` callbacks identify raised custom
+## [3.0.1] - 2026-10-04
+
+### Added
+
+- Opt-in `:http_client_exception_diagnostics` callbacks report raised custom
   HTTP-client exceptions and call sites using redacted metadata. The terminal
   acquisition failure result stays unchanged; callback failures are ignored.
+
+### Fixed
+
 - The default NTRIP user-agent product now follows the core package version.
 
 ## [3.0.0] - 2026-10-04
