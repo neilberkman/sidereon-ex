@@ -1,6 +1,6 @@
 [package]
 name = "sidereon_nif"
-version = "3.0.0"
+version = "3.0.1"
 authors = []
 edition = "2021"
 
@@ -14,8 +14,8 @@ exact-cache-test-failpoints = ["sidereon-core/exact-cache-test-failpoints"]
 rustler = "0.37.3"
 chrono = "0.4"
 serde_json = "1"
-sidereon-core = { version = "=3.0.0", features = ["mmap"] }
-sidereon = { version = "=3.0.0" }
+sidereon-core = { version = "=3.0.1", features = ["mmap"] }
+sidereon = { version = "=3.0.1" }
 trust-region-least-squares = { version = "=0.11.0" }
 # Same major.minor as sidereon-core so the shared `DMatrix`/`DVector` types
 # unify across crates for the covariance/least-squares marshalling.

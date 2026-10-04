@@ -4,6 +4,8 @@ defmodule Sidereon.NIFSourceLockIntegrationTest do
   @moduletag :local_data
   @moduletag timeout: 900_000
 
+  @project_version Mix.Project.config()[:version]
+
   test "a packaged source build accepts its current lock and leaves it unchanged" do
     {package_root, build_root} = packaged_project()
     original_lock = File.read!(Path.join(package_root, "Cargo.lock"))
@@ -54,7 +56,7 @@ defmodule Sidereon.NIFSourceLockIntegrationTest do
     # selector for this control.
     File.write!(
       Path.join(package_root, "checksum-Elixir.Sidereon.NIF.exs"),
-      ~s(%{"fixture-v3.0.0-marker" => "sha256:00"}\n)
+      ~s(%{"fixture-v#{@project_version}-marker" => "sha256:00"}\n)
     )
 
     {output, status} =
@@ -98,7 +100,7 @@ defmodule Sidereon.NIFSourceLockIntegrationTest do
     # is the only source-build selector for this alternate-graph control.
     File.write!(
       Path.join(package_root, "checksum-Elixir.Sidereon.NIF.exs"),
-      ~s(%{"fixture-v3.0.0-marker" => "sha256:00"}\n)
+      ~s(%{"fixture-v#{@project_version}-marker" => "sha256:00"}\n)
     )
 
     {output, status} =
@@ -151,7 +153,7 @@ defmodule Sidereon.NIFSourceLockIntegrationTest do
     library_prefix = if extension == "dll", do: "", else: "lib"
 
     expected_name =
-      "#{library_prefix}sidereon_nif-v3.0.0-nif-2.15-#{target_triple}.#{extension}.tar.gz"
+      "#{library_prefix}sidereon_nif-v#{@project_version}-nif-2.15-#{target_triple}.#{extension}.tar.gz"
 
     assert Path.basename(archive) == expected_name
 
