@@ -354,6 +354,199 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
 
       assert Observations.observation_codes(obs)["C"] == ["C1P", "L1P"]
     end
+
+    test "public downgrade reports rounded values, picoseconds, and clock offsets" do
+      obs =
+        parse!([
+          header_line("     2.11           OBSERVATION DATA    G (GPS)", "RINEX VERSION / TYPE"),
+          header_line("     1     Z", "# / TYPES OF OBSERV"),
+          header_line("G    1 Z", "SYS / # / OBS TYPES"),
+          header_line("G   10  0", "SYS / SCALE FACTOR"),
+          header_line("", "END OF HEADER"),
+          "> 2020 06 24 00 00  0.0000000 12345  0  1      -0.000000000001",
+          "G01      1234.567"
+        ])
+
+      assert {:error, {:epoch_picoseconds_not_in_version, %{version: 2.11, epoch_index: 0}}} =
+               Observations.to_rinex_string(obs)
+
+      scale_only =
+        parse!([
+          header_line("     2.11           OBSERVATION DATA    G (GPS)", "RINEX VERSION / TYPE"),
+          header_line("     1     Z", "# / TYPES OF OBSERV"),
+          header_line("G    1 Z", "SYS / # / OBS TYPES"),
+          header_line("G   10  0", "SYS / SCALE FACTOR"),
+          header_line("", "END OF HEADER"),
+          "> 2020 06 24 00 00  0.0000000  0  1",
+          "G01      1234.567"
+        ])
+
+      assert {:error, {:scale_factors_in_version_two, %{count: 1}}} =
+               Observations.to_rinex_string(scale_only)
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      assert Enum.find(changes, &(&1.tag == :scale_factors_removed)) ==
+               %DowngradeChange{
+                 tag: :scale_factors_removed,
+                 count: 1,
+                 message: "ScaleFactorsRemoved { count: 1 }"
+               }
+
+      assert Enum.find(changes, &(&1.tag == :epoch_picoseconds_removed)) ==
+               %DowngradeChange{
+                 tag: :epoch_picoseconds_removed,
+                 epoch_index: 0,
+                 picoseconds: 12_345,
+                 message: "EpochPicosecondsRemoved { epoch_index: 0, picoseconds: 12345 }"
+               }
+
+      assert Enum.find(changes, &(&1.tag == :clock_offset_rounded)) ==
+               %DowngradeChange{
+                 tag: :clock_offset_rounded,
+                 epoch_index: 0,
+                 from_value: -1.0e-12,
+                 to_value: 0.0,
+                 message: "ClockOffsetRounded { epoch_index: 0, from: -1e-12, to: 0.0 }"
+               }
+
+      assert Enum.find(changes, &(&1.tag == :value_rounded)) ==
+               %DowngradeChange{
+                 tag: :value_rounded,
+                 epoch_index: 0,
+                 satellite: "G01",
+                 code: "Z",
+                 from_value: 123.4567,
+                 to_value: 123.457,
+                 message:
+                   "ValueRounded { epoch_index: 0, satellite: GnssSatelliteId { system: Gps, prn: 1 }, code: \"Z\", from: 123.4567, to: 123.457 }"
+               }
+    end
+
+    test "a version 4 public downgrade reports deprecated header records" do
+      phase_shift = header_line("G L1C  0.25000", "SYS / PHASE SHIFT")
+
+      obs =
+        parse!([
+          header_line("     4.02           OBSERVATION DATA    M (MIXED)", "RINEX VERSION / TYPE"),
+          header_line("G    1 L1C", "SYS / # / OBS TYPES"),
+          phase_shift,
+          header_line("", "END OF HEADER"),
+          "> 2020 01 01 00 00  0.0000000  0  1",
+          "G01 110000000.000"
+        ])
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      assert Enum.find(changes, &(&1.tag == :deprecated_records_removed)) ==
+               %DowngradeChange{
+                 tag: :deprecated_records_removed,
+                 label: "SYS / PHASE SHIFT",
+                 epoch_index: nil,
+                 records: [phase_shift],
+                 message:
+                   ~s(DeprecatedRecordsRemoved { label: "SYS / PHASE SHIFT", epoch_index: None, records: ["#{phase_shift}"] })
+               }
+    end
+
+    test "a public mixed RINEX fixture reports code moves and additions" do
+      path = Path.join(__DIR__, "fixtures/obs/WTZR00DEU_R_20201770000_01D_30S_MO_120epoch.rnx")
+      {:ok, obs} = path |> File.read!() |> Observations.parse()
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      assert Enum.find(changes, &(&1.tag == :code_moved)) ==
+               %DowngradeChange{
+                 tag: :code_moved,
+                 system: "G",
+                 code: "L5X",
+                 from_position: 11,
+                 to_position: 9,
+                 message: "CodeMoved { system: Gps, code: \"L5X\", from: 11, to: 9 }"
+               }
+
+      assert Enum.find(changes, &(&1.tag == :code_added)) ==
+               %DowngradeChange{
+                 tag: :code_added,
+                 system: "G",
+                 code: "D7",
+                 message: "CodeAdded { system: Gps, code: \"D7\" }"
+               }
+    end
+
+    test "public downgrade rewrites event type lists and reports event-local moves" do
+      first_event = header_line("G    3 L1C C1C S1C", "SYS / # / OBS TYPES")
+      second_event = header_line("G    1 C1C", "SYS / # / OBS TYPES")
+
+      observation_record = fn satellite, values ->
+        satellite <> Enum.map_join(values, "", &(String.pad_leading(&1, 14) <> "  "))
+      end
+
+      obs =
+        parse!([
+          header_line("     3.05           OBSERVATION DATA    M (MIXED)", "RINEX VERSION / TYPE"),
+          header_line("G    2 C1C L1C", "SYS / # / OBS TYPES"),
+          header_line("R    1 C1C", "SYS / # / OBS TYPES"),
+          header_line("", "END OF HEADER"),
+          "> 2020 01 01 00 00  0.0000000  0  2",
+          observation_record.("G01", ["20000000.000", "100000.000"]),
+          observation_record.("R02", ["21000000.000"]),
+          blank_event_line(4, 1),
+          first_event,
+          "> 2020 01 01 00 00 30.0000000  0  2",
+          observation_record.("G01", ["100030.000", "20000030.000", "45.000"]),
+          observation_record.("R02", ["21000030.000"]),
+          blank_event_line(4, 1),
+          second_event,
+          "> 2020 01 01 00 01  0.0000000  0  1",
+          observation_record.("G01", ["20000060.000"])
+        ])
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      rewritten = Enum.filter(changes, &(&1.tag == :event_records_rewritten))
+
+      assert Enum.map(rewritten, &{&1.epoch_index, &1.from_records, &1.to_records, &1.message}) == [
+               {1, [first_event], ["     3    L1    C1    S1                                    # / TYPES OF OBSERV"],
+                ~s(EventRecordsRewritten { epoch_index: 1, from: ["G    3 L1C C1C S1C                                          SYS / # / OBS TYPES"], to: ["     3    L1    C1    S1                                    # / TYPES OF OBSERV"] })},
+               {3, [second_event], ["     1    C1                                                # / TYPES OF OBSERV"],
+                ~s(EventRecordsRewritten { epoch_index: 3, from: ["G    1 C1C                                                  SYS / # / OBS TYPES"], to: ["     1    C1                                                # / TYPES OF OBSERV"] })}
+             ]
+
+      assert Enum.map(Enum.filter(changes, &(&1.tag == :in_event_lists)), fn change ->
+               {change.epoch_index, change.change.tag, change.change.system, change.change.code,
+                change.change.from_position, change.change.to_position, change.change.message, change.message}
+             end) == [
+               {1, :code_added, "R", "L1C", nil, nil, "CodeAdded { system: Glonass, code: \"L1C\" }",
+                "InEventLists { epoch_index: 1, change: CodeAdded { system: Glonass, code: \"L1C\" } }"},
+               {1, :code_moved, "R", "C1C", 0, 1, "CodeMoved { system: Glonass, code: \"C1C\", from: 0, to: 1 }",
+                "InEventLists { epoch_index: 1, change: CodeMoved { system: Glonass, code: \"C1C\", from: 0, to: 1 } }"},
+               {1, :code_added, "R", "S1C", nil, nil, "CodeAdded { system: Glonass, code: \"S1C\" }",
+                "InEventLists { epoch_index: 1, change: CodeAdded { system: Glonass, code: \"S1C\" } }"}
+             ]
+    end
+
+    test "public downgrade removes a declared list unused by every observation" do
+      obs =
+        parse!([
+          header_line("     3.05           OBSERVATION DATA    M (MIXED)", "RINEX VERSION / TYPE"),
+          header_line("G    1 C1C", "SYS / # / OBS TYPES"),
+          header_line("R    1 L1C", "SYS / # / OBS TYPES"),
+          header_line("", "END OF HEADER"),
+          "> 2020 01 01 00 00  0.0000000  0  1",
+          "G01 20000000.000"
+        ])
+
+      assert {:ok, %{changes: changes}} = Observations.downgrade_to_rinex2(obs, 2.11)
+
+      assert Enum.find(changes, &(&1.tag == :code_list_removed)) ==
+               %DowngradeChange{
+                 tag: :code_list_removed,
+                 system: "R",
+                 codes: ["L1C"],
+                 message: "CodeListRemoved { system: Glonass, codes: [\"L1C\"] }"
+               }
+    end
   end
 
   describe "DowngradeChange field mapping" do
