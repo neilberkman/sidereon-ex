@@ -21,12 +21,59 @@ defmodule Sidereon.GNSS.NtripTest do
     assert text =~ "STR;MOUNT;ID"
   end
 
-  test "format_gga delegates sentence generation to core" do
+  test "format_gga returns the complete canonical sentence" do
     assert {:ok, sentence} =
              Ntrip.format_gga(%GgaPosition{lat_deg: 40.0, lon_deg: -105.0, height_m: 1600.0}, 12_345.67)
 
-    assert sentence |> String.starts_with?("$GPGGA,032545.67")
-    assert String.ends_with?(sentence, "\r\n")
+    assert sentence ==
+             "$GPGGA,032545.67,4000.0000000,N,10500.0000000,W,1,10,1.00,1600.0,M,,,,*2E\r\n"
+  end
+
+  test "format_gga uses the complete public default position" do
+    position = %GgaPosition{}
+
+    assert position ==
+             %GgaPosition{
+               lat_deg: 0.0,
+               lon_deg: 0.0,
+               height_m: 0.0,
+               fix_quality: 1,
+               num_satellites: 10,
+               hdop: 1.0
+             }
+
+    assert {:ok, sentence} = Ntrip.format_gga(position, 0.0)
+
+    expected =
+      <<36>> <>
+        "GPGGA,000000.00,0000.0000000,N,00000.0000000,E,1,10,1.00,0.0,M,,,,*0F" <>
+        <<13, 10>>
+
+    assert sentence == expected
+  end
+
+  test "format_gga preserves all position metadata and floors time to centiseconds" do
+    position = %GgaPosition{
+      lat_deg: -33.865143,
+      lon_deg: -151.2099,
+      height_m: 58.7,
+      fix_quality: 4,
+      num_satellites: 7,
+      hdop: 0.75
+    }
+
+    assert {:ok, sentence} = Ntrip.format_gga(position, 86_399.999)
+
+    assert sentence ==
+             "$GPGGA,235959.99,3351.9085800,S,15112.5940000,W,4,07,0.75,58.7,M,,,,*3D\r\n"
+  end
+
+  test "format_gga returns core validation errors for coordinates and time" do
+    assert {:error, "invalid input: GGA latitude outside [-90, 90]"} =
+             Ntrip.format_gga(%GgaPosition{lat_deg: 90.0001}, 1.0)
+
+    assert {:error, "invalid input: GGA time must be in [0, 86400)"} =
+             Ntrip.format_gga(%GgaPosition{}, 86_400.0)
   end
 
   test "request_bytes exposes the core NTRIP request builder" do
