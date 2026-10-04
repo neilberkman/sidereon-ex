@@ -75,6 +75,7 @@ defmodule Sidereon.MixProject do
 
   @version "3.0.0"
   @source_url "https://github.com/neilberkman/sidereon-ex"
+  @website_url "https://sidereon.dev"
 
   def project do
     [
@@ -89,6 +90,7 @@ defmodule Sidereon.MixProject do
       package: package(),
       docs: docs(),
       source_url: @source_url,
+      homepage_url: @website_url,
       test_ignore_filters: [&String.starts_with?(&1, "test/fixtures/")]
     ]
   end
@@ -127,7 +129,12 @@ defmodule Sidereon.MixProject do
     [
       files: package_files(),
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url}
+      links: %{
+        "Changelog" => "https://hexdocs.pm/sidereon/changelog.html",
+        "Documentation" => "https://sidereon.hexdocs.pm",
+        "GitHub" => @source_url,
+        "Website" => @website_url
+      }
     ]
   end
 
@@ -154,6 +161,8 @@ defmodule Sidereon.MixProject do
   defp docs do
     [
       main: "sidereon",
+      source_ref: "v#{@version}",
+      source_url: @source_url,
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       extras: [
         "README.md",
@@ -166,6 +175,7 @@ defmodule Sidereon.MixProject do
         "examples/gnss_positioning.livemd"
       ],
       groups_for_extras: [
+        Changelog: ~r/CHANGELOG\.md/,
         Guides: Path.wildcard("guides/*.md")
       ],
       groups_for_modules: [

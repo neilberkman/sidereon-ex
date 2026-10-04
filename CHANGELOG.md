@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-04
+
 ### Added
 
 - `Sidereon.GNSS.RTK.RinexArc.unresolved_carriers/1` and
@@ -2608,3 +2610,6 @@ correction, time, and data-fetch layers.
 ---
 
 Releases before 0.7.0 predate this changelog.
+
+[Unreleased]: https://github.com/neilberkman/sidereon-ex/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/neilberkman/sidereon-ex/compare/v2.1.1...v3.0.0
