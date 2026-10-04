@@ -8,10 +8,13 @@
 
 mod atoms {
     rustler::atoms! {
+        after_coverage,
+        before_coverage,
         invalid_input,
         missing_ap_array,
         non_finite_input,
         out_of_domain,
+        ut1_outside_coverage,
     }
 }
 
@@ -33,4 +36,36 @@ pub(crate) fn atmosphere(err: sidereon_core::astro::atmosphere::AtmosphereError)
         E::OutOfDomain(_) => atoms::out_of_domain(),
     };
     rustler::Error::Term(Box::new(atom))
+}
+
+/// The atom naming which side of the UT1 table an instant fell on:
+/// `:before_coverage` or `:after_coverage`.
+pub(crate) fn degrade_reason_atom(
+    reason: sidereon_core::astro::time::DegradeReason,
+) -> rustler::Atom {
+    use sidereon_core::astro::time::DegradeReason as R;
+    match reason {
+        R::BeforeCoverage => atoms::before_coverage(),
+        R::AfterCoverage => atoms::after_coverage(),
+    }
+}
+
+/// `{:ut1_outside_coverage, :before_coverage | :after_coverage}`, the term every
+/// entry point uses for an instant whose UT1 lies outside the table.
+pub(crate) fn ut1_outside_coverage_term<'a>(
+    env: rustler::Env<'a>,
+    reason: sidereon_core::astro::time::DegradeReason,
+) -> rustler::Term<'a> {
+    use rustler::Encoder;
+    (atoms::ut1_outside_coverage(), degrade_reason_atom(reason)).encode(env)
+}
+
+/// As `ut1_outside_coverage_term`, raised as the error of a native call.
+pub(crate) fn ut1_outside_coverage(
+    reason: sidereon_core::astro::time::DegradeReason,
+) -> rustler::Error {
+    rustler::Error::Term(Box::new((
+        atoms::ut1_outside_coverage(),
+        degrade_reason_atom(reason),
+    )))
 }

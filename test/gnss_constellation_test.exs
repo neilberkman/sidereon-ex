@@ -252,11 +252,36 @@ defmodule Sidereon.GNSS.ConstellationTest do
                Constellation.from_celestrak_omm_lenient(:gps, [])
     end
 
-    test "leniency covers identity only: a malformed record still aborts" do
+    test "an entry without NORAD_CAT_ID is skipped with a nil norad_id" do
       feed = [%{"OBJECT_NAME" => "GPS BIIF-8  (PRN 03)"}]
 
-      assert {:error, {:bad_celestrak_record, {:missing_field, "NORAD_CAT_ID"}, _}} =
+      assert {:ok, %Constellation.Catalog{records: [], skipped: [skipped]}} =
                Constellation.from_celestrak_omm_lenient(:gps, feed)
+
+      assert skipped.object_name == "GPS BIIF-8  (PRN 03)"
+      assert skipped.norad_id == nil
+    end
+
+    test "a malformed NORAD_CAT_ID still aborts" do
+      feed = [%{"OBJECT_NAME" => "GPS BIIF-8  (PRN 03)", "NORAD_CAT_ID" => "abc"}]
+
+      assert {:error, {:bad_celestrak_record, {:bad_integer, "NORAD_CAT_ID", "abc"}, _}} =
+               Constellation.from_celestrak_omm_lenient(:gps, feed)
+    end
+
+    test "JSON array elements the reader cannot read are listed in unread" do
+      json =
+        ~s|[{"OBJECT_NAME":"GPS BIIF-8  (PRN 03)","NORAD_CAT_ID":40294,"EPOCH":"2024-01-01T00:00:00","MEAN_MOTION":2.0,"ECCENTRICITY":0.01,"INCLINATION":55.0,"RA_OF_ASC_NODE":10.0,"ARG_OF_PERICENTER":20.0,"MEAN_ANOMALY":30.0,"BSTAR":0}, {"OBJECT_NAME":"BROKEN"}]|
+
+      assert {:ok, %Constellation.Catalog{records: [record], unread: [{1, reason}]}} =
+               Constellation.from_celestrak_json_lenient(json, :gps)
+
+      assert record.sp3_id == "G03"
+      assert {:missing_field, field} = reason
+      assert is_atom(field)
+
+      assert {:error, {:bad_celestrak_record, {:unreadable_record, 1, ^reason}, nil}} =
+               Constellation.from_celestrak_json(json, :gps)
     end
   end
 

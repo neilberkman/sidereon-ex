@@ -62,6 +62,16 @@ defmodule Sidereon.GNSS.NtripTest do
     assert [%Ntrip.StrRecord{mountpoint: "MOUNT"}] = table.records
   end
 
+  test "an exception the injected transport raises reaches the caller as itself" do
+    fails = fn _request, _opts -> :erlang.error({:transport_down, :test}) end
+    call = fn -> Ntrip.sourcetable("caster.invalid", version: :rev1, transport_fun: fails) end
+    error = assert_raise ErlangError, call
+    assert error.original == {:transport_down, :test}
+
+    refuses = fn _request, _opts -> :erlang.error(:badarg) end
+    assert_raise ArgumentError, fn -> Ntrip.sourcetable("caster.invalid", version: :rev1, transport_fun: refuses) end
+  end
+
   test "stream process delivers payload from an injected transport" do
     owner = self()
 

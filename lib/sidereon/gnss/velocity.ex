@@ -12,6 +12,7 @@ defmodule Sidereon.GNSS.Velocity do
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @typedoc "Three-component ECEF vector."
   @type vec3 :: {float(), float(), float()}
@@ -141,24 +142,24 @@ defmodule Sidereon.GNSS.Velocity do
     do: {:error, {:too_few_satellites, 0, 4}}
 
   defp core_solve(%SP3{handle: handle}, terms, epoch, receiver, observable, light_time?, sagnac?) do
-    {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
-
-    case NIF.sp3_velocity_solve(
-           handle,
-           terms,
-           jd_whole,
-           jd_fraction,
-           receiver,
-           Atom.to_string(observable),
-           light_time?,
-           sagnac?
-         ) do
-      {:ok, result} -> {:ok, result}
-      {:error, _} = err -> err
-      other -> {:error, other}
+    with {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
+      case NIF.sp3_velocity_solve(
+             handle,
+             terms,
+             jd_whole,
+             jd_fraction,
+             receiver,
+             Atom.to_string(observable),
+             light_time?,
+             sagnac?
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_velocity_solve)
   end
 
   defp core_solve(%Broadcast{handle: handle}, terms, epoch, receiver, observable, light_time?, sagnac?) do
@@ -178,7 +179,7 @@ defmodule Sidereon.GNSS.Velocity do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :broadcast_velocity_solve)
   end
 
   defp to_result_map({velocity, speed, clock_drift, state_covariance, residuals, used_sats}) do

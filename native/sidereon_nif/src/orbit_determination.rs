@@ -29,7 +29,8 @@ mod atoms {
         least_squares,
         singular_geometry,
         did_not_converge,
-        rtn_frame
+        rtn_frame,
+        ut1_validity_mismatch
     }
 }
 
@@ -220,28 +221,32 @@ fn report(value: OrbitFitReport) -> OrbitFitReportTerm {
     }
 }
 
-fn error_atom(error: OrbitFitError) -> rustler::Atom {
+fn error_term<'a>(env: Env<'a>, error: OrbitFitError) -> Term<'a> {
     match error {
-        OrbitFitError::EmptySelection => atoms::empty_selection(),
-        OrbitFitError::InvalidOption { .. } => atoms::invalid_option(),
-        OrbitFitError::TooFewSamples { .. } => atoms::too_few_samples(),
-        OrbitFitError::NonMonotonicEpochs { .. } => atoms::non_monotonic_epochs(),
-        OrbitFitError::MixedTimeScales => atoms::mixed_timescales(),
-        OrbitFitError::InvalidEpoch { .. } => atoms::invalid_epoch(),
-        OrbitFitError::InvalidObservation { .. } => atoms::invalid_observation(),
-        OrbitFitError::Frame { .. } => atoms::frame(),
-        OrbitFitError::Propagation { .. } => atoms::propagation(),
-        OrbitFitError::LeastSquares { .. } => atoms::least_squares(),
-        OrbitFitError::SingularGeometry { .. } => atoms::singular_geometry(),
-        OrbitFitError::DidNotConverge { .. } => atoms::did_not_converge(),
-        OrbitFitError::RtnFrame { .. } => atoms::rtn_frame(),
+        OrbitFitError::EmptySelection => atoms::empty_selection().encode(env),
+        OrbitFitError::InvalidOption { .. } => atoms::invalid_option().encode(env),
+        OrbitFitError::TooFewSamples { .. } => atoms::too_few_samples().encode(env),
+        OrbitFitError::NonMonotonicEpochs { .. } => atoms::non_monotonic_epochs().encode(env),
+        OrbitFitError::MixedTimeScales => atoms::mixed_timescales().encode(env),
+        OrbitFitError::InvalidEpoch { .. } => atoms::invalid_epoch().encode(env),
+        OrbitFitError::InvalidObservation { .. } => atoms::invalid_observation().encode(env),
+        OrbitFitError::Frame { .. } => atoms::frame().encode(env),
+        OrbitFitError::Propagation { .. } => atoms::propagation().encode(env),
+        OrbitFitError::LeastSquares { .. } => atoms::least_squares().encode(env),
+        OrbitFitError::SingularGeometry { .. } => atoms::singular_geometry().encode(env),
+        OrbitFitError::DidNotConverge { .. } => atoms::did_not_converge().encode(env),
+        OrbitFitError::RtnFrame { .. } => atoms::rtn_frame().encode(env),
+        OrbitFitError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, reason)
+        }
+        OrbitFitError::Ut1ValidityMismatch { .. } => atoms::ut1_validity_mismatch().encode(env),
     }
 }
 
 fn encode_report<'a>(env: Env<'a>, result: Result<OrbitFitReport, OrbitFitError>) -> Term<'a> {
     match result {
         Ok(value) => (atoms::ok(), report(value)).encode(env),
-        Err(error) => (atoms::error(), error_atom(error)).encode(env),
+        Err(error) => (atoms::error(), error_term(env, error)).encode(env),
     }
 }
 

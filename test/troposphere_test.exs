@@ -71,4 +71,85 @@ defmodule Sidereon.GNSS.TroposphereTest do
                Troposphere.slant_delay(30.0, 45.0, 10.0, 0.0, %{pressure_hpa: 1000.0}, @epoch)
     end
   end
+
+  test "detailed siblings preserve core refusals and legacy success behavior" do
+    assert {:ok, legacy} = Troposphere.zenith_delay(45.0, 0.0, @met)
+    assert {:ok, detailed} = Troposphere.zenith_delay_detailed(45.0, 0.0, @met)
+    assert detailed == legacy
+
+    invalid_met = %{pressure_hpa: -1.0, temperature_k: 288.15, relative_humidity: 0.5}
+    assert {:error, :invalid_input} = Troposphere.zenith_delay(45.0, 0.0, invalid_met)
+
+    assert {:error, :invalid_input} =
+             Troposphere.slant_delay(30.0, 45.0, 10.0, 0.0, invalid_met, @epoch)
+
+    assert {:error, {:invalid_input, %{kind: "INVALID_INPUT", message: message}}} =
+             Troposphere.zenith_delay_detailed(
+               45.0,
+               0.0,
+               %{pressure_hpa: -1.0, temperature_k: 288.15, relative_humidity: 0.5}
+             )
+
+    assert is_binary(message) and message != ""
+
+    assert {:error, {:invalid_input, %{kind: "INVALID_INPUT", message: slant_message}}} =
+             Troposphere.slant_delay_detailed(
+               30.0,
+               45.0,
+               10.0,
+               0.0,
+               %{pressure_hpa: -1.0, temperature_k: 288.15, relative_humidity: 0.5},
+               @epoch
+             )
+
+    assert is_binary(slant_message) and slant_message != ""
+
+    assert {:error, :below_mapping_elevation} =
+             Troposphere.mapping(1.0, 45.0, 0.0, @epoch)
+
+    assert {:error, {:invalid_input, %{kind: "INVALID_INPUT", message: mapping_message}}} =
+             Troposphere.mapping_detailed(1.0, 45.0, 0.0, @epoch)
+
+    assert is_binary(mapping_message) and mapping_message != ""
+
+    assert {:error,
+            {:invalid_input,
+             %{
+               family: "TimeModelError",
+               kind: "TIME_MODEL_INVALID_INPUT",
+               message: split_message,
+               field: "fraction",
+               reason: "must be within one residual day"
+             }}} =
+             Sidereon.NIF.tropo_mapping_factors_detailed(45.0, 45.0, 0.0, 2_451_545.0, 1.5)
+
+    assert is_binary(split_message) and split_message != ""
+
+    assert {:error,
+            {:invalid_input,
+             %{
+               family: "FrameValueError",
+               kind: "FRAME_VALUE_INVALID_INPUT",
+               field: "lat_rad",
+               reason: "must be in [-pi/2, pi/2]"
+             }}} = Troposphere.zenith_delay_detailed(100.0, 0.0, @met)
+
+    assert {:error,
+            {:invalid_input,
+             %{
+               family: "TimeModelError",
+               kind: "TIME_MODEL_INVALID_INPUT",
+               field: "fraction",
+               reason: "must be within one residual day"
+             }}} =
+             Sidereon.NIF.tropo_mapping_factors_detailed(45.0, 45.0, 0.0, 2_451_545.0, 1.5)
+
+    assert {:ok, legacy_slant} =
+             Troposphere.slant_delay(90.0, 45.0, 10.0, 0.0, @met, @epoch)
+
+    assert {:ok, detailed_slant} =
+             Troposphere.slant_delay_detailed(90.0, 45.0, 10.0, 0.0, @met, @epoch)
+
+    assert detailed_slant == legacy_slant
+  end
 end

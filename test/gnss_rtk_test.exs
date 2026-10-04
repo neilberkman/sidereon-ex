@@ -27,6 +27,8 @@ defmodule Sidereon.GNSS.RTKTest do
   }
 
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.Time.ExactEpoch
+  alias Sidereon.Test.CoreGolden
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
@@ -145,6 +147,52 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   describe "solve_rtk_fixed/1" do
+    test "public residual refusal retains the complete selected outlier" do
+      assert {:error,
+              {:residual_validation_failed,
+               {epoch_index, "G05", "G01", "G05", "code", residual_m, sigma_m, normalized_residual, 6.0}, []}} =
+               RTK.solve_rtk_fixed(%{
+                 epochs: residual_validation_epochs(),
+                 base: {4_075_580.0, 931_854.0, 4_801_568.0},
+                 ambiguity_ids: ["G02", "G03", "G04", "G05"],
+                 ambiguity_satellites: Map.new(["G02", "G03", "G04", "G05"], &{&1, &1}),
+                 wavelengths_m: Map.new(["G02", "G03", "G04", "G05"], &{&1, @l1_wavelength_m}),
+                 offsets_m: Map.new(["G02", "G03", "G04", "G05"], &{&1, 0.0}),
+                 model: %{
+                   code_sigma_m: 0.3,
+                   phase_sigma_m: 0.003,
+                   stochastic: :simple,
+                   elevation_weighting: false,
+                   sagnac: false
+                 },
+                 initial_baseline_m: {-30.0, 25.0, -10.0},
+                 float_options: %{
+                   position_tol_m: 1.0e-3,
+                   ambiguity_tol_m: 1.0e-6,
+                   max_iterations: 10
+                 },
+                 fixed_options: %{
+                   position_tol_m: 1.0e-3,
+                   ambiguity_tol_m: 1.0e-6,
+                   max_iterations: 10,
+                   ratio_threshold: 3.0,
+                   partial_ambiguity_resolution: false,
+                   partial_min_ambiguities: 4
+                 },
+                 residual_options: %{threshold_sigma: 6.0, max_exclusions: 0}
+               })
+
+      assert epoch_index in 0..2
+      assert is_float(residual_m) and is_float(sigma_m) and sigma_m > 0.0
+      assert is_float(normalized_residual)
+
+      assert_in_delta normalized_residual,
+                      residual_m / sigma_m,
+                      2.0 * 2.220446049250313e-16 * max(1.0, abs(normalized_residual))
+
+      assert abs(normalized_residual) > 6.0
+    end
+
     test "delegates direct prepared epochs to the core fixed solver" do
       assert {:ok, solution} =
                RTK.solve_rtk_fixed(%{
@@ -191,6 +239,34 @@ defmodule Sidereon.GNSS.RTKTest do
       assert is_list(solution.measurement_covariance)
       refute Enum.empty?(solution.measurement_covariance)
     end
+
+    test "exact prediction epochs distinguish labels collapsed by seconds-since-J2000 floats" do
+      {:ok, first_exact} = ExactEpoch.new(9_007_199_254_741_392, 0)
+      {:ok, second_exact} = ExactEpoch.new(9_007_199_254_741_393, 0)
+      assert ExactEpoch.j2000_seconds(first_exact) == ExactEpoch.j2000_seconds(second_exact)
+      prediction_time_s = ExactEpoch.j2000_seconds(first_exact)
+
+      exact_epochs =
+        arc_epochs()
+        |> Enum.take(2)
+        |> Enum.with_index()
+        |> Enum.map(fn {epoch, index} ->
+          Map.merge(epoch, %{
+            velocity_mps: {1.0, 0.0, 0.0},
+            prediction_time_s: prediction_time_s,
+            prediction_epoch: if(index == 0, do: first_exact, else: second_exact)
+          })
+        end)
+
+      legacy_epochs = Enum.map(exact_epochs, &Map.delete(&1, :prediction_epoch))
+      config = put_in(arc_config(), [:update_opts, :dynamics_model], :velocity_propagated)
+
+      assert {:ok, exact_solution} = RTK.solve_arc(exact_epochs, config)
+      assert {:ok, legacy_solution} = RTK.solve_arc(legacy_epochs, config)
+
+      refute Enum.at(exact_solution.epochs, 1).float_baseline_m ==
+               Enum.at(legacy_solution.epochs, 1).float_baseline_m
+    end
   end
 
   describe "solve_static_arc/2" do
@@ -236,6 +312,41 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   describe "fix_wide_lane_rtk_arc/2" do
+    test "uses exact gap epochs while preserving the legacy float fallback" do
+      {:ok, first_exact} = ExactEpoch.new(9_007_199_254_741_392, 0)
+      {:ok, second_exact} = ExactEpoch.new(9_007_199_254_741_393, 0)
+      assert ExactEpoch.j2000_seconds(first_exact) == ExactEpoch.j2000_seconds(second_exact)
+
+      exact_epochs =
+        dual_frequency_epochs()
+        |> Enum.take(2)
+        |> Enum.with_index()
+        |> Enum.map(fn {epoch, index} ->
+          Map.merge(epoch, %{
+            epoch: 0,
+            gap_epoch: if(index == 0, do: first_exact, else: second_exact)
+          })
+        end)
+
+      # The exact gap epochs are one second apart while their binary64 J2000
+      # seconds are equal, so a half-second gap limit is exceeded only when the
+      # exact epochs reach the core.
+      config =
+        wide_lane_config()
+        |> Map.put(:cycle_slip, %{
+          policy: :error,
+          gf_threshold_m: 0.05,
+          mw_threshold_cycles: 4.0,
+          min_arc_gap_s: 0.5
+        })
+
+      assert {:error, {:cycle_slip_detected, _receiver, _satellite, _epoch, [:data_gap]}} =
+               RTK.fix_wide_lane_rtk_arc(exact_epochs, config)
+
+      legacy_epochs = Enum.map(exact_epochs, &Map.delete(&1, :gap_epoch))
+      assert {:ok, _solution} = RTK.fix_wide_lane_rtk_arc(legacy_epochs, config)
+    end
+
     test "surfaces geometry quality for a synthetic dual-frequency arc" do
       assert {:ok, solution} =
                RTK.fix_wide_lane_rtk_arc(dual_frequency_epochs(), wide_lane_config())
@@ -306,6 +417,7 @@ defmodule Sidereon.GNSS.RTKTest do
 
       assert solution.epoch_count == 120
       assert solution.skipped_epoch_count == 0
+      assert solution.unresolved_carriers == []
       assert solution.references == %{"G" => "G30"}
 
       float_error_m = norm(sub3(ecef_tuple(solution.float_solution.baseline_m), ctx.truth_baseline))
@@ -330,6 +442,7 @@ defmodule Sidereon.GNSS.RTKTest do
 
       assert solution.epoch_count == 120
       assert solution.skipped_epoch_count == 0
+      assert solution.unresolved_carriers == []
       assert %WideLaneFixedMetadata{} = solution.wide_lane
       assert solution.wide_lane.fixed?
       assert solution.wide_lane.ambiguity_count == 7
@@ -358,81 +471,107 @@ defmodule Sidereon.GNSS.RTKTest do
           partial_min_ambiguities: 4
         })
 
+      # The expected values are the core's own solve with the same options and
+      # reference position (test/generators/core_goldens).
+      golden = CoreGolden.load("rtk_reference_station_wtzr_wtzz.json")
+      reference_position = CoreGolden.tuple3(golden["reference_position_m"])
+      assert norm(sub3(reference_position, ctx.base_arp)) < 1.0e-6
+
       assert {:ok, solution} =
                RTK.solve_static_reference_station_rinex(
                  ctx.sp3,
                  ctx.base_obs,
                  ctx.rover_obs,
-                 ctx.base_arp,
+                 reference_position,
                  opts
                )
 
+      assert golden["mode"] == "CarrierFixed"
+      assert golden["fix_status"] == "CarrierFixed"
+      assert golden["integer_status"] == "Fixed"
       assert solution.mode == :carrier_fixed
       assert solution.fix_status == :carrier_fixed
       assert solution.code_solution == nil
       assert solution.carrier_solution.integer_status == :fixed
       # The validation ratio comes out of the iterative ILS search, whose last
-      # bits differ across architectures (arm64 vs x86_64 libm), so the pin is
-      # a tight relative band around the canonical value plus the acceptance
+      # bits differ across architectures (arm64 vs x86_64 libm), so it is held
+      # to a tight relative band around the core's value, beside the acceptance
       # threshold that actually gates fixing.
-      canonical_ratio = from_bits(0x40552D1856B255BA)
-      assert_in_delta solution.carrier_solution.integer_ratio, canonical_ratio, 1.0e-6 * canonical_ratio
+      expected_ratio = CoreGolden.f(golden["integer_ratio"])
+      assert_in_delta solution.carrier_solution.integer_ratio, expected_ratio, 1.0e-6 * expected_ratio
       assert solution.carrier_solution.integer_ratio > 3.0
       assert length(solution.diagnostics) == 24
       assert length(solution.carrier_solution.diagnostics) == 24
       assert length(solution.mode_reports) == 1
       assert hd(solution.mode_reports).mode == :carrier_fixed
       assert hd(solution.mode_reports).status == :solved
-      assert hd(solution.mode_reports).used_epochs == 24
-      assert hd(solution.mode_reports).skipped_epochs == 0
-      assert hd(solution.mode_reports).used_measurements == 432
+      assert hd(solution.mode_reports).used_epochs == golden["mode_report"]["used_epochs"]
+      assert hd(solution.mode_reports).skipped_epochs == golden["mode_report"]["skipped_epochs"]
+      assert hd(solution.mode_reports).used_measurements == golden["mode_report"]["used_measurements"]
       assert norm(sub3(ecef_tuple(solution.baseline_vector_m), ctx.truth_baseline)) < 0.005
 
-      # All three outputs come from the iterative solve chain, whose last bits
-      # differ across architectures, so each pin is a tight band around the
-      # canonical value rather than exact bits (same policy as the ratio pin
-      # above). One micrometre on positions and a relative band on covariance
-      # are far below any real regression and far above cross-arch ULP noise.
-      canonical_position = [0x414F181DAF5EFC9B, 0x412C701AD358462B, 0x4152510859BC4562]
-
+      # The outputs come from the iterative solve chain, whose last bits differ
+      # across architectures, so each is held to a tight band around the core's
+      # value rather than exact bits: one micrometre on positions, 1e-9 metres
+      # on the baseline vector and 1e-9 relative on the covariance, far below
+      # any real regression and far above cross-architecture rounding.
       solution.position_m
       |> ecef_tuple()
       |> Tuple.to_list()
-      |> Enum.zip(canonical_position)
-      |> Enum.each(fn {got, expected} ->
-        assert_in_delta got, from_bits(expected), 1.0e-6
-      end)
-
-      canonical_baseline = [0xBFEF911D96FBE6B2, 0xBFE4DC7080D098F8, 0x3FF11595629A56D4]
+      |> Enum.zip(CoreGolden.f(golden["position_m"]))
+      |> Enum.each(fn {got, expected} -> assert_in_delta got, expected, 1.0e-6 end)
 
       solution.baseline_vector_m
       |> ecef_tuple()
       |> Tuple.to_list()
-      |> Enum.zip(canonical_baseline)
-      |> Enum.each(fn {got, expected} ->
-        assert_in_delta got, from_bits(expected), 1.0e-9
-      end)
-
-      canonical_covariance = [
-        0x3F04ACAF48E915F6,
-        0x3EDF5DA71E914413,
-        0x3EF32E401D0C7CB0,
-        0x3EDF5DA71E914413,
-        0x3EEC4A84FC5F278A,
-        0x3ED882C671817361,
-        0x3EF32E401D0C7CAF,
-        0x3ED882C671817360,
-        0x3F08FCE97D368DEE
-      ]
+      |> Enum.zip(CoreGolden.f(golden["baseline_vector_m"]))
+      |> Enum.each(fn {got, expected} -> assert_in_delta got, expected, 1.0e-9 end)
 
       solution.covariance.position_ecef_m2
       |> List.flatten()
-      |> Enum.zip(canonical_covariance)
+      |> Enum.zip(List.flatten(CoreGolden.f(golden["covariance_position_ecef_m2"])))
       |> Enum.each(fn {got, expected} ->
-        canonical = from_bits(expected)
-        assert_in_delta got, canonical, 1.0e-9 * max(abs(canonical), 1.0e-12)
+        assert_in_delta got, expected, 1.0e-9 * max(abs(expected), 1.0e-12)
       end)
     end
+  end
+
+  defp residual_validation_epochs do
+    base = {4_075_580.0, 931_854.0, 4_801_568.0}
+    truth = {1.2, -0.85, 0.91}
+    rover = add3(base, truth)
+
+    satellites = [
+      {"G01", {15_000_000.0, 7_000_000.0, 21_000_000.0}, 0},
+      {"G02", {-12_000_000.0, 18_000_000.0, 19_000_000.0}, 4},
+      {"G03", {20_000_000.0, -10_000_000.0, 17_000_000.0}, -7},
+      {"G04", {-19_000_000.0, -13_000_000.0, 20_000_000.0}, 9},
+      {"G05", {9_000_000.0, 22_000_000.0, 16_000_000.0}, -3}
+    ]
+
+    [40.0, -40.0, 40.0]
+    |> Enum.map(fn g05_noise ->
+      rows =
+        Enum.map(satellites, fn {sat, position, cycles} ->
+          base_range = norm(sub3(position, base))
+          rover_range = norm(sub3(position, rover))
+          noise = if sat == "G05", do: g05_noise, else: 0.0
+
+          %{
+            sat: sat,
+            sd_ambiguity_id: sat,
+            base_code_m: base_range,
+            base_phase_m: base_range,
+            rover_code_m: rover_range + noise,
+            rover_phase_m: rover_range + cycles * @l1_wavelength_m,
+            base_tx_pos: position,
+            rover_tx_pos: position,
+            pos: position
+          }
+        end)
+
+      %{references: [hd(rows)], nonref: tl(rows), dt_s: 0.0}
+    end)
   end
 
   defp prepared_epochs do
@@ -702,11 +841,6 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   defp ecef_tuple(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
-
-  defp from_bits(bits) do
-    <<value::float-64>> = <<bits::64>>
-    value
-  end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}

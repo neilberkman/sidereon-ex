@@ -13,6 +13,13 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
   @midpoint_dt ~N[2020-06-24 08:45:00]
   @midpoint_j2000_s 646_260_300.0
 
+  defp assert_interpolation_policy_error({:error, details}, factor) when is_map(details) do
+    assert details.kind == "sp3_interpolation_options"
+    assert details.field == "gap_threshold_factor"
+    assert details.value == inspect(factor)
+    assert details.reason =~ "gap_threshold_factor must be finite and greater than 1.0"
+  end
+
   defp gapped_sp3_bytes do
     lines = @sp3_path |> File.read!() |> String.split("\n")
 
@@ -52,7 +59,7 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
       assert SP3.gap_threshold_factor(sp3) == 1.5
 
       # Querying G01 at midpoint (08:45:00) falls in the gap
-      assert {:error, "epoch out of range"} = SP3.position(sp3, "G01", @midpoint_dt)
+      assert {:error, :epoch_out_of_range} = SP3.position(sp3, "G01", @midpoint_dt)
 
       assert {:ok, batch} = SP3.interpolate(sp3, "G01", [@midpoint_j2000_s])
       assert batch.statuses == [:gap]
@@ -91,17 +98,23 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
       assert {:ok, _state} = SP3.position(sp3_bang, "G01", @midpoint_dt)
     end
 
-    test "gap_threshold_factor <= 1.0 or non-finite errors" do
+    test "gap_threshold_factor at or below 1.0 is refused with typed detail" do
       raw = gapped_sp3_bytes()
 
-      assert {:error, msg} = SP3.parse(raw, gap_threshold_factor: 1.0)
-      assert msg =~ "gap_threshold_factor must be finite and greater than 1.0"
+      assert_interpolation_policy_error(
+        SP3.parse(raw, gap_threshold_factor: 1.0),
+        1.0
+      )
 
-      assert {:error, msg} = SP3.parse(raw, gap_threshold_factor: 0.5)
-      assert msg =~ "gap_threshold_factor must be finite and greater than 1.0"
+      assert_interpolation_policy_error(
+        SP3.parse(raw, gap_threshold_factor: 0.5),
+        0.5
+      )
 
-      assert {:error, msg} = SP3.parse(raw, gap_threshold_factor: -1.0)
-      assert msg =~ "gap_threshold_factor must be finite and greater than 1.0"
+      assert_interpolation_policy_error(
+        SP3.parse(raw, gap_threshold_factor: -1.0),
+        -1.0
+      )
 
       assert {:error, {:bad_gap_threshold_factor, :invalid}} =
                SP3.parse(raw, gap_threshold_factor: :invalid)
@@ -130,6 +143,20 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
 
       assert {:ok, report} = SP3.check_continuity(sp3, gap_threshold_factor: 13.0)
       assert is_list(report.defects)
+
+      # The hole in G01 leaves hold-out residuals; each carries every field of
+      # its kind under the core's name, beside the summary fields it fills.
+      assert [_ | _] = residuals = Enum.filter(report.defects, &(&1.kind == :hold_out_residual))
+
+      for defect <- residuals do
+        assert defect.preceding_j2000_s == defect.from_j2000_s
+        assert defect.epoch_j2000_s == defect.to_j2000_s
+        assert defect.residual_m == defect.magnitude
+        assert {defect.tolerance_m, defect.bound} == {1.0, 1.0}
+        assert [_ | _] = defect.node_epochs_j2000_s
+        assert defect.node_epochs_j2000_s == Enum.sort(defect.node_epochs_j2000_s)
+        refute Map.has_key?(defect, :interval_s)
+      end
 
       [e0 | _] = SP3.epochs_j2000_seconds(sp3)
       e_end = List.last(SP3.epochs_j2000_seconds(sp3))
@@ -165,10 +192,17 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
 
       assert PreciseEphemeris.gap_threshold_factor(pe_f13) == 13.0
 
-      assert {:error, msg} =
-               PreciseEphemeris.from_samples(samples, gap_threshold_factor: 1.0)
+      assert_interpolation_policy_error(
+        PreciseEphemeris.from_samples(samples, gap_threshold_factor: 1.0),
+        1.0
+      )
 
-      assert msg =~ "gap_threshold_factor must be finite and greater than 1.0"
+      accuracy = SP3.precise_ephemeris_accuracy_samples(sp3_f13)
+
+      assert_interpolation_policy_error(
+        PreciseEphemeris.from_samples_with_accuracy(samples, accuracy, gap_threshold_factor: 1.0),
+        1.0
+      )
 
       assert {:error, {:bad_gap_threshold_factor, :bad}} =
                PreciseEphemeris.from_samples(samples, gap_threshold_factor: :bad)
@@ -223,6 +257,45 @@ defmodule Sidereon.GNSS.SP3InterpolationPolicyTest do
                Interpolant.from_precise_ephemeris_samples(pe, gap_threshold_factor: 13.0)
 
       assert Interpolant.gap_threshold_factor(interp_pe) == 13.0
+    end
+
+    test "every interpolant factory and artifact override reports typed factor refusal" do
+      raw = gapped_sp3_bytes()
+      assert {:ok, sp3} = SP3.parse(raw)
+      samples = SP3.precise_ephemeris_samples(sp3)
+      accuracy = SP3.precise_ephemeris_accuracy_samples(sp3)
+      assert {:ok, pe} = PreciseEphemeris.from_samples(samples)
+      assert {:ok, interpolant} = Interpolant.from_sp3(sp3)
+
+      assert_interpolation_policy_error(
+        Interpolant.from_sp3(sp3, gap_threshold_factor: 1.0),
+        1.0
+      )
+
+      assert_interpolation_policy_error(
+        Interpolant.from_samples(samples, gap_threshold_factor: 1.0),
+        1.0
+      )
+
+      assert_interpolation_policy_error(
+        Interpolant.from_samples_with_accuracy(samples, accuracy, gap_threshold_factor: 1.0),
+        1.0
+      )
+
+      assert_interpolation_policy_error(
+        Interpolant.from_precise_ephemeris_samples(pe, gap_threshold_factor: 1.0),
+        1.0
+      )
+
+      assert_interpolation_policy_error(
+        Interpolant.artifact_bytes(sp3, gap_threshold_factor: 1.0),
+        1.0
+      )
+
+      assert_interpolation_policy_error(
+        Interpolant.artifact_bytes(interpolant, gap_threshold_factor: 1.0),
+        1.0
+      )
     end
   end
 

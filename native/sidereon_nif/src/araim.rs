@@ -205,14 +205,18 @@ fn allocation_term(allocation: IntegrityAllocation) -> AllocationTerm {
     )
 }
 
-fn error_atom(err: AraimError) -> rustler::Atom {
-    match err {
+fn error_term<'a>(env: Env<'a>, err: AraimError) -> Term<'a> {
+    let atom = match err {
         AraimError::InsufficientGeometry => atoms::insufficient_geometry(),
         AraimError::UnmonitorableFaultMass => atoms::unmonitorable_fault_mass(),
         AraimError::NumericalFailure => atoms::numerical_failure(),
         AraimError::InvalidIsm => atoms::invalid_ism(),
         AraimError::InvalidAllocation => atoms::invalid_allocation(),
-    }
+        AraimError::Ut1OutsideCoverage(reason) => {
+            return crate::errors::ut1_outside_coverage_term(env, reason);
+        }
+    };
+    atom.encode(env)
 }
 
 fn vec3(values: [f64; 3]) -> Vec3 {
@@ -293,6 +297,8 @@ fn araim_solve<'a>(
             .iter()
             .map(|system| system_from_term(system))
             .collect::<NifResult<_>>()?,
+        // A geometry the caller supplies was formed without reading UT1.
+        ut1_degraded: None,
     };
     let ism = Ism::new(
         constellations
@@ -307,7 +313,7 @@ fn araim_solve<'a>(
     Ok(
         match araim(&geometry, &ism, &decode_allocation(allocation)) {
             Ok(result) => (atoms::ok(), result_term(result)).encode(env),
-            Err(err) => (atoms::error(), error_atom(err)).encode(env),
+            Err(err) => (atoms::error(), error_term(env, err)).encode(env),
         },
     )
 }

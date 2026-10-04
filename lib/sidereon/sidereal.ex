@@ -11,6 +11,7 @@ defmodule Sidereon.Sidereal do
   alias __MODULE__.FilterOutput
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule FilterOptions do
     @moduledoc """
@@ -68,7 +69,7 @@ defmodule Sidereon.Sidereal do
     {letter, prn} = satellite(satellite_id)
     NIF.sidereal_orbit_repeat_lag(handle, letter, prn, near_epoch_j2000_s / 1.0)
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sidereal_orbit_repeat_lag)
   end
 
   @doc """
@@ -85,7 +86,7 @@ defmodule Sidereon.Sidereal do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sidereal_filter_series)
   end
 
   @doc """
@@ -100,7 +101,7 @@ defmodule Sidereon.Sidereal do
 
     NIF.sidereal_periodicity_strength(numbers(series), numbers(candidate_periods_s), sample_interval_s)
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sidereal_periodicity_strength)
   end
 
   defp filter_options(%FilterOptions{} = opts), do: filter_options(Map.from_struct(opts))

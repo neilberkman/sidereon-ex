@@ -44,6 +44,7 @@ defmodule Sidereon.GNSS.Constellation do
   decoded maps.
   """
 
+  alias Sidereon.CCSDS.Error
   alias Sidereon.GNSS.Constellation
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
@@ -108,8 +109,9 @@ defmodule Sidereon.GNSS.Constellation do
     could not resolve to a `Record` for the requested system.
 
     Carries the entry's identity so the caller can triage why it was skipped: a
-    record from another constellation in a combined feed, or a satellite of the
-    requested system whose `OBJECT_NAME` does not yet resolve.
+    record from another constellation in a combined feed, a satellite of the
+    requested system whose `OBJECT_NAME` does not yet resolve, or an entry that
+    states no `NORAD_CAT_ID` (`norad_id: nil`).
     """
 
     @enforce_keys [:object_name, :norad_id]
@@ -117,7 +119,7 @@ defmodule Sidereon.GNSS.Constellation do
 
     @type t :: %__MODULE__{
             object_name: String.t() | nil,
-            norad_id: pos_integer()
+            norad_id: pos_integer() | nil
           }
   end
 
@@ -127,18 +129,21 @@ defmodule Sidereon.GNSS.Constellation do
     OMM entries that did not.
 
     Resolvable entries become `records` (sorted by `{system, prn}`); every entry
-    whose `OBJECT_NAME` did not resolve is collected into `skipped` with its
-    identity, in input order.
+    whose `OBJECT_NAME` did not resolve, or that states no `NORAD_CAT_ID`, is
+    collected into `skipped` with its identity, in input order. `unread` lists,
+    for a catalog built from JSON text, each array element the OMM reader could
+    not read as `{index, reason}`, with its zero-based position in the array.
     """
 
     alias Sidereon.GNSS.Constellation.SkippedOmm
 
     @enforce_keys [:records, :skipped]
-    defstruct [:records, :skipped]
+    defstruct [:records, :skipped, unread: []]
 
     @type t :: %__MODULE__{
             records: [Sidereon.GNSS.Constellation.Record.t()],
-            skipped: [SkippedOmm.t()]
+            skipped: [SkippedOmm.t()],
+            unread: [{non_neg_integer(), Error.omm()}]
           }
   end
 
@@ -305,7 +310,10 @@ defmodule Sidereon.GNSS.Constellation do
   Build records for `system` from a JSON OMM feed.
 
   This is the string-input sibling of `from_celestrak_omm/2`; decoded entries
-  are still resolved by the shared Rust core.
+  are still resolved by the shared Rust core. An array element the OMM reader
+  cannot read is refused with
+  `{:error, {:bad_celestrak_record, {:unreadable_record, index, reason}, nil}}`
+  rather than left out of the records.
   """
   @spec from_celestrak_json(String.t(), system()) :: {:ok, [Record.t()]} | error()
   def from_celestrak_json(json, system \\ :gps)
@@ -318,6 +326,12 @@ defmodule Sidereon.GNSS.Constellation do
 
         {:error, {:missing_prn, name}} ->
           {:error, {:bad_celestrak_record, {:missing_prn, name}, nil}}
+
+        {:error, {:missing_norad_id, _name}} ->
+          {:error, {:bad_celestrak_record, {:missing_field, "NORAD_CAT_ID"}, nil}}
+
+        {:error, {:unreadable_record, index, reason}} ->
+          {:error, {:bad_celestrak_record, {:unreadable_record, index, reason}, nil}}
 
         {:error, reason} ->
           {:error, reason}
@@ -345,6 +359,9 @@ defmodule Sidereon.GNSS.Constellation do
         {:error, {:missing_prn, name}} ->
           {:error, {:bad_celestrak_record, {:missing_prn, name}, find_omm(omms, name)}}
 
+        {:error, {:missing_norad_id, name}} ->
+          {:error, {:bad_celestrak_record, {:missing_field, "NORAD_CAT_ID"}, find_omm(omms, name)}}
+
         {:error, reason} ->
           {:error, reason}
       end
@@ -364,11 +381,12 @@ defmodule Sidereon.GNSS.Constellation do
   def from_celestrak_json_lenient(json, system) when is_binary(json) do
     with {:ok, letter} <- system_letter(system) do
       case NIF.constellation_from_celestrak_json_lenient(letter, json) do
-        {:ok, %{records: records, skipped: skipped}} ->
+        {:ok, %{records: records, skipped: skipped, unread: unread}} ->
           {:ok,
            %Catalog{
              records: Enum.map(records, &from_nif_record/1),
-             skipped: Enum.map(skipped, &from_nif_skipped/1)
+             skipped: Enum.map(skipped, &from_nif_skipped/1),
+             unread: unread
            }}
 
         {:error, reason} ->
@@ -390,8 +408,9 @@ defmodule Sidereon.GNSS.Constellation do
   resolve) is collected into `Catalog.skipped` with its identity. Resolvable
   records are returned sorted by `{system, prn}`.
 
-  Leniency covers identity resolution only: an entry missing a valid
-  `NORAD_CAT_ID` still aborts with `{:error, reason}`.
+  An entry that states no `NORAD_CAT_ID` is skipped with `norad_id: nil`; one
+  whose `NORAD_CAT_ID` is not a positive integer still aborts with
+  `{:error, reason}`.
 
   ## Examples
 
@@ -420,11 +439,12 @@ defmodule Sidereon.GNSS.Constellation do
     with {:ok, letter} <- system_letter(system),
          {:ok, lites} <- omm_lites(omms) do
       case NIF.constellation_from_celestrak_omm_lenient(letter, lites) do
-        {:ok, %{records: records, skipped: skipped}} ->
+        {:ok, %{records: records, skipped: skipped, unread: unread}} ->
           {:ok,
            %Catalog{
              records: Enum.map(records, &from_nif_record/1),
-             skipped: Enum.map(skipped, &from_nif_skipped/1)
+             skipped: Enum.map(skipped, &from_nif_skipped/1),
+             unread: unread
            }}
 
         {:error, reason} ->
@@ -749,10 +769,13 @@ defmodule Sidereon.GNSS.Constellation do
 
   defp omm_lite(other), do: {:error, {:bad_celestrak_record, :not_a_map, %{value: other}}}
 
+  # An absent `NORAD_CAT_ID` is passed on as `nil`: the strict build refuses it
+  # by name and the lenient build skips the entry.
   defp fetch_norad(omm) do
     case Map.fetch(omm, "NORAD_CAT_ID") do
+      {:ok, nil} -> {:ok, nil}
       {:ok, value} -> parse_positive_int(value)
-      :error -> {:error, {:missing_field, "NORAD_CAT_ID"}}
+      :error -> {:ok, nil}
     end
   end
 

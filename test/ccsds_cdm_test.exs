@@ -122,7 +122,7 @@ defmodule Sidereon.CCSDS.CDMTest do
       OBJECT_DESIGNATOR = 00002
       """
 
-      assert {:error, "incomplete state vector"} = CDM.parse(kvn)
+      assert {:error, :incomplete_state_vector} = CDM.parse(kvn)
     end
 
     test "HBR is nil when not in COMMENT", %{cdm: cdm} do
@@ -130,7 +130,7 @@ defmodule Sidereon.CCSDS.CDMTest do
     end
 
     test "round-trips through encode/1", %{cdm: cdm} do
-      kvn = CDM.encode(cdm)
+      {:ok, kvn} = CDM.encode(cdm)
       {:ok, cdm2} = CDM.parse(kvn)
 
       assert cdm2.message_id == cdm.message_id
@@ -142,7 +142,7 @@ defmodule Sidereon.CCSDS.CDMTest do
 
     test "round-trips through XML encode/parse", %{cdm: cdm} do
       # Encode to XML, parse back, and confirm every meaningful field matches.
-      xml = CDM.encode(cdm, format: :xml)
+      {:ok, xml} = CDM.encode(cdm, format: :xml)
 
       # Basic shape checks on the emitted XML
       assert String.starts_with?(String.trim_leading(xml), "<?xml")
@@ -184,7 +184,7 @@ defmodule Sidereon.CCSDS.CDMTest do
     end
 
     test "parse_xml/1 explicit form matches parse/1 auto-detection", %{cdm: cdm} do
-      xml = CDM.encode_xml(cdm)
+      {:ok, xml} = CDM.encode_xml(cdm)
       {:ok, via_auto} = CDM.parse(xml)
       {:ok, via_explicit} = CDM.parse_xml(xml)
 
@@ -271,6 +271,18 @@ defmodule Sidereon.CCSDS.CDMTest do
 
       {:ok, cdm} = CDM.parse(kvn)
       assert_in_delta cdm.hard_body_radius_m, 15.5, 0.01
+    end
+  end
+
+  describe "typed refusals" do
+    test "an object block named other than OBJECT1 or OBJECT2 is refused by name", %{kvn: kvn} do
+      text = String.replace(kvn, ~r/^OBJECT(\s*)= OBJECT2$/m, "OBJECT\\1= OBJECT3")
+      assert {:error, {:unknown_object, "OBJECT3"}} = CDM.parse_kvn(text)
+    end
+
+    test "two blocks for one object are refused by name", %{kvn: kvn} do
+      text = String.replace(kvn, ~r/^OBJECT(\s*)= OBJECT2$/m, "OBJECT\\1= OBJECT1")
+      assert {:error, {:repeated_object, "OBJECT1"}} = CDM.parse_kvn(text)
     end
   end
 

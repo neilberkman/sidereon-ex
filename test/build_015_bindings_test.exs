@@ -6,7 +6,15 @@ defmodule Sidereon.Build015BindingsTest do
   alias Sidereon.GeodeticTimeSeries
   alias Sidereon.GNSS.ARAIM
   alias Sidereon.GNSS.SBAS
-  alias Sidereon.GNSS.SBAS.{ProtectionGeometry, ProtectionRow, SbasErrorModel, SbasKMultipliers, SbasSisError}
+
+  alias Sidereon.GNSS.SBAS.{
+    ProtectionGeometry,
+    ProtectionRow,
+    SbasErrorModel,
+    SbasKMultipliers,
+    SbasSisError
+  }
+
   alias Sidereon.GNSS.SP3
   alias Sidereon.OrbitDetermination
   alias Sidereon.Propagator
@@ -81,7 +89,8 @@ defmodule Sidereon.Build015BindingsTest do
   test "composite forces reproduce two-body J2 bit-for-bit when extra forces are disabled" do
     state = {{7000.0, 0.0, 1300.0}, {0.0, 7.4, 1.0}}
 
-    assert {:ok, legacy} = Propagator.propagate(state, 60.0, forces: [:twobody, :j2], tolerance: 1.0e-12)
+    assert {:ok, legacy} =
+             Propagator.propagate(state, 60.0, forces: [:twobody, :j2], tolerance: 1.0e-12)
 
     assert {:ok, composite} =
              Propagator.propagate(state, 60.0,
@@ -93,10 +102,23 @@ defmodule Sidereon.Build015BindingsTest do
   end
 
   test "Baarda W-test constants pin delta0 and lambda0" do
-    assert {:ok, %{delta0: delta0, lambda0: lambda0}} = Reliability.wtest_noncentrality(0.001, 0.80)
+    assert {:ok, %{delta0: delta0, lambda0: lambda0}} =
+             Reliability.wtest_noncentrality(0.001, 0.80)
 
     assert abs(delta0 - 4.132147965064809) / 4.132147965064809 <= 1.0e-14
     assert abs(lambda0 - delta0 * delta0) / lambda0 <= 1.0e-15
+  end
+
+  test "reliability core refusals keep their typed quality atoms" do
+    assert {:error, :invalid_probability} = Reliability.wtest_noncentrality(0.0, 0.8)
+
+    rows = [
+      RangeReliabilityRow.new("xOnly", [1.0, 0.0], 1.0),
+      RangeReliabilityRow.new("yA", [0.0, 1.0], 1.0),
+      RangeReliabilityRow.new("yB", [0.0, 1.0], 1.0)
+    ]
+
+    assert {:error, :invalid_probability} = Reliability.reliability_design(rows, alpha: 0.0)
   end
 
   test "reliability design sums redundancy and preserves nil uncheckable fields" do
@@ -172,7 +194,12 @@ defmodule Sidereon.Build015BindingsTest do
       fixed_los_vectors()
       |> Enum.with_index(1)
       |> Enum.map(fn {los, idx} ->
-        ProtectionRow.new("G#{String.pad_leading(Integer.to_string(idx), 2, "0")}", los, 0.8, :gps)
+        ProtectionRow.new(
+          "G#{String.pad_leading(Integer.to_string(idx), 2, "0")}",
+          los,
+          0.8,
+          :gps
+        )
       end)
 
     ProtectionGeometry.new(rows, {0.5, 0.2, 0.0}, [:gps])

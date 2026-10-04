@@ -11,9 +11,10 @@ use sidereon_core::astro::forces::SpaceWeather;
 use sidereon_core::astro::forces::SpaceWeatherSource;
 use sidereon_core::astro::propagator::decay::estimate_decay_with_source;
 use sidereon_core::astro::space_weather::{
-    encode_csv, encode_txt, parse, ObservationClass, SpaceWeatherCoverage, SpaceWeatherError,
-    SpaceWeatherPolicy, SpaceWeatherSample, SpaceWeatherTable,
+    encode_csv, encode_txt, parse, ApHistorySample, ObservationClass, SpaceWeatherCoverage,
+    SpaceWeatherError, SpaceWeatherPolicy, SpaceWeatherSample, SpaceWeatherTable,
 };
+use sidereon_core::nmea::Diagnostics;
 
 use crate::drag::{
     decay_config_from_terms, decode_decay_error, DecayEstimateTerm, DragParametersTerm,
@@ -21,6 +22,8 @@ use crate::drag::{
 
 pub struct SpaceWeatherTableResource {
     pub table: Arc<SpaceWeatherTable>,
+    /// The non-fatal findings of the parse that built the table.
+    pub diagnostics: Diagnostics,
 }
 
 #[rustler::resource_impl]
@@ -32,6 +35,7 @@ mod atoms {
         error,
         observed,
         interpolated,
+        not_observed,
         daily_predicted,
         monthly_predicted,
         unrecognized_format,
@@ -60,8 +64,28 @@ struct SpaceWeatherSampleTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct SpaceWeatherPolicyTerm {
+struct ApHistorySampleTerm {
+    ap: Vec<f64>,
+    class: rustler::Atom,
+    ap_defaulted: bool,
+    bins_from_daily_ap: u8,
+}
+
+impl From<ApHistorySample> for ApHistorySampleTerm {
+    fn from(sample: ApHistorySample) -> Self {
+        Self {
+            ap: sample.ap.to_vec(),
+            class: class_atom(sample.class),
+            ap_defaulted: sample.ap_defaulted,
+            bins_from_daily_ap: sample.bins_from_daily_ap,
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+pub(crate) struct SpaceWeatherPolicyTerm {
     allow_interpolated: bool,
+    allow_not_observed: bool,
     allow_daily_predicted: bool,
     allow_monthly_predicted: bool,
     require_geomagnetic: bool,
@@ -89,6 +113,7 @@ impl From<SpaceWeatherPolicyTerm> for SpaceWeatherPolicy {
     fn from(policy: SpaceWeatherPolicyTerm) -> Self {
         Self {
             allow_interpolated: policy.allow_interpolated,
+            allow_not_observed: policy.allow_not_observed,
             allow_daily_predicted: policy.allow_daily_predicted,
             allow_monthly_predicted: policy.allow_monthly_predicted,
             require_geomagnetic: policy.require_geomagnetic,
@@ -117,10 +142,23 @@ impl From<SpaceWeatherCoverage> for SpaceWeatherCoverageTerm {
     }
 }
 
+/// The drag source for a table read under `policy`, or under the default
+/// policy when none is given.
+pub(crate) fn table_source(
+    table: &SpaceWeatherTableResource,
+    policy: Option<SpaceWeatherPolicyTerm>,
+) -> SpaceWeatherSource {
+    match policy {
+        Some(policy) => SpaceWeatherSource::TableWithPolicy(table.table.clone(), policy.into()),
+        None => SpaceWeatherSource::Table(table.table.clone()),
+    }
+}
+
 fn class_atom(class: ObservationClass) -> rustler::Atom {
     match class {
         ObservationClass::Observed => atoms::observed(),
         ObservationClass::Interpolated => atoms::interpolated(),
+        ObservationClass::NotObserved => atoms::not_observed(),
         ObservationClass::DailyPredicted => atoms::daily_predicted(),
         ObservationClass::MonthlyPredicted => atoms::monthly_predicted(),
     }
@@ -209,11 +247,12 @@ where
 fn space_weather_parse<'a>(env: Env<'a>, bytes: Binary<'a>) -> Term<'a> {
     match parse(bytes.as_slice()) {
         Ok(parsed) => {
-            let (table, _diagnostics) = parsed.into_parts();
+            let (table, diagnostics) = parsed.into_parts();
             (
                 atoms::ok(),
                 ResourceArc::new(SpaceWeatherTableResource {
                     table: Arc::new(table),
+                    diagnostics,
                 }),
             )
                 .encode(env)
@@ -274,6 +313,29 @@ fn space_weather_ap_array_at<'a>(
 }
 
 #[rustler::nif]
+fn space_weather_ap_history_at_with_policy<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<SpaceWeatherTableResource>,
+    epoch_j2000_s: f64,
+    policy: SpaceWeatherPolicyTerm,
+) -> Term<'a> {
+    encode_lookup(
+        env,
+        handle
+            .table
+            .ap_history_at_with_policy(epoch_j2000_s, policy.into()),
+        |env, sample| ApHistorySampleTerm::from(sample).encode(env),
+    )
+}
+
+#[rustler::nif]
+fn space_weather_diagnostics(
+    handle: ResourceArc<SpaceWeatherTableResource>,
+) -> crate::nmea::DiagnosticsTerm {
+    crate::nmea::diagnostics_term(handle.diagnostics.clone())
+}
+
+#[rustler::nif]
 fn space_weather_coverage<'a>(
     env: Env<'a>,
     handle: ResourceArc<SpaceWeatherTableResource>,
@@ -310,6 +372,7 @@ fn drag_estimate_decay_with_space_weather_table<'a>(
     max_duration_s: f64,
     max_scan_samples: u32,
     table: ResourceArc<SpaceWeatherTableResource>,
+    policy: Option<SpaceWeatherPolicyTerm>,
 ) -> rustler::NifResult<Term<'a>> {
     let mut config = decay_config_from_terms(
         params,
@@ -323,7 +386,7 @@ fn drag_estimate_decay_with_space_weather_table<'a>(
         max_scan_samples,
     )?;
     config.mu_km3_s2 = None;
-    let source = SpaceWeatherSource::Table(table.table.clone());
+    let source = table_source(&table, policy);
 
     Ok(
         match estimate_decay_with_source(crate::drag::state_from_term(state), &config, &source) {

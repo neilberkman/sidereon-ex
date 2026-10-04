@@ -6,6 +6,7 @@ defmodule Sidereon.GNSS.DGNSSTest do
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.SP3
+  alias Sidereon.Test.ModelClock
 
   # Precise ephemeris fixture: 2020-06-24 00:00..23:45 GPST, 15-min, 96 epochs.
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
@@ -106,14 +107,37 @@ defmodule Sidereon.GNSS.DGNSSTest do
       {:ok, prc} = DGNSS.corrections(ctx.sp3, ctx.base, base_obs, @epoch)
       {:ok, prc0} = DGNSS.corrections(ctx.sp3, ctx.base, base_clean, @epoch)
 
+      # The base station places each satellite from its pseudorange (RTKLIB
+      # `satposs`), so an error of `e` metres moves the transmission epoch by
+      # `e / c` and the satellite along its track by its speed times that, under
+      # 4 km/s for a GPS satellite. The correction recovers the error to the
+      # range change that bounds.
       for sat <- sats do
         recovered = prc[sat] - prc0[sat]
-        assert_in_delta recovered, errors[sat], 1.0e-6
+        assert_in_delta recovered, errors[sat], abs(errors[sat]) * 4_000.0 / @c + 1.0e-6
       end
 
       # The baseline length is reported and matches the true ~2.6 km separation.
       true_baseline = dist_xyz(ctx.base, ctx.rover)
       assert_in_delta dg_clean.baseline_m, true_baseline, 1.0e-2
+    end
+  end
+
+  describe "nested corrected SPP refusal" do
+    test "public DGNSS position keeps the SPP count cause", ctx do
+      sats = common_visible(ctx.sp3, ctx.base, ctx.rover)
+      base_observations = synth(ctx.sp3, sats, ctx.base, @rx_clock_base)
+      rover_observations = Enum.take(base_observations, 1)
+
+      assert {:error, {:too_few_satellites, 1, 4}} =
+               DGNSS.position(
+                 ctx.sp3,
+                 ctx.base,
+                 base_observations,
+                 rover_observations,
+                 @epoch,
+                 initial_guess: guess(ctx.rover)
+               )
     end
   end
 
@@ -247,14 +271,10 @@ defmodule Sidereon.GNSS.DGNSSTest do
     |> Enum.map(& &1.satellite_id)
   end
 
-  # Clean pseudorange: pr = geometric_range + c*(rx_clock - sat_clock).
+  # Clean pseudorange: pr = geometric_range + c*(rx_clock - sat_clock), with the
+  # satellite placed from the pseudorange as the solver places it.
   defp synth(sp3, sats, station, rx_clock_s) do
-    Enum.map(sats, fn sat ->
-      {:ok, o} =
-        Observables.predict(sp3, sat, station, @epoch, light_time: true, sagnac: true)
-
-      {sat, o.geometric_range_m + @c * (rx_clock_s - (o.sat_clock_s || 0.0))}
-    end)
+    Enum.map(sats, fn sat -> {sat, ModelClock.spp_pseudorange(sp3, sat, station, @epoch, rx_clock_s)} end)
   end
 
   defp inject(observations, errors) do

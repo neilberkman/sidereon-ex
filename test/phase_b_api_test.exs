@@ -8,12 +8,15 @@ defmodule Sidereon.PhaseBApiTest do
   alias Sidereon.Astro.Observe
   alias Sidereon.Astro.Relative
   alias Sidereon.Drag
+  alias Sidereon.GNSS.Antex
   alias Sidereon.GNSS.Bias
   alias Sidereon.GNSS.Broadcast
   alias Sidereon.GNSS.Ephemeris
+  alias Sidereon.GNSS.RTCM
   alias Sidereon.GNSS.SBAS
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.SSR
+  alias Sidereon.GNSS.Time.ExactEpochQuery
   alias Sidereon.OrbitalElements
   alias Sidereon.Terrain
 
@@ -131,6 +134,89 @@ defmodule Sidereon.PhaseBApiTest do
     assert dcb.info.records > 0
   end
 
+  test "bias SINEX header-layout failures and lenient notices retain typed details" do
+    compressed =
+      File.read!(Path.join(@core_fixtures, "bias/COD0OPSFIN_20261330000_01D_01D_OSB.BIA.gz"))
+
+    input = :zlib.gunzip(compressed)
+    newline = elem(:binary.match(input, "\n"), 0)
+
+    malformed =
+      binary_part(input, 0, newline) <>
+        "X" <>
+        binary_part(input, newline, byte_size(input) - newline)
+
+    assert {:error, {:departure, {:header_layout, reason}}} = Bias.parse_bias_sinex(malformed)
+    assert reason == "header line is not 74 columns"
+
+    assert {:ok, bias} = Bias.parse_bias_sinex(malformed, policy: :lenient)
+    assert {:departure, {:header_layout, reason}} in Bias.notices(bias)
+  end
+
+  test "bias file readers retain typed I/O failures" do
+    missing_path =
+      Path.join(
+        System.tmp_dir!(),
+        "sidereon-missing-bias-product-#{System.unique_integer([:positive])}"
+      )
+
+    assert {:error, {:io, message}} = Bias.load_bias_sinex(missing_path)
+    assert is_binary(message)
+  end
+
+  test "bias writers preserve source bytes and report typed text and DCB errors" do
+    compressed =
+      File.read!(Path.join(@core_fixtures, "bias/COD0OPSFIN_20261330000_01D_01D_OSB.BIA.gz"))
+
+    source = :zlib.gunzip(compressed)
+    assert {:ok, bias} = Bias.parse_bias_sinex(source)
+    assert {:ok, ^source} = Bias.write_bias_sinex_bytes(bias)
+
+    invalid_utf8_source =
+      :binary.replace(source, "* Bias Solution", <<"* ", 255, "Bias Solution">>, [:global])
+
+    assert {:ok, invalid_utf8_bias} = Bias.parse_bias_sinex(invalid_utf8_source)
+    assert {:ok, ^invalid_utf8_source} = Bias.write_bias_sinex_bytes(invalid_utf8_bias)
+    assert {:error, {:invalid_utf8, line}} = Bias.write_bias_sinex(invalid_utf8_bias)
+    assert is_integer(line) and line > 0
+
+    assert {:error, {:missing_writer_metadata, "dcb_meta"}} = Bias.write_code_dcb(bias)
+  end
+
+  test "CODE DCB text and byte writers preserve the same source" do
+    source = File.read!(Path.join(@core_fixtures, "bias/P1C1_RINEX.DCB"))
+
+    assert {:ok, bias} =
+             Bias.parse_code_dcb(source, pair: {"P1", "C1"}, year: 2026, month: 6)
+
+    assert {:ok, text} = Bias.write_code_dcb(bias)
+    assert {:ok, bytes} = Bias.write_code_dcb_bytes(bias)
+    assert text == bytes
+    assert bytes == source
+  end
+
+  test "bias lookups return the value with its records, or a typed status" do
+    {:ok, bias} =
+      Bias.load_bias_sinex(Path.join(@core_fixtures, "bias/COD0OPSFIN_20261330000_01D_01D_OSB.BIA.gz"))
+
+    assert bias.info.mode == :absolute
+    assert bias.info.time_scale == "GPST"
+    assert bias.info.time_system_label == "G"
+    assert is_list(Bias.notices(bias))
+
+    # OSB  G080 G01 C1C 2026:133:00000 2026:134:00000 ns -6.0355
+    assert {:ok, value, %{records: [index], overridden: []}} =
+             Bias.code_osb(bias, "G01", "C1C", ~N[2026-05-13 12:00:00])
+
+    assert_in_delta value, -6.0355e-9, 1.0e-18
+
+    record = Enum.at(Bias.records(bias), index)
+    assert %Bias.Record{obs1: "C1C", family: :code, unit: :nanoseconds} = record
+    assert is_integer(record.line)
+
+    assert {:error, :absent} = Bias.code_osb(bias, "G01", "C1C", ~N[2026-05-20 12:00:00])
+  end
+
   test "SBAS message decode and store construction use core" do
     body = hex_bytes("5308DFFC010005FFC00DFFC009FFDFFC001FFDFFDFFFBABBBBBB9BBB80")
 
@@ -138,20 +224,42 @@ defmodule Sidereon.PhaseBApiTest do
     assert message.kind == :fast_corrections
     assert message.message_type == 2
 
-    line = "2360 259200 120 1 : 5308DFFC010005FFC00DFFC009FFDFFC001FFDFFDFFFBABBBBBB9BBB80\n"
+    line = "2360 259200 120 2 : 5308DFFC010005FFC00DFFC009FFDFFC001FFDFFDFFFBABBBBBB9BBB80\n"
     assert {:ok, [%SBAS.LogBlock{} = block]} = SBAS.parse_rtklib(line)
     assert block.satellite_id == "S20"
+    assert block.declared_message_type == 2
+    assert block.pad_bits == 0
+
+    # A record whose type field differs from the type its message carries is
+    # refused under :strict and read with the departure under :lenient.
+    mislabelled = String.replace(line, " 120 2 :", " 120 1 :")
+    assert {:error, _reason} = SBAS.parse_rtklib(mislabelled)
+
+    assert {:ok, %SBAS.Log{blocks: [%SBAS.LogBlock{declared_message_type: 1}], departures: [{1, departure}]}} =
+             SBAS.parse_rtklib_log(mislabelled, policy: :lenient)
+
+    assert departure == {:declared_message_type, 1, 2}
 
     assert {:ok, store} = SBAS.store_from_rtklib(line)
     assert %SBAS{} = store
+
+    # The message reached the PRN 120 partition; with no PRN mask no
+    # correction was addressed to an unassigned bit. A GEO the store has not
+    # heard has no partition.
+    assert SBAS.unassigned_mask_corrections(store, "S120") == {:ok, %{}}
+    assert SBAS.unassigned_mask_corrections(store, "S121") == {:error, :not_found}
   end
 
   test "SSR RTCM decode exposes orbit corrections and corrected broadcast states" do
     bytes = @core_fixtures |> Path.join("ssr/SSRA02IGS0_2026181234930_1060.hex") |> File.read!() |> hex_bytes()
 
-    assert {:ok, store} = SSR.from_rtcm(bytes, 2425, 344_970.0)
+    assert {:ok, store, report} = SSR.from_rtcm(bytes, 2425, 344_970.0)
+    assert %{diagnostics: %{crc_failures: _, departures: _}, trailing_partial_frame_len: _} = report
+    assert is_list(report.ingest_refusals)
     assert {:ok, orbit} = SSR.orbit(store, "G30")
     assert is_float(orbit.radial_m)
+    assert orbit.has_nav_message == nil
+    assert is_float(orbit.transmitted_epoch_j2000_s)
 
     broadcast = Broadcast.load!(Path.join(@core_fixtures, "ssr/BRDC00WRD_S_20261820000_G30_G31.rnx"))
 
@@ -160,6 +268,191 @@ defmodule Sidereon.PhaseBApiTest do
 
     assert {x, y, z} = corrected.position_ecef_m
     assert is_float(x) and is_float(y) and is_float(z)
+
+    {:ok, exact_query} =
+      ExactEpochQuery.from_binary_j2000_seconds(ssr_j2000(344_970.0))
+
+    {:ok, state_query} = ExactEpochQuery.checked_add_binary_seconds(exact_query, 0.125)
+
+    assert {:ok, selected} =
+             SSR.selected_state_at_epoch_queries(
+               broadcast,
+               store,
+               "G30",
+               state_query,
+               exact_query,
+               fallback_to_broadcast: true
+             )
+
+    assert {:ok, exact_corrected} =
+             SSR.corrected_position_at_epoch_query(
+               broadcast,
+               store,
+               "G30",
+               state_query,
+               selection_epoch_query: exact_query,
+               fallback_to_broadcast: true
+             )
+
+    assert selected.position_ecef_m == exact_corrected.position_ecef_m
+    assert selected.clock_s == exact_corrected.clock_s
+
+    assert {:ok, %{clock_s: placement_clock_s}} =
+             SSR.transmit_clock_at_epoch_queries(
+               broadcast,
+               store,
+               "G30",
+               state_query,
+               exact_query,
+               fallback_to_broadcast: true
+             )
+
+    assert is_float(placement_clock_s)
+
+    assert :not_applicable ==
+             SSR.clock_relativity_for_state_at_epoch_query(
+               broadcast,
+               store,
+               "G30",
+               state_query,
+               selected.position_ecef_m,
+               fallback_to_broadcast: true
+             )
+
+    variance =
+      SSR.ephemeris_variance_at_epoch_queries(
+        broadcast,
+        store,
+        "G30",
+        state_query,
+        exact_query,
+        fallback_to_broadcast: true
+      )
+
+    assert is_nil(variance) or is_number(variance)
+  end
+
+  test "SSR centre-of-mass correction uses the public ANTEX and attitude options" do
+    bytes =
+      @core_fixtures
+      |> Path.join("ssr/SSRA02IGS0_2026181234930_1060.hex")
+      |> File.read!()
+      |> hex_bytes()
+
+    assert {:ok, store, _report} =
+             SSR.from_rtcm(bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+    broadcast = Broadcast.load!(Path.join(@core_fixtures, "ssr/BRDC00WRD_S_20261820000_G30_G31.rnx"))
+    antex = Antex.load!(Path.join(@core_fixtures, "antex/igs20_wettzell_trim.atx"))
+    epoch = ssr_j2000(344_970.0)
+
+    assert {:error, :not_found} = SSR.corrected_position(broadcast, store, "G30", epoch)
+
+    assert {:ok, strict_store} =
+             SSR.from_rtcm_strict(bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+    assert {:error, :not_found} = SSR.corrected_position(broadcast, strict_store, "G30", epoch)
+
+    frame = RTCM.decode_frame(bytes)
+    assert {:ok, %{body: body}} = frame
+    assert {:ok, message} = RTCM.decode_message(body)
+    constructed_store = SSR.new(reference_point: :center_of_mass)
+    assert :ok = SSR.ingest(constructed_store, message, 2425, 344_970.0)
+    assert {:error, :not_found} = SSR.corrected_position(broadcast, constructed_store, "G30", epoch)
+
+    opts = [satellite_antex: antex, satellite_attitude: :nominal_sun_fixed]
+    assert {:ok, corrected} = SSR.corrected_position(broadcast, store, "G30", epoch, opts)
+    assert {x, y, z} = corrected.position_ecef_m
+    assert_in_delta x, -6_327_381.448161609, 1.0e-6
+    assert_in_delta y, 15_802_128.916795386, 1.0e-6
+    assert_in_delta z, -20_121_896.861226305, 1.0e-6
+    assert_in_delta corrected.clock_s, 0.0002800865527753679, 1.0e-15
+    assert abs(x) > 1_000_000.0
+    assert corrected.oversized_corrections == []
+
+    assert {:ok, strict_corrected} =
+             SSR.corrected_position(broadcast, strict_store, "G30", epoch, opts)
+
+    assert strict_corrected == corrected
+
+    assert {:ok, constructed_corrected} =
+             SSR.corrected_position(broadcast, constructed_store, "G30", epoch, opts)
+
+    assert constructed_corrected == corrected
+
+    assert {:ok, apc_store, _report} = SSR.from_rtcm(bytes, 2425, 344_970.0)
+    assert {:ok, apc_corrected} = SSR.corrected_position(broadcast, apc_store, "G30", epoch, opts)
+    assert apc_corrected.position_ecef_m != corrected.position_ecef_m
+    {:ok, exact_query} = ExactEpochQuery.from_binary_j2000_seconds(epoch)
+
+    assert {:ok, exact_corrected} =
+             SSR.corrected_position_at_epoch_query(
+               broadcast,
+               store,
+               "G30",
+               exact_query,
+               Keyword.put(opts, :selection_epoch_query, exact_query)
+             )
+
+    assert exact_corrected.position_ecef_m == corrected.position_ecef_m
+    assert exact_corrected.clock_s == corrected.clock_s
+
+    assert {:ok, [sample]} = SSR.sample(broadcast, store, ["G30"], {epoch, epoch}, 1.0, opts)
+    assert sample.position_ecef_m == corrected.position_ecef_m
+    assert sample.clock_s == corrected.clock_s
+  end
+
+  test "SSR CoM assembler preserves APC stream diagnostics and refusal behavior" do
+    frame =
+      @core_fixtures
+      |> Path.join("ssr/SSRA02IGS0_2026181234930_1060.hex")
+      |> File.read!()
+      |> hex_bytes()
+
+    malformed = [
+      {<<0>> <> frame, 1, 0, 0},
+      {binary_part(frame, 0, byte_size(frame) - 1) <> <<rem(:binary.last(frame) + 1, 256)>>, byte_size(frame), 1, 0},
+      {frame <> <<211, 0>>, 2, 0, 2}
+    ]
+
+    for {bytes, resync, crc_failures, trailing_len} <- malformed do
+      assert {:ok, _apc, apc_report} = SSR.from_rtcm(bytes, 2425, 344_970.0)
+
+      assert {:ok, _com, com_report} =
+               SSR.from_rtcm(bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+      assert apc_report.diagnostics.resync_bytes == resync
+      assert com_report.diagnostics.resync_bytes == resync
+      assert apc_report.diagnostics.crc_failures == crc_failures
+      assert com_report.diagnostics.crc_failures == crc_failures
+      assert apc_report.trailing_partial_frame_len == trailing_len
+      assert com_report.trailing_partial_frame_len == trailing_len
+
+      assert {:error, apc_error} = SSR.from_rtcm_strict(bytes, 2425, 344_970.0)
+
+      assert {:error, com_error} =
+               SSR.from_rtcm_strict(bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+      assert com_error == apc_error
+    end
+
+    {:ok, %{body: body}} = RTCM.decode_frame(frame)
+    <<prefix::bitstring-size(68), _satellite_id::6, suffix::bitstring>> = body
+    {:ok, refused_bytes} = RTCM.encode_frame(<<prefix::bitstring, 0::6, suffix::bitstring>>)
+    assert {:ok, _apc, apc_report} = SSR.from_rtcm(refused_bytes, 2425, 344_970.0)
+
+    assert {:ok, _com, com_report} =
+             SSR.from_rtcm(refused_bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+    assert length(apc_report.ingest_refusals) == 1
+    assert apc_report.ingest_refusals == com_report.ingest_refusals
+    assert hd(apc_report.ingest_refusals).message_number == 1060
+    assert {:error, apc_error} = SSR.from_rtcm_strict(refused_bytes, 2425, 344_970.0)
+
+    assert {:error, com_error} =
+             SSR.from_rtcm_strict(refused_bytes, 2425, 344_970.0, reference_point: :center_of_mass)
+
+    assert com_error == apc_error
   end
 
   test "DTED terrain wrappers use core terrain lookup" do

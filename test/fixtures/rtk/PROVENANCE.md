@@ -25,7 +25,7 @@ output for the vendored WTZR/WTZZ 2020-06-25 120-epoch short-baseline arc.
   -h -m 10 -a ...` with `pos1-sateph = precise`, the CODE orbit product
   `COD0MGXFIN_20201770000_01D_05M_ORB.SP3`, and the CNES/CLS clock product
   `GRG0MGXFIN_20201770000_01D_30S_CLK.CLK`. The generated `.pos` source was
-  `/tmp/orbis-rtklib-precise-lowercase/l1_precise_cod_sp3_grg_clk_enu.pos`.
+  `l1_precise_cod_sp3_grg_clk_enu.pos` in a scratch directory.
 
 The broadcast JSON fixture includes the full per-epoch L1+broadcast
 fix-and-hold solution and compact summaries for L1 instantaneous, L1 float, and

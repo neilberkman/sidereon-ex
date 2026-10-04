@@ -3,6 +3,10 @@ defmodule Sidereon.GNSSScenarioTest do
 
   alias Sidereon.GNSS.Scenario
 
+  # The committed scenario `scenario/0` normalizes to, in the core's own form.
+  @scenario_path Path.join(__DIR__, "fixtures/scenario/g01_two_epochs.json")
+  @expected_path Path.join(__DIR__, "fixtures/scenario/g01_two_epochs_expected.json")
+
   describe "deterministic scenario simulator parity" do
     test "returns identical bytes and core-pinned arrays for the same seed" do
       assert {:ok, bytes1, fingerprint1} = Scenario.simulate_bytes(scenario())
@@ -24,8 +28,12 @@ defmodule Sidereon.GNSSScenarioTest do
       assert observations["epoch_offsets"] == [0, 1, 2]
       assert observations["epoch_index"] == [0, 1]
 
-      assert_close_list(observations["pseudorange_m"], [19_950_610.11293578, 19_953_170.84944195], 1.0e-8)
-      assert_close_list(observations["doppler_hz"], [-438.22961996703225, -458.8850866917381], 1.0e-12)
+      # The observations are the core's own simulation of the same scenario,
+      # written by test/generators/core_goldens.
+      expected = expected_simulation()
+      assert observations == expected["observations"]
+      assert truth == expected["truth_terms"]
+      assert receiver == expected["receiver_truth"]
 
       assert_close_list(truth["geometric_range_m"], observations["pseudorange_m"], 0.0)
       assert_close_list(truth["doppler_satellite_motion_hz"], observations["doppler_hz"], 0.0)
@@ -53,7 +61,7 @@ defmodule Sidereon.GNSSScenarioTest do
       assert bytes == atom_bytes
       decoded = Jason.decode!(bytes)
 
-      assert_close_list(decoded["observations"]["pseudorange_m"], [19_950_610.11293578, 19_953_170.84944195], 1.0e-8)
+      assert decoded["observations"] == expected_simulation()["observations"]
     end
 
     test "accepts schema string kinds for external product maps" do
@@ -69,6 +77,15 @@ defmodule Sidereon.GNSSScenarioTest do
       assert {:error, :external_source_required} = Scenario.simulate_bytes(scenario)
     end
   end
+
+  test "the map form and the committed core scenario simulate to the same bytes" do
+    text = File.read!(@scenario_path)
+    assert {:ok, text_bytes, text_fp} = Scenario.simulate_bytes(text)
+    assert {:ok, map_bytes, ^text_fp} = Scenario.simulate_bytes(scenario())
+    assert map_bytes == text_bytes
+  end
+
+  defp expected_simulation, do: @expected_path |> File.read!() |> Jason.decode!()
 
   defp scenario do
     %{

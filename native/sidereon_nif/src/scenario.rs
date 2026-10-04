@@ -20,7 +20,8 @@ mod atoms {
         no_ephemeris,
         observable,
         frame,
-        json
+        json,
+        ut1_outside_coverage
     }
 }
 
@@ -74,5 +75,11 @@ fn encode_error<'a>(env: Env<'a>, error: ScenarioError) -> Term<'a> {
         }
         ScenarioError::Observable(error) => (atoms::observable(), error.to_string()).encode(env),
         ScenarioError::Frame(message) => (atoms::frame(), message).encode(env),
+        ScenarioError::Ut1OutsideCoverage { satellite, reason } => (
+            atoms::ut1_outside_coverage(),
+            satellite.to_string(),
+            crate::errors::degrade_reason_atom(reason),
+        )
+            .encode(env),
     }
 }

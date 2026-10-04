@@ -11,7 +11,7 @@ defmodule MultiGNSSSeqMeasurement do
   # multi-GNSS RTKLIB oracle. See multignss-seq-measurement-2026-06.md.
   #
   # Usage (from the repo root):
-  #   ORBIS_BUILD=1 mix run \
+  #   mix run \
   #     test/fixtures/rtk/generators/multignss_seq_measurement_2026_06.exs
 
   alias Sidereon.GNSS.RINEX.Observations

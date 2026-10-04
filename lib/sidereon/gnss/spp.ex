@@ -10,6 +10,7 @@ defmodule Sidereon.GNSS.SPP do
 
   alias Sidereon.Constants
   alias Sidereon.GNSS.Broadcast
+  alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.Positioning.Solution
   alias Sidereon.GNSS.RINEX.Observations
@@ -22,6 +23,9 @@ defmodule Sidereon.GNSS.SPP do
   defmodule EpochInputs do
     @moduledoc """
     One RINEX observation epoch assembled into SPP solve inputs.
+
+    `qzss_clock` and `troposphere_model` record the model selectors applied
+    during assembly and solve.
     """
 
     @enforce_keys [
@@ -33,7 +37,9 @@ defmodule Sidereon.GNSS.SPP do
       :day_of_year,
       :initial_guess,
       :corrections,
-      :glonass_channels
+      :glonass_channels,
+      :qzss_clock,
+      :troposphere_model
     ]
     defstruct [
       :epoch_index,
@@ -44,7 +50,9 @@ defmodule Sidereon.GNSS.SPP do
       :day_of_year,
       :initial_guess,
       :corrections,
-      :glonass_channels
+      :glonass_channels,
+      :qzss_clock,
+      :troposphere_model
     ]
 
     @type t :: %__MODULE__{
@@ -56,7 +64,9 @@ defmodule Sidereon.GNSS.SPP do
             day_of_year: float(),
             initial_guess: {float(), float(), float(), float()},
             corrections: %{ionosphere: boolean(), troposphere: boolean()},
-            glonass_channels: %{non_neg_integer() => integer()}
+            glonass_channels: %{non_neg_integer() => integer()},
+            qzss_clock: :gps | :separate,
+            troposphere_model: :rtklib | :saastamoinen_niell
           }
   end
 
@@ -86,6 +96,8 @@ defmodule Sidereon.GNSS.SPP do
           | {:pressure_hpa, number()}
           | {:temperature_k, number()}
           | {:relative_humidity, number()}
+          | {:qzss_clock, :gps | :separate}
+          | {:troposphere_model, :rtklib | :saastamoinen_niell}
           | {:huber, boolean()}
           | {:huber_k, number()}
           | {:huber_sigma, number()}
@@ -115,6 +127,8 @@ defmodule Sidereon.GNSS.SPP do
     * `:satellites` - optional satellite id allow-list.
     * `:pressure_hpa`, `:temperature_k`, `:relative_humidity` - surface met
       values for the troposphere model.
+    * `:qzss_clock` and `:troposphere_model` - clock grouping and troposphere
+      implementation selectors, defaulting to `:gps` and `:rtklib`.
     * `:huber` plus `:huber_k`, `:huber_sigma`, `:huber_max_iter` - optional
       robust reweighting for each assembled solve.
   """
@@ -135,6 +149,11 @@ defmodule Sidereon.GNSS.SPP do
   Assemble RINEX OBS epochs and solve each epoch serially with SPP.
 
   The source and RINEX observation arguments match `spp_inputs_from_rinex_obs/3`.
+  Observation-assembly errors retain their core category, for example
+  `{:error, {:observation, {:parse, message}}}` or
+  `{:error, {:observation, {:invalid_input, message}}}`. Other core errors use
+  their core variant name as the nested reason tag, such as
+  `{:observation, {:epoch_out_of_range, message}}`.
   Per-epoch solve failures are retained in the returned list as
   `%EpochSolution{solution: {:error, reason}}`.
 
@@ -150,7 +169,8 @@ defmodule Sidereon.GNSS.SPP do
   def solve_spp_from_rinex_obs(source, obs, opts \\ [])
 
   def solve_spp_from_rinex_obs(%Broadcast{handle: source}, %Observations{handle: obs}, opts) when is_list(opts) do
-    with {:ok, max_pdop} <- optional_positive_float(Keyword.get(opts, :max_pdop), :max_pdop),
+    with {:ok, _qzss_clock, _troposphere_model} <- Positioning.model_options(opts),
+         {:ok, max_pdop} <- optional_positive_float(Keyword.get(opts, :max_pdop), :max_pdop),
          {:ok, coarse_search_seeds} <-
            optional_positive_integer(Keyword.get(opts, :coarse_search_seeds), :coarse_search_seeds) do
       args = rinex_args(source, obs, opts) ++ [Keyword.get(opts, :with_geodetic, true), max_pdop, coarse_search_seeds]
@@ -170,10 +190,12 @@ defmodule Sidereon.GNSS.SPP do
   end
 
   defp call_inputs(source, obs, opts) do
-    case apply(NIF, :spp_inputs_from_rinex_obs, rinex_args(source, obs, opts)) do
-      {:ok, epochs} -> {:ok, Enum.map(epochs, &decode_epoch_inputs/1)}
-      {:error, _} = err -> err
-      other -> {:error, other}
+    with {:ok, _qzss_clock, _troposphere_model} <- Positioning.model_options(opts) do
+      case apply(NIF, :spp_inputs_from_rinex_obs, rinex_args(source, obs, opts)) do
+        {:ok, epochs} -> {:ok, Enum.map(epochs, &decode_epoch_inputs/1)}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
     end
   rescue
     e in [ErlangError, ArgumentError] -> {:error, nif_error_reason(e)}
@@ -191,7 +213,9 @@ defmodule Sidereon.GNSS.SPP do
       Keyword.get(opts, :pressure_hpa, Constants.surface_met_pressure_hpa()) / 1.0,
       Keyword.get(opts, :temperature_k, Constants.surface_met_temperature_k()) / 1.0,
       Keyword.get(opts, :relative_humidity, Constants.surface_met_relative_humidity()) / 1.0,
-      robust_arg(opts)
+      robust_arg(opts),
+      Keyword.get(opts, :qzss_clock, :gps),
+      Keyword.get(opts, :troposphere_model, :rtklib)
     ]
   end
 
@@ -238,7 +262,7 @@ defmodule Sidereon.GNSS.SPP do
 
   defp decode_epoch_inputs(
          {epoch_index, epoch, observations, t_rx_j2000_s, t_rx_second_of_day_s, day_of_year, initial_guess,
-          {ionosphere, troposphere}, glonass_channels}
+          {ionosphere, troposphere}, glonass_channels, qzss_clock, troposphere_model}
        ) do
     %EpochInputs{
       epoch_index: epoch_index,
@@ -249,7 +273,9 @@ defmodule Sidereon.GNSS.SPP do
       day_of_year: day_of_year,
       initial_guess: initial_guess,
       corrections: %{ionosphere: ionosphere, troposphere: troposphere},
-      glonass_channels: Map.new(glonass_channels)
+      glonass_channels: Map.new(glonass_channels),
+      qzss_clock: decode_model_name(qzss_clock),
+      troposphere_model: decode_model_name(troposphere_model)
     }
   end
 
@@ -259,4 +285,9 @@ defmodule Sidereon.GNSS.SPP do
   end
 
   defp nif_error_reason(error), do: Map.get(error, :original, Exception.message(error))
+
+  defp decode_model_name("gps"), do: :gps
+  defp decode_model_name("separate"), do: :separate
+  defp decode_model_name("rtklib"), do: :rtklib
+  defp decode_model_name("saastamoinen_niell"), do: :saastamoinen_niell
 end

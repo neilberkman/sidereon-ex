@@ -68,19 +68,72 @@ defmodule Sidereon.GNSS.TimeTest do
 
   describe "epoch_to_split_jd/1" do
     test "puts midnight on the *.5 day boundary with a zero fraction" do
-      assert {jd_whole, fraction} = Time.epoch_to_split_jd({{2020, 6, 24}, {0, 0, 0}})
+      assert {:ok, {jd_whole, fraction}} = Time.epoch_to_split_jd({{2020, 6, 24}, {0, 0, 0}})
       assert jd_whole == 2_459_024.5
       assert fraction == 0.0
     end
 
     test "carries the within-day time into the fraction" do
-      assert {2_459_024.5, fraction} = Time.epoch_to_split_jd({{2020, 6, 24}, {12, 0, 0}})
+      assert {:ok, {2_459_024.5, fraction}} = Time.epoch_to_split_jd({{2020, 6, 24}, {12, 0, 0}})
       assert fraction == 0.5
     end
 
     test "accepts a NaiveDateTime" do
-      assert {2_459_024.5, fraction} = Time.epoch_to_split_jd(~N[2020-06-24 00:00:00])
+      assert {:ok, {2_459_024.5, fraction}} = Time.epoch_to_split_jd(~N[2020-06-24 00:00:00])
       assert fraction == 0.0
+    end
+  end
+
+  describe "epoch field refusals" do
+    @i32_past 2_147_483_648
+    @oversized Integer.pow(10, 400)
+
+    test "a field the core cannot take is named, not raised, by every helper" do
+      helpers = [
+        &Time.epoch_to_split_jd/1,
+        &Time.day_of_year/1,
+        &Time.utc_instant_split/1,
+        &Time.epoch_to_j2000_seconds_fractional/1
+      ]
+
+      cases = [
+        {{{@i32_past, 6, 24}, {0, 0, 0}}, {:value_out_of_range, :year, @i32_past}},
+        {{{2020, 6.0, 24}, {0, 0, 0}}, {:invalid_epoch_field, :month, 6.0}},
+        {{{2020, 6, 24}, {12 / 1, 0, 0}}, {:invalid_epoch_field, :hour, 12.0}},
+        {{{2020, 6, 24}, {0, -@i32_past - 1, 0}}, {:value_out_of_range, :minute, -@i32_past - 1}},
+        {{{2020, 6, 24}, {0, 0, :noon}}, {:invalid_epoch_field, :second, :noon}},
+        {{{2020, 6, 24}, {0, 0, @oversized}}, {:value_out_of_range, :second, @oversized}}
+      ]
+
+      for helper <- helpers, {epoch, reason} <- cases do
+        assert helper.(epoch) == {:error, reason}, "#{inspect(helper)} #{inspect(epoch)}"
+      end
+
+      overflowing_year = %{~N[2020-06-24 00:00:00] | year: @i32_past}
+
+      for helper <- helpers do
+        assert helper.(overflowing_year) == {:error, {:value_out_of_range, :year, @i32_past}}
+      end
+
+      assert Time.epoch_to_split_jd(:noon) == {:error, :bad_epoch}
+      assert Time.day_of_year("2020-06-24") == {:error, :bad_epoch}
+
+      assert Time.epoch_to_j2000_seconds({{@i32_past, 1, 1}, {0, 0, 0}}) ==
+               {:error, {:value_out_of_range, :year, @i32_past}}
+    end
+
+    test "second_of_day reads only the clock fields" do
+      # The date is not read, so a date no core helper takes does not refuse it.
+      assert {:ok, 43_200.0} = Time.second_of_day({{@i32_past, 6.5, :day}, {12, 0, 0}})
+      assert {:ok, 43_200.5} = Time.second_of_day(~N[2020-06-24 12:00:00.500000])
+
+      assert Time.second_of_day({{2020, 6, 24}, {12.0, 0, 0}}) == {:error, {:invalid_epoch_field, :hour, 12.0}}
+
+      assert Time.second_of_day({{2020, 6, 24}, {0, @i32_past, 0}}) ==
+               {:error, {:value_out_of_range, :minute, @i32_past}}
+
+      assert Time.second_of_day({{2020, 6, 24}, {0, 0, "0"}}) == {:error, {:invalid_epoch_field, :second, "0"}}
+      assert Time.second_of_day(nil) == {:error, :bad_epoch}
     end
   end
 
@@ -110,7 +163,7 @@ defmodule Sidereon.GNSS.TimeTest do
     end
 
     test "agrees with the raw split-Julian-date path for a valid epoch" do
-      {raw_whole, raw_fraction} = Time.epoch_to_split_jd({{2020, 6, 25}, {6, 30, 0}})
+      {:ok, {raw_whole, raw_fraction}} = Time.epoch_to_split_jd({{2020, 6, 25}, {6, 30, 0}})
 
       assert {:ok, {jd_whole, fraction}} =
                Time.utc_instant_split({{2020, 6, 25}, {6, 30, 0}})
@@ -122,5 +175,27 @@ defmodule Sidereon.GNSS.TimeTest do
     test "rejects an out-of-day clock field" do
       assert {:error, :invalid_instant} = Time.utc_instant_split({{2020, 6, 25}, {25, 0, 0}})
     end
+  end
+
+  test "detailed UTC instant split preserves typed core time-model cause" do
+    assert {:ok, detailed_split} =
+             Time.utc_instant_split_detailed({{2020, 6, 25}, {6, 30, 0}})
+
+    assert {:ok, legacy_split} = Time.utc_instant_split({{2020, 6, 25}, {6, 30, 0}})
+    assert detailed_split == legacy_split
+
+    assert {:error,
+            {:invalid_input,
+             %{
+               family: "TimeModelError",
+               kind: "TIME_MODEL_INVALID_INPUT",
+               field: "fraction",
+               reason: "must be within one residual day",
+               message: "invalid time model fraction: must be within one residual day"
+             }}} =
+             Time.utc_instant_split_detailed({{2020, 6, 25}, {25, 0, 0}})
+
+    assert {:error, :invalid_instant} =
+             Time.utc_instant_split({{2020, 6, 25}, {25, 0, 0}})
   end
 end

@@ -12,6 +12,7 @@ defmodule Sidereon.ErrorMetrics do
   alias __MODULE__.PositionCovariance
   alias __MODULE__.PositionErrorMetrics
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type covariance3 :: [[number()]]
   @type geodetic_radians_m :: {number(), number(), number()}
@@ -128,7 +129,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_from_enu_covariance)
   end
 
   @doc """
@@ -145,7 +146,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_from_ecef_covariance)
   end
 
   @doc """
@@ -164,7 +165,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_from_position_covariance)
   end
 
   @doc """
@@ -183,7 +184,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_from_kinematic_solution)
   end
 
   @doc """
@@ -197,7 +198,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_error_ellipse_from_enu_covariance)
   end
 
   @doc """
@@ -211,7 +212,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_horizontal_radius_at)
   end
 
   @doc """
@@ -225,7 +226,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_spherical_radius_at)
   end
 
   @doc """
@@ -239,7 +240,7 @@ defmodule Sidereon.ErrorMetrics do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :position_error_metrics_vertical_radius_at)
   end
 
   defp metrics(value) do

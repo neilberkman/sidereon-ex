@@ -4,6 +4,7 @@ defmodule Sidereon.ILS do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type result :: %{
           fixed: [integer()],
@@ -28,7 +29,7 @@ defmodule Sidereon.ILS do
       |> decode_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ils_lambda_search)
   end
 
   @doc """
@@ -50,7 +51,7 @@ defmodule Sidereon.ILS do
       |> decode_result()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ils_search)
   end
 
   defp validate_inputs(float_cycles, covariance) do

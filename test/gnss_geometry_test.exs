@@ -57,13 +57,13 @@ defmodule Sidereon.GNSS.GeometryTest do
       assert %{gdop: _, pdop: _, hdop: _, vdop: _, tdop: _} = sol.dop
 
       # Independent DOP over the SAME used-satellite set and the SAME converged
-      # receiver, with the elevation weighting and corrected line of sight that
-      # the point-positioning geometry uses, so the two code paths are
-      # apples-to-apples.
+      # receiver, with the corrected line of sight the point-positioning geometry
+      # uses. The solve reports the geometry's DOP at unit weight, as RTKLIB
+      # dops forms it, so the cross-check is at unit weight too.
       geom =
         Geometry.dop(ctx.sp3, sol.position, @epoch,
           satellites: sol.used_sats,
-          weights: :elevation,
+          weights: :unit,
           light_time: true
         )
 

@@ -58,8 +58,18 @@ defmodule Sidereon.GeoidTest do
   end
 
   test "PROJ EGM96 GTX loader rejects a truncated grid", %{proj_gtx_bytes: bytes} do
-    assert {:error, reason} = Geoid.load_proj_egm96_gtx(binary_part(bytes, 0, byte_size(bytes) - 4))
-    assert reason =~ "egm96_15.gtx"
+    truncated = binary_part(bytes, 0, byte_size(bytes) - 4)
+    expected_reason = "PROJ egm96_15.gtx must be 4153000 bytes, got #{byte_size(truncated)}"
+
+    assert {:error,
+            %Geoid.GridError{
+              kind: :parse,
+              expected: nil,
+              found: nil,
+              field: nil,
+              index: nil,
+              reason: ^expected_reason
+            }} = Geoid.load_proj_egm96_gtx(truncated)
   end
 
   test "PROJ vertical-grid query requires an explicit arithmetic mode", %{proj_grid: grid} do

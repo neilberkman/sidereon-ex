@@ -26,6 +26,272 @@ defmodule Sidereon.GNSS.RTCMTest do
     refute fields.galileo_indicator
   end
 
+  test "all network and transformation families construct from typed field maps" do
+    empty_records = []
+
+    messages = [
+      {:network_correction_differences,
+       %{
+         message_number: 1015,
+         network_id: 0,
+         subnetwork_id: 0,
+         epoch_time: 0,
+         multiple_message: false,
+         master_station_id: 0,
+         auxiliary_station_id: 0,
+         satellite_count: 0,
+         satellites: empty_records,
+         trailing_bits: []
+       }},
+      {:helmert_transformation,
+       %{
+         message_number: 1021,
+         source_name: "",
+         target_name: "",
+         system_id: 0,
+         utilized_messages: 0,
+         plate_number: 0,
+         computation_indicator: 0,
+         height_indicator: 0,
+         validity_latitude: 0,
+         validity_longitude: 0,
+         validity_extension_latitude: 0,
+         validity_extension_longitude: 0,
+         dx: 0,
+         dy: 0,
+         dz: 0,
+         r1: 0,
+         r2: 0,
+         r3: 0,
+         ds: 0,
+         rotation_point: nil,
+         add_as: 0,
+         add_bs: 0,
+         add_at: 0,
+         add_bt: 0,
+         horizontal_quality: 0,
+         vertical_quality: 0,
+         trailing_bits: []
+       }},
+      {:residual_grid,
+       %{
+         message_number: 1023,
+         system_id: 0,
+         horizontal_shift: false,
+         vertical_shift: false,
+         origin_1: 0,
+         origin_2: 0,
+         extension_1: 0,
+         extension_2: 0,
+         mean_offset_1: 0,
+         mean_offset_2: 0,
+         mean_height_offset: 0,
+         residuals: List.duplicate(%{horizontal_1: 0, horizontal_2: 0, height: 0}, 16),
+         horizontal_interpolation: 0,
+         vertical_interpolation: 0,
+         horizontal_quality: 0,
+         vertical_quality: 0,
+         mjd: 0,
+         trailing_bits: []
+       }},
+      {:projection,
+       %{
+         message_number: 1025,
+         system_id: 0,
+         projection_type: 0,
+         parameter_kind: "natural_origin",
+         latitude: 0,
+         longitude: 0,
+         add_scale: 0,
+         false_easting: 0,
+         false_northing: 0,
+         standard_parallel_1: nil,
+         standard_parallel_2: nil,
+         rectification: nil,
+         azimuth: nil,
+         rectified_to_skew: nil,
+         easting: nil,
+         northing: nil,
+         trailing_bits: []
+       }},
+      {:network_residuals,
+       %{
+         message_number: 1030,
+         epoch_time: 0,
+         reference_station_id: 0,
+         reference_station_count: 0,
+         satellite_count: 0,
+         satellites: empty_records,
+         trailing_bits: []
+       }},
+      {:physical_reference_station,
+       %{
+         message_number: 1032,
+         non_physical_station_id: 0,
+         physical_station_id: 0,
+         itrf_realization_year: 0,
+         ecef_x: 0,
+         ecef_y: 0,
+         ecef_z: 0,
+         trailing_bits: []
+       }},
+      {:fkp_gradients,
+       %{
+         message_number: 1034,
+         reference_station_id: 0,
+         epoch_time: 0,
+         satellite_count: 0,
+         satellites: empty_records,
+         trailing_bits: []
+       }}
+    ]
+
+    Enum.each(messages, fn {type, fields} ->
+      assert {:ok, frame} = RTCM.encode_frame({type, fields})
+      assert {:ok, [{^type, decoded_fields}]} = RTCM.decode_messages(frame)
+      assert decoded_fields.message_number == fields.message_number
+    end)
+  end
+
+  test "RTCM encoder refusals retain structured variant payloads" do
+    fields = %{
+      message_number: 1015,
+      network_id: 0,
+      subnetwork_id: 0,
+      epoch_time: 0,
+      multiple_message: false,
+      master_station_id: 0,
+      auxiliary_station_id: 0,
+      satellite_count: 1,
+      satellites: [],
+      trailing_bits: []
+    }
+
+    assert {:error, {:rtcm_encode_error, %{variant: "count_mismatch", message_number: 1015, expected: 1, actual: 0}}} =
+             RTCM.encode({:network_correction_differences, fields})
+  end
+
+  test "VTEC evaluation exposes typed model refusal details" do
+    fields = %{
+      message_number: 1264,
+      igs_ssr_version: nil,
+      epoch_time_s: 0,
+      update_interval: 0,
+      multiple_message: false,
+      iod_ssr: 0,
+      provider_id: 0,
+      solution_id: 0,
+      quality_indicator: 0,
+      # DF473 carries the layer height in 10 km units: 35 is 350 km.
+      layers: [%{height: 35, degree: 1, order: 1, cosine: [0, 0, 0], sine: [0]}],
+      trailing_bits: []
+    }
+
+    assert {:error, {:vtec_evaluation, %{kind: "computation_time"}}} =
+             RTCM.evaluate_ssr_vtec(
+               {:ssr_vtec, fields},
+               [6_378_137.0, 0.0, 0.0],
+               [26_000_000.0, 0.0, 0.0],
+               86_400.0,
+               1.0e9
+             )
+
+    # A raw field the message cannot carry is refused by name.
+    too_high = %{fields | layers: [%{hd(fields.layers) | height: 350}]}
+
+    assert {:error, "invalid VTEC field height: 350 does not fit its raw width"} =
+             RTCM.evaluate_ssr_vtec(
+               {:ssr_vtec, too_high},
+               [6_378_137.0, 0.0, 0.0],
+               [26_000_000.0, 0.0, 0.0],
+               3_600.0,
+               1.0e9
+             )
+  end
+
+  test "system-parameter and text messages construct from typed fields" do
+    parameters = %{
+      message_number: 1013,
+      reference_station_id: 42,
+      mjd: 60_000,
+      seconds_of_day: 1234,
+      announcement_count: 1,
+      leap_seconds: 18,
+      announcements: [%{message_number: 1005, synchronous: true, interval: 10}],
+      trailing_bits: []
+    }
+
+    assert {:ok, parameters_body} = RTCM.encode({:system_parameters, parameters})
+    assert {:ok, {:system_parameters, ^parameters}} = RTCM.decode_message(parameters_body)
+
+    text = %{
+      message_number: 1029,
+      reference_station_id: 42,
+      mjd: 60_000,
+      seconds_of_day: 1234,
+      character_count: 2,
+      code_units: [?O, ?K],
+      trailing_bits: []
+    }
+
+    assert {:ok, text_body} = RTCM.encode({:text, text})
+    assert {:ok, {:text, ^text}} = RTCM.decode_message(text_body)
+
+    auxiliary = %{
+      message_number: 1014,
+      network_id: 3,
+      subnetwork_id: 2,
+      auxiliary_station_count: 1,
+      master_station_id: 42,
+      auxiliary_station_id: 43,
+      delta_latitude: -12,
+      delta_longitude: 34,
+      delta_height: -56,
+      trailing_bits: []
+    }
+
+    assert {:ok, auxiliary_body} = RTCM.encode({:network_auxiliary_station, auxiliary})
+
+    assert {:ok, {:network_auxiliary_station, ^auxiliary}} =
+             RTCM.decode_message(auxiliary_body)
+
+    biases = %{
+      message_number: 1230,
+      reference_station_id: 42,
+      aligned: true,
+      reserved: 0,
+      l1_ca: -7,
+      l1_p: nil,
+      l2_ca: 11,
+      l2_p: nil,
+      trailing_bits: []
+    }
+
+    assert {:ok, biases_body} = RTCM.encode({:glonass_code_phase_biases, biases})
+
+    assert {:ok, {:glonass_code_phase_biases, ^biases}} =
+             RTCM.decode_message(biases_body)
+  end
+
+  test "legacy observation construction and decoding use typed fields" do
+    fields = %{
+      message_number: 1001,
+      reference_station_id: 7,
+      epoch_time: 42,
+      synchronous_gnss: false,
+      satellite_count: 0,
+      divergence_free_smoothing: false,
+      smoothing_interval: 0,
+      satellites: [],
+      trailing_bits: []
+    }
+
+    assert {:ok, frame} = RTCM.encode_frame({:legacy_observations, fields})
+    assert {:ok, [{:legacy_observations, decoded}]} = RTCM.decode_messages(frame)
+    assert decoded == fields
+    refute Map.has_key?(decoded, :body)
+  end
+
   test "decode_frame returns the framed body and message number" do
     assert {:ok, %{message_number: 1006, frame_len: 27, body: body}} =
              RTCM.decode_frame(@frame_1006)
@@ -37,13 +303,19 @@ defmodule Sidereon.GNSS.RTCMTest do
     assert fields.reference_station_id == 2003
   end
 
-  test "decode_messages skips a CRC-corrupted frame (forgiving stream)" do
+  test "decode_messages refuses a CRC-corrupted frame; decode_stream reports it" do
     corrupted = :binary.replace(@frame_1006, <<62, 231>>, <<0, 0>>)
-    assert {:ok, []} = RTCM.decode_messages(corrupted)
+    assert {:error, message} = RTCM.decode_messages(corrupted)
+    assert message =~ "CRC-24Q"
+
+    assert {:ok, %{messages: [], diagnostics: diagnostics}} = RTCM.decode_stream(corrupted)
+    assert diagnostics.crc_failures == 1
+    assert diagnostics.resync_bytes == byte_size(corrupted)
   end
 
-  test "decode_messages on a buffer with no preamble yields no messages" do
-    assert {:ok, []} = RTCM.decode_messages(<<0, 1, 2, 3, 4, 5>>)
+  test "decode_messages refuses a buffer with bytes outside any frame" do
+    assert {:error, _message} = RTCM.decode_messages(<<0, 1, 2, 3, 4, 5>>)
+    assert {:error, _message} = RTCM.decode_messages(<<"junk", @frame_1006::binary>>)
   end
 
   test "decode_stream returns messages and diagnostics" do
@@ -51,8 +323,45 @@ defmodule Sidereon.GNSS.RTCMTest do
 
     assert [{:station_coordinates, fields}] = stream.messages
     assert fields.message_number == 1006
-    assert stream.diagnostics.resync_bytes >= 4
+    assert fields.trailing_bits == []
+    assert stream.diagnostics.resync_bytes == 4
+    assert stream.diagnostics.crc_failures == 0
     assert stream.diagnostics.skipped_frames == []
+    assert stream.diagnostics.departures == []
+  end
+
+  test "bits after the last field are refused under :strict and kept under :lenient" do
+    {:ok, %{body: body, reserved: 0}} = RTCM.decode_frame(@frame_1006)
+    padded = body <> <<0xFF>>
+    ones = List.duplicate(true, 8)
+
+    assert {:error, _reason} = RTCM.decode_message(padded)
+
+    assert {:ok, {:station_coordinates, fields}, [{:trailing_bits, 1006, ^ones}]} =
+             RTCM.decode_message_with_policy(padded, :lenient)
+
+    assert fields.trailing_bits == ones
+    assert {:error, _reason} = RTCM.encode({:station_coordinates, fields})
+    assert {:ok, ^padded, departures} = RTCM.encode_with_policy({:station_coordinates, fields}, :lenient)
+    assert is_list(departures)
+
+    {:ok, frame} = RTCM.encode_frame(padded)
+    assert {:ok, %{messages: [], diagnostics: strict}} = RTCM.decode_stream(frame)
+    assert [%{reason: :departure, detail: {:trailing_bits, 1006, ^ones}}] = strict.skipped_frames
+
+    assert {:ok, %{messages: [{:station_coordinates, _}], diagnostics: lenient}} =
+             RTCM.decode_stream(frame, policy: :lenient)
+
+    assert [{0, {:trailing_bits, 1006, ^ones}}] = lenient.departures
+  end
+
+  test "frame reserved bits are read and written back" do
+    {:ok, %{body: body}} = RTCM.decode_frame(@frame_1006)
+    assert {:ok, frame} = RTCM.encode_frame_with_reserved(body, 5)
+    assert {:ok, %{reserved: 5, body: ^body}} = RTCM.decode_frame(frame)
+    # The frame's reserved field is six bits, 0..=63.
+    assert {:error, {:rtcm_encode_error, %{variant: "frame_reserved_out_of_range", value: "64"}}} =
+             RTCM.encode_frame_with_reserved(body, 64)
   end
 
   test "decode_frame errors on a truncated buffer" do
@@ -133,27 +442,62 @@ defmodule Sidereon.GNSS.RTCMTest do
     end
 
     test "round-trips a 1019 GPS ephemeris built from scratch" do
-      assert_roundtrip(:gps_ephemeris, gps_ephemeris_fields())
+      assert_lenient_roundtrip(:gps_ephemeris, gps_ephemeris_fields())
     end
 
     test "round-trips a 1020 GLONASS ephemeris built from scratch" do
-      assert_roundtrip(:glonass_ephemeris, glonass_ephemeris_fields())
+      assert_lenient_roundtrip(:glonass_ephemeris, glonass_ephemeris_fields())
+    end
+
+    test "round-trips a 1041 NavIC ephemeris built from scratch" do
+      assert_lenient_roundtrip(:navic_ephemeris, navic_ephemeris_fields())
+    end
+
+    test "round-trips every GLONASS negative-zero bit through lenient policy encoding" do
+      fields =
+        glonass_ephemeris_fields()
+        |> Map.merge(%{
+          xn_dot: 0,
+          xn: 0,
+          xn_dot_dot: 0,
+          yn_dot: 0,
+          yn: 0,
+          yn_dot_dot: 0,
+          zn_dot: 0,
+          zn: 0,
+          zn_dot_dot: 0,
+          gamma_n: 0,
+          tau_n: 0,
+          delta_tau_n: 0,
+          tau_c: 0,
+          m_tau_gps: 0,
+          negative_zero: 0x3FFF,
+          trailing_bits: []
+        })
+
+      assert assert_roundtrip(:glonass_ephemeris, fields) == fields
+      assert {:ok, body, []} = RTCM.encode_with_policy({:glonass_ephemeris, fields}, :lenient)
+
+      assert {:ok, {:glonass_ephemeris, decoded}, []} =
+               RTCM.decode_message_with_policy(body, :lenient)
+
+      assert decoded == fields
     end
 
     test "round-trips a 1042 BeiDou ephemeris built from scratch" do
-      assert_roundtrip(:beidou_ephemeris, beidou_ephemeris_fields())
+      assert_lenient_roundtrip(:beidou_ephemeris, beidou_ephemeris_fields())
     end
 
     test "round-trips a 1044 QZSS ephemeris built from scratch" do
-      assert_roundtrip(:qzss_ephemeris, qzss_ephemeris_fields())
+      assert_lenient_roundtrip(:qzss_ephemeris, qzss_ephemeris_fields())
     end
 
     test "round-trips a 1045 Galileo F/NAV ephemeris built from scratch" do
-      assert_roundtrip(:galileo_fnav_ephemeris, galileo_fnav_ephemeris_fields())
+      assert_lenient_roundtrip(:galileo_fnav_ephemeris, galileo_fnav_ephemeris_fields())
     end
 
     test "round-trips a 1046 Galileo I/NAV ephemeris built from scratch" do
-      assert_roundtrip(:galileo_inav_ephemeris, galileo_inav_ephemeris_fields())
+      assert_lenient_roundtrip(:galileo_inav_ephemeris, galileo_inav_ephemeris_fields())
     end
 
     test "decodes a real 1046 Galileo I/NAV frame and re-encodes it exactly" do
@@ -174,6 +518,12 @@ defmodule Sidereon.GNSS.RTCMTest do
       assert decoded.message_number == 1074
       assert decoded.system == "G"
       assert decoded.kind == "msm4"
+      # Built without a mask, the message states the mask of its cells' signals.
+      assert decoded.signal_mask ==
+               Enum.reduce(fields.signals, 0, fn signal, mask ->
+                 Bitwise.bor(mask, Bitwise.bsl(1, 32 - signal.signal_id))
+               end)
+
       assert decoded.header == fields.header
       assert decoded.satellites == fields.satellites
       assert decoded.signals == fields.signals
@@ -195,6 +545,90 @@ defmodule Sidereon.GNSS.RTCMTest do
     end
   end
 
+  describe "encode refusals" do
+    test "an MSM satellite outside the 64-bit mask is refused by name, not written as another" do
+      fields = msm_with_satellite(msm_fields("msm4", 1074), 65)
+
+      for encoder <- [&RTCM.encode/1, &RTCM.encode_frame/1, &RTCM.encode_message/1] do
+        assert {:error, {:rtcm_encode_error, %{variant: "msm_mask", satellite: 65}}} =
+                 encoder.({:msm, fields})
+      end
+    end
+
+    test "an MSM satellite number wider than a byte is refused before conversion" do
+      fields = msm_with_satellite(msm_fields("msm4", 1074), 257)
+
+      assert {:error, {:invalid_input, message}} = RTCM.encode({:msm, fields})
+      assert message =~ "257"
+    end
+
+    test "an MSM signal naming an unlisted satellite, or a repeated satellite, is refused" do
+      fields = msm_fields("msm7", 1077)
+      [signal] = fields.signals
+
+      unlisted = %{fields | signals: [%{signal | satellite_id: 6}]}
+
+      assert {:error, {:rtcm_encode_error, %{variant: "msm_mask", satellite: 6, signal: signal_id}}} =
+               RTCM.encode({:msm, unlisted})
+
+      assert signal_id == signal.signal_id
+
+      [satellite] = fields.satellites
+      repeated = %{fields | satellites: [satellite, satellite]}
+
+      assert {:error, {:rtcm_encode_error, %{variant: "msm_mask", satellite: 5}}} =
+               RTCM.encode({:msm, repeated})
+
+      out_of_mask = %{fields | signals: [%{signal | signal_id: 33}]}
+
+      assert {:error, {:rtcm_encode_error, %{variant: "msm_mask", signal: 33}}} =
+               RTCM.encode({:msm, out_of_mask})
+    end
+
+    test "an ephemeris satellite wider than the message's raw field is refused" do
+      # QZSS 1044 carries a four-bit satellite field, GPS 1019 a six-bit one.
+      # The core refuses each with its typed encode error.
+      assert {:error,
+              {:rtcm_encode_error,
+               %{
+                 variant: "satellite_id_out_of_range",
+                 message_number: 1044,
+                 field: "QZSS satellite ID",
+                 value: "16",
+                 width: 4
+               }}} = RTCM.encode({:qzss_ephemeris, %{qzss_ephemeris_fields() | satellite_id: 16}})
+
+      assert {:error,
+              {:rtcm_encode_error,
+               %{
+                 variant: "satellite_id_out_of_range",
+                 message_number: 1019,
+                 field: "GPS PRN",
+                 value: "64",
+                 width: 6
+               }}} =
+               RTCM.encode_frame({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 64}})
+
+      assert {:error, {:invalid_input, _message}} =
+               RTCM.encode({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 256}})
+
+      # The widest value each field holds still encodes.
+      assert {:ok, _body} =
+               RTCM.encode({:qzss_ephemeris, %{qzss_ephemeris_fields() | satellite_id: 15, trailing_bits: []}})
+
+      assert {:ok, _body} =
+               RTCM.encode({:gps_ephemeris, %{gps_ephemeris_fields() | satellite_id: 63, trailing_bits: []}})
+    end
+  end
+
+  defp msm_with_satellite(fields, id) do
+    %{
+      fields
+      | satellites: Enum.map(fields.satellites, &%{&1 | id: id}),
+        signals: Enum.map(fields.signals, &%{&1 | satellite_id: id})
+    }
+  end
+
   defp assert_roundtrip(type, fields) do
     assert {:ok, frame} = RTCM.encode_message({type, fields})
     assert is_binary(frame)
@@ -205,6 +639,41 @@ defmodule Sidereon.GNSS.RTCMTest do
     end)
 
     decoded
+  end
+
+  defp assert_lenient_roundtrip(type, fields) do
+    message_number = ephemeris_message_number(type)
+    trailing_bits = Map.fetch!(fields, :trailing_bits)
+
+    assert {:error, {:departure, {:trailing_bits, ^message_number, ^trailing_bits}}} =
+             RTCM.encode({type, fields})
+
+    assert {:ok, body, [{:trailing_bits, ^message_number, ^trailing_bits}]} =
+             RTCM.encode_with_policy({type, fields}, :lenient)
+
+    assert is_binary(body)
+
+    assert {:ok, {^type, decoded}, [{:trailing_bits, ^message_number, ^trailing_bits}]} =
+             RTCM.decode_message_with_policy(body, :lenient)
+
+    Enum.each(fields, fn {key, value} ->
+      assert Map.fetch!(decoded, key) == value, "field #{key} did not round-trip"
+    end)
+
+    decoded
+  end
+
+  defp ephemeris_message_number(:gps_ephemeris), do: 1019
+  defp ephemeris_message_number(:glonass_ephemeris), do: 1020
+  defp ephemeris_message_number(:navic_ephemeris), do: 1041
+  defp ephemeris_message_number(:beidou_ephemeris), do: 1042
+  defp ephemeris_message_number(:qzss_ephemeris), do: 1044
+  defp ephemeris_message_number(:galileo_fnav_ephemeris), do: 1045
+  defp ephemeris_message_number(:galileo_inav_ephemeris), do: 1046
+
+  defp ephemeris_trailing_bits(length) do
+    [true, false, true, true, false, false, true, false, true, false, true, true, false, true]
+    |> Enum.take(length)
   end
 
   defp gps_ephemeris_fields do
@@ -238,7 +707,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       t_gd: 1,
       sv_health: 1,
       l2_p_data_flag: false,
-      fit_interval: false
+      fit_interval: false,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 
@@ -253,7 +723,7 @@ defmodule Sidereon.GNSS.RTCMTest do
       b_n_msb: false,
       p2: false,
       t_b: 1,
-      xn_dot: 1,
+      xn_dot: 0,
       xn: 1,
       xn_dot_dot: 1,
       yn_dot: 1,
@@ -279,7 +749,45 @@ defmodule Sidereon.GNSS.RTCMTest do
       m_n4: 1,
       m_tau_gps: 1,
       m_l_n_fifth: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8),
+      negative_zero: 1
+    }
+  end
+
+  defp navic_ephemeris_fields do
+    %{
+      satellite_id: 9,
+      week_number: 389,
+      a_f0: -1_234_567,
+      a_f1: -12_345,
+      a_f2: -3,
+      ura: 2,
+      t_oc: 10_821,
+      t_gd: -5,
+      delta_n: 1_234_567,
+      iodec: 161,
+      reserved: 0x2A5,
+      l5_flag: true,
+      s_flag: false,
+      c_uc: -16_000,
+      c_us: 15_000,
+      c_ic: -1,
+      c_is: 2,
+      c_rc: 16_383,
+      c_rs: -16_384,
+      idot: -8_000,
+      m0: -2_000_000_000,
+      t_oe: 10_821,
+      eccentricity: 3_000_000,
+      sqrt_a: 3_404_000_000,
+      omega0: 1_500_000_000,
+      omega: -1_000_000_000,
+      omega_dot: -2_000_000,
+      i0: 400_000_000,
+      spare_df544: 3,
+      spare_df545: 1,
+      trailing_bits: ephemeris_trailing_bits(14)
     }
   end
 
@@ -312,7 +820,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       omega_dot: -100,
       t_gd1: 5,
       t_gd2: 7,
-      sv_health: false
+      sv_health: false,
+      trailing_bits: ephemeris_trailing_bits(9)
     }
   end
 
@@ -346,7 +855,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       sv_health: 1,
       t_gd: 1,
       iodc: 1,
-      fit_interval: false
+      fit_interval: false,
+      trailing_bits: ephemeris_trailing_bits(11)
     }
   end
 
@@ -379,7 +889,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       bgd_e5a_e1: 5,
       e5a_signal_health: 0,
       e5a_data_validity: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 
@@ -415,7 +926,8 @@ defmodule Sidereon.GNSS.RTCMTest do
       e5b_data_validity: false,
       e1b_signal_health: 0,
       e1b_data_validity: false,
-      reserved: 0
+      reserved: 0,
+      trailing_bits: ephemeris_trailing_bits(8)
     }
   end
 

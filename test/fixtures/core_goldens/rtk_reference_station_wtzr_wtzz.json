@@ -1,0 +1,44 @@
+{
+  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b positioning::solve_static_reference_station_rinex, carrier mode",
+  "reference_position_m": [
+    "0x414f181e2da372f7",
+    "0x412c701c211f4e38",
+    "0x415251081565efd8"
+  ],
+  "mode": "CarrierFixed",
+  "fix_status": "CarrierFixed",
+  "integer_status": "Fixed",
+  "integer_ratio": "0x4055ce6634521828",
+  "position_m": [
+    "0x414f181daf5f86cc",
+    "0x412c701ad35a97cf",
+    "0x4152510859bc8a81"
+  ],
+  "baseline_vector_m": [
+    "0xbfef90fb0ac567c9",
+    "0xbfe4dc4b6688b506",
+    "0x3ff115a6aa24c512"
+  ],
+  "covariance_position_ecef_m2": [
+    [
+      "0x3f04714c22717de7",
+      "0x3eded47420268df8",
+      "0x3ef2f6943b05405f"
+    ],
+    [
+      "0x3eded47420268df6",
+      "0x3eec2a218bb40a65",
+      "0x3ed80783fb505d72"
+    ],
+    [
+      "0x3ef2f6943b05405d",
+      "0x3ed80783fb505d72",
+      "0x3f090f65270bcd58"
+    ]
+  ],
+  "mode_report": {
+    "used_epochs": 24,
+    "skipped_epochs": 0,
+    "used_measurements": 432
+  }
+}

@@ -19,7 +19,7 @@ the full constellation, which the SP3 reader tolerates); no values were altered.
 - size 72293 bytes, sha256
   `f77d83a0da91e7112c2890ba7aae29326b8c621cfee58ac18e4243d86e40238b`.
 - Source product: GFZ Potsdam MGEX products for GPS week 2111.
-- Purpose: the real BeiDou drift gate for `Orbis.GNSS.ReducedOrbit`'s
+- Purpose: the real BeiDou drift gate for `Sidereon.GNSS.ReducedOrbit`'s
   `:eccentric_secular` model (the GRG product carries no BeiDou). GEO satellites
   (C01–C05) are excluded; they are near-equatorial and not orbital-element-friendly. An
   identical copy lives in the `astrodynamics-gnss` crate fixtures for the same
@@ -48,8 +48,11 @@ multi-epoch precise-positioning / troposphere regression.
 
 ## `degenerate_coincident_5sat.sp3`
 
-Hand-authored rank-deficient fixture (five GPS satellites at one ECEF point) for
-the graceful-degeneracy path; not a redistributed product.
+Hand-authored rank-deficient fixture, not a redistributed product: five GPS
+satellites placed at one ECEF point at eleven 15-minute epochs, 00:00 through
+02:30 GPST on 2020-06-24, for the graceful-degeneracy path. Eleven is the node
+count the position interpolator takes (RTKLIB pephpos's `NMAX + 1`), so every
+epoch is served. Byte-identical to the core crate's fixture of the same name.
 
 ## `COD0MGXFIN_20201770000_01D_05M_ORB.SP3`
 

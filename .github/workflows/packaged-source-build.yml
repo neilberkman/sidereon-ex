@@ -2,6 +2,12 @@ name: Packaged source build
 
 on:
   workflow_call:
+    inputs:
+      candidate:
+        description: "Allow only the explicitly pinned prepublication Git candidate"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,4 +29,6 @@ jobs:
         run: mix local.hex 2.5.1 --force
 
       - name: Build package and force its source-build path
+        env:
+          SIDEREON_CANDIDATE_MODE: ${{ inputs.candidate && !startsWith(github.ref, 'refs/tags/') }}
         run: bash .github/scripts/check-packaged-source-build.sh

@@ -32,8 +32,11 @@ defmodule Sidereon.GNSS.Observables do
   * **Geometric range** is `|r_sat_rot - r_rx|` in metres, and the
     line-of-sight unit vector points from the receiver to the satellite.
 
-  * **Range rate.** The satellite velocity at `t_tx` is obtained by central
-    finite difference of `Sidereon.GNSS.SP3.position/3` (+/- 0.5 s). For a static
+  * **Range rate.** The satellite velocity at `t_tx` is the source's own where it
+    defines one: for a broadcast source, the difference of the selected
+    record's positions at `t_tx` and 1 ms later over 1 ms, as RTKLIB `ephpos`
+    forms it. For an SP3 source it is the central finite difference of
+    `Sidereon.GNSS.SP3.position/3` (+/- 0.5 s). For a static
     receiver (`v_rx = 0`) the range rate is the LOS projection
     `los . (v_sat - v_rx)`, which equals `d(range)/dt`.
 
@@ -41,6 +44,24 @@ defmodule Sidereon.GNSS.Observables do
     with the L1 carrier `f = 1575.42 MHz` and `c = 299792458 m/s`.
 
   ## Sign conventions
+
+  ## Satellite clock terms
+
+  `sat_clock_s` is the clock the source states at `t_tx`. A broadcast clock is
+  the one RTKLIB `satposs` returns: the clock polynomial and the relativistic
+  term, without the broadcast group delay. Two further terms describe what a
+  single-frequency positioning model does with that clock, as
+  `Sidereon.GNSS.Positioning.solve/4` applies them:
+
+    * `sat_clock_relativity_s` - the relativistic term `-2 r·v / c²` a model
+      adds to a product clock (SP3), as RTKLIB `peph2pos` forms it for
+      positioning; `:not_applicable` for a clock that carries its own term
+      (broadcast), and `:unavailable` where the term cannot be formed, within
+      1 ms of the end of the product's coverage.
+    * `single_frequency_group_delay_s` - the broadcast group delay (GPS and
+      QZSS TGD, Galileo BGD, BeiDou TGD1) a model subtracts from the clock for
+      a single-frequency pseudorange, as RTKLIB `prange` does; `nil` for a
+      precise clock.
 
   `range_rate_m_s` is the time derivative of the geometric range: it is
   **negative when the satellite is approaching** (range decreasing) and positive
@@ -54,7 +75,9 @@ defmodule Sidereon.GNSS.Observables do
         geometric_range_m: float(),    # metres
         range_rate_m_s:    float(),    # d(range)/dt; negative = approaching
         doppler_hz:        float(),    # = -range_rate * carrier / c; + = approaching
-        sat_clock_s:       float() | nil,  # SP3 clock offset at transmit time
+        sat_clock_s:       float() | nil,  # source clock offset at transmit time
+        sat_clock_relativity_s: float() | :not_applicable | :unavailable,
+        single_frequency_group_delay_s: float() | nil,
         elevation_deg:     float(),    # topocentric elevation
         azimuth_deg:       float(),    # topocentric azimuth, [0, 360)
         transmit_time:     NaiveDateTime.t(),  # t_tx
@@ -71,6 +94,7 @@ defmodule Sidereon.GNSS.Observables do
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.PreciseEphemeris.InterpolantArtifact
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type vec3 :: {float(), float(), float()}
 
@@ -79,12 +103,65 @@ defmodule Sidereon.GNSS.Observables do
           range_rate_m_s: float(),
           doppler_hz: float(),
           sat_clock_s: float() | nil,
+          sat_clock_relativity_s: float() | :not_applicable | :unavailable,
+          single_frequency_group_delay_s: float() | nil,
           elevation_deg: float(),
           azimuth_deg: float(),
           transmit_time: NaiveDateTime.t(),
           los_unit: vec3(),
           sat_pos_ecef_m: vec3(),
           sat_velocity_m_s: vec3()
+        }
+
+  @typedoc "Structured error detail returned by the additive detailed prediction API."
+  @type ionex_missing_nodes_detail :: %{
+          map_number: non_neg_integer(),
+          lat_index: non_neg_integer(),
+          lon_index: non_neg_integer(),
+          lon_index_next: non_neg_integer(),
+          missing: [boolean()]
+        }
+
+  @typedoc """
+  Structured core causes. `mapping_function_declaration` is `Absent` or
+  `Declared`; `mapping_function_kind` is `NoMapping`, `CosZ`, `QFactor`, or
+  `Other` when declared, and `nil` when absent.
+  """
+  @type core_cause_detail :: %{
+          family: String.t(),
+          kind: String.t(),
+          message: String.t(),
+          satellite: String.t() | nil,
+          nodes: non_neg_integer() | nil,
+          required: non_neg_integer() | nil,
+          input_message: String.t() | nil,
+          coverage_reason: String.t() | nil,
+          earlier_missing_nodes: ionex_missing_nodes_detail() | nil,
+          later_missing_nodes: ionex_missing_nodes_detail() | nil,
+          refusal_kind: String.t() | nil,
+          map_number: non_neg_integer() | nil,
+          latitude_index: non_neg_integer() | nil,
+          longitude_index: non_neg_integer() | nil,
+          mapping_function_declaration: String.t() | nil,
+          mapping_function_kind: String.t() | nil,
+          mapping_function_code: String.t() | nil
+        }
+
+  @type elixir_input_cause_detail :: %{
+          family: String.t(),
+          kind: String.t(),
+          message: String.t(),
+          raw: term()
+        }
+
+  @type prediction_error :: %{
+          family: String.t(),
+          kind: String.t(),
+          message: String.t(),
+          field: String.t() | nil,
+          reason: term() | nil,
+          input_kind: String.t() | nil,
+          cause: core_cause_detail() | elixir_input_cause_detail() | nil
         }
 
   @doc """
@@ -121,6 +198,58 @@ defmodule Sidereon.GNSS.Observables do
   def predict(%Broadcast{} = source, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts)
       when is_binary(satellite_id) do
     do_predict(source, satellite_id, receiver_ecef, epoch, opts)
+  end
+
+  @doc """
+  Predict observables and retain the structured cause of native prediction errors.
+
+  The result uses the same success map as `predict/5`; failures from the core
+  include the observable field and validation category or a nested core error
+  detail map. The existing `predict/5` return values are unchanged.
+  """
+  @spec predict_detailed(
+          SP3.t() | Broadcast.t(),
+          String.t(),
+          vec3() | map(),
+          NaiveDateTime.t(),
+          keyword()
+        ) :: {:ok, observables()} | {:error, prediction_error()}
+  def predict_detailed(source, satellite_id, receiver_ecef, epoch, opts \\ [])
+
+  def predict_detailed(%SP3{} = source, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts)
+      when is_binary(satellite_id), do: do_predict_detailed(source, satellite_id, receiver_ecef, epoch, opts)
+
+  def predict_detailed(%Broadcast{} = source, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts)
+      when is_binary(satellite_id), do: do_predict_detailed(source, satellite_id, receiver_ecef, epoch, opts)
+
+  defp do_predict_detailed(source, satellite_id, receiver_ecef, epoch, opts) do
+    carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz())
+    light_time? = Keyword.get(opts, :light_time, true)
+    sagnac? = Keyword.get(opts, :sagnac, true)
+
+    result =
+      with {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
+           {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id),
+           :ok <- validate_source_coverage(source, epoch, opts),
+           {:ok, raw} <-
+             core_predict_detailed(
+               source,
+               system_letter,
+               prn,
+               receiver,
+               epoch,
+               carrier_hz,
+               light_time?,
+               sagnac?
+             ) do
+        {:ok, to_observables_map(raw, epoch)}
+      end
+
+    case result do
+      {:error, %{family: _family, kind: _kind} = detail} -> {:error, detail}
+      {:error, reason} -> {:error, detailed_input_error(reason)}
+      other -> other
+    end
   end
 
   defp do_predict(source, satellite_id, receiver_ecef, epoch, opts) do
@@ -190,15 +319,43 @@ defmodule Sidereon.GNSS.Observables do
 
     stitch_batch(prepared, nif_results)
   rescue
-    e in ErlangError -> Enum.map(requests, fn _ -> {:error, e.original} end)
+    e in ErlangError ->
+      error = NifCall.error(e, __STACKTRACE__, :sp3_predict_batch)
+      Enum.map(requests, fn _ -> error end)
+  end
+
+  @doc "Predict a request batch with one structured result per original request."
+  @spec predict_batch_detailed(
+          SP3.t(),
+          [{String.t(), vec3() | map(), NaiveDateTime.t()}],
+          keyword()
+        ) :: [{:ok, observables()} | {:error, prediction_error()}]
+  def predict_batch_detailed(%SP3{handle: handle}, requests, opts \\ []) when is_list(requests) do
+    carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz())
+    light_time? = Keyword.get(opts, :light_time, true)
+    sagnac? = Keyword.get(opts, :sagnac, true)
+    prepared = Enum.map(requests, &prepare_batch_request/1)
+    nif_requests = for {:ok, {tuple, _epoch}} <- prepared, do: tuple
+
+    nif_results =
+      case nif_requests do
+        [] -> []
+        _ -> NIF.sp3_predict_batch_detailed(handle, nif_requests, carrier_hz, light_time?, sagnac?)
+      end
+
+    stitch_batch_detailed(prepared, nif_results)
+  rescue
+    e in ErlangError ->
+      detail = detailed_input_error(NifCall.error(e, __STACKTRACE__, :sp3_predict_batch_detailed))
+      Enum.map(requests, fn _ -> {:error, detail} end)
   end
 
   # Normalize one batch request into the NIF tuple plus the epoch (kept for the
   # transmit-time reconstruction), or surface the per-request error.
   defp prepare_batch_request({satellite_id, receiver_ecef, %NaiveDateTime{} = epoch}) when is_binary(satellite_id) do
     with {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
-         {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id) do
-      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
+         {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id),
+         {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
       {:ok, {{system_letter, prn, jd_whole, jd_fraction, receiver}, epoch}}
     end
   end
@@ -208,7 +365,6 @@ defmodule Sidereon.GNSS.Observables do
   # Walk the prepared requests, consuming one core result per valid request so
   # the returned list stays index-aligned with the input.
   defp stitch_batch([], _results), do: []
-
   defp stitch_batch([{:error, _reason} = err | rest], results), do: [err | stitch_batch(rest, results)]
 
   defp stitch_batch([{:ok, {_tuple, epoch}} | rest], [result | results]) do
@@ -220,6 +376,25 @@ defmodule Sidereon.GNSS.Observables do
 
     [decoded | stitch_batch(rest, results)]
   end
+
+  defp stitch_batch_detailed([], _results), do: []
+
+  defp stitch_batch_detailed([{:error, reason} | rest], results),
+    do: [{:error, detailed_input_error(reason)} | stitch_batch_detailed(rest, results)]
+
+  defp stitch_batch_detailed([{:ok, {_tuple, epoch}} | rest], [result | results]) do
+    decoded =
+      case result do
+        {:ok, raw} -> {:ok, to_observables_map(raw, epoch)}
+        {:error, %{family: _family, kind: _kind} = detail} -> {:error, detail}
+        {:error, reason} -> {:error, detailed_input_error(reason)}
+      end
+
+    [decoded | stitch_batch_detailed(rest, results)]
+  end
+
+  defp stitch_batch_detailed([{:ok, {_tuple, _epoch}} | rest], []),
+    do: [{:error, detailed_input_error(:missing_prediction_result)} | stitch_batch_detailed(rest, [])]
 
   @type range_request :: {String.t(), vec3() | map(), number()}
 
@@ -241,6 +416,15 @@ defmodule Sidereon.GNSS.Observables do
           troposphere_delays_m: [float() | nil],
           statuses: [:valid | :gap | :below_elevation_cutoff | :error],
           element_errors: [term() | nil]
+        }
+
+  @type detailed_emission_media_batch :: %{
+          positions_ecef_m: [vec3() | nil],
+          clocks_s: [float() | nil],
+          ionosphere_slant_delays_m: [float() | nil],
+          troposphere_delays_m: [float() | nil],
+          statuses: [:valid | :gap | :below_elevation_cutoff | :error],
+          element_errors: [prediction_error() | nil]
         }
 
   @doc """
@@ -294,7 +478,116 @@ defmodule Sidereon.GNSS.Observables do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :predict_ranges_batch)
+  end
+
+  @typedoc """
+  The transmit-time geometry of a pseudorange as the positioning models place
+  it. See `pseudorange_transmit_geometry/6`.
+  """
+  @type pseudorange_geometry :: %{
+          transmit_time_j2000_s: float(),
+          signal_flight_time_s: float(),
+          transmit_offset_us: integer(),
+          sat_clock_s: float() | nil,
+          sat_clock_relativity_s: float() | :not_applicable | :unavailable,
+          single_frequency_group_delay_s: float() | nil,
+          geometric_range_m: float(),
+          elevation_deg: float(),
+          azimuth_deg: float(),
+          sat_pos_ecef_m: vec3(),
+          los_unit: vec3()
+        }
+
+  @doc """
+  The transmit-time geometry of `satellite_id`'s pseudorange `pseudorange_m`,
+  time-tagged `epoch` by a receiver at `receiver_ecef`, placed as SPP, the
+  static solve, DGNSS and PPP place it (RTKLIB `satposs`).
+
+  The transmission epoch is `t_rx - P / c` less the satellite clock read there,
+  from the record selected at the reception epoch, so the receiver clock offset
+  the pseudorange carries places the satellite where the signal left it. The
+  geometry is the source's state at that epoch, not rotated: the range is
+  `|r_s - r_r|` plus the Sagnac term `ω (x_s y_r - y_s x_r) / c` (RTKLIB
+  `geodist`), and the line of sight, elevation and azimuth are those of the
+  unrotated vector. `signal_flight_time_s` is `t_rx - t_tx`, which holds both
+  clock offsets with the flight time.
+
+  `epoch` is the receiver's time tag, a `NaiveDateTime` in the source's time
+  scale, converted to seconds since J2000 as the positioning solves convert
+  it. `sat_clock_relativity_s` and `single_frequency_group_delay_s` are the
+  terms a single-frequency model applies to `sat_clock_s` at the transmission
+  epoch, as in `predict/5`.
+
+  `source` is an SP3 product, a broadcast store, a precise-sample source or a
+  precise interpolant. `pseudorange_m` has to be a positive finite distance.
+
+  ## Options
+
+    * `:sagnac` - add the Sagnac term, default `true`.
+  """
+  @spec pseudorange_transmit_geometry(
+          SP3.t() | Broadcast.t() | PreciseEphemeris.t() | Interpolant.t() | InterpolantArtifact.t(),
+          String.t(),
+          Types.ecef_input(),
+          NaiveDateTime.t(),
+          number(),
+          keyword()
+        ) :: {:ok, pseudorange_geometry()} | {:error, term()}
+  def pseudorange_transmit_geometry(source, satellite_id, receiver_ecef, epoch, pseudorange_m, opts \\ [])
+      when is_number(pseudorange_m) do
+    sagnac? = Keyword.get(opts, :sagnac, true)
+
+    with {:ok, handle} <- placement_source_handle(source),
+         {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
+         {:ok, system_letter, prn} <- Types.parse_sat_id(satellite_id),
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+      case NIF.observables_pseudorange_transmit_geometry(
+             handle,
+             system_letter,
+             prn,
+             receiver,
+             t_rx_j2000_s,
+             pseudorange_m / 1.0,
+             sagnac?
+           ) do
+        {:ok, result} -> {:ok, to_pseudorange_geometry(result)}
+        {:error, _} = err -> err
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observables_pseudorange_transmit_geometry)
+  end
+
+  defp placement_source_handle(%Broadcast{handle: handle}), do: {:ok, handle}
+  defp placement_source_handle(source), do: source_handle(source)
+
+  defp to_pseudorange_geometry(
+         {[
+            transmit_time_j2000_s,
+            signal_flight_time_s,
+            transmit_offset_us,
+            sat_clock_s,
+            geometric_range_m,
+            elevation_deg,
+            azimuth_deg,
+            sat_clock_relativity,
+            single_frequency_group_delay_s
+          ], [sat_pos, los]}
+       ) do
+    %{
+      transmit_time_j2000_s: transmit_time_j2000_s,
+      signal_flight_time_s: signal_flight_time_s,
+      transmit_offset_us: transmit_offset_us,
+      sat_clock_s: sat_clock_s,
+      sat_clock_relativity_s: sat_clock_relativity,
+      single_frequency_group_delay_s: single_frequency_group_delay_s,
+      geometric_range_m: geometric_range_m,
+      elevation_deg: elevation_deg,
+      azimuth_deg: azimuth_deg,
+      sat_pos_ecef_m: sat_pos,
+      los_unit: los
+    }
   end
 
   defp source_handle(%SP3{handle: handle}), do: {:ok, handle}
@@ -371,6 +664,24 @@ defmodule Sidereon.GNSS.Observables do
           keyword()
         ) :: {:ok, emission_media_batch()} | {:error, term()}
   def emission_media_batch(source, requests, receiver_ecef, opts \\ []) when is_list(requests) do
+    do_emission_media_batch(source, requests, receiver_ecef, opts, false)
+  end
+
+  @doc """
+  Like `emission_media_batch/4`, with typed cause maps for each failed row in
+  `element_errors`. The legacy API keeps its existing error representation.
+  """
+  @spec emission_media_batch_detailed(
+          SP3.t() | PreciseEphemeris.t() | Interpolant.t() | InterpolantArtifact.t(),
+          [emission_media_request()],
+          vec3() | map(),
+          keyword()
+        ) :: {:ok, detailed_emission_media_batch()} | {:error, term()}
+  def emission_media_batch_detailed(source, requests, receiver_ecef, opts \\ []) when is_list(requests) do
+    do_emission_media_batch(source, requests, receiver_ecef, opts, true)
+  end
+
+  defp do_emission_media_batch(source, requests, receiver_ecef, opts, detailed?) do
     with {:ok, handle} <- source_handle(source),
          {:ok, nif_requests} <- prepare_emission_requests(requests),
          {:ok, receiver} <- Types.normalize_ecef(receiver_ecef),
@@ -378,22 +689,37 @@ defmodule Sidereon.GNSS.Observables do
          {:ok, troposphere} <- emission_troposphere(Keyword.get(opts, :troposphere, false), opts),
          {:ok, ionosphere} <- emission_ionosphere(Keyword.get(opts, :ionosphere)),
          {:ok, min_elevation_rad} <- min_elevation_rad(Keyword.get(opts, :min_elevation_deg)) do
-      case NIF.emission_media_batch(
-             handle,
-             nif_requests,
-             receiver,
-             carrier_hz / 1.0,
-             troposphere,
-             ionosphere,
-             min_elevation_rad
-           ) do
+      result =
+        if detailed? do
+          NIF.emission_media_batch_detailed(
+            handle,
+            nif_requests,
+            receiver,
+            carrier_hz / 1.0,
+            troposphere,
+            ionosphere,
+            min_elevation_rad
+          )
+        else
+          NIF.emission_media_batch(
+            handle,
+            nif_requests,
+            receiver,
+            carrier_hz / 1.0,
+            troposphere,
+            ionosphere,
+            min_elevation_rad
+          )
+        end
+
+      case result do
         {:ok, tuple} -> {:ok, emission_media_map(tuple)}
         {:error, _} = err -> err
         other -> {:error, other}
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :emission_media_batch)
   end
 
   defp prepare_emission_requests(requests) do
@@ -487,25 +813,25 @@ defmodule Sidereon.GNSS.Observables do
   end
 
   defp core_predict(%SP3{handle: handle}, system_letter, prn, receiver, epoch, carrier_hz, light_time?, sagnac?) do
-    {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
-
-    case NIF.sp3_observables(
-           handle,
-           system_letter,
-           prn,
-           jd_whole,
-           jd_fraction,
-           receiver,
-           carrier_hz,
-           light_time?,
-           sagnac?
-         ) do
-      {:ok, result} -> {:ok, result}
-      {:error, _} = err -> err
-      other -> {:error, other}
+    with {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
+      case NIF.sp3_observables(
+             handle,
+             system_letter,
+             prn,
+             jd_whole,
+             jd_fraction,
+             receiver,
+             carrier_hz,
+             light_time?,
+             sagnac?
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_observables)
   end
 
   defp core_predict(%Broadcast{handle: handle}, system_letter, prn, receiver, epoch, carrier_hz, light_time?, sagnac?) do
@@ -526,7 +852,88 @@ defmodule Sidereon.GNSS.Observables do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :broadcast_observables)
+  end
+
+  defp core_predict_detailed(
+         %SP3{handle: handle},
+         system_letter,
+         prn,
+         receiver,
+         epoch,
+         carrier_hz,
+         light_time?,
+         sagnac?
+       ) do
+    with {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
+      case NIF.sp3_observables_detailed(
+             handle,
+             system_letter,
+             prn,
+             jd_whole,
+             jd_fraction,
+             receiver,
+             carrier_hz,
+             light_time?,
+             sagnac?
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_observables_detailed)
+  end
+
+  defp core_predict_detailed(
+         %Broadcast{handle: handle},
+         system_letter,
+         prn,
+         receiver,
+         epoch,
+         carrier_hz,
+         light_time?,
+         sagnac?
+       ) do
+    with {:ok, t_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+      case NIF.broadcast_observables_detailed(
+             handle,
+             system_letter,
+             prn,
+             t_j2000_s,
+             receiver,
+             carrier_hz,
+             light_time?,
+             sagnac?
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, _} = err -> err
+        other -> {:error, other}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :broadcast_observables_detailed)
+  end
+
+  defp detailed_input_error(reason) do
+    {kind, message, field, input_kind} =
+      case reason do
+        :invalid_receiver -> {"INVALID_RECEIVER", "receiver ECEF input is invalid", "receiver_ecef", nil}
+        {:bad_sat_id, _value} -> {"BAD_SATELLITE_ID", "satellite identifier is invalid", "satellite_id", nil}
+        :outside_coverage -> {"OUTSIDE_COVERAGE", "epoch is outside source coverage", "epoch", nil}
+        other -> {"INPUT_ERROR", inspect(other), nil, nil}
+      end
+
+    %{
+      family: "ElixirInputError",
+      kind: kind,
+      message: message,
+      field: field,
+      reason: reason,
+      input_kind: input_kind,
+      cause: %{family: "ElixirInputError", kind: kind, message: message, raw: reason}
+    }
   end
 
   defp to_observables_map(
@@ -538,7 +945,9 @@ defmodule Sidereon.GNSS.Observables do
             elevation_deg,
             azimuth_deg,
             transmit_offset_us,
-            _transmit_time_j2000_s
+            _transmit_time_j2000_s,
+            sat_clock_relativity,
+            single_frequency_group_delay_s
           ], [los, sat_pos, sat_velocity]},
          epoch
        ) do
@@ -554,6 +963,8 @@ defmodule Sidereon.GNSS.Observables do
       range_rate_m_s: range_rate,
       doppler_hz: doppler_hz,
       sat_clock_s: sat_clock_s,
+      sat_clock_relativity_s: sat_clock_relativity,
+      single_frequency_group_delay_s: single_frequency_group_delay_s,
       elevation_deg: elevation_deg,
       azimuth_deg: azimuth_deg,
       transmit_time: transmit_time,

@@ -5,18 +5,23 @@
 //! to [`rv2coe`] / [`coe2rv`], and encodes the result back. No two-body geometry,
 //! special-case node handling, or Kepler math lives here. Position is in km,
 //! velocity in km/s, `mu` in km^3/s^2; angles cross the boundary in radians, the
-//! crate's native element units. A degenerate or non-finite input surfaces as a
-//! raised `:invalid_input` atom.
+//! crate's native element units. Core refusals are returned as
+//! `{:error, {:orbital_elements, kind, field}}`; `field` is present only for
+//! non-finite inputs.
 
-use crate::errors;
 use rustler::{Encoder, Env, NifResult, Term};
-use sidereon_core::astro::elements::{coe2rv, rv2coe, ClassicalElements, OrbitType};
+use sidereon_core::astro::elements::{coe2rv, rv2coe, ClassicalElements, ElementsError, OrbitType};
 
 mod atoms {
     rustler::atoms! {
         ok,
         error,
-        invalid_input
+        orbital_elements,
+        non_finite,
+        non_positive_mu,
+        zero_position,
+        degenerate_orbit,
+        non_positive_semi_latus
     }
 }
 
@@ -51,6 +56,38 @@ fn finite(value: f64) -> Option<f64> {
     } else {
         None
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ElementsErrorKind {
+    NonFinite,
+    NonPositiveMu,
+    ZeroPosition,
+    DegenerateOrbit,
+    NonPositiveSemiLatus,
+}
+
+fn elements_error_parts(error: ElementsError) -> (ElementsErrorKind, Option<&'static str>) {
+    match error {
+        ElementsError::NonFinite { field } => (ElementsErrorKind::NonFinite, Some(field)),
+        ElementsError::NonPositiveMu => (ElementsErrorKind::NonPositiveMu, None),
+        ElementsError::ZeroPosition => (ElementsErrorKind::ZeroPosition, None),
+        ElementsError::DegenerateOrbit => (ElementsErrorKind::DegenerateOrbit, None),
+        ElementsError::NonPositiveSemiLatus => (ElementsErrorKind::NonPositiveSemiLatus, None),
+    }
+}
+
+fn elements_error_reason(error: ElementsError) -> impl Encoder {
+    let (kind, field) = elements_error_parts(error);
+    let kind = match kind {
+        ElementsErrorKind::NonFinite => atoms::non_finite(),
+        ElementsErrorKind::NonPositiveMu => atoms::non_positive_mu(),
+        ElementsErrorKind::ZeroPosition => atoms::zero_position(),
+        ElementsErrorKind::DegenerateOrbit => atoms::degenerate_orbit(),
+        ElementsErrorKind::NonPositiveSemiLatus => atoms::non_positive_semi_latus(),
+    };
+
+    (atoms::orbital_elements(), kind, field)
 }
 
 fn orbit_type_name(orbit_type: OrbitType) -> &'static str {
@@ -99,7 +136,7 @@ impl From<ClassicalElements> for ClassicalElementsFields {
 fn elements_rv2coe<'a>(env: Env<'a>, r: Vec3, v: Vec3, mu: f64) -> Term<'a> {
     match rv2coe([r.0, r.1, r.2], [v.0, v.1, v.2], mu) {
         Ok(coe) => (atoms::ok(), ClassicalElementsFields::from(coe)).encode(env),
-        Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
+        Err(error) => (atoms::error(), elements_error_reason(error)).encode(env),
     }
 }
 
@@ -138,6 +175,21 @@ fn elements_coe2rv(
         lonper,
         orbit_type,
     };
-    let (r, v) = coe2rv(&coe, mu).map_err(errors::invalid_input)?;
+    let (r, v) = coe2rv(&coe, mu)
+        .map_err(|error| rustler::Error::Term(Box::new(elements_error_reason(error))))?;
     Ok(((r[0], r[1], r[2]), (v[0], v[1], v[2])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{elements_error_parts, ElementsErrorKind};
+    use sidereon_core::astro::elements::ElementsError;
+
+    #[test]
+    fn non_finite_field_is_preserved_by_the_typed_mapper() {
+        assert_eq!(
+            elements_error_parts(ElementsError::NonFinite { field: "mu" }),
+            (ElementsErrorKind::NonFinite, Some("mu"))
+        );
+    }
 }

@@ -276,6 +276,7 @@ defmodule Sidereon.Estimation.TrackFilterConfig do
   alias Sidereon.Estimation.TrackState
   alias Sidereon.Estimation.TrackTerms
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @enforce_keys [
     :frame,
@@ -317,7 +318,7 @@ defmodule Sidereon.Estimation.TrackFilterConfig do
     end
   rescue
     e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_filter_config_new)
   end
 
   @doc """
@@ -353,7 +354,7 @@ defmodule Sidereon.Estimation.TrackFilterConfig do
     end
   rescue
     e in [ArgumentError, ArithmeticError, KeyError] -> {:error, e}
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_filter_config_from_position)
   end
 
   @doc """
@@ -387,6 +388,7 @@ defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
   alias Sidereon.Estimation.TrackFilter
   alias Sidereon.Estimation.TrackRtsHistory
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @enforce_keys [:handle]
   defstruct [:handle]
@@ -412,7 +414,7 @@ defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_rts_history_builder_from_filter)
   end
 
   @doc """
@@ -425,7 +427,7 @@ defmodule Sidereon.Estimation.TrackRtsHistoryBuilder do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_rts_history_builder_finish)
   end
 end
 
@@ -509,6 +511,7 @@ defmodule Sidereon.Estimation.TrackFilter do
   alias Sidereon.Estimation.TrackTerms
   alias Sidereon.Estimation.TrackUpdate
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @enforce_keys [:handle]
   defstruct [:handle]
@@ -525,7 +528,7 @@ defmodule Sidereon.Estimation.TrackFilter do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_filter_new)
   end
 
   @doc """
@@ -890,6 +893,7 @@ defmodule Sidereon.Estimation do
   alias Sidereon.Estimation.SmoothedTrack
   alias Sidereon.Estimation.TrackRtsHistory
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type primitive_error :: {:invalid_input, String.t(), String.t()}
 
@@ -1143,7 +1147,7 @@ defmodule Sidereon.Estimation do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :track_smooth_rts)
   end
 
   defp state_tuple(%AlphaBetaState{level: level, rate: rate}) when is_number(level) and is_number(rate) do

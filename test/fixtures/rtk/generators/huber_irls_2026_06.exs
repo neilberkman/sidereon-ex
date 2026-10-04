@@ -12,7 +12,7 @@ defmodule HuberIrls202606 do
   # locally. sidereon SPP is run per matched epoch as (A) bare and (B) Huber-on.
   #
   # Run from the sidereon worktree root:
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/huber_irls_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/huber_irls_2026_06.exs
   # Options: --work DIR (default /tmp/gsdc-work), --results FILE, --report FILE.
   # Every matched epoch is measured (no decimation), per the pre-registered spec.
 

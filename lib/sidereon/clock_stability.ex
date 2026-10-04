@@ -16,6 +16,7 @@ defmodule Sidereon.ClockStability do
   alias __MODULE__.PowerLawOctave
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Curve do
     @moduledoc """
@@ -270,7 +271,7 @@ defmodule Sidereon.ClockStability do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :clock_compute_allan_deviations)
   end
 
   @doc """
@@ -304,7 +305,7 @@ defmodule Sidereon.ClockStability do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :clock_fit_power_law_noise)
   end
 
   defp estimator(kind, series, tau0_s, averaging_factors) do
@@ -317,7 +318,7 @@ defmodule Sidereon.ClockStability do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :clock_allan_estimator)
   end
 
   defp normalize_series(values) when is_list(values), do: normalize_series({:phase_seconds, values})

@@ -71,9 +71,10 @@ defmodule Sidereon.GNSS.RINEX.ClockTest do
     test "serializes and writes RINEX clock text", ctx do
       clock = Clock.load!(ctx.path)
 
+      # The text is the product's authority: the unedited product is restated
+      # byte for byte, the AR record and header lines included.
       assert {:ok, text} = Clock.to_rinex_string(clock)
-      assert text =~ "RINEX VERSION / TYPE"
-      assert text =~ "AS G05"
+      assert text == @clk
 
       assert {:ok, reparsed} = Clock.parse(text)
       assert reparsed.series == clock.series
@@ -105,11 +106,15 @@ defmodule Sidereon.GNSS.RINEX.ClockTest do
       AS G06  2026 05 13 00 00  bad-second  1   2.0e-04
       """
 
-      assert {:error, reason} = Clock.load(write_tmp_clock!(text))
-      assert reason =~ "second=bad-second"
+      assert {:error, {:bad_field, %{line: 2, field: "second", value: "bad-second"}}} =
+               Clock.load(write_tmp_clock!(text))
 
       assert {:ok, clock} = Clock.parse_lossy(text)
       assert Map.keys(clock.series) == ["G05"]
+
+      # The unreadable line is kept with its typed diagnostic and restated.
+      assert [%Clock.Diagnostic{line: 2, error: {:bad_field, %{field: "second"}}}] = Clock.diagnostics(clock)
+      assert Clock.to_rinex_string(clock) == {:ok, text}
 
       assert {:ok, bias} = Clock.clock_s(clock, "G05", ~N[2026-05-13 00:00:00.000000])
       assert <<bias::float-64>> == <<1.0e-4::float-64>>

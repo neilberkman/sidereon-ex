@@ -12,9 +12,8 @@ defmodule Sidereon.GNSS.PreciseEphemerisSample do
   ## Fields
 
     * `:sat` - the canonical SP3/RINEX satellite token, e.g. `"G01"`.
-    * `:epoch` - the sample epoch as a split Julian date tagged with its time
-      scale: `%{time_scale: "GPST", jd_whole: float, jd_fraction: float}`. Every
-      sample in one source must carry the same time scale.
+    * `:epoch` - the sample epoch as either a split Julian date or exact
+      nanoseconds since J2000, tagged with its time scale.
     * `:position_ecef_m` - satellite position in the ITRF/IGS ECEF frame, in
       meters, as `{x_m, y_m, z_m}`.
     * `:clock_s` - satellite clock offset in seconds, or `nil` when no clock
@@ -31,7 +30,9 @@ defmodule Sidereon.GNSS.PreciseEphemerisSample do
 
   @type vec3 :: {float(), float(), float()}
 
-  @type epoch :: %{time_scale: String.t(), jd_whole: float(), jd_fraction: float()}
+  @type epoch ::
+          %{time_scale: String.t(), jd_whole: float(), jd_fraction: float()}
+          | %{time_scale: String.t(), nanos_since_j2000: integer()}
 
   @type t :: %__MODULE__{
           sat: String.t(),
@@ -45,17 +46,18 @@ defmodule Sidereon.GNSS.PreciseEphemerisSample do
   @spec to_nif_tuple(t()) :: {:ok, tuple()} | {:error, term()}
   def to_nif_tuple(%__MODULE__{
         sat: sat,
-        epoch: %{time_scale: time_scale, jd_whole: jd_whole, jd_fraction: jd_fraction},
+        epoch: epoch,
         position_ecef_m: position,
         clock_s: clock_s,
         clock_event: clock_event
       })
-      when is_binary(time_scale) and is_number(jd_whole) and is_number(jd_fraction) and
-             (is_number(clock_s) or is_nil(clock_s)) and is_boolean(clock_event) do
-    with {:ok, {x, y, z}} <- Types.normalize_ecef(position, :bad_position),
-         {:ok, letter, prn} <- Types.parse_sat_id(sat) do
+      when is_map(epoch) and (is_number(clock_s) or is_nil(clock_s)) and is_boolean(clock_event) do
+    with {:ok, {position_x, position_y, position_z}} <-
+           Types.normalize_ecef(position, :bad_position),
+         {:ok, letter, prn} <- Types.parse_sat_id(sat),
+         {:ok, nif_epoch} <- epoch_to_nif(epoch) do
       clock = if !is_nil(clock_s), do: clock_s * 1.0
-      {:ok, {letter, prn, {time_scale, jd_whole * 1.0, jd_fraction * 1.0}, {x, y, z}, clock, clock_event}}
+      {:ok, {letter, prn, nif_epoch, {position_x, position_y, position_z}, clock, clock_event}}
     end
   end
 
@@ -63,15 +65,34 @@ defmodule Sidereon.GNSS.PreciseEphemerisSample do
 
   @doc false
   @spec from_nif_tuple(tuple()) :: t()
-  def from_nif_tuple({letter, prn, {time_scale, jd_whole, jd_fraction}, position, clock_s, clock_event}) do
+  def from_nif_tuple({letter, prn, epoch, position, clock_s, clock_event}) do
     %__MODULE__{
       sat: sat_token(letter, prn),
-      epoch: %{time_scale: time_scale, jd_whole: jd_whole, jd_fraction: jd_fraction},
+      epoch: epoch_from_nif(epoch),
       position_ecef_m: position,
       clock_s: clock_s,
       clock_event: clock_event
     }
   end
+
+  defp epoch_to_nif(%{time_scale: scale, jd_whole: whole, jd_fraction: fraction} = epoch)
+       when is_binary(scale) and is_number(whole) and is_number(fraction) and not is_map_key(epoch, :nanos_since_j2000) do
+    {:ok, %{time_scale: scale, julian_date: {whole * 1.0, fraction * 1.0}, nanos_since_j2000: nil}}
+  end
+
+  defp epoch_to_nif(%{time_scale: scale, nanos_since_j2000: nanos} = epoch)
+       when is_binary(scale) and is_integer(nanos) and not is_map_key(epoch, :jd_whole) and
+              not is_map_key(epoch, :jd_fraction) do
+    {:ok, %{time_scale: scale, julian_date: nil, nanos_since_j2000: Integer.to_string(nanos)}}
+  end
+
+  defp epoch_to_nif(_epoch), do: {:error, :bad_epoch}
+
+  defp epoch_from_nif(%{time_scale: scale, julian_date: {whole, fraction}}),
+    do: %{time_scale: scale, jd_whole: whole, jd_fraction: fraction}
+
+  defp epoch_from_nif(%{time_scale: scale, nanos_since_j2000: nanos}) when is_binary(nanos),
+    do: %{time_scale: scale, nanos_since_j2000: String.to_integer(nanos)}
 
   defp sat_token(letter, prn) do
     letter <> String.pad_leading(Integer.to_string(prn), 2, "0")

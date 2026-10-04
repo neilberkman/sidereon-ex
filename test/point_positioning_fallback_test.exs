@@ -8,6 +8,7 @@ defmodule Sidereon.GNSS.PositioningFallbackTest do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Staleness.Policy
   alias Sidereon.GNSS.Staleness.StalenessMetadata
+  alias Sidereon.Test.CoreGolden
 
   # Precise GPS orbits for 2020-06-24 (DOY 176) and the matching known-truth SPP
   # trace (the same fixtures the SP3 SPP end-to-end test uses).
@@ -37,15 +38,15 @@ defmodule Sidereon.GNSS.PositioningFallbackTest do
   setup_all do
     trace = @trace_path |> File.read!() |> Jason.decode!()
     inputs = trace["fixture"]["inputs"]
-    final = trace["fixture"]["final_solution"]
 
-    trace_obs =
-      Enum.map(inputs["observations"], fn obs ->
-        {obs["sat_id"], hex_to_float(obs["p_meas_m"])}
-      end)
+    sp3 = SP3.load!(@sp3_path)
+
+    # The trace's pseudoranges exactly as committed; the expected solution is
+    # the core's own solve of them (test/generators/core_goldens).
+    trace_obs = Enum.map(inputs["observations"], fn obs -> {obs["sat_id"], hex_to_float(obs["p_meas_m"])} end)
 
     {:ok,
-     sp3: SP3.load!(@sp3_path),
+     sp3: sp3,
      broadcast: Broadcast.load!(@nav_path),
      trace_obs: trace_obs,
      trace_alpha: inputs["klobuchar_alpha"] |> Enum.map(&hex_to_float/1) |> List.to_tuple(),
@@ -53,7 +54,7 @@ defmodule Sidereon.GNSS.PositioningFallbackTest do
      trace_pressure_hpa: hex_to_float(inputs["met"]["pressure_hpa"]),
      trace_temperature_k: hex_to_float(inputs["met"]["temperature_k"]),
      trace_relative_humidity: hex_to_float(inputs["met"]["relative_humidity"]),
-     trace_truth_x: Enum.map(final["truth_x"], &hex_to_float/1)}
+     trace_golden: CoreGolden.load("spp_trace_L2_tropo.json")}
   end
 
   defp trace_opts(ctx) do
@@ -107,11 +108,13 @@ defmodule Sidereon.GNSS.PositioningFallbackTest do
 
       assert solution == direct
 
-      # And it recovers the synthesized truth.
-      [tx, ty, tz, _tb] = ctx.trace_truth_x
-      assert_in_delta solution.position.x_m, tx, 1.0e-3
-      assert_in_delta solution.position.y_m, ty, 1.0e-3
-      assert_in_delta solution.position.z_m, tz, 1.0e-3
+      # And it agrees with the core's solve of the same inputs within the
+      # core's SPP agreement bound (`AGREEMENT_BOUND_M`, 1e-6 m).
+      expected = ctx.trace_golden["solves"]["near_guess"]["solution"]
+      [ex, ey, ez] = CoreGolden.f(expected["position_m"])
+      assert_in_delta solution.position.x_m, ex, 1.0e-6
+      assert_in_delta solution.position.y_m, ey, 1.0e-6
+      assert_in_delta solution.position.z_m, ez, 1.0e-6
     end
   end
 

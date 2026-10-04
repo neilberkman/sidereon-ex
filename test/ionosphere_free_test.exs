@@ -22,6 +22,7 @@ defmodule Sidereon.GNSS.IonosphereFreeTest do
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.SP3
+  alias Sidereon.Test.ModelClock
 
   @c 299_792_458.0
 
@@ -333,9 +334,9 @@ defmodule Sidereon.GNSS.IonosphereFreeTest do
         |> Enum.filter(&String.starts_with?(&1, "G"))
         |> Enum.flat_map(fn sat ->
           case Observables.predict(sp3, sat, @truth, @epoch) do
-            {:ok, %{geometric_range_m: range, sat_clock_s: clk, elevation_deg: el}}
+            {:ok, %{geometric_range_m: range, sat_clock_s: clk, elevation_deg: el} = pred}
             when is_float(clk) and el > 10.0 ->
-              r = range - @c * clk
+              r = range - @c * ModelClock.sat_clock_s(pred)
               # Obliquity factor: 1 at zenith, larger toward the horizon (a thin-
               # shell mapping with mean ionospheric height ~350 km, Earth ~6371 km).
               el_rad = el * :math.pi() / 180.0

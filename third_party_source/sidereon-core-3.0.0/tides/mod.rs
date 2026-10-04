@@ -12,11 +12,33 @@
 //!   displacement, the out-of-phase corrections (`ST1IDIU`, `ST1ISEM`), the
 //!   latitude-dependence correction (`ST1L1`), and the frequency-dependent
 //!   step-2 diurnal/long-period band corrections (`STEP2DIU`, `STEP2LON`),
-//!   evaluating the identical Love/Shida numbers, Doodson/argument tables, and
+//!   evaluating the identical Love/Shida numbers, long-period table and
 //!   leap-second table.
-//! * It keeps the permanent (mean) tide deformation: the original routine's
-//!   commented-out "Step 3" permanent-tide removal is left disabled, matching
-//!   the ITRF/IGS conform-to-mean-tide convention.
+//! * Its diurnal (Step 2) table has two variants, [`StationTideConstants`].
+//!   [`StationTideConstants::IersRoutine`] is the routine's `DATDI` array as
+//!   distributed. [`StationTideConstants::Conventions`], the default, corrects
+//!   three rows of it to the Conventions text and the physics it states:
+//!   - K1 out-of-phase radial amplitude -0.78 mm, as Table 7.3a prints it in
+//!     the 2010 edition and in the chapter update of 1 February 2018, and as
+//!     Equation (7.12c) gives it from the K1 row of Table 7.2 (h(0)I = 0.0030
+//!     against the nominal hI = -0.0025, with the Cartwright-Tayler-Edden
+//!     amplitude Hf = 0.368645 m of the IERS routine `ADMINT.F`: -0.783 mm).
+//!     The routine (revision of 19 December 2016) and RTKLIB use -0.80 mm.
+//!   - P1 out-of-phase radial amplitude +0.07 mm. Table 7.3a and the routine
+//!     both have -0.07 mm, but Equation (7.12c) with Table 7.2 (P1
+//!     h(0)I = -0.0011, Hf = -0.121995 m) gives +0.066 mm; the sign error was
+//!     identified by H. Krásná and is corrected in Orekit's copy of Table 7.3a.
+//!   - The 25th row is tide 166,564 (s multiplier 1), the tide Tables 6.5a and
+//!     7.2 list between psi1 and 167,355; the routine's s multiplier 0 names
+//!     156,564, out of the table's frequency order and in no Conventions table.
+//!
+//!   The Conventions' version notes (v1.0.0 to v1.3.0) list no correction to
+//!   either source. The two variants differ by at most the sum of the three
+//!   changes, 0.02 + 0.14 + 0.02 mm, in the displacement.
+//! * It applies the permanent part of the displacement: the routine's
+//!   commented-out "Step 3" permanent-tide removal stays out, so coordinates
+//!   corrected with it are "conventional tide free", the system of the ITRF
+//!   (IERS Conventions (2010), Section 7.1.1.2).
 //! * The routine names are changed from the IERS originals (per the IERS
 //!   Conventions Software License), and the Fortran subroutine structure is
 //!   inlined into private helpers.
@@ -43,7 +65,8 @@ mod ocean;
 mod pole;
 pub use ocean::{
     ocean_tide_loading, parse_ocean_loading_blq_block, parse_ocean_loading_blq_blocks,
-    OceanLoadingBlq, OceanLoadingBlqBlock, OceanTideConstituent, NUM_OCEAN_CONSTITUENTS,
+    write_ocean_loading_blq_blocks, OceanLoadingBlq, OceanLoadingBlqBlock, OceanLoadingBlqComment,
+    OceanLoadingBlqCommentPlacement, OceanTideConstituent, NUM_OCEAN_CONSTITUENTS,
     OCEAN_LOADING_CONSTITUENTS,
 };
 pub use pole::solid_earth_pole_tide;
@@ -54,56 +77,212 @@ use crate::astro::constants::time::{
     DAYS_PER_JULIAN_CENTURY, J2000_JD, SECONDS_PER_DAY, TT_MINUS_TAI_S,
 };
 use crate::astro::constants::units::{ARCSEC_TO_RAD, DEG_TO_RAD, KM_TO_M};
-use crate::astro::frames::transforms::{FrameTransformError, PolarMotion};
+use crate::astro::frames::transforms::{FrameTransformError, PolarMotion, Ut1Gate};
 use crate::astro::math::vec3::{dot3_ref as dot, norm3_ref as norm8};
-use crate::astro::time::{CoverageError, TimeScaleInputErrorKind, TimeScales};
+use crate::astro::time::{
+    CoverageError, TimeScaleInputErrorKind, TimeScales, Validated, ValidityMode,
+};
 use crate::frame::{geodetic_to_itrf, ItrfPositionM, Wgs84Geodetic};
 use crate::validate::{self, FieldError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Validation categories carried by [`TideError::InvalidInput`].
+///
+/// The categories are converted from shared field and time-scale validation
+/// errors before they are exposed by the tide APIs.
 pub enum TideInputErrorKind {
+    /// A required input was not supplied.
     Missing,
+    /// An input value or component was not finite.
     NonFinite,
+    /// A value required to be positive was zero or negative.
     NotPositive,
+    /// A value failed a negative-value check.
     Negative,
+    /// A finite input was outside its permitted domain.
     OutOfRange,
+    /// Text could not be parsed as a floating-point value.
     FloatParse,
+    /// Text could not be parsed as an integer value.
     IntParse,
+    /// A calendar date failed civil-date validation.
     InvalidCivilDate,
+    /// A clock value failed civil-time validation.
     InvalidCivilTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Failure details produced while parsing a BLQ station block.
+///
+/// Numeric rows and constituent headers use these variants to retain the
+/// offending count, token, station, or constituent label.
 pub enum BlqParseErrorKind {
+    /// The input contained no non-whitespace content.
     Empty,
+    /// A numeric coefficient row appeared before a station identifier.
     MissingStation,
+    /// A station ended before its six coefficient rows were complete.
     MissingCoefficientRows {
+        /// Trimmed station identifier for the incomplete block.
         station: String,
+        /// Required number of coefficient rows, which is six.
         expected: usize,
+        /// Number of coefficient rows collected before end of input.
         found: usize,
     },
+    /// The active station accumulated more than six coefficient rows.
     TooManyCoefficientRows {
+        /// Active station identifier when the extra row was read.
         station: String,
     },
+    /// A numeric row or recognized header did not contain eleven columns.
     WrongColumnCount {
+        /// Required ARG2 column count, equal to `NUM_OCEAN_CONSTITUENTS`.
         expected: usize,
+        /// Number of tokens or constituent labels found on the line.
         found: usize,
     },
+    /// A coefficient token could not be parsed as an `f64`.
     InvalidNumber {
+        /// Original token, or the trimmed line reported as a numeric candidate.
         token: String,
     },
+    /// A token parsed as an `f64` but produced a non-finite value.
     NonFiniteNumber {
+        /// Original token that produced the non-finite value.
         token: String,
     },
+    /// A constituent-like header label is absent from the supported table.
     UnsupportedConstituent {
+        /// Normalized uppercase label rejected by the constituent lookup.
         constituent: String,
     },
+    /// A supported constituent occurred more than once in a header.
     DuplicateConstituent {
+        /// Canonical label of the repeated constituent.
         constituent: String,
     },
+    /// The single-block parser found more than one complete station block.
     MultipleBlocks {
+        /// Number of complete station blocks found.
         found: usize,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Reasons a BLQ block cannot be written so that the parser reads it back
+/// unchanged.
+pub enum BlqWriteErrorKind {
+    /// The station identifier is empty.
+    EmptyStation,
+    /// The station identifier contains a line break.
+    StationLineBreak,
+    /// The station identifier has leading or trailing whitespace, which the
+    /// parser trims.
+    StationSurroundingWhitespace,
+    /// The station identifier starts with a comment marker (`$`, `#`, `!`).
+    StationReadsAsComment,
+    /// The station identifier would be read as a column-order header.
+    StationReadsAsHeader,
+    /// The station identifier would be read as a coefficient row.
+    StationReadsAsCoefficientRow,
+    /// A coefficient is NaN or infinite.
+    NonFiniteCoefficient {
+        /// Zero-based BLQ row: amplitudes radial, EW, NS, then phases.
+        row: usize,
+        /// Constituent of the value.
+        constituent: crate::tides::OceanTideConstituent,
+    },
+    /// A retained comment line contains a line break or ends with a carriage
+    /// return.
+    CommentLineBreak {
+        /// Index in [`crate::tides::OceanLoadingBlqBlock::comments`].
+        index: usize,
+    },
+    /// A retained line is blank or has no comment marker and is not a
+    /// column-order header, so it would not be read as a comment.
+    NotACommentLine {
+        /// Index in [`crate::tides::OceanLoadingBlqBlock::comments`].
+        index: usize,
+    },
+    /// A retained comment names a coefficient row after the sixth.
+    CommentPlacementOutOfRange {
+        /// Index in [`crate::tides::OceanLoadingBlqBlock::comments`].
+        index: usize,
+    },
+    /// A retained line is a column-order header the parser refuses.
+    InvalidHeader {
+        /// Index in [`crate::tides::OceanLoadingBlqBlock::comments`].
+        index: usize,
+        /// The parser's refusal.
+        kind: BlqParseErrorKind,
+    },
+    /// A retained comment is placed after the coefficient rows of a block
+    /// that is not the last one written; the parser reads such a line as part
+    /// of the next block.
+    AfterRowsBeforeAnotherBlock {
+        /// Index in [`crate::tides::OceanLoadingBlqBlock::comments`].
+        index: usize,
+    },
+    /// Retained comments are not grouped by placement in file order (before
+    /// the station, before rows 0 to 5, after the rows); the parser would read
+    /// them back in that order.
+    CommentsOutOfPlacementOrder {
+        /// Index of the first comment placed before its predecessor.
+        index: usize,
+    },
+}
+
+impl core::fmt::Display for BlqWriteErrorKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyStation => f.write_str("empty station identifier"),
+            Self::StationLineBreak => f.write_str("station identifier contains a line break"),
+            Self::StationSurroundingWhitespace => {
+                f.write_str("station identifier has leading or trailing whitespace")
+            }
+            Self::StationReadsAsComment => {
+                f.write_str("station identifier starts with a comment marker")
+            }
+            Self::StationReadsAsHeader => {
+                f.write_str("station identifier reads as a column-order header")
+            }
+            Self::StationReadsAsCoefficientRow => {
+                f.write_str("station identifier reads as a coefficient row")
+            }
+            Self::NonFiniteCoefficient { row, constituent } => write!(
+                f,
+                "coefficient row {row} constituent {} is not finite",
+                constituent.label()
+            ),
+            Self::CommentLineBreak { index } => {
+                write!(f, "comment {index} contains a line break")
+            }
+            Self::NotACommentLine { index } => {
+                write!(f, "comment {index} would not be read as a comment")
+            }
+            Self::CommentPlacementOutOfRange { index } => {
+                write!(
+                    f,
+                    "comment {index} is placed after the sixth coefficient row"
+                )
+            }
+            Self::InvalidHeader { index, kind } => {
+                write!(
+                    f,
+                    "comment {index} is a column-order header the parser refuses: {kind}"
+                )
+            }
+            Self::AfterRowsBeforeAnotherBlock { index } => write!(
+                f,
+                "comment {index} follows the coefficient rows of a block that is not the last"
+            ),
+            Self::CommentsOutOfPlacementOrder { index } => write!(
+                f,
+                "comment {index} is placed before the comment preceding it"
+            ),
+        }
+    }
 }
 
 impl core::fmt::Display for BlqParseErrorKind {
@@ -176,24 +355,49 @@ impl From<&FieldError> for TideInputErrorKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Errors returned by station displacement evaluators and BLQ parsers.
+///
+/// Validation failures carry normalized field and reason data; other variants
+/// preserve the underlying time-scale, frame, ephemeris, or parser failure.
 pub enum TideError {
+    /// A tide input failed validation.
     #[error("invalid solid-earth tide input {field}: {kind}")]
     InvalidInput {
+        /// Field label supplied by the originating validator or constructor.
         field: &'static str,
+        /// Normalized validation category for the field.
         kind: TideInputErrorKind,
     },
+    /// Time-scale conversion failed for a non-input coverage or conversion reason.
     #[error("station displacement time-scale conversion failed: {0}")]
     TimeScale(#[from] CoverageError),
+    /// Geodetic, ECEF, or polar-motion frame conversion failed.
     #[error("station displacement frame transform failed: {0}")]
     FrameTransform(#[from] FrameTransformError),
+    /// Polar-motion-aware Sun/Moon evaluation failed.
     #[error("station displacement Sun/Moon evaluation failed: {0}")]
     SunMoon(#[from] SunMoonError),
+    /// A required high-level station-displacement input was not supplied.
     #[error("missing station displacement input {field}")]
-    MissingInput { field: &'static str },
+    MissingInput {
+        /// Missing-input label; the dispatcher uses `"polar motion"` here.
+        field: &'static str,
+    },
+    /// A BLQ parser rejected an input line or whole-input condition.
     #[error("invalid BLQ block at line {line}: {kind}")]
     BlqParse {
+        /// One-based offending line number, or zero for whole-input failures.
         line: usize,
+        /// Detailed BLQ parsing failure and its source payload.
         kind: BlqParseErrorKind,
+    },
+    /// A BLQ block could not be written so that it reads back unchanged.
+    #[error("cannot write BLQ block {block}: {kind}")]
+    BlqWrite {
+        /// Zero-based index of the block in the written sequence.
+        block: usize,
+        /// Reason the block was refused.
+        kind: BlqWriteErrorKind,
     },
 }
 
@@ -278,11 +482,17 @@ impl StationDisplacementPosition {
 /// IERS polar-motion coordinates of the epoch, in arcseconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StationPolarMotion {
+    /// IERS x-pole coordinate supplied in arcseconds.
     pub xp_arcsec: f64,
+    /// IERS y-pole coordinate supplied in arcseconds.
     pub yp_arcsec: f64,
 }
 
 impl StationPolarMotion {
+    /// Construct from the IERS x- and y-pole coordinates in arcseconds.
+    ///
+    /// The coordinates are stored as supplied; tide evaluation performs the
+    /// conversion and validation required by its downstream model.
     pub const fn from_arcseconds(xp_arcsec: f64, yp_arcsec: f64) -> Self {
         Self {
             xp_arcsec,
@@ -301,11 +511,17 @@ impl StationPolarMotion {
 /// UTC epoch for station displacement evaluation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StationDisplacementEpoch {
+    /// UTC calendar year passed to validation and tide models.
     pub year: i32,
+    /// UTC calendar month passed to validation and tide models.
     pub month: u8,
+    /// UTC calendar day passed to validation and tide models.
     pub day: u8,
+    /// UTC hour used by the `fractional_hour` calculation.
     pub hour: u8,
+    /// UTC minute used by the `fractional_hour` calculation.
     pub minute: u8,
+    /// UTC seconds, including a fractional part, used in time conversion and fractional-hour calculation.
     pub second: f64,
     /// Optional IERS polar motion for pole tide and polar-motion-aware Sun/Moon
     /// rotation.
@@ -313,6 +529,10 @@ pub struct StationDisplacementEpoch {
 }
 
 impl StationDisplacementEpoch {
+    /// Construct an epoch from UTC calendar and clock components.
+    ///
+    /// The returned epoch has no polar motion until a caller adds it with
+    /// [`StationDisplacementEpoch::with_polar_motion_arcsec`].
     pub const fn from_utc(
         year: i32,
         month: u8,
@@ -332,6 +552,7 @@ impl StationDisplacementEpoch {
         }
     }
 
+    /// Return this epoch with the supplied IERS polar motion in arcseconds.
     pub const fn with_polar_motion_arcsec(mut self, xp_arcsec: f64, yp_arcsec: f64) -> Self {
         self.polar_motion = Some(StationPolarMotion::from_arcseconds(xp_arcsec, yp_arcsec));
         self
@@ -370,6 +591,7 @@ impl StationDisplacementEpoch {
 
 /// Switches for the high-level station displacement entry.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct StationDisplacementOptions<'a> {
     /// Apply the IERS solid Earth tide station displacement.
     pub solid_earth_tide: bool,
@@ -378,6 +600,9 @@ pub struct StationDisplacementOptions<'a> {
     pub pole_tide: bool,
     /// Optional ocean-loading BLQ coefficients supplied by the caller.
     pub ocean_loading: Option<&'a OceanLoadingBlq>,
+    /// Diurnal Step 2 constants of the solid Earth tide;
+    /// [`StationTideConstants::Conventions`] by default.
+    pub solid_earth_tide_constants: StationTideConstants,
 }
 
 impl Default for StationDisplacementOptions<'_> {
@@ -386,6 +611,7 @@ impl Default for StationDisplacementOptions<'_> {
             solid_earth_tide: true,
             pole_tide: false,
             ocean_loading: None,
+            solid_earth_tide_constants: StationTideConstants::Conventions,
         }
     }
 }
@@ -395,8 +621,11 @@ impl Default for StationDisplacementOptions<'_> {
 pub struct StationDisplacement {
     /// Sum of all enabled component displacements, in ITRF/ECEF metres.
     pub ecef_m: [f64; 3],
+    /// Solid-Earth tide component, or `None` when that correction is disabled.
     pub solid_earth_tide_ecef_m: Option<[f64; 3]>,
+    /// Pole-tide component, or `None` when that correction is disabled.
     pub pole_tide_ecef_m: Option<[f64; 3]>,
+    /// Ocean-loading component, or `None` when no BLQ coefficients are supplied.
     pub ocean_loading_ecef_m: Option<[f64; 3]>,
 }
 
@@ -421,33 +650,55 @@ impl StationDisplacement {
 /// metre components.
 ///
 /// The solid Earth tide path uses IERS Conventions (2010), Chapter 7 station
-/// displacement with the permanent tide retained. The low-level
+/// displacement with its permanent part applied. The low-level
 /// [`solid_earth_tide`] routine ships the in-phase degree-2 and degree-3
 /// displacement, the step-1 out-of-phase and latitude-dependence corrections,
 /// and the step-2 diurnal/long-period frequency corrections; it leaves the
-/// optional step-3 permanent-tide removal disabled for ITRF/IGS use. Sun/Moon
+/// optional step-3 permanent-tide removal out, so corrected coordinates are
+/// conventional tide free, as the ITRF is. Sun/Moon
 /// positions are generated through the same Earth-fixed analytic ephemeris path
 /// used by the tide-force lane, including caller-supplied polar motion when the
 /// epoch carries it.
+///
+/// The solid Earth tide rotates the Sun and Moon into ITRF with UT1, so it
+/// refuses an epoch outside the UT1 table; see
+/// [`station_displacement_ecef_m_with_validity`].
 pub fn station_displacement_ecef_m(
     position: StationDisplacementPosition,
     epoch: StationDisplacementEpoch,
     options: StationDisplacementOptions<'_>,
 ) -> Result<StationDisplacement, TideError> {
+    station_displacement_ecef_m_with_validity(position, epoch, options, ValidityMode::Strict)
+        .map(|validated| validated.value)
+}
+
+/// [`station_displacement_ecef_m`] under an explicit UT1 [`ValidityMode`].
+///
+/// Only the solid Earth tide reads UT1. [`ValidityMode::Strict`] refuses an
+/// epoch outside the UT1 table when it is enabled;
+/// [`ValidityMode::Permissive`] evaluates it with the long-term UT1 and
+/// reports the departure in [`Validated::degraded`].
+pub fn station_displacement_ecef_m_with_validity(
+    position: StationDisplacementPosition,
+    epoch: StationDisplacementEpoch,
+    options: StationDisplacementOptions<'_>,
+    mode: ValidityMode,
+) -> Result<Validated<StationDisplacement>, TideError> {
     let receiver_ecef_m = position.ecef_m()?;
     epoch.validate_utc()?;
     let fhr = epoch.fractional_hour();
     let mut displacement = StationDisplacement::zero();
+    let gate = Ut1Gate::new(mode);
 
     if options.solid_earth_tide {
-        let ts = epoch.time_scales()?;
+        let ts = gate.admit(epoch.time_scales()?)?;
         let polar_motion = epoch
             .polar_motion
             .map(StationPolarMotion::polar_motion)
             .transpose()?
             .unwrap_or_default();
         let sun_moon = sun_moon_ecef_with_polar_motion(&ts, polar_motion)?;
-        let solid = solid_earth_tide(
+        let solid = solid_earth_tide_with_constants(
             &receiver_ecef_m,
             epoch.year,
             i32::from(epoch.month),
@@ -455,6 +706,7 @@ pub fn station_displacement_ecef_m(
             fhr,
             &sun_moon.sun,
             &sun_moon.moon,
+            options.solid_earth_tide_constants,
         )?;
         StationDisplacement::add_component(&mut displacement.ecef_m, solid);
         displacement.solid_earth_tide_ecef_m = Some(solid);
@@ -490,7 +742,7 @@ pub fn station_displacement_ecef_m(
         displacement.ocean_loading_ecef_m = Some(ocean);
     }
 
-    Ok(displacement)
+    Ok(gate.finish(displacement)?)
 }
 
 /// Evaluate station displacement for many epochs. Each element is equivalent to
@@ -507,6 +759,20 @@ pub fn station_displacement_ecef_m_batch(
         .collect()
 }
 
+/// [`station_displacement_ecef_m_batch`] under an explicit UT1
+/// [`ValidityMode`]; each row is [`station_displacement_ecef_m_with_validity`].
+pub fn station_displacement_ecef_m_batch_with_validity(
+    position: StationDisplacementPosition,
+    epochs: &[StationDisplacementEpoch],
+    options: StationDisplacementOptions<'_>,
+    mode: ValidityMode,
+) -> Vec<Result<Validated<StationDisplacement>, TideError>> {
+    epochs
+        .iter()
+        .map(|&epoch| station_displacement_ecef_m_with_validity(position, epoch, options, mode))
+        .collect()
+}
+
 /// Solid-earth tide displacement of an ITRF station, in metres (ECEF).
 ///
 /// Arguments mirror the IERS reference routine:
@@ -516,8 +782,12 @@ pub fn station_displacement_ecef_m_batch(
 /// * `xsun` - geocentric Sun position (m, ECEF).
 /// * `xmon` - geocentric Moon position (m, ECEF).
 ///
-/// Returns the displacement vector `dxtide` (m, geocentric ITRF). The permanent
-/// (mean) tide deformation is retained (ITRF/IGS convention).
+/// Returns the displacement vector `dxtide` (m, geocentric ITRF), permanent
+/// part included, so corrected coordinates are conventional tide free, as the
+/// ITRF is.
+///
+/// The diurnal Step 2 constants are [`StationTideConstants::Conventions`];
+/// [`solid_earth_tide_with_constants`] chooses them.
 ///
 /// Returns [`TideError`] when inputs are non-finite or geometrically
 /// degenerate: the station vector must be non-zero and non-polar, and Sun/Moon
@@ -531,9 +801,35 @@ pub fn solid_earth_tide(
     xsun: &[f64; 3],
     xmon: &[f64; 3],
 ) -> Result<[f64; 3], TideError> {
+    solid_earth_tide_with_constants(
+        xsta,
+        year,
+        month,
+        day,
+        fhr,
+        xsun,
+        xmon,
+        StationTideConstants::Conventions,
+    )
+}
+
+/// [`solid_earth_tide`] with the diurnal Step 2 constants `constants`.
+/// [`StationTideConstants::IersRoutine`] reproduces `DEHANTTIDEINEL.F` and
+/// RTKLIB `tidedisp`.
+#[allow(clippy::too_many_arguments)]
+pub fn solid_earth_tide_with_constants(
+    xsta: &[f64; 3],
+    year: i32,
+    month: i32,
+    day: i32,
+    fhr: f64,
+    xsun: &[f64; 3],
+    xmon: &[f64; 3],
+    constants: StationTideConstants,
+) -> Result<[f64; 3], TideError> {
     validate_tide_domain(xsta, year, month, day, fhr, xsun, xmon)?;
     Ok(solid_earth_tide_unchecked(
-        xsta, year, month, day, fhr, xsun, xmon,
+        xsta, year, month, day, fhr, xsun, xmon, constants,
     ))
 }
 
@@ -572,6 +868,7 @@ fn validate_tide_domain(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solid_earth_tide_unchecked(
     xsta: &[f64; 3],
     year: i32,
@@ -580,6 +877,7 @@ fn solid_earth_tide_unchecked(
     fhr: f64,
     xsun: &[f64; 3],
     xmon: &[f64; 3],
+    constants: StationTideConstants,
 ) -> [f64; 3] {
     // Nominal second- and third-degree Love and Shida numbers.
     const H20: f64 = 0.6078;
@@ -606,8 +904,10 @@ fn solid_earth_tide_unchecked(
     let p2mon = 3.0 * (h2 / 2.0 - l2) * scmon * scmon - h2 / 2.0;
 
     // P3 term.
-    let p3sun = 5.0 / 2.0 * (H3 - 3.0 * L3) * scsun.powi(3) + 3.0 / 2.0 * (L3 - H3) * scsun;
-    let p3mon = 5.0 / 2.0 * (H3 - 3.0 * L3) * scmon.powi(3) + 3.0 / 2.0 * (L3 - H3) * scmon;
+    let scsun3 = scsun * scsun * scsun;
+    let scmon3 = scmon * scmon * scmon;
+    let p3sun = 5.0 / 2.0 * (H3 - 3.0 * L3) * scsun3 + 3.0 / 2.0 * (L3 - H3) * scsun;
+    let p3mon = 5.0 / 2.0 * (H3 - 3.0 * L3) * scmon3 + 3.0 / 2.0 * (L3 - H3) * scmon;
 
     // Term in direction of Sun/Moon vector.
     let x2sun = 3.0 * l2 * scsun;
@@ -619,8 +919,10 @@ fn solid_earth_tide_unchecked(
     const MASS_RATIO_SUN: f64 = 332946.0482;
     const MASS_RATIO_MOON: f64 = 0.0123000371;
     const RE: f64 = SOLID_TIDE_EARTH_RADIUS_M;
-    let fac2sun = MASS_RATIO_SUN * RE * (RE / rsun).powi(3);
-    let fac2mon = MASS_RATIO_MOON * RE * (RE / rmon).powi(3);
+    let re_over_rsun = RE / rsun;
+    let re_over_rmon = RE / rmon;
+    let fac2sun = MASS_RATIO_SUN * RE * re_over_rsun * re_over_rsun * re_over_rsun;
+    let fac2mon = MASS_RATIO_MOON * RE * re_over_rmon * re_over_rmon * re_over_rmon;
     let fac3sun = fac2sun * (RE / rsun);
     let fac3mon = fac2mon * (RE / rmon);
 
@@ -651,10 +953,10 @@ fn solid_earth_tide_unchecked(
     let (jjm0, jjm1) = gregorian_to_two_part_julian_date(year, month, day);
     let fhrd = fhr / 24.0;
     let mut t = ((jjm0 - J2000_JD) + jjm1 + fhrd) / DAYS_PER_JULIAN_CENTURY;
-    let dtt = tai_minus_utc_seconds(year, month, day) + TT_MINUS_TAI_S;
+    let dtt = tai_minus_utc_seconds(year, month, day, fhrd) + TT_MINUS_TAI_S;
     t += dtt / (SECONDS_PER_DAY * DAYS_PER_JULIAN_CENTURY);
 
-    let c = frequency_dependent_diurnal_correction(xsta, fhr, t);
+    let c = frequency_dependent_diurnal_correction(xsta, fhr, t, constants.diurnal_table());
     for i in 0..3 {
         dxtide[i] += c[i];
     }
@@ -664,8 +966,8 @@ fn solid_earth_tide_unchecked(
     }
 
     // Step 3 of the IERS routine, the permanent (zero-frequency) tide removal,
-    // is intentionally not applied, so the permanent (mean) tide deformation is
-    // retained (the ITRF/IGS conform-to-mean-tide convention; see module docs).
+    // stays out as it does in the routine, so the displacement includes its
+    // permanent part and corrected coordinates are conventional tide free.
     dxtide
 }
 
@@ -875,44 +1177,117 @@ fn latitude_dependence_correction(
     xcorsta
 }
 
+/// Constants of the diurnal-band frequency-dependent (Step 2) station tide.
+///
+/// See the module documentation for the three rows in which the variants
+/// differ and the sources for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum StationTideConstants {
+    /// The IERS Conventions (2010) Chapter 7 text: Table 7.3a with the P1
+    /// sign it misprints corrected, and tide 166,564 as Tables 6.5a and 7.2
+    /// list it.
+    #[default]
+    Conventions,
+    /// The `DATDI` array of the IERS routine `DEHANTTIDEINEL.F` (`STEP2DIU`)
+    /// as distributed, which RTKLIB also uses.
+    IersRoutine,
+}
+
+impl StationTideConstants {
+    fn diurnal_table(self) -> &'static [[f64; 9]; 31] {
+        match self {
+            Self::Conventions => &DIURNAL_BAND_CONVENTIONS,
+            Self::IersRoutine => &DIURNAL_BAND_IERS_ROUTINE,
+        }
+    }
+}
+
+// Diurnal-band tables, 31 rows: multipliers of s, h, p, N', ps (tau's is 1),
+// then the radial in-phase, radial out-of-phase, transverse in-phase and
+// transverse out-of-phase amplitudes in mm, the columns of Table 7.3a.
+
+/// `DATDI` of `STEP2DIU.F` as distributed.
+#[rustfmt::skip]
+const DIURNAL_BAND_IERS_ROUTINE: [[f64; 9]; 31] = [
+    [-3.0, 0.0, 2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [-3.0, 2.0, 0.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [-2.0, 0.0, 1.0, -1.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [-2.0, 0.0, 1.0, 0.0, 0.0, -0.08, 0.0, -0.01, 0.01],
+    [-2.0, 2.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0, -1.0, 0.0, -0.10, 0.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0, 0.0, 0.0, -0.51, 0.0, -0.02, 0.03],
+    [-1.0, 2.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, -2.0, 1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0, 0.0, 0.06, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, 2.0, -1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [1.0, -3.0, 0.0, 0.0, 1.0, -0.06, 0.0, 0.0, 0.0],
+    [1.0, -2.0, 0.0, -1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [1.0, -2.0, 0.0, 0.0, 0.0, -1.23, -0.07, 0.06, 0.01],
+    [1.0, -1.0, 0.0, 0.0, -1.0, 0.02, 0.0, 0.0, 0.0],
+    [1.0, -1.0, 0.0, 0.0, 1.0, 0.04, 0.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0, -1.0, 0.0, -0.22, 0.01, 0.01, 0.0],
+    [1.0, 0.0, 0.0, 0.0, 0.0, 12.00, -0.80, -0.67, -0.03],
+    [1.0, 0.0, 0.0, 1.0, 0.0, 1.73, -0.12, -0.10, 0.0],
+    [1.0, 0.0, 0.0, 2.0, 0.0, -0.04, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 0.0, -1.0, -0.50, -0.01, 0.03, 0.0],
+    [1.0, 1.0, 0.0, 0.0, 1.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 1.0, -1.0, -0.01, 0.0, 0.0, 0.0],
+    [1.0, 2.0, -2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [1.0, 2.0, 0.0, 0.0, 0.0, -0.11, 0.01, 0.01, 0.0],
+    [2.0, -2.0, 1.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [2.0, 0.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [3.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+];
+
+/// `DATDI` with three rows corrected to the Conventions text: row 16 (P1)
+/// out-of-phase radial +0.07, row 20 (K1) out-of-phase radial -0.78, and
+/// row 25 tide 166,564 (s multiplier 1).
+#[rustfmt::skip]
+const DIURNAL_BAND_CONVENTIONS: [[f64; 9]; 31] = [
+    [-3.0, 0.0, 2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [-3.0, 2.0, 0.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [-2.0, 0.0, 1.0, -1.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [-2.0, 0.0, 1.0, 0.0, 0.0, -0.08, 0.0, -0.01, 0.01],
+    [-2.0, 2.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0, -1.0, 0.0, -0.10, 0.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0, 0.0, 0.0, -0.51, 0.0, -0.02, 0.03],
+    [-1.0, 2.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, -2.0, 1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0, 0.0, 0.06, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [0.0, 2.0, -1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [1.0, -3.0, 0.0, 0.0, 1.0, -0.06, 0.0, 0.0, 0.0],
+    [1.0, -2.0, 0.0, -1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
+    [1.0, -2.0, 0.0, 0.0, 0.0, -1.23, 0.07, 0.06, 0.01],
+    [1.0, -1.0, 0.0, 0.0, -1.0, 0.02, 0.0, 0.0, 0.0],
+    [1.0, -1.0, 0.0, 0.0, 1.0, 0.04, 0.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0, -1.0, 0.0, -0.22, 0.01, 0.01, 0.0],
+    [1.0, 0.0, 0.0, 0.0, 0.0, 12.00, -0.78, -0.67, -0.03],
+    [1.0, 0.0, 0.0, 1.0, 0.0, 1.73, -0.12, -0.10, 0.0],
+    [1.0, 0.0, 0.0, 2.0, 0.0, -0.04, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 0.0, -1.0, -0.50, -0.01, 0.03, 0.0],
+    [1.0, 1.0, 0.0, 0.0, 1.0, 0.01, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 1.0, -1.0, -0.01, 0.0, 0.0, 0.0],
+    [1.0, 2.0, -2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [1.0, 2.0, 0.0, 0.0, 0.0, -0.11, 0.01, 0.01, 0.0],
+    [2.0, -2.0, 1.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
+    [2.0, 0.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
+    [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [3.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+];
+
 /// In-phase / out-of-phase frequency-dependent corrections, diurnal band
 /// (STEP2DIU). `fhr` is UTC fractional hour, `t` is Julian centuries (TT).
-fn frequency_dependent_diurnal_correction(xsta: &[f64; 3], fhr: f64, t: f64) -> [f64; 3] {
-    // DATDI(9,31): {l, l', F, D, Omega(Ps), Adr, Adi, Anr, Ani} per wave.
-    #[rustfmt::skip]
-    const DATDI: [[f64; 9]; 31] = [
-        [-3.0, 0.0, 2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
-        [-3.0, 2.0, 0.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
-        [-2.0, 0.0, 1.0, -1.0, 0.0, -0.02, 0.0, 0.0, 0.0],
-        [-2.0, 0.0, 1.0, 0.0, 0.0, -0.08, 0.0, -0.01, 0.01],
-        [-2.0, 2.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0, -1.0, 0.0, -0.10, 0.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0, 0.0, 0.0, -0.51, 0.0, -0.02, 0.03],
-        [-1.0, 2.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
-        [0.0, -2.0, 1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0, 0.0, 0.06, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
-        [0.0, 2.0, -1.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0],
-        [1.0, -3.0, 0.0, 0.0, 1.0, -0.06, 0.0, 0.0, 0.0],
-        [1.0, -2.0, 0.0, -1.0, 0.0, 0.01, 0.0, 0.0, 0.0],
-        [1.0, -2.0, 0.0, 0.0, 0.0, -1.23, -0.07, 0.06, 0.01],
-        [1.0, -1.0, 0.0, 0.0, -1.0, 0.02, 0.0, 0.0, 0.0],
-        [1.0, -1.0, 0.0, 0.0, 1.0, 0.04, 0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0, -1.0, 0.0, -0.22, 0.01, 0.01, 0.0],
-        [1.0, 0.0, 0.0, 0.0, 0.0, 12.00, -0.80, -0.67, -0.03],
-        [1.0, 0.0, 0.0, 1.0, 0.0, 1.73, -0.12, -0.10, 0.0],
-        [1.0, 0.0, 0.0, 2.0, 0.0, -0.04, 0.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0, 0.0, -1.0, -0.50, -0.01, 0.03, 0.0],
-        [1.0, 1.0, 0.0, 0.0, 1.0, 0.01, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 1.0, -1.0, -0.01, 0.0, 0.0, 0.0],
-        [1.0, 2.0, -2.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
-        [1.0, 2.0, 0.0, 0.0, 0.0, -0.11, 0.01, 0.01, 0.0],
-        [2.0, -2.0, 1.0, 0.0, 0.0, -0.01, 0.0, 0.0, 0.0],
-        [2.0, 0.0, -1.0, 0.0, 0.0, -0.02, 0.0, 0.0, 0.0],
-        [3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [3.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    ];
+fn frequency_dependent_diurnal_correction(
+    xsta: &[f64; 3],
+    fhr: f64,
+    t: f64,
+    datdi: &[[f64; 9]; 31],
+) -> [f64; 3] {
     let mut s = 218.31664563 + (481267.88194 + (-0.0014663889 + 0.00000185139 * t) * t) * t;
     let mut tau = fhr * 15.0
         + 280.4606184
@@ -929,28 +1304,31 @@ fn frequency_dependent_diurnal_correction(xsta: &[f64; 3], fhr: f64, t: f64) -> 
     let mut ps = 282.93734098
         + (1.71945766667 + (0.00045688889 + (-0.00000001778 + -0.00000000334 * t) * t) * t) * t;
 
-    s = s.rem_euclid(360.0);
-    tau = tau.rem_euclid(360.0);
-    h = h.rem_euclid(360.0);
-    p = p.rem_euclid(360.0);
-    zns = zns.rem_euclid(360.0);
-    ps = ps.rem_euclid(360.0);
+    s %= 360.0;
+    tau %= 360.0;
+    h %= 360.0;
+    p %= 360.0;
+    zns %= 360.0;
+    ps %= 360.0;
 
     let rsta = (xsta[0] * xsta[0] + xsta[1] * xsta[1] + xsta[2] * xsta[2]).sqrt();
     let sinphi = xsta[2] / rsta;
     let cosphi = (xsta[0] * xsta[0] + xsta[1] * xsta[1]).sqrt() / rsta;
     let cosla = xsta[0] / cosphi / rsta;
     let sinla = xsta[1] / cosphi / rsta;
-    let zla = xsta[1].atan2(xsta[0]);
+    let zla = libm::atan2(xsta[1], xsta[0]);
 
     let mut xcorsta = [0.0_f64; 3];
-    for w in &DATDI {
+    for w in datdi {
         let thetaf = (tau + w[0] * s + w[1] * h + w[2] * p + w[3] * zns + w[4] * ps) * DEG_TO_RAD;
-        let dr = w[5] * 2.0 * sinphi * cosphi * (thetaf + zla).sin()
-            + w[6] * 2.0 * sinphi * cosphi * (thetaf + zla).cos();
-        let dn = w[7] * (cosphi * cosphi - sinphi * sinphi) * (thetaf + zla).sin()
-            + w[8] * (cosphi * cosphi - sinphi * sinphi) * (thetaf + zla).cos();
-        let de = w[7] * sinphi * (thetaf + zla).cos() - w[8] * sinphi * (thetaf + zla).sin();
+        let angle = thetaf + zla;
+        let sin_angle = libm::sin(angle);
+        let cos_angle = libm::cos(angle);
+        let dr =
+            w[5] * 2.0 * sinphi * cosphi * sin_angle + w[6] * 2.0 * sinphi * cosphi * cos_angle;
+        let dn = w[7] * (cosphi * cosphi - sinphi * sinphi) * sin_angle
+            + w[8] * (cosphi * cosphi - sinphi * sinphi) * cos_angle;
+        let de = w[7] * sinphi * cos_angle - w[8] * sinphi * sin_angle;
 
         xcorsta[0] += dr * cosla * cosphi - de * sinla - dn * sinphi * cosla;
         xcorsta[1] += dr * sinla * cosphi + de * cosla - dn * sinphi * sinla;
@@ -965,6 +1343,11 @@ fn frequency_dependent_diurnal_correction(xsta: &[f64; 3], fhr: f64, t: f64) -> 
 /// In-phase / out-of-phase frequency-dependent corrections, long-period band
 /// (STEP2LON). `t` is Julian centuries (TT).
 fn frequency_dependent_long_period_correction(xsta: &[f64; 3], t: f64) -> [f64; 3] {
+    // DATDI(9,5): multipliers of s, h, p, N', ps, then the radial in-phase,
+    // transverse in-phase, radial out-of-phase and transverse out-of-phase
+    // amplitudes in mm (Table 7.3b lists the same values in the order radial
+    // in-phase, radial out-of-phase, transverse in-phase, transverse
+    // out-of-phase).
     #[rustfmt::skip]
     const DATDI: [[f64; 9]; 5] = [
         [0.0, 0.0, 0.0, 1.0, 0.0, 0.47, 0.23, 0.16, 0.07],
@@ -991,19 +1374,21 @@ fn frequency_dependent_long_period_correction(xsta: &[f64; 3], t: f64) -> [f64; 
     let cosla = xsta[0] / cosphi / rsta;
     let sinla = xsta[1] / cosphi / rsta;
 
-    s = s.rem_euclid(360.0);
-    h = h.rem_euclid(360.0);
-    p = p.rem_euclid(360.0);
-    zns = zns.rem_euclid(360.0);
-    ps = ps.rem_euclid(360.0);
+    s %= 360.0;
+    h %= 360.0;
+    p %= 360.0;
+    zns %= 360.0;
+    ps %= 360.0;
 
     let mut xcorsta = [0.0_f64; 3];
     for w in &DATDI {
         let thetaf = (w[0] * s + w[1] * h + w[2] * p + w[3] * zns + w[4] * ps) * DEG_TO_RAD;
-        let dr = w[5] * (3.0 * sinphi * sinphi - 1.0) / 2.0 * thetaf.cos()
-            + w[7] * (3.0 * sinphi * sinphi - 1.0) / 2.0 * thetaf.sin();
-        let dn = w[6] * (cosphi * sinphi * 2.0) * thetaf.cos()
-            + w[8] * (cosphi * sinphi * 2.0) * thetaf.sin();
+        let sin_theta = libm::sin(thetaf);
+        let cos_theta = libm::cos(thetaf);
+        let dr = w[5] * (3.0 * sinphi * sinphi - 1.0) / 2.0 * cos_theta
+            + w[7] * (3.0 * sinphi * sinphi - 1.0) / 2.0 * sin_theta;
+        let dn =
+            w[6] * (cosphi * sinphi * 2.0) * cos_theta + w[8] * (cosphi * sinphi * 2.0) * sin_theta;
         let de = 0.0;
 
         xcorsta[0] += dr * cosla * cosphi - de * sinla - dn * sinphi * cosla;
@@ -1036,10 +1421,30 @@ fn gregorian_to_two_part_julian_date(iy: i32, im: i32, id: i32) -> (f64, f64) {
     (djm0, djm)
 }
 
-/// TAI-UTC (Delta(AT)) in seconds for the given date (SOFA DAT, post-1972
-/// leap-second table only). The four golden dates are all post-1972; SOFA's
-/// pre-1972 drift terms are not implemented here.
-fn tai_minus_utc_seconds(iy: i32, im: i32, _id: i32) -> f64 {
+/// TAI-UTC (Delta(AT)) in seconds for the given UTC date and fraction of day
+/// `fd`, as the SOFA `DAT` routine distributed with DEHANTTIDEINEL returns it:
+/// 0 before 1960 (the routine's "pre-UTC year" warning path, whose result
+/// DEHANTTIDEINEL uses as is), the 1960-1971 offsets with their drift terms,
+/// and the leap-second table from 1972. Dates after the last entry keep its
+/// value.
+fn tai_minus_utc_seconds(iy: i32, im: i32, id: i32, fd: f64) -> f64 {
+    // 1960-1971: (year, month, Delta(AT) seconds, reference MJD, drift s/day).
+    const DRIFT: [(i32, i32, f64, f64, f64); 14] = [
+        (1960, 1, 1.4178180, 37300.0, 0.001296),
+        (1961, 1, 1.4228180, 37300.0, 0.001296),
+        (1961, 8, 1.3728180, 37300.0, 0.001296),
+        (1962, 1, 1.8458580, 37665.0, 0.0011232),
+        (1963, 11, 1.9458580, 37665.0, 0.0011232),
+        (1964, 1, 3.2401300, 38761.0, 0.001296),
+        (1964, 4, 3.3401300, 38761.0, 0.001296),
+        (1964, 9, 3.4401300, 38761.0, 0.001296),
+        (1965, 1, 3.5401300, 38761.0, 0.001296),
+        (1965, 3, 3.6401300, 38761.0, 0.001296),
+        (1965, 7, 3.7401300, 38761.0, 0.001296),
+        (1965, 9, 3.8401300, 38761.0, 0.001296),
+        (1966, 1, 4.3131700, 39126.0, 0.002592),
+        (1968, 2, 4.2131700, 39126.0, 0.002592),
+    ];
     // Post-1972 leap-second table: (year, month, Delta(AT) seconds).
     const IDAT: [(i32, i32, f64); 28] = [
         (1972, 1, 10.0),
@@ -1071,12 +1476,26 @@ fn tai_minus_utc_seconds(iy: i32, im: i32, _id: i32) -> f64 {
         (2015, 7, 36.0),
         (2017, 1, 37.0),
     ];
+    if iy < DRIFT[0].0 {
+        return 0.0;
+    }
     let m = 12 * iy + im;
-    let mut da = IDAT[0].2;
+    let mut leap = None;
     for &(y, mo, d) in &IDAT {
         if m >= 12 * y + mo {
-            da = d;
+            leap = Some(d);
         }
     }
-    da
+    if let Some(da) = leap {
+        return da;
+    }
+    let mut era = DRIFT[0];
+    for entry in DRIFT {
+        if m >= 12 * entry.0 + entry.1 {
+            era = entry;
+        }
+    }
+    let (_, djm) = gregorian_to_two_part_julian_date(iy, im, id);
+    let (_, _, da, reference_mjd, rate) = era;
+    da + (djm + fd - reference_mjd) * rate
 }

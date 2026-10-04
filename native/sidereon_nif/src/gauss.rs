@@ -4,8 +4,7 @@
 //! logic lives in the core engine; this layer only groups scalar arguments into
 //! the arrays the core entry point expects.
 
-use rustler::NifResult;
-use sidereon_core::astro::iod::gauss_angles;
+use sidereon_core::astro::iod::{gauss_angles, IodError};
 
 type Vec3 = (f64, f64, f64);
 
@@ -26,7 +25,7 @@ pub(crate) fn gauss_impl(
     rseci1: Vec3,
     rseci2: Vec3,
     rseci3: Vec3,
-) -> NifResult<(Vec3, Vec3)> {
+) -> Result<(Vec3, Vec3), IodError> {
     let decl = [decl1, decl2, decl3];
     let rtasc = [rtasc1, rtasc2, rtasc3];
     let jd = [jd1, jd2, jd3];
@@ -37,8 +36,6 @@ pub(crate) fn gauss_impl(
         [rseci3.0, rseci3.1, rseci3.2],
     ];
 
-    match gauss_angles(&decl, &rtasc, &jd, &jdf, &rseci) {
-        Ok((r2, v2)) => Ok(((r2[0], r2[1], r2[2]), (v2[0], v2[1], v2[2]))),
-        Err(_) => Ok(((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))),
-    }
+    gauss_angles(&decl, &rtasc, &jd, &jdf, &rseci)
+        .map(|(r2, v2)| ((r2[0], r2[1], r2[2]), (v2[0], v2[1], v2[2])))
 }

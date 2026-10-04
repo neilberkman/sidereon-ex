@@ -195,6 +195,30 @@ defmodule Sidereon.GNSS.ObservablesTest do
     end
   end
 
+  describe "predict_detailed/5 errors" do
+    test "invalid carrier preserves the core field and validation category", %{sp3: sp3, high_id: id} do
+      assert {:error, :invalid_input} = Observables.predict(sp3, id, @rx, @epoch, carrier_hz: 0.0)
+      assert {:error, error} = Observables.predict_detailed(sp3, id, @rx, @epoch, carrier_hz: 0.0)
+      assert error.family == "ObservablesError"
+      assert error.kind == "INVALID_INPUT"
+      assert error.field == "options.carrier_hz"
+      assert error.reason == "not positive"
+      assert error.input_kind == "NotPositive"
+      assert error.cause == nil
+      assert is_binary(error.message)
+    end
+
+    test "missing satellite retains the exact underlying core variant", %{sp3: sp3} do
+      assert {:error, error} = Observables.predict_detailed(sp3, "G99", @rx, @epoch)
+      assert error.family == "ObservablesError"
+      assert error.kind == "EPHEMERIS"
+      assert error.cause.family == "CoreError"
+      assert error.cause.kind == "UNKNOWN_SATELLITE"
+      assert error.cause.satellite == "G99"
+      assert is_binary(error.cause.message)
+    end
+  end
+
   # Independent light-time + Sagnac line-of-sight straight from Sidereon.GNSS.SP3.position,
   # so the ENU cross-check is fed dx,dy,dz from a different code path than the one
   # under test. Returns {dx, dy, dz, range} in the receive-epoch ECEF frame.

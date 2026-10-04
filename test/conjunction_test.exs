@@ -137,5 +137,8 @@ defmodule Sidereon.ConjunctionTest do
     assert closest.miss_distance_km < 10.0
   end
 
-  defp split(epoch), do: Time.epoch_to_split_jd(epoch)
+  defp split(epoch) do
+    {:ok, split} = Time.epoch_to_split_jd(epoch)
+    split
+  end
 end

@@ -14,7 +14,7 @@ defmodule SppRobustness202606 do
   # 3D and horizontal median/p95 are summarized per arc.
   #
   # Run from the sidereon worktree root:
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/spp_robustness_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/spp_robustness_2026_06.exs
   # Options: --work DIR (staged GSDC root, default /tmp/gsdc-work),
   #          --results FILE, --report FILE.
 

@@ -11,13 +11,87 @@ defmodule Sidereon.GNSSFusionTest do
   alias Sidereon.GNSS.Fusion.TightRangeRateObservation
   alias Sidereon.GNSS.Fusion.TimeSyncHistoryConfig
   alias Sidereon.GNSS.SP3
+  alias Sidereon.Test.CoreGolden
 
   @wgs84_a_m 6_378_137.0
   @omega_e_dot_rad_s 7.292_115_146_7e-5
   @sp3_path "test/fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_73epoch.sp3"
-  @c_m_s 299_792_458.0
 
   describe "GNSS/INS fusion parity" do
+    test "public inertial gravity and attitude helpers expose core results" do
+      assert {:ok, gravity} = Fusion.normal_gravity_mps2(0.0, 0.0)
+      assert_in_delta gravity, 9.780_325_335_9, 1.0e-12
+
+      assert {:error, {:invalid_input, "lat_rad", "must be in [-pi/2, pi/2]"}} =
+               Fusion.normal_gravity_mps2(:math.pi(), 0.0)
+
+      assert {:ok, gravity_ecef} = Fusion.gravity_ecef_mps2({@wgs84_a_m, 0.0, 0.0})
+      assert_in_delta elem(gravity_ecef, 0), -gravity, 1.0e-12
+      assert {:ok, 1.0} = Fusion.gauss_markov_bias_decay(0.25, :infinity)
+      assert {:ok, 0.5} = Fusion.gauss_markov_bias_variance_increment(2.0, 0.125, :infinity)
+
+      identity = [{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}]
+      assert {:ok, quaternion} = Fusion.attitude_quaternion_from_dcm(identity)
+      assert_in_delta quaternion.w, 1.0, 1.0e-15
+      assert quaternion.x == 0.0 and quaternion.y == 0.0 and quaternion.z == 0.0
+      assert {:ok, ^identity} = Fusion.attitude_dcm_from_quaternion(quaternion)
+      # Core forms pitch as asin(-C[2][0]), which is asin(-0.0) = -0.0 for the
+      # identity; yaw and roll are atan2(+0.0, 1.0) = +0.0.
+      assert {:ok, {+0.0, -0.0, +0.0}} = Fusion.attitude_yaw_pitch_roll_rad(identity)
+      assert {:ok, ^quaternion} = Fusion.nav_state_attitude_quaternion(%{attitude_body_to_ecef: identity})
+
+      spec = Fusion.ImuSpec.preset(:tactical)
+      assert spec.accel_vrw_mps_sqrt_s > 0.0
+      assert Fusion.strapdown_config(Fusion.MechanizationConfig.new()).coning_correction == :off
+    end
+
+    test "batch IMU simulation exposes samples and per-sample stochastic state" do
+      increment = %Fusion.CorrectedImuIncrement{
+        t_j2000_s: 0.1,
+        delta_velocity_mps: {0.0, 0.0, 0.0},
+        delta_theta_rad: {0.0, 0.0, 0.0},
+        dt_s: 0.1
+      }
+
+      assert {:ok, sequence} =
+               Fusion.simulate_imu_samples_from_increments([increment], :tactical, seed: 42)
+
+      assert length(sequence.samples) == 1
+      assert length(sequence.bias_history) == 1
+      assert length(sequence.rate_random_walk_history) == 1
+      assert %Fusion.ImuSample{kind: :increment, dt_s: 0.1} = hd(sequence.samples)
+    end
+
+    test "standalone mechanizer and IMU simulator use the shared inertial core" do
+      nav_state = Map.delete(initial_state(), :covariance_diagonal)
+      {:ok, mechanizer} = Fusion.StrapdownMechanizer.new(nav_state)
+      {:ok, before} = Fusion.StrapdownMechanizer.state(mechanizer)
+      assert before.t_j2000_s == 0.0
+
+      sample = %Fusion.ImuSample{
+        t_j2000_s: 0.1,
+        kind: :increment,
+        delta_velocity_mps: {0.0, 0.0, 0.0},
+        delta_theta_rad: {0.0, 0.0, 0.0},
+        dt_s: 0.1
+      }
+
+      assert {:ok, after_state} = Fusion.StrapdownMechanizer.propagate(mechanizer, sample)
+      assert after_state.t_j2000_s == 0.1
+
+      {:ok, simulator} = Fusion.ImuSimulator.new(:navigation, output: :increment, seed: 17)
+
+      truth = %{
+        t_j2000_s: 0.2,
+        delta_velocity_mps: {0.0, 0.0, 0.0},
+        delta_theta_rad: {0.0, 0.0, 0.0},
+        dt_s: 0.1
+      }
+
+      assert {:ok, %Fusion.ImuSample{kind: :increment, t_j2000_s: 0.2}} =
+               Fusion.ImuSimulator.sample_increment(simulator, truth)
+    end
+
     test "encodes and decodes state bytes" do
       {:ok, filter} = Fusion.new(initial_state(), config(:ekf))
       assert {:ok, bytes} = Fusion.encode_state(filter)
@@ -378,15 +452,12 @@ defmodule Sidereon.GNSSFusionTest do
 
     test "applies tight pseudorange and range-rate rows from an SP3 source" do
       sp3 = SP3.load!(@sp3_path)
-      epoch = SP3.coverage(sp3).start_j2000_s
-      {:ok, satellite} = SP3.state(sp3, "G01", 0)
-
-      rho =
-        :math.sqrt(
-          :math.pow(satellite.x_m - @wgs84_a_m, 2) +
-            :math.pow(satellite.y_m, 2) +
-            :math.pow(satellite.z_m, 2)
-        ) + satellite.clock_s * @c_m_s
+      # The core's own update on the same filter, source and observation
+      # (test/generators/core_goldens): the pseudorange is the first G01 SP3
+      # record's range from the filter position plus its clock, plus 2 m.
+      golden = CoreGolden.load("fusion_tight_sp3.json")
+      epoch = CoreGolden.f(golden["t_j2000_s"])
+      assert epoch == SP3.coverage(sp3).start_j2000_s
 
       tight_config =
         Fusion.filter_config(zero_imu_spec(), filter_kind: :ekf, tight: %{light_time: false, sagnac: false})
@@ -395,21 +466,26 @@ defmodule Sidereon.GNSSFusionTest do
 
       epoch_observation =
         TightGnssEpoch.new(epoch, [
-          TightGnssObservation.new("G01", rho + 2.0, 10.0, range_rate: TightRangeRateObservation.new(0.5, 2.0, 0.0))
+          TightGnssObservation.new("G01", CoreGolden.f(golden["pseudorange_m"]), 10.0,
+            range_rate: TightRangeRateObservation.new(0.5, 2.0, 0.0)
+          )
         ])
 
       assert TightGnssEpoch.observation_count(epoch_observation) == 1
 
+      # The binding hands the core the same filter and observation, and the
+      # core's results are bit-identical across x86_64 and arm64, so the update
+      # is the core's own, bit for bit.
       assert {:ok, report} = Fusion.update_tight(filter, sp3, epoch_observation)
-      assert report.rows == 2
-      assert report.applied
-      assert_close(report.nis, 0.08525833579508538, 1.0e-15)
-      assert_close_list(Enum.take(report.ekf.dx, -2), [9_561.485104261606, -291.81853498313416], 1.0e-9)
+      assert report.rows == golden["update"]["rows"]
+      assert report.applied == golden["update"]["applied"]
+      assert report.nis == CoreGolden.f(golden["update"]["nis"])
+      assert report.ekf.dx == CoreGolden.f(golden["update"]["dx"])
 
       assert {:ok, clock} = Fusion.tight_clock_state(filter)
-      assert_close(clock.bias_m, 9_561.485104261606, 1.0e-9)
-      assert_close(clock.drift_m_s, -291.81853498313416, 1.0e-12)
-      assert_close_matrix(clock.covariance, [[199.99999996000003, 0.0], [0.0, 103.98918512474701]], 1.0e-9)
+      assert clock.bias_m == CoreGolden.f(golden["clock"]["bias_m"])
+      assert clock.drift_m_s == CoreGolden.f(golden["clock"]["drift_m_s"])
+      assert clock.covariance == CoreGolden.f(golden["clock"]["covariance"])
     end
 
     test "records robust loose history and smooths fusion RTS output" do

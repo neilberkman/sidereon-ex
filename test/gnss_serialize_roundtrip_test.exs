@@ -18,13 +18,13 @@ defmodule Sidereon.GNSS.SerializeRoundTripTest do
     end
 
     test "returns deterministic ANTEX text", %{antex: antex} do
-      text = Antex.encode(antex)
+      assert {:ok, text} = Antex.encode(antex)
       assert is_binary(text)
-      assert Antex.encode(antex) == text
+      assert Antex.encode(antex) == {:ok, text}
     end
 
     test "round-trips through parse with identical antenna ids and PCO", %{antex: antex} do
-      text = Antex.encode(antex)
+      assert {:ok, text} = Antex.encode(antex)
       assert {:ok, reparsed} = Antex.parse(text)
 
       assert Map.keys(reparsed.antennas) == Map.keys(antex.antennas)
@@ -32,8 +32,9 @@ defmodule Sidereon.GNSS.SerializeRoundTripTest do
       id = antex.antennas |> Map.keys() |> List.first()
       original = Antex.antenna(antex, id)
       round_tripped = Antex.antenna(reparsed, id)
-      freq = original.frequencies |> Map.keys() |> List.first()
+      [%Antex.Frequency{frequency: freq} | _] = original.frequencies
 
+      assert {:ok, _pco} = Antex.pco(original, freq)
       assert Antex.pco(round_tripped, freq) == Antex.pco(original, freq)
     end
   end
@@ -45,13 +46,13 @@ defmodule Sidereon.GNSS.SerializeRoundTripTest do
     end
 
     test "returns deterministic RINEX NAV text", %{nav: nav} do
-      text = Broadcast.encode_nav(nav)
+      assert {:ok, text} = Broadcast.encode_nav(nav)
       assert is_binary(text)
-      assert Broadcast.encode_nav(nav) == text
+      assert Broadcast.encode_nav(nav) == {:ok, text}
     end
 
     test "round-trips through parse with identical records", %{nav: nav} do
-      text = Broadcast.encode_nav(nav)
+      assert {:ok, text} = Broadcast.encode_nav(nav)
       assert {:ok, reparsed} = Broadcast.parse(text)
 
       assert Broadcast.record_count(reparsed) == Broadcast.record_count(nav)

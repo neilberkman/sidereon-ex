@@ -16,7 +16,8 @@ use crate::broadcast::BroadcastResource;
 use crate::geometry_quality::geometry_quality_to_term;
 use crate::sp3::Sp3Resource;
 use crate::spp::{
-    atom_from, build_solve_inputs, decode_robust, matrix3_to_rows, spp_error_reason_term,
+    atom_from, build_solve_inputs, decode_robust, least_squares_error_term_from_core,
+    matrix3_to_rows, pseudorange_code_from_atom, spp_error_reason_term, spp_input_error_kind_name,
     status_atom_name,
 };
 use std::collections::BTreeMap;
@@ -39,10 +40,13 @@ struct StaticEpochTerm {
     temperature_k: f64,
     relative_humidity: f64,
     glonass_channels: Vec<(u8, i8)>,
+    pseudorange_code: rustler::Atom,
 }
 
 /// Solve one static receiver position from several SP3-backed epochs.
+/// The positional arity preserves the established Elixir NIF call contract.
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn static_positioning_solve_sp3<'a>(
     env: Env<'a>,
     handle: ResourceArc<Sp3Resource>,
@@ -50,9 +54,17 @@ fn static_positioning_solve_sp3<'a>(
     initial_position_m: Vec3,
     with_geodetic: bool,
     robust: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let robust = decode_robust(robust)?;
-    let options = static_options(initial_position_m, with_geodetic, robust);
+    let options = static_options(
+        initial_position_m,
+        with_geodetic,
+        robust,
+        qzss_clock,
+        troposphere_model,
+    )?;
     let epochs = decode_epochs(epochs, initial_position_m, robust)?;
     Ok(match solve_static(&handle.sp3, &epochs, options) {
         Ok(solution) => (atom::ok(), encode_solution(env, &solution)).encode(env),
@@ -61,7 +73,9 @@ fn static_positioning_solve_sp3<'a>(
 }
 
 /// Solve one static receiver position from several broadcast-backed epochs.
+/// The positional arity preserves the established Elixir NIF call contract.
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
 fn static_positioning_solve_broadcast<'a>(
     env: Env<'a>,
     handle: ResourceArc<BroadcastResource>,
@@ -69,9 +83,17 @@ fn static_positioning_solve_broadcast<'a>(
     initial_position_m: Vec3,
     with_geodetic: bool,
     robust: Term<'a>,
+    qzss_clock: Term<'a>,
+    troposphere_model: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let robust = decode_robust(robust)?;
-    let options = static_options(initial_position_m, with_geodetic, robust);
+    let options = static_options(
+        initial_position_m,
+        with_geodetic,
+        robust,
+        qzss_clock,
+        troposphere_model,
+    )?;
     let mut epochs = decode_epochs(epochs, initial_position_m, robust)?;
     let iono = handle.store.iono_corrections();
     for epoch in &mut epochs {
@@ -93,7 +115,9 @@ fn static_options(
     initial_position_m: Vec3,
     with_geodetic: bool,
     robust: Option<sidereon_core::positioning::RobustConfig>,
-) -> StaticSolveOptions {
+    qzss_clock: Term<'_>,
+    troposphere_model: Term<'_>,
+) -> NifResult<StaticSolveOptions> {
     let mut options = StaticSolveOptions::default();
     options.initial_position_m = [
         initial_position_m.0,
@@ -102,7 +126,9 @@ fn static_options(
     ];
     options.with_geodetic = with_geodetic;
     options.robust = robust;
-    options
+    options.qzss_clock = crate::spp::decode_qzss_clock(qzss_clock)?;
+    options.troposphere_model = crate::spp::decode_troposphere_model(troposphere_model)?;
+    Ok(options)
 }
 
 fn decode_epochs(
@@ -143,6 +169,7 @@ fn decode_epoch(
         robust,
     )?;
     inputs.glonass_channels = glonass_channels;
+    inputs.pseudorange_code = pseudorange_code_from_atom(epoch.pseudorange_code)?;
     let mut static_epoch = StaticEpoch::from_solve_inputs(inputs);
     static_epoch.weights = epoch.weights;
     Ok(static_epoch)
@@ -272,6 +299,10 @@ fn encode_solution<'a>(env: Env<'a>, solution: &StaticSolution) -> Term<'a> {
             (solution.metadata.used_measurements as i64).encode(env),
             (solution.metadata.n_parameters as i64).encode(env),
             (solution.metadata.redundancy as i64).encode(env),
+            match solution.metadata.ut1_degraded {
+                Some(reason) => crate::errors::degrade_reason_atom(reason).encode(env),
+                None => atom::nil().encode(env),
+            },
         ],
     );
 
@@ -325,27 +356,52 @@ fn rejection_reason_atom<'a>(
     env: Env<'a>,
     reason: sidereon_core::positioning::RejectionReason,
 ) -> Term<'a> {
-    let name = match reason {
-        sidereon_core::positioning::RejectionReason::NoEphemeris => "no_ephemeris",
-        sidereon_core::positioning::RejectionReason::LowElevation => "low_elevation",
-        sidereon_core::positioning::RejectionReason::SbasWithdrawn => "sbas_withdrawn",
-        sidereon_core::positioning::RejectionReason::SbasIonoUncovered => "sbas_iono_uncovered",
-    };
-    atom_from(env, name)
+    match reason {
+        sidereon_core::positioning::RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris"),
+        sidereon_core::positioning::RejectionReason::SsrCorrectionExceedsLimit(size) => (
+            atom_from(env, "ssr_correction_exceeds_limit"),
+            SsrCorrectionSizeFields {
+                orbit_m: size.orbit_m,
+                clock_m: size.clock_m,
+            },
+        )
+            .encode(env),
+        sidereon_core::positioning::RejectionReason::LowElevation => {
+            atom_from(env, "low_elevation")
+        }
+        sidereon_core::positioning::RejectionReason::SbasWithdrawn => {
+            atom_from(env, "sbas_withdrawn")
+        }
+        sidereon_core::positioning::RejectionReason::SbasIonoUncovered => {
+            atom_from(env, "sbas_iono_uncovered")
+        }
+        sidereon_core::positioning::RejectionReason::IonosphereCarrierUnresolved => {
+            atom_from(env, "ionosphere_carrier_unresolved")
+        }
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SsrCorrectionSizeFields {
+    orbit_m: f64,
+    clock_m: f64,
 }
 
 fn static_error_term<'a>(env: Env<'a>, error: &StaticSolveError) -> Term<'a> {
     match error {
         StaticSolveError::EmptyEpochs => atom_from(env, "empty_epochs"),
-        StaticSolveError::InvalidInput { field, kind } => {
-            (atom_from(env, "invalid_input"), *field, kind.to_string()).encode(env)
-        }
+        StaticSolveError::InvalidInput { field, kind } => (
+            atom_from(env, "invalid_input"),
+            *field,
+            spp_input_error_kind_name(*kind),
+        )
+            .encode(env),
         StaticSolveError::EpochInput {
             epoch_index,
             source,
         } => (
             atom_from(env, "epoch_input"),
-            *epoch_index as i64,
+            *epoch_index,
             spp_error_reason_term(env, source),
         )
             .encode(env),
@@ -354,34 +410,32 @@ fn static_error_term<'a>(env: Env<'a>, error: &StaticSolveError) -> Term<'a> {
             satellite,
         } => (
             atom_from(env, "duplicate_observation"),
-            *epoch_index as i64,
+            *epoch_index,
             satellite.to_string(),
         )
             .encode(env),
-        StaticSolveError::IonosphereUnsupported {
-            epoch_index,
-            satellite,
-        } => (
-            atom_from(env, "ionosphere_unsupported"),
-            *epoch_index as i64,
-            satellite.to_string(),
-        )
-            .encode(env),
-        StaticSolveError::TooFewMeasurements { used, required } => (
-            atom_from(env, "too_few_measurements"),
-            *used as i64,
-            *required as i64,
-        )
-            .encode(env),
+        StaticSolveError::TooFewMeasurements { used, required } => {
+            (atom_from(env, "too_few_measurements"), *used, *required).encode(env)
+        }
         StaticSolveError::EphemerisLost {
             epoch_index,
             satellite,
         } => (
             atom_from(env, "ephemeris_lost"),
-            *epoch_index as i64,
+            *epoch_index,
             satellite.to_string(),
         )
             .encode(env),
-        StaticSolveError::Singular(_) => atom_from(env, "singular_geometry"),
+        StaticSolveError::Singular(cause) => (
+            atom_from(env, "singular_geometry"),
+            least_squares_error_term_from_core(env, cause),
+        )
+            .encode(env),
+        StaticSolveError::SelectionUnsettled { passes } => {
+            (atom_from(env, "selection_unsettled"), *passes).encode(env)
+        }
+        StaticSolveError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, *reason)
+        }
     }
 }

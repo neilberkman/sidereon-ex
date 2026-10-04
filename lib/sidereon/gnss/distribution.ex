@@ -129,14 +129,15 @@ defmodule Sidereon.GNSS.Distribution do
   defmodule SourceFailure do
     @moduledoc "Sanitized structured failure from one explicitly allowed source."
     @enforce_keys [:source, :error_type, :message]
-    defstruct [:source, :error_type, :message, :url, :status]
+    defstruct [:source, :error_type, :message, :url, :status, :detail]
 
     @type t :: %__MODULE__{
             source: Source.source_type(),
             error_type: atom(),
             message: String.t(),
             url: String.t() | nil,
-            status: integer() | nil
+            status: integer() | nil,
+            detail: String.t() | nil
           }
   end
 
@@ -1565,13 +1566,15 @@ defmodule Sidereon.GNSS.Distribution do
   defp identity_from_map(_map), do: {:error, :invalid_identity}
 
   defp failure_to_map(failure) do
-    %{
+    map = %{
       "source" => Atom.to_string(failure.source),
       "error_type" => Atom.to_string(failure.error_type),
       "message" => failure.message,
       "url" => failure.url,
       "status" => failure.status
     }
+
+    if is_nil(failure.detail), do: map, else: Map.put(map, "detail", failure.detail)
   end
 
   defp failures_from_maps(maps) when is_list(maps) do
@@ -1584,7 +1587,8 @@ defmodule Sidereon.GNSS.Distribution do
           error_type: error_type,
           message: map["message"],
           url: map["url"],
-          status: map["status"]
+          status: map["status"],
+          detail: map["detail"]
         }
 
         {:cont, {:ok, [failure | failures]}}
@@ -1600,10 +1604,18 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp failures_from_maps(_maps), do: {:error, :invalid_failures}
 
+  # Every recorded failure is one of the classified cases, or
+  # `:unclassified_failure` with the inspected reason as its `detail`.
   defp source_failure(source, reason) do
     {type, message, url, status} = failure_fields(reason)
-    %SourceFailure{source: source, error_type: type, message: message, url: url, status: status}
+    detail = if type == :unclassified_failure, do: inspect(reason)
+    %SourceFailure{source: source, error_type: type, message: message, url: url, status: status, detail: detail}
   end
+
+  # A response status outside 100-599 is no HTTP status (RFC 9110 section 15):
+  # the failure is the transport's, and the value stays in the message.
+  defp failure_fields({:http_status, status, url}) when is_integer(status) and status not in 100..599,
+    do: {:transport, "transport:http_#{status}", url, nil}
 
   defp failure_fields({type, status, url})
        when type in [
@@ -1634,9 +1646,18 @@ defmodule Sidereon.GNSS.Distribution do
 
   defp failure_fields({type, _, url}) when type in [:invalid_content_type], do: {type, Atom.to_string(type), url, nil}
   defp failure_fields({type, url}) when type in [:error_document], do: {type, Atom.to_string(type), url, nil}
-  defp failure_fields({type, _detail}) when is_atom(type), do: {type, Atom.to_string(type), nil, nil}
-  defp failure_fields(type) when is_atom(type), do: {type, Atom.to_string(type), nil, nil}
-  defp failure_fields(reason), do: {:unknown, inspect(reason), nil, nil}
+
+  defp failure_fields({type, _detail})
+       when type in [
+              :download_size_exceeded,
+              :decompression_failed,
+              :product_validation_failed,
+              :cache_read_failed,
+              :cache_write_failed
+            ], do: {type, Atom.to_string(type), nil, nil}
+
+  defp failure_fields(:offline_cache_miss), do: {:offline_cache_miss, "offline_cache_miss", nil, nil}
+  defp failure_fields(reason), do: {:unclassified_failure, inspect(reason), nil, nil}
 
   defp source_atom(value) when value in ["direct", "nasa_cddis", "local_file", "in_memory"],
     do: {:ok, String.to_existing_atom(value)}
@@ -1648,7 +1669,7 @@ defmodule Sidereon.GNSS.Distribution do
   defp compression_atom("unix_compress"), do: {:ok, :unix_compress}
   defp compression_atom(_value), do: {:error, :invalid_compression}
 
-  @failure_atoms ~w(authentication_required authentication_failed authorization_denied product_not_published retired_endpoint redirect_policy_failure malformed_url transport http_client_failure http_status invalid_content_type error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution)a
+  @failure_atoms ~w(authentication_required authentication_failed authorization_denied product_not_published retired_endpoint redirect_policy_failure malformed_url transport http_client_failure http_status invalid_content_type error_document content_length_mismatch download_size_exceeded decompression_failed checksum_mismatch product_validation_failed cache_read_failed cache_write_failed offline_cache_miss unsupported_distribution unclassified_failure)a
 
   defp failure_atom(value) when is_binary(value) do
     atom = String.to_existing_atom(value)

@@ -15,6 +15,7 @@ defmodule Sidereon.GNSS.Ntrip do
   alias Sidereon.GNSS.Ntrip
   alias Sidereon.GNSS.SSR
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_port 2101
   @default_stall_timeout_s 30.0
@@ -106,6 +107,7 @@ defmodule Sidereon.GNSS.Ntrip do
           | {:protocol, term()}
           | {:network, term()}
           | {:stream_stalled, number()}
+          | Sidereon.argument_error()
 
   @doc """
   Build the raw NTRIP request bytes for a host and option set.
@@ -121,7 +123,7 @@ defmodule Sidereon.GNSS.Ntrip do
       NIF.ntrip_request_bytes(config)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ntrip_request_bytes)
   end
 
   @doc """
@@ -158,7 +160,7 @@ defmodule Sidereon.GNSS.Ntrip do
       {:error, reason} -> {:error, {:protocol, reason}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ntrip_parse_sourcetable)
   end
 
   @doc """
@@ -172,7 +174,7 @@ defmodule Sidereon.GNSS.Ntrip do
   def format_gga(%GgaPosition{} = position, utc_seconds_of_day) when is_number(utc_seconds_of_day) do
     NIF.ntrip_format_gga(Map.from_struct(position), utc_seconds_of_day / 1.0)
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ntrip_format_gga)
   end
 
   @doc """
@@ -213,25 +215,39 @@ defmodule Sidereon.GNSS.Ntrip do
     end
   end
 
+  # The transport - the caller's `:transport_fun` or the socket - runs outside
+  # the rescues of `raw_machine/1` and `raw_sourcetable_events/2`, so an
+  # exception it raises reaches the caller as itself.
   defp raw_sourcetable(host, opts, transport_fun) do
     version = opts |> Keyword.get(:version, :rev1) |> raw_version()
 
     with {:ok, config} <- config(host, Keyword.put(opts, :version, version)),
-         {:ok, request} <- NIF.ntrip_request_bytes(config),
-         machine = NIF.ntrip_machine_new(config),
+         {:ok, request, machine} <- raw_machine(config),
          {:ok, chunks} <- raw_exchange(host, request, opts, transport_fun) do
-      events =
-        chunks
-        |> Enum.flat_map(&NIF.ntrip_machine_push(machine, IO.iodata_to_binary(&1)))
-        |> Kernel.++(NIF.ntrip_machine_finish(machine))
+      raw_sourcetable_events(machine, chunks)
+    end
+  end
 
-      case Enum.find(events, &match?({:sourcetable, _}, &1)) do
-        {:sourcetable, table} -> {:ok, to_table(table)}
-        nil -> raw_terminal(events)
-      end
+  defp raw_machine(config) do
+    with {:ok, request} <- NIF.ntrip_request_bytes(config) do
+      {:ok, request, NIF.ntrip_machine_new(config)}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ntrip_request_bytes)
+  end
+
+  defp raw_sourcetable_events(machine, chunks) do
+    events =
+      chunks
+      |> Enum.flat_map(&NIF.ntrip_machine_push(machine, IO.iodata_to_binary(&1)))
+      |> Kernel.++(NIF.ntrip_machine_finish(machine))
+
+    case Enum.find(events, &match?({:sourcetable, _}, &1)) do
+      {:sourcetable, table} -> {:ok, to_table(table)}
+      nil -> raw_terminal(events)
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :ntrip_machine_push)
   end
 
   defp raw_terminal(events) do

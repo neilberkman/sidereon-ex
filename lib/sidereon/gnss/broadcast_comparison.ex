@@ -185,7 +185,7 @@ defmodule Sidereon.GNSS.BroadcastComparison do
     half = round(step_s / 2.0)
     {:ok, broadcast_t0_j2000_s} = Time.epoch_to_j2000_seconds_fractional(from)
     {:ok, broadcast_t1_j2000_s} = Time.epoch_to_j2000_seconds_fractional(to)
-    {precise_start_jd_whole, precise_start_fraction} = Time.epoch_to_split_jd(from)
+    {:ok, {precise_start_jd_whole, precise_start_fraction}} = Time.epoch_to_split_jd(from)
 
     {overall, per_satellite, missing} =
       NIF.broadcast_comparison(

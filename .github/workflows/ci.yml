@@ -9,6 +9,20 @@ on:
   # weaker copy of it. Two lists drift, and the weaker one ends up guarding
   # the irreversible action.
   workflow_call:
+    inputs:
+      candidate:
+        description: "Validate a coordinated prepublication Git-pinned candidate"
+        required: false
+        type: boolean
+        default: false
+
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: "Validate a coordinated prepublication Git-pinned candidate"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   # A workflow file can be valid YAML and still be a broken workflow - a
@@ -36,6 +50,8 @@ jobs:
   packaged-source-build:
     name: Packaged source-build release gate
     uses: ./.github/workflows/packaged-source-build.yml
+    with:
+      candidate: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || inputs.candidate) && !startsWith(github.ref, 'refs/tags/') }}
 
   test:
     name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }} / ${{ matrix.os }}
@@ -63,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:

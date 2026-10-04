@@ -4,6 +4,7 @@ defmodule Sidereon.Astro.Relative do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule State do
     @moduledoc """
@@ -25,7 +26,7 @@ defmodule Sidereon.Astro.Relative do
   def rotation(frame, %State{} = chief) when frame in [:rsw, :rtn, :ric, :lvlh] do
     {:ok, NIF.relative_rotation(Atom.to_string(frame), state_map(chief))}
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :relative_rotation)
   end
 
   def relative_state(%State{} = chief, %State{} = deputy),
@@ -53,7 +54,7 @@ defmodule Sidereon.Astro.Relative do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, fun)
   end
 
   defp to_state(fields) do

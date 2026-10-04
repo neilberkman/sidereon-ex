@@ -8,12 +8,15 @@ use sidereon_core::astro::equinoctial::{
 use sidereon_core::astro::relative;
 use sidereon_core::astro::state::CartesianState;
 use sidereon_core::ephemeris::{self, EphemerisSampleStatus};
-use sidereon_core::terrain::{DtedInterpolation, DtedLookupOptions, DtedTerrain, DtedTile};
+use sidereon_core::terrain::{
+    DtedInterpolation, DtedLookupOptions, DtedTerrain, DtedTile, DtedTileError,
+};
 use sidereon_core::GnssSatelliteId;
 
 use crate::broadcast::BroadcastResource;
 use crate::errors;
 use crate::sp3::Sp3Resource;
+use crate::spp::atom_from;
 
 type Vec3 = (f64, f64, f64);
 type Mat3Term = ((f64, f64, f64), (f64, f64, f64), (f64, f64, f64));
@@ -650,12 +653,23 @@ fn terrain_dted_height<'a>(
         .map_err(|_| Error::Term(Box::new("terrain lock poisoned")))?;
     let mut lookup_options = DtedLookupOptions::default();
     lookup_options.interpolation = interpolation;
-    Ok(
-        match terrain.height_m_with_options(longitude_deg, latitude_deg, lookup_options) {
-            Ok(height) => (atoms::ok(), height).encode(env),
-            Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
+    Ok(dted_height_term(
+        env,
+        terrain.height_m_with_options(longitude_deg, latitude_deg, lookup_options),
+    ))
+}
+
+/// A DTED terrain lookup result: `{:ok, height_m}`, the typed reason for an
+/// unknown elevation, a tile on another horizontal datum or a missing tile, or
+/// `{:error, :invalid_input}` for a query the lookup refuses.
+fn dted_height_term<'a>(env: Env<'a>, result: sidereon_core::Result<f64>) -> Term<'a> {
+    match result {
+        Ok(height) => (atoms::ok(), height).encode(env),
+        Err(error) => match crate::terrain_store::terrain_lookup_error_term(env, &error) {
+            Some(reason) => (atoms::error(), reason).encode(env),
+            None => (atoms::error(), atoms::invalid_input()).encode(env),
         },
-    )
+    }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -679,17 +693,18 @@ fn terrain_dted_height_batch<'a>(
     Ok(terrain
         .height_batch(&points, lookup_options)
         .into_iter()
-        .map(|result| match result {
-            Ok(height) => (atoms::ok(), height).encode(env),
-            Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
-        })
+        .map(|result| dted_height_term(env, result))
         .collect())
 }
 
+/// Load one DTED tile: `{:ok, resource}` or `{:error, reason}` with the typed
+/// [`DtedTileError`] reason.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn terrain_dted_tile_load(path: String) -> NifResult<ResourceArc<DtedTileResource>> {
-    let tile = DtedTile::from_path(path).map_err(|e| Error::Term(Box::new(e.to_string())))?;
-    Ok(ResourceArc::new(DtedTileResource { tile }))
+fn terrain_dted_tile_load<'a>(env: Env<'a>, path: String) -> Term<'a> {
+    match DtedTile::from_path(path) {
+        Ok(tile) => (atoms::ok(), ResourceArc::new(DtedTileResource { tile })).encode(env),
+        Err(error) => (atoms::error(), dted_tile_error_term(env, &error)).encode(env),
+    }
 }
 
 #[rustler::nif]
@@ -700,7 +715,128 @@ fn terrain_dted_tile_elevation<'a>(
     latitude_deg: f64,
 ) -> Term<'a> {
     match handle.tile.get_elevation(longitude_deg, latitude_deg) {
-        Ok(height) => (atoms::ok(), height as i64).encode(env),
-        Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
+        Ok(height) => (atoms::ok(), i64::from(height)).encode(env),
+        Err(error) => (atoms::error(), dted_tile_error_term(env, &error)).encode(env),
+    }
+}
+
+/// The horizontal datum the tile's DSI record states.
+#[rustler::nif]
+fn terrain_dted_tile_horizontal_datum<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<DtedTileResource>,
+) -> Term<'a> {
+    crate::terrain_store::horizontal_datum_term(env, handle.tile.horizontal_datum())
+}
+
+/// A [`DtedTileError`] as `{tag, fields}`: a bare tag for a variant with no
+/// fields, the text for the two message variants, and a tuple of the fields in
+/// declaration order otherwise.
+pub(crate) fn dted_tile_error_term<'a>(env: Env<'a>, error: &DtedTileError) -> Term<'a> {
+    let tag = |name: &str| atom_from(env, name);
+    match error {
+        DtedTileError::Io { path, message } => {
+            (tag("io"), (path.as_str(), message.as_str())).encode(env)
+        }
+        DtedTileError::TooShort { path } => (tag("too_short"), path.as_str()).encode(env),
+        DtedTileError::MissingUhl1 { path } => (tag("missing_uhl1"), path.as_str()).encode(env),
+        DtedTileError::InvalidEncoding(message) => {
+            (tag("invalid_encoding"), message.as_str()).encode(env)
+        }
+        DtedTileError::InvalidField(message) => {
+            (tag("invalid_field"), message.as_str()).encode(env)
+        }
+        DtedTileError::InvalidDimensions {
+            path,
+            lon_count,
+            lat_count,
+        } => (
+            tag("invalid_dimensions"),
+            (path.as_str(), *lon_count, *lat_count),
+        )
+            .encode(env),
+        DtedTileError::Truncated {
+            path,
+            actual,
+            expected,
+        } => (tag("truncated"), (path.as_str(), *actual, *expected)).encode(env),
+        DtedTileError::Outside {
+            longitude,
+            latitude,
+            origin_longitude,
+            origin_latitude,
+        } => (
+            tag("outside"),
+            (*longitude, *latitude, *origin_longitude, *origin_latitude),
+        )
+            .encode(env),
+        DtedTileError::PostingIndexOutOfBounds {
+            longitude_index,
+            latitude_index,
+        } => (
+            tag("posting_index_out_of_bounds"),
+            (*longitude_index, *latitude_index),
+        )
+            .encode(env),
+        DtedTileError::MissingDataSentinel { longitude_index } => {
+            (tag("missing_data_sentinel"), *longitude_index).encode(env)
+        }
+        DtedTileError::Checksum {
+            longitude_index,
+            checksum,
+            sum,
+        } => (tag("checksum"), (*longitude_index, *checksum, *sum)).encode(env),
+        DtedTileError::EmptyCoordinate => tag("empty_coordinate"),
+        DtedTileError::InvalidHemisphere { hemisphere } => {
+            (tag("invalid_hemisphere"), hemisphere.to_string()).encode(env)
+        }
+        DtedTileError::NegativePostingIndex { index } => {
+            (tag("negative_posting_index"), *index).encode(env)
+        }
+        DtedTileError::CoordinateOutOfRange { field, text } => {
+            (tag("coordinate_out_of_range"), (*field, text.as_str())).encode(env)
+        }
+        DtedTileError::WrongHemisphere {
+            field,
+            hemisphere,
+            expected,
+        } => (
+            tag("wrong_hemisphere"),
+            (*field, hemisphere.to_string(), *expected),
+        )
+            .encode(env),
+        DtedTileError::OriginNotWholeDegree { field, text } => {
+            (tag("origin_not_whole_degree"), (*field, text.as_str())).encode(env)
+        }
+        DtedTileError::IntervalCountMismatch {
+            field,
+            interval_tenths_arcsec,
+            count,
+        } => (
+            tag("interval_count_mismatch"),
+            (*field, *interval_tenths_arcsec, *count),
+        )
+            .encode(env),
+        DtedTileError::ProfileLongitudeCountMismatch {
+            longitude_index,
+            declared,
+        } => (
+            tag("profile_longitude_count_mismatch"),
+            (*longitude_index, *declared),
+        )
+            .encode(env),
+        DtedTileError::UnsupportedPartialProfile {
+            longitude_index,
+            first_latitude_index,
+        } => (
+            tag("unsupported_partial_profile"),
+            (*longitude_index, *first_latitude_index),
+        )
+            .encode(env),
+        DtedTileError::NullPosting {
+            longitude_index,
+            latitude_index,
+        } => (tag("null_posting"), (*longitude_index, *latitude_index)).encode(env),
+        other => (tag("other"), other.to_string()).encode(env),
     }
 }

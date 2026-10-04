@@ -14,6 +14,7 @@ defmodule Sidereon.OrbitDetermination do
   alias Sidereon.GNSS.PreciseEphemerisSample
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule OrbitFitCovariance do
     @moduledoc """
@@ -120,6 +121,8 @@ defmodule Sidereon.OrbitDetermination do
           | :singular_geometry
           | :did_not_converge
           | :rtn_frame
+          | {:ut1_outside_coverage, :before_coverage | :after_coverage}
+          | :ut1_validity_mismatch
           | term()
 
   @doc """
@@ -136,7 +139,7 @@ defmodule Sidereon.OrbitDetermination do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :orbit_fit_sp3_precise_orbit)
   end
 
   @doc """
@@ -155,7 +158,7 @@ defmodule Sidereon.OrbitDetermination do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :orbit_fit_sp3_ecef_precise_orbit)
   end
 
   @doc """
@@ -170,7 +173,7 @@ defmodule Sidereon.OrbitDetermination do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :orbit_fit_sp3_ecef_precise_orbits)
   end
 
   @doc """
@@ -185,7 +188,7 @@ defmodule Sidereon.OrbitDetermination do
       other -> {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :orbit_fit_all_sp3_ecef_precise_orbits)
   end
 
   @doc """
@@ -204,7 +207,7 @@ defmodule Sidereon.OrbitDetermination do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :orbit_fit_precise_ephemeris_sample_orbit)
   end
 
   defp options(opts) do

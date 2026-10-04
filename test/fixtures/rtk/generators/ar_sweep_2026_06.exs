@@ -12,7 +12,7 @@ defmodule ARSweep do
   # Elixir reference kernel. See ar-commitment-measurement-2026-06.md.
   #
   # Usage (from the repo root):
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/ar_sweep_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/ar_sweep_2026_06.exs
 
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.RTK

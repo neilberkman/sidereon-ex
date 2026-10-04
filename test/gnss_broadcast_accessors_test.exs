@@ -21,18 +21,22 @@ defmodule Sidereon.GNSS.BroadcastAccessorsTest do
     test "exposes default broadcast records and matches the core golden bits" do
       nav = Broadcast.load!(@nav_path)
 
+      # The store keeps every record of the single-frequency messages whatever
+      # its health: the file's 257 GPS LNAV, 821 Galileo I/NAV (40 of them
+      # unhealthy) and 357 BeiDou records, counted from the fixture text. Its
+      # 781 Galileo F/NAV records are not kept.
       records = Broadcast.records(nav)
-      assert Broadcast.record_count(nav) == 1395
-      assert length(records) == 1395
+      assert Broadcast.record_count(nav) == 1435
+      assert length(records) == 1435
 
       assert Enum.frequencies_by(records, &String.first(&1.satellite_id)) == %{
                "G" => 257,
-               "E" => 781,
+               "E" => 821,
                "C" => 357
              }
 
       assert Enum.all?(records, &match?(%Record{}, &1))
-      assert Enum.all?(records, &(&1.sv_health == 0.0))
+      assert Enum.count(records, &(&1.sv_health != 0.0)) == 40
       refute Enum.any?(records, &(&1.message == :galileo_fnav))
 
       case_data = golden_case("gps_at_toe")

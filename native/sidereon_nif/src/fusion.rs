@@ -36,8 +36,11 @@ use sidereon_core::fusion::{
     VelocityMatchedTrajectory, VelocityMatchingConfig,
 };
 use sidereon_core::inertial::{
-    ConingCorrection, ImuBias, ImuCalibration, ImuErrorModel, ImuGrade, ImuSample, ImuSpec,
-    MechanizationConfig, NavState,
+    simulate_imu_samples as core_simulate_imu_samples,
+    simulate_imu_samples_from_increments as core_simulate_imu_samples_from_increments,
+    true_imu_increment_between as core_true_imu_increment_between, ConingCorrection, ImuBias,
+    ImuCalibration, ImuErrorModel, ImuGrade, ImuRateRandomWalk, ImuSample, ImuSimulationOptions,
+    ImuSimulationOutput, ImuSimulator, ImuSpec, MechanizationConfig, NavState, StrapdownMechanizer,
 };
 use sidereon_core::GnssSatelliteId;
 
@@ -66,8 +69,22 @@ struct FusionFilterResource {
     filter: Mutex<InertialFilter>,
 }
 
+struct StrapdownMechanizerResource {
+    mechanizer: Mutex<StrapdownMechanizer>,
+}
+
+struct ImuSimulatorResource {
+    simulator: Mutex<ImuSimulator>,
+}
+
 #[rustler::resource_impl]
 impl rustler::Resource for FusionFilterResource {}
+
+#[rustler::resource_impl]
+impl rustler::Resource for StrapdownMechanizerResource {}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ImuSimulatorResource {}
 
 struct FusionRtsHistoryBuilderResource {
     builder: Mutex<FusionRtsHistoryBuilder>,
@@ -109,6 +126,274 @@ fn fusion_imu_spec_preset<'a>(env: Env<'a>, grade: String) -> Term<'a> {
     };
 
     (atoms::ok(), encode_imu_spec(ImuSpec::preset(grade))).encode(env)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_strapdown_new<'a>(
+    env: Env<'a>,
+    state: NavStateTerm,
+    model: ImuModelTerm,
+    config: MechanizationTerm,
+) -> Term<'a> {
+    let state = match decode_nav_state(state) {
+        Ok(state) => state,
+        Err(error) => return fusion_error(env, error),
+    };
+    let model = match decode_imu_model(model) {
+        Ok(model) => model,
+        Err(error) => return fusion_error(env, error),
+    };
+    let config = match decode_mechanization(config) {
+        Ok(config) => config,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mechanizer = match StrapdownMechanizer::new(state)
+        .map_err(FusionError::from)
+        .and_then(|mechanizer| mechanizer.with_imu_model(model).map_err(FusionError::from))
+    {
+        Ok(mechanizer) => mechanizer.with_config(config),
+        Err(error) => return fusion_error(env, error),
+    };
+    (
+        atoms::ok(),
+        ResourceArc::new(StrapdownMechanizerResource {
+            mechanizer: Mutex::new(mechanizer),
+        }),
+    )
+        .encode(env)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_strapdown_state<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<StrapdownMechanizerResource>,
+) -> Term<'a> {
+    match handle.mechanizer.lock() {
+        Ok(mechanizer) => (atoms::ok(), encode_nav_state(mechanizer.state())).encode(env),
+        Err(_) => (atoms::error(), atoms::poisoned_resource()).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_strapdown_propagate<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<StrapdownMechanizerResource>,
+    sample: ImuSampleTerm,
+) -> Term<'a> {
+    let sample = match decode_imu_sample(sample) {
+        Ok(sample) => sample,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut mechanizer = match handle.mechanizer.lock() {
+        Ok(mechanizer) => mechanizer,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match mechanizer.propagate(sample) {
+        Ok(state) => (atoms::ok(), encode_nav_state(state)).encode(env),
+        Err(error) => fusion_error(env, FusionError::from(error)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_imu_simulator_new<'a>(
+    env: Env<'a>,
+    spec: ImuSpecTerm,
+    options: ImuSimulationOptionsTerm,
+) -> Term<'a> {
+    let spec = match decode_imu_spec(spec) {
+        Ok(spec) => spec,
+        Err(error) => return fusion_error(env, error),
+    };
+    let options = match decode_imu_simulation_options(options) {
+        Ok(options) => options,
+        Err(error) => return fusion_error(env, error),
+    };
+    match ImuSimulator::new(spec, options).map_err(FusionError::from) {
+        Ok(simulator) => (
+            atoms::ok(),
+            ResourceArc::new(ImuSimulatorResource {
+                simulator: Mutex::new(simulator),
+            }),
+        )
+            .encode(env),
+        Err(error) => fusion_error(env, error),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_imu_simulator_sample_increment<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<ImuSimulatorResource>,
+    truth: CorrectedImuIncrementTerm,
+) -> Term<'a> {
+    let truth = match decode_corrected_increment(truth) {
+        Ok(truth) => truth,
+        Err(error) => return fusion_error(env, error),
+    };
+    let mut simulator = match handle.simulator.lock() {
+        Ok(simulator) => simulator,
+        Err(_) => return (atoms::error(), atoms::poisoned_resource()).encode(env),
+    };
+    match simulator.sample_increment(&truth) {
+        Ok(sample) => (atoms::ok(), encode_imu_sample(sample)).encode(env),
+        Err(error) => fusion_error(env, FusionError::from(error)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_imu_simulator_bias<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<ImuSimulatorResource>,
+) -> Term<'a> {
+    match handle.simulator.lock() {
+        Ok(simulator) => (atoms::ok(), encode_imu_bias(simulator.bias())).encode(env),
+        Err(_) => (atoms::error(), atoms::poisoned_resource()).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_imu_simulator_rate_random_walk<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<ImuSimulatorResource>,
+) -> Term<'a> {
+    match handle.simulator.lock() {
+        Ok(simulator) => (atoms::ok(), encode_imu_bias(simulator.rate_random_walk())).encode(env),
+        Err(_) => (atoms::error(), atoms::poisoned_resource()).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_true_imu_increment_between<'a>(
+    env: Env<'a>,
+    start: NavStateTerm,
+    end: NavStateTerm,
+) -> Term<'a> {
+    let start = match decode_nav_state(start) {
+        Ok(state) => state,
+        Err(error) => return fusion_error(env, error),
+    };
+    let end = match decode_nav_state(end) {
+        Ok(state) => state,
+        Err(error) => return fusion_error(env, error),
+    };
+    match core_true_imu_increment_between(&start, &end) {
+        Ok(increment) => (
+            atoms::ok(),
+            CorrectedImuIncrementTerm {
+                t_j2000_s: increment.t_j2000_s,
+                delta_velocity_mps: increment.delta_velocity_mps.to_vec(),
+                delta_theta_rad: increment.delta_theta_rad.to_vec(),
+                dt_s: increment.dt_s,
+            },
+        )
+            .encode(env),
+        Err(error) => fusion_error(env, FusionError::from(error)),
+    }
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SimulatedImuSequenceTerm {
+    samples: Vec<ImuSampleTerm>,
+    bias_history: Vec<ImuBiasTerm>,
+    rate_random_walk_history: Vec<ImuBiasTerm>,
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_simulate_imu_samples<'a>(
+    env: Env<'a>,
+    trajectory: Vec<NavStateTerm>,
+    spec: ImuSpecTerm,
+    options: ImuSimulationOptionsTerm,
+) -> Term<'a> {
+    let trajectory = match trajectory
+        .into_iter()
+        .map(decode_nav_state)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(trajectory) => trajectory,
+        Err(error) => return fusion_error(env, error),
+    };
+    let spec = match decode_imu_spec(spec) {
+        Ok(spec) => spec,
+        Err(error) => return fusion_error(env, error),
+    };
+    let options = match decode_imu_simulation_options(options) {
+        Ok(options) => options,
+        Err(error) => return fusion_error(env, error),
+    };
+    match core_simulate_imu_samples(&trajectory, spec, options) {
+        Ok(sequence) => (
+            atoms::ok(),
+            SimulatedImuSequenceTerm {
+                samples: sequence
+                    .samples
+                    .into_iter()
+                    .map(encode_imu_sample)
+                    .collect(),
+                bias_history: sequence
+                    .bias_history
+                    .into_iter()
+                    .map(encode_imu_bias)
+                    .collect(),
+                rate_random_walk_history: sequence
+                    .rate_random_walk_history
+                    .into_iter()
+                    .map(encode_imu_bias)
+                    .collect(),
+            },
+        )
+            .encode(env),
+        Err(error) => fusion_error(env, FusionError::from(error)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn fusion_simulate_imu_samples_from_increments<'a>(
+    env: Env<'a>,
+    increments: Vec<CorrectedImuIncrementTerm>,
+    spec: ImuSpecTerm,
+    options: ImuSimulationOptionsTerm,
+) -> Term<'a> {
+    let increments = match increments
+        .into_iter()
+        .map(decode_corrected_increment)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(increments) => increments,
+        Err(error) => return fusion_error(env, error),
+    };
+    let spec = match decode_imu_spec(spec) {
+        Ok(spec) => spec,
+        Err(error) => return fusion_error(env, error),
+    };
+    let options = match decode_imu_simulation_options(options) {
+        Ok(options) => options,
+        Err(error) => return fusion_error(env, error),
+    };
+    match core_simulate_imu_samples_from_increments(&increments, spec, options) {
+        Ok(sequence) => (
+            atoms::ok(),
+            SimulatedImuSequenceTerm {
+                samples: sequence
+                    .samples
+                    .into_iter()
+                    .map(encode_imu_sample)
+                    .collect(),
+                bias_history: sequence
+                    .bias_history
+                    .into_iter()
+                    .map(encode_imu_bias)
+                    .collect(),
+                rate_random_walk_history: sequence
+                    .rate_random_walk_history
+                    .into_iter()
+                    .map(encode_imu_bias)
+                    .collect(),
+            },
+        )
+            .encode(env),
+        Err(error) => fusion_error(env, FusionError::from(error)),
+    }
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -285,6 +570,29 @@ struct ImuSampleTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+struct CorrectedImuIncrementTerm {
+    t_j2000_s: f64,
+    delta_velocity_mps: Vec<f64>,
+    delta_theta_rad: Vec<f64>,
+    dt_s: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct ImuSimulationOptionsTerm {
+    output: String,
+    seed: Option<u64>,
+    initial_bias: ImuBiasTerm,
+    calibration: ImuCalibrationTerm,
+    rate_random_walk: Option<ImuRateRandomWalkTerm>,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct ImuRateRandomWalkTerm {
+    accel_mps2_sqrt_s: f64,
+    gyro_rps_sqrt_s: f64,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
 struct LooseMeasurementTerm {
     t_j2000_s: f64,
     position_ecef_m: Vec3Term,
@@ -415,6 +723,9 @@ struct FusionUpdateOut {
     accepted_rows: u64,
     rejected_rows: u64,
     ekf: EkfReportOut,
+    /// `nil`, or the side of the UT1 table a satellite state was read outside
+    /// under a permissive UT1 policy.
+    ut1_degraded: Option<rustler::Atom>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -1116,6 +1427,60 @@ fn decode_imu_spec(term: ImuSpecTerm) -> Result<ImuSpec, FusionError> {
     Ok(spec)
 }
 
+fn decode_imu_simulation_options(
+    term: ImuSimulationOptionsTerm,
+) -> Result<ImuSimulationOptions, FusionError> {
+    let output = match term.output.as_str() {
+        "rate" => ImuSimulationOutput::Rate,
+        "increment" => ImuSimulationOutput::Increment,
+        _ => {
+            return Err(FusionError::InvalidInput {
+                field: "imu_simulation.output",
+                reason: "must be rate or increment",
+            })
+        }
+    };
+    let initial_bias = ImuBias {
+        accel_mps2: vec3(term.initial_bias.accel_mps2, "initial_bias.accel_mps2")?,
+        gyro_rps: vec3(term.initial_bias.gyro_rps, "initial_bias.gyro_rps")?,
+    };
+    let calibration = ImuCalibration {
+        accel_scale_misalignment: mat3(
+            term.calibration.accel_scale_misalignment,
+            "calibration.accel_scale_misalignment",
+        )?,
+        gyro_scale_misalignment: mat3(
+            term.calibration.gyro_scale_misalignment,
+            "calibration.gyro_scale_misalignment",
+        )?,
+    };
+    let rate_random_walk = term.rate_random_walk.map(|walk| ImuRateRandomWalk {
+        accel_mps2_sqrt_s: walk.accel_mps2_sqrt_s,
+        gyro_rps_sqrt_s: walk.gyro_rps_sqrt_s,
+    });
+    let mut options = ImuSimulationOptions::default();
+    options.output = output;
+    options.seed = term
+        .seed
+        .unwrap_or(sidereon_core::inertial::DEFAULT_IMU_SIM_SEED);
+    options.initial_bias = initial_bias;
+    options.calibration = calibration;
+    options.rate_random_walk = rate_random_walk;
+    options.validate().map_err(FusionError::from)?;
+    Ok(options)
+}
+
+fn decode_corrected_increment(
+    term: CorrectedImuIncrementTerm,
+) -> Result<sidereon_core::inertial::CorrectedImuIncrement, FusionError> {
+    Ok(sidereon_core::inertial::CorrectedImuIncrement {
+        t_j2000_s: term.t_j2000_s,
+        delta_velocity_mps: vec3(term.delta_velocity_mps, "delta_velocity_mps")?,
+        delta_theta_rad: vec3(term.delta_theta_rad, "delta_theta_rad")?,
+        dt_s: term.dt_s,
+    })
+}
+
 fn decode_imu_model(term: ImuModelTerm) -> Result<ImuErrorModel, FusionError> {
     let model = ImuErrorModel {
         bias: ImuBias {
@@ -1241,6 +1606,43 @@ fn decode_imu_sample(term: ImuSampleTerm) -> Result<ImuSample, FusionError> {
             field: "imu_sample.kind",
             reason: "must be rate or increment",
         }),
+    }
+}
+
+fn encode_imu_sample(sample: ImuSample) -> ImuSampleTerm {
+    match sample.kind {
+        sidereon_core::inertial::ImuSampleKind::Rate {
+            specific_force_mps2,
+            angular_rate_rps,
+        } => ImuSampleTerm {
+            t_j2000_s: sample.t_j2000_s,
+            kind: "rate".to_string(),
+            specific_force_mps2: specific_force_mps2.to_vec(),
+            angular_rate_rps: angular_rate_rps.to_vec(),
+            delta_velocity_mps: Vec::new(),
+            delta_theta_rad: Vec::new(),
+            dt_s: 0.0,
+        },
+        sidereon_core::inertial::ImuSampleKind::Increment {
+            delta_velocity_mps,
+            delta_theta_rad,
+            dt_s,
+        } => ImuSampleTerm {
+            t_j2000_s: sample.t_j2000_s,
+            kind: "increment".to_string(),
+            specific_force_mps2: Vec::new(),
+            angular_rate_rps: Vec::new(),
+            delta_velocity_mps: delta_velocity_mps.to_vec(),
+            delta_theta_rad: delta_theta_rad.to_vec(),
+            dt_s,
+        },
+    }
+}
+
+fn encode_imu_bias(bias: ImuBias) -> ImuBiasTerm {
+    ImuBiasTerm {
+        accel_mps2: bias.accel_mps2.to_vec(),
+        gyro_rps: bias.gyro_rps.to_vec(),
     }
 }
 
@@ -1438,6 +1840,21 @@ fn encode_state(state: &InsFilterState) -> FilterStateOut {
     }
 }
 
+fn encode_nav_state(state: &NavState) -> NavStateOut {
+    NavStateOut {
+        t_j2000_s: state.t_j2000_s,
+        position_ecef_m: state.position_ecef_m.to_vec(),
+        velocity_ecef_mps: state.velocity_ecef_mps.to_vec(),
+        attitude_body_to_ecef: state
+            .attitude_body_to_ecef
+            .iter()
+            .map(|row| row.to_vec())
+            .collect(),
+        accel_bias_mps2: state.accel_bias_mps2.to_vec(),
+        gyro_bias_rps: state.gyro_bias_rps.to_vec(),
+    }
+}
+
 fn encode_tight_snapshot(snapshot: &TightFilterSnapshot) -> TightFilterSnapshotOut {
     TightFilterSnapshotOut {
         clock_bias_m: snapshot.clock_bias_m,
@@ -1481,6 +1898,7 @@ fn encode_update(update: FusionUpdate) -> FusionUpdateOut {
         accepted_rows: update.accepted_rows as u64,
         rejected_rows: update.rejected_rows as u64,
         ekf: encode_ekf_report(update.ekf),
+        ut1_degraded: update.ut1_degraded.map(crate::errors::degrade_reason_atom),
     }
 }
 
@@ -1583,6 +2001,9 @@ fn fusion_error<'a>(env: Env<'a>, error: FusionError) -> Term<'a> {
             (atoms::non_positive_definite(), field).encode(env)
         }
         FusionError::NominalState => atoms::nominal_state().encode(env),
+        FusionError::Ut1OutsideCoverage(reason) => {
+            crate::errors::ut1_outside_coverage_term(env, reason)
+        }
     };
     (atoms::error(), reason).encode(env)
 }

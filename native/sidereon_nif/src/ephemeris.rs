@@ -71,25 +71,27 @@ impl SpkSegmentFields {
 }
 
 /// The state of one body relative to another, evaluated from the kernel.
-/// Encoded to Elixir as a map; `velocity_km_s` is `nil` when the resolved
-/// segment path runs through a position-only type-2 segment.
+/// Encoded to Elixir as a map. Every supported segment type yields velocity:
+/// types 3 and 21 store it, and for type 2 it is the time derivative of the
+/// position Chebyshev expansion.
 #[derive(Debug, Clone, rustler::NifMap)]
 struct SpkStateFields {
     target: i32,
     center: i32,
     position_km: (f64, f64, f64),
-    velocity_km_s: Option<(f64, f64, f64)>,
+    velocity_km_s: (f64, f64, f64),
     frame: i32,
 }
 
 impl SpkStateFields {
     fn from_state(state: SpkState) -> Self {
         let [px, py, pz] = state.position_km;
+        let [vx, vy, vz] = state.velocity_km_s;
         Self {
             target: state.target,
             center: state.center,
             position_km: (px, py, pz),
-            velocity_km_s: state.velocity_km_s.map(|[vx, vy, vz]| (vx, vy, vz)),
+            velocity_km_s: (vx, vy, vz),
             frame: state.frame,
         }
     }

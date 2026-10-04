@@ -260,6 +260,8 @@ fn position_error_metrics_from_kinematic_solution<'a>(
         position_covariance_m2: matrix3(position_covariance_m2)?,
         used_sats: Vec::new(),
         innovation_rms_m: 0.0,
+        ssr_bias_exclusions: Vec::new(),
+        unplaced_observations: Vec::new(),
         status: KinematicEpochStatus::Updated,
     };
     Ok(encode_metrics(

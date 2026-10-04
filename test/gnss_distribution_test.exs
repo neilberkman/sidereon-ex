@@ -707,7 +707,8 @@ defmodule Sidereon.GNSS.DistributionTest do
     identity = %{request.identity | format_version: "SP3-c"}
 
     assert {:error,
-            {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 format-version mismatch:" <> _detail}}} =
+            {:product_validation_failed,
+             {:exact_sp3_validation_failed, %{kind: "format_version_mismatch", requested: "SP3-c", actual: "SP3-d"}}}} =
              Data.acquire(%{request | identity: identity}, cache_dir: root)
   end
 
@@ -1302,7 +1303,9 @@ defmodule Sidereon.GNSS.DistributionTest do
     cadence_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(bad_cadence)} end
     cadence_request = request!([Distribution.direct(), later])
 
-    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 cadence mismatch:" <> _detail}}} =
+    assert {:error,
+            {:product_validation_failed,
+             {:exact_sp3_validation_failed, %{kind: "cadence_mismatch", requested_s: "300", header_s: "900"}}}} =
              Data.acquire(cadence_request,
                cache_dir: Path.join(root, "cadence"),
                http_client: cadence_client,
@@ -1313,7 +1316,9 @@ defmodule Sidereon.GNSS.DistributionTest do
     span_client = fn _url, _opts -> {:ok, 200, [], :zlib.gzip(bad_span)} end
     span_request = request!([Distribution.direct(), later])
 
-    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
+    assert {:error,
+            {:product_validation_failed,
+             {:exact_sp3_validation_failed, %{kind: "span_mismatch", parsed: "287", half_open: "288", inclusive: "289"}}}} =
              Data.acquire(span_request,
                cache_dir: Path.join(root, "span"),
                http_client: span_client,
@@ -1341,7 +1346,9 @@ defmodule Sidereon.GNSS.DistributionTest do
         Distribution.in_memory(valid, compression: :none)
       ])
 
-    assert {:error, {:product_validation_failed, {:exact_sp3_validation_failed, "SP3 span mismatch:" <> _detail}}} =
+    assert {:error,
+            {:product_validation_failed,
+             {:exact_sp3_validation_failed, %{kind: "span_mismatch", parsed: "287", half_open: "288", inclusive: "289"}}}} =
              Data.acquire(request, cache_dir: root, http_client: client, retries: 1)
 
     assert_receive {:requested, url}

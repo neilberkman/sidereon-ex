@@ -16,6 +16,7 @@ defmodule Sidereon.GNSS.StaticPositioning do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Solution do
     @moduledoc """
@@ -25,8 +26,15 @@ defmodule Sidereon.GNSS.StaticPositioning do
     `per_epoch_clock` contains the fitted receiver clock for each epoch and
     constellation. `covariance` contains the full stacked state covariance plus
     ECEF and ENU position covariance blocks. Influence and residual fields are
-    index-aligned to the input epochs and used measurements.
+    index-aligned to the input epochs and used measurements. `rejected_sats`
+    lists, per epoch, each satellite left out with its
+    `t:Sidereon.GNSS.Positioning.Solution.rejection_reason/0`; with the
+    ionosphere requested, a satellite with no resolvable carrier (a GLONASS
+    satellite with no channel or a channel outside `-7..6`) is reported as
+    `:ionosphere_carrier_unresolved` and the rest of its epoch is solved.
     """
+
+    alias Sidereon.GNSS.Positioning.Solution
 
     @enforce_keys [
       :position,
@@ -79,12 +87,13 @@ defmodule Sidereon.GNSS.StaticPositioning do
     @type metadata :: %{
             iterations: non_neg_integer(),
             converged: boolean(),
-            status: atom(),
+            status: Solution.status(),
             outer_iterations: non_neg_integer(),
             final_robust_scale_m: float() | nil,
             used_measurements: non_neg_integer(),
             n_parameters: non_neg_integer(),
-            redundancy: integer()
+            redundancy: integer(),
+            ut1_degraded: nil | :before_coverage | :after_coverage
           }
 
     @typedoc "Decoded multi-epoch static positioning solution."
@@ -99,7 +108,7 @@ defmodule Sidereon.GNSS.StaticPositioning do
             geometry_quality: GeometryQuality.t(),
             residuals_m: [map()],
             used_sats: [[String.t()]],
-            rejected_sats: [[{String.t(), atom()}]],
+            rejected_sats: [[{String.t(), Solution.rejection_reason()}]],
             metadata: metadata(),
             residual_rms_m: float()
           }
@@ -115,6 +124,33 @@ defmodule Sidereon.GNSS.StaticPositioning do
           }
           | {[Positioning.observation()], Positioning.epoch()}
           | {[Positioning.observation()], Positioning.epoch(), keyword()}
+
+  @typedoc "A core static-positioning refusal with its owned fields and nested cause."
+  @type static_solve_error ::
+          :empty_epochs
+          | {:invalid_input, String.t(), String.t()}
+          | {:epoch_input, non_neg_integer(), nested_spp_error()}
+          | {:duplicate_observation, non_neg_integer(), String.t()}
+          | {:too_few_measurements, non_neg_integer(), non_neg_integer()}
+          | {:ephemeris_lost, non_neg_integer(), String.t()}
+          | {:singular_geometry, least_squares_error()}
+          | {:selection_unsettled, non_neg_integer()}
+          | {:ut1_outside_coverage, :before_coverage | :after_coverage}
+
+  @typedoc "A nested single-point positioning failure retained by static solving."
+  @type nested_spp_error ::
+          {:invalid_input, String.t(), String.t()}
+          | {:too_few_satellites, non_neg_integer(), non_neg_integer()}
+          | {:singular_geometry, least_squares_error()}
+          | {:duplicate_observation, String.t()}
+          | {:ephemeris_lost, String.t()}
+          | {:selection_unsettled, non_neg_integer()}
+          | {:ut1_outside_coverage, :before_coverage | :after_coverage}
+
+  @typedoc "A nested least-squares failure."
+  @type least_squares_error ::
+          :singular_jacobian
+          | {:invalid_input, String.t(), String.t()}
 
   @default_initial_position {0.0, 0.0, 0.0}
   @default_alpha {0.0, 0.0, 0.0, 0.0}
@@ -140,16 +176,26 @@ defmodule Sidereon.GNSS.StaticPositioning do
       `{0.0, 0.0, 0.0}`.
     * `:with_geodetic` - include geodetic output, default `true`.
     * `:ionosphere`, `:troposphere`, `:klobuchar_alpha`, `:klobuchar_beta`,
-      `:pressure_hpa`, `:temperature_k`, `:relative_humidity`, and
-      `:glonass_channels` match `Sidereon.GNSS.Positioning.solve/4`.
+      `:pressure_hpa`, `:temperature_k`, `:relative_humidity`,
+      `:glonass_channels`, `:pseudorange_code`, `:qzss_clock` (`:gps` or
+      `:separate`) and `:troposphere_model` (`:rtklib` or
+      `:saastamoinen_niell`) match
+      `Sidereon.GNSS.Positioning.solve/4`.
     * `:huber` plus `:huber_k`, `:huber_sigma`, and `:huber_max_iter` enables
       the core static Huber reweighting.
 
   Returns `{:ok, %Solution{}}` or `{:error, reason}` with typed static solve
-  errors from the core.
+  errors from the core, among them
+  `{:ut1_outside_coverage, :before_coverage | :after_coverage}` when the
+  ephemeris source refuses a satellite state that reads UT1 outside the UT1
+  table, and `{:selection_unsettled, passes}` when the satellite selection,
+  re-made at every iterate as RTKLIB `estpos` makes it, did not settle within
+  `passes` passes. `metadata.ut1_degraded` names the side of the table a state
+  was read outside under a permissive UT1 policy, or is `nil`. A converged
+  solve reports `metadata.status` `:selection_settled`.
   """
   @spec solve(SP3.t() | Broadcast.t(), [epoch_request()], keyword()) ::
-          {:ok, Solution.t()} | {:error, term()}
+          {:ok, Solution.t()} | {:error, static_solve_error()}
   def solve(source, epochs, opts \\ [])
 
   def solve(%SP3{handle: handle}, epochs, opts) when is_list(epochs) do
@@ -163,7 +209,8 @@ defmodule Sidereon.GNSS.StaticPositioning do
   defp run_solve(source, handle, epochs, opts) do
     with {:ok, normalized_epochs} <- build_epochs(epochs, opts),
          {:ok, initial_position} <- initial_position(Keyword.get(opts, :initial_position, @default_initial_position)),
-         {:ok, robust} <- robust_arg(opts) do
+         {:ok, robust} <- robust_arg(opts),
+         {:ok, qzss_clock, troposphere_model} <- Positioning.model_options(opts) do
       nif =
         case source do
           :sp3 -> :static_positioning_solve_sp3
@@ -171,11 +218,19 @@ defmodule Sidereon.GNSS.StaticPositioning do
         end
 
       NIF
-      |> apply(nif, [handle, normalized_epochs, initial_position, Keyword.get(opts, :with_geodetic, true), robust])
+      |> apply(nif, [
+        handle,
+        normalized_epochs,
+        initial_position,
+        Keyword.get(opts, :with_geodetic, true),
+        robust,
+        qzss_clock,
+        troposphere_model
+      ])
       |> decode()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :static_positioning_solve)
   end
 
   defp build_epochs(epochs, base_opts) do
@@ -203,7 +258,10 @@ defmodule Sidereon.GNSS.StaticPositioning do
     weights = Map.get(request, :weights, Keyword.get(opts, :weights))
 
     with {:ok, glonass_channels} <- validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
+         {:ok, pseudorange_code} <- Positioning.pseudorange_code_option(opts),
          {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, second_of_day} <- Time.second_of_day(epoch),
+         {:ok, day_of_year} <- Time.day_of_year(epoch),
          {:ok, weights} <- normalize_weights(weights),
          {:ok, alpha} <- tuple4(Keyword.get(opts, :klobuchar_alpha, @default_alpha), :klobuchar_alpha),
          {:ok, beta} <- tuple4(Keyword.get(opts, :klobuchar_beta, @default_beta), :klobuchar_beta),
@@ -219,8 +277,8 @@ defmodule Sidereon.GNSS.StaticPositioning do
          observations: Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end),
          weights: weights,
          t_rx_j2000_s: t_rx_j2000_s,
-         t_rx_second_of_day_s: Time.second_of_day(epoch),
-         day_of_year: Time.day_of_year(epoch),
+         t_rx_second_of_day_s: second_of_day,
+         day_of_year: day_of_year,
          clock_initial_m: clock_initial_m,
          apply_iono: Keyword.get(opts, :ionosphere, false),
          apply_tropo: Keyword.get(opts, :troposphere, false),
@@ -229,7 +287,8 @@ defmodule Sidereon.GNSS.StaticPositioning do
          pressure_hpa: pressure_hpa,
          temperature_k: temperature_k,
          relative_humidity: relative_humidity,
-         glonass_channels: glonass_channels
+         glonass_channels: glonass_channels,
+         pseudorange_code: pseudorange_code
        }}
     end
   end
@@ -385,7 +444,7 @@ defmodule Sidereon.GNSS.StaticPositioning do
 
   defp metadata_map(
          {iterations, converged, status, outer_iterations, final_robust_scale_m, used_measurements, n_parameters,
-          redundancy}
+          redundancy, ut1_degraded}
        ) do
     %{
       iterations: iterations,
@@ -395,7 +454,8 @@ defmodule Sidereon.GNSS.StaticPositioning do
       final_robust_scale_m: final_robust_scale_m,
       used_measurements: used_measurements,
       n_parameters: n_parameters,
-      redundancy: redundancy
+      redundancy: redundancy,
+      ut1_degraded: ut1_degraded
     }
   end
 

@@ -28,15 +28,18 @@ defmodule Sidereon.TestSupport.ExactSp3Fixture do
     gps_days = Date.diff(content_date, @gps_epoch)
     gps_week = div(gps_days, 7)
     seconds_of_week = rem(gps_days, 7) * @seconds_per_day + hour * 3_600 + minute * 60
-    mjd = Date.diff(content_date, @mjd_epoch) + (hour * 3_600 + minute * 60) / @seconds_per_day
+    mjd_day = Date.diff(content_date, @mjd_epoch)
+    second_of_day = hour * 3_600 + minute * 60
+    fraction_units = div(second_of_day * 10_000_000_000_000 + 43_200, @seconds_per_day)
+    mjd_fraction_str = "0." <> String.pad_leading(Integer.to_string(fraction_units), 13, "0")
 
     header = [
       "#dP#{datetime_fields(start)} #{pad(declared_count, 7)} " <>
         "#{String.pad_trailing("ORBIT", 5)}#{String.pad_leading("IGS20", 6)}" <>
         "#{String.pad_leading("FIT", 4)} #{agency}",
       "## #{pad(gps_week, 4)} #{fixed(seconds_of_week, 8) |> String.pad_leading(15)} " <>
-        "#{to_string(header_cadence) |> String.pad_leading(14)} #{pad(trunc(mjd), 5)} " <>
-        "#{fixed(mjd - trunc(mjd), 13)}",
+        "#{to_string(header_cadence) |> String.pad_leading(14)} #{pad(mjd_day, 5)} " <>
+        mjd_fraction_str,
       "+    1   G01" <> String.duplicate("  0", 16)
     ]
 

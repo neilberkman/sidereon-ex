@@ -39,11 +39,13 @@ mod geoid;
 mod geometry;
 mod geometry_quality;
 mod ils;
+mod inertial;
 mod iod;
 mod iono;
 mod lambert;
 mod lnav;
 mod look_angle;
+mod ndm_errors;
 mod nmea;
 mod normality;
 mod ntrip;
@@ -80,6 +82,7 @@ mod sp3;
 mod space_weather;
 mod spp;
 mod ssr;
+mod ssr_bias_exclusion;
 mod staleness;
 mod static_positioning;
 mod tdm;
@@ -199,6 +202,7 @@ fn propagate_dp54_with_drag_and_space_weather<'a>(
     rel_tol: f64,
     drag: Term<'a>,
     table: rustler::ResourceArc<space_weather::SpaceWeatherTableResource>,
+    policy: Option<space_weather::SpaceWeatherPolicyTerm>,
 ) -> NifResult<Term<'a>> {
     propagation::propagate_dp54_impl_with_drag_and_space_weather(
         env,
@@ -211,6 +215,7 @@ fn propagate_dp54_with_drag_and_space_weather<'a>(
         rel_tol,
         drag::decode_drag_parameters(drag)?,
         table,
+        policy,
     )
 }
 
@@ -253,7 +258,7 @@ fn constellation_visible<'a>(
     datetime_tuple: Term<'a>,
     min_elevation_deg: f64,
     opsmode: Term<'a>,
-) -> NifResult<Vec<(String, f64, f64, f64, Vec3)>> {
+) -> NifResult<Vec<passes::VisibleTerm>> {
     passes::constellation_visible_impl(
         env,
         tle_maps,
@@ -299,6 +304,67 @@ fn constellation_look_angle_arcs<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn constellation_look_angle_arcs_detailed<'a>(
+    env: Env<'a>,
+    tle_maps: Vec<Term<'a>>,
+    station_latitude_deg: f64,
+    station_longitude_deg: f64,
+    station_altitude_m: f64,
+    datetimes: Vec<Term<'a>>,
+    opsmode: Term<'a>,
+) -> NifResult<Vec<(usize, Term<'a>)>> {
+    passes::constellation_look_angle_arcs_detailed_impl(
+        env,
+        tle_maps,
+        station_latitude_deg,
+        station_longitude_deg,
+        station_altitude_m,
+        datetimes,
+        opsmode,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::type_complexity)]
+fn constellation_ground_tracks_detailed<'a>(
+    env: Env<'a>,
+    tle_maps: Vec<Term<'a>>,
+    datetimes: Vec<Term<'a>>,
+    opsmode: Term<'a>,
+) -> NifResult<Vec<(usize, Term<'a>)>> {
+    passes::constellation_ground_tracks_detailed_impl(env, tle_maps, datetimes, opsmode)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn constellation_passes_detailed<'a>(
+    env: Env<'a>,
+    tle_maps: Vec<Term<'a>>,
+    station_latitude_deg: f64,
+    station_longitude_deg: f64,
+    station_altitude_m: f64,
+    start_datetime: Term<'a>,
+    end_datetime: Term<'a>,
+    min_elevation_deg: f64,
+    step_seconds: i64,
+    opsmode: Term<'a>,
+) -> NifResult<Vec<(usize, Term<'a>)>> {
+    passes::constellation_passes_detailed_impl(
+        env,
+        tle_maps,
+        station_latitude_deg,
+        station_longitude_deg,
+        station_altitude_m,
+        start_datetime,
+        end_datetime,
+        min_elevation_deg,
+        step_seconds,
+        opsmode,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn constellation_ground_tracks<'a>(
     env: Env<'a>,
     tle_maps: Vec<Term<'a>>,
@@ -321,7 +387,7 @@ fn constellation_passes<'a>(
     min_elevation_deg: f64,
     step_seconds: i64,
     opsmode: Term<'a>,
-) -> NifResult<Vec<(u32, String, i64, i64, f64, i64)>> {
+) -> NifResult<Vec<passes::FleetPassTerm>> {
     passes::constellation_passes_impl(
         env,
         tle_maps,
@@ -732,26 +798,28 @@ fn doppler_shift(
 }
 
 #[rustler::nif]
-fn iod_gibbs(r1: Vec3, r2: Vec3, r3: Vec3) -> NifResult<(Vec3, f64, f64, f64)> {
-    iod::gibbs_impl(r1, r2, r3)
+fn iod_gibbs<'a>(env: Env<'a>, r1: Vec3, r2: Vec3, r3: Vec3) -> Term<'a> {
+    iod::encode_result(env, iod::gibbs_impl(r1, r2, r3))
 }
 
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
-fn iod_hgibbs(
+fn iod_hgibbs<'a>(
+    env: Env<'a>,
     r1: Vec3,
     r2: Vec3,
     r3: Vec3,
     jd1: f64,
     jd2: f64,
     jd3: f64,
-) -> NifResult<(Vec3, f64, f64, f64)> {
-    iod::hgibbs_impl(r1, r2, r3, jd1, jd2, jd3)
+) -> Term<'a> {
+    iod::encode_result(env, iod::hgibbs_impl(r1, r2, r3, jd1, jd2, jd3))
 }
 
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
-fn iod_gauss(
+fn iod_gauss<'a>(
+    env: Env<'a>,
     decl1: f64,
     decl2: f64,
     decl3: f64,
@@ -767,10 +835,13 @@ fn iod_gauss(
     rseci1: Vec3,
     rseci2: Vec3,
     rseci3: Vec3,
-) -> NifResult<(Vec3, Vec3)> {
-    gauss::gauss_impl(
-        decl1, decl2, decl3, rtasc1, rtasc2, rtasc3, jd1, jdf1, jd2, jdf2, jd3, jdf3, rseci1,
-        rseci2, rseci3,
+) -> Term<'a> {
+    iod::encode_result(
+        env,
+        gauss::gauss_impl(
+            decl1, decl2, decl3, rtasc1, rtasc2, rtasc3, jd1, jdf1, jd2, jdf2, jd3, jdf3, rseci1,
+            rseci2, rseci3,
+        ),
     )
 }
 
@@ -954,8 +1025,64 @@ fn solid_earth_tide(
     fhr: f64,
     sun: (f64, f64, f64),
     moon: (f64, f64, f64),
+    constants: String,
 ) -> NifResult<(f64, f64, f64)> {
-    tides::solid_earth_tide_impl(sta_x, sta_y, sta_z, year, month, day, fhr, sun, moon)
+    tides::solid_earth_tide_impl(
+        sta_x, sta_y, sta_z, year, month, day, fhr, sun, moon, &constants,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn station_displacement<'a>(env: Env<'a>, request: tides::StationDisplacementRequest) -> Term<'a> {
+    tides::station_displacement_impl(env, request)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::type_complexity)]
+fn station_displacement_batch<'a>(
+    env: Env<'a>,
+    requests: Vec<tides::StationDisplacementRequest>,
+) -> Term<'a> {
+    tides::station_displacement_batch_impl(env, requests)
+}
+
+#[rustler::nif]
+fn inertial_normal_gravity_mps2(lat_rad: f64, height_m: f64) -> NifResult<f64> {
+    inertial::normal_gravity(lat_rad, height_m)
+}
+
+#[rustler::nif]
+fn inertial_gravity_ecef_mps2(position_ecef_m: Vec3) -> NifResult<Vec3> {
+    inertial::gravity_ecef(position_ecef_m)
+}
+
+#[rustler::nif]
+fn inertial_quaternion_from_dcm(rows: Vec<Vec<f64>>) -> NifResult<(f64, f64, f64, f64)> {
+    inertial::quaternion_from_dcm(rows)
+}
+
+#[rustler::nif]
+fn inertial_dcm_from_quaternion(quaternion: (f64, f64, f64, f64)) -> NifResult<Vec<Vec<f64>>> {
+    inertial::dcm_from_quaternion(quaternion)
+}
+
+#[rustler::nif]
+fn inertial_yaw_pitch_roll_rad(rows: Vec<Vec<f64>>) -> NifResult<(f64, f64, f64)> {
+    inertial::yaw_pitch_roll(rows)
+}
+
+#[rustler::nif]
+fn inertial_gauss_markov_bias_decay(dt_s: f64, tau_s: Option<f64>) -> NifResult<f64> {
+    inertial::bias_decay(dt_s, tau_s)
+}
+
+#[rustler::nif]
+fn inertial_gauss_markov_bias_variance_increment(
+    instability: f64,
+    dt_s: f64,
+    tau_s: Option<f64>,
+) -> NifResult<f64> {
+    inertial::bias_variance_increment(instability, dt_s, tau_s)
 }
 
 #[rustler::nif]

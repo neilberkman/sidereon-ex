@@ -34,9 +34,14 @@ defmodule Sidereon.GNSS.SP3 do
   alias Sidereon.GNSS.ExactCache
   alias Sidereon.GNSS.PreciseEphemeris.Interpolant
   alias Sidereon.GNSS.PreciseEphemeris.StateBatch
+  alias Sidereon.GNSS.PreciseEphemerisAccuracySample
   alias Sidereon.GNSS.PreciseEphemerisSample
+  alias Sidereon.GNSS.SP3.RawRecordAccuracy
+  alias Sidereon.GNSS.SP3.RecordAccuracy
   alias Sidereon.GNSS.Time
+  alias Sidereon.GNSS.Time.ExactEpochQuery
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @enforce_keys [:handle, :time_scale, :coverage_start, :coverage_end]
   defstruct [:handle, :time_scale, :coverage_start, :coverage_end]
@@ -46,6 +51,14 @@ defmodule Sidereon.GNSS.SP3 do
           time_scale: String.t(),
           coverage_start: float(),
           coverage_end: float()
+        }
+
+  @typedoc "Typed refusal for a numeric SP3 interpolation-policy input."
+  @type interpolation_error :: %{
+          kind: String.t(),
+          field: String.t(),
+          value: String.t(),
+          reason: String.t()
         }
 
   @typedoc "Exact declared-span representation found by the core validator."
@@ -61,6 +74,7 @@ defmodule Sidereon.GNSS.SP3 do
     """
 
     alias Sidereon.NIF
+    alias Sidereon.NifCall
 
     @derive {Inspect, except: [:handle]}
     @enforce_keys [:handle, :date, :span, :sample]
@@ -103,7 +117,7 @@ defmodule Sidereon.GNSS.SP3 do
         {:ok, from_handle(handle)}
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_exact_request_new)
     end
 
     def new(_date, _span, _sample, _opts),
@@ -116,7 +130,7 @@ defmodule Sidereon.GNSS.SP3 do
         {:ok, from_handle(handle)}
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_exact_request_from_identity)
       _error -> {:error, {:exact_sp3_validation_failed, "invalid exact SP3 identity"}}
     end
 
@@ -129,7 +143,7 @@ defmodule Sidereon.GNSS.SP3 do
         {:ok, from_handle(updated)}
       end
     rescue
-      e in ErlangError -> {:error, e.original}
+      e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_exact_request_require_agency)
     end
 
     def require_agency(_request, _agency),
@@ -214,6 +228,9 @@ defmodule Sidereon.GNSS.SP3 do
   Options:
     * `:gap_threshold_factor` - multiple of nominal node spacing above which
       consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
+
+  A numeric factor at or below `1.0` returns `{:error, interpolation_error()}`
+  with the supplied value and core refusal reason.
   """
   @spec load(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def load(path, opts \\ []) when is_binary(path) and is_list(opts) do
@@ -239,6 +256,10 @@ defmodule Sidereon.GNSS.SP3 do
   Options:
     * `:gap_threshold_factor` - multiple of nominal node spacing above which
       consecutive records mark a coverage gap (default `1.5`, must be > 1.0).
+
+  A numeric factor at or below `1.0` returns
+  `{:error, interpolation_error()}` with the supplied factor and core refusal
+  reason. SP3 grammar failures keep their existing error term.
   """
   @spec parse(binary(), keyword()) :: {:ok, t()} | {:error, term()}
   def parse(bytes, opts \\ []) when is_binary(bytes) and is_list(opts), do: parse_bytes(bytes, opts)
@@ -257,7 +278,7 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_parse)
   end
 
   @doc """
@@ -291,7 +312,7 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_parse_exact)
   end
 
   def parse_exact(_bytes, _request, _opts),
@@ -307,7 +328,7 @@ defmodule Sidereon.GNSS.SP3 do
   def validate_exact(%__MODULE__{handle: product}, %ExactRequest{handle: request}) do
     NIF.sp3_validate_exact(product, request)
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_validate_exact)
   end
 
   def validate_exact(_product, _request),
@@ -357,7 +378,7 @@ defmodule Sidereon.GNSS.SP3 do
     NIF.sp3_satellite_ids(handle)
   rescue
     e in ErlangError ->
-      reraise ArgumentError, [message: "could not read SP3 satellite ids: #{inspect(e.original)}"], __STACKTRACE__
+      reraise ArgumentError, [message: "could not read SP3 satellite ids: #{NifCall.describe(e)}"], __STACKTRACE__
   end
 
   @doc """
@@ -378,7 +399,7 @@ defmodule Sidereon.GNSS.SP3 do
     NIF.sp3_epoch_count(handle)
   rescue
     e in ErlangError ->
-      reraise ArgumentError, [message: "could not read SP3 epoch count: #{inspect(e.original)}"], __STACKTRACE__
+      reraise ArgumentError, [message: "could not read SP3 epoch count: #{NifCall.describe(e)}"], __STACKTRACE__
   end
 
   @doc """
@@ -393,7 +414,7 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not read declared SP3 epoch count: #{inspect(e.original)}"],
+              [message: "could not read declared SP3 epoch count: #{NifCall.describe(e)}"],
               __STACKTRACE__
   end
 
@@ -408,7 +429,7 @@ defmodule Sidereon.GNSS.SP3 do
     NIF.sp3_declared_start_j2000_seconds(handle)
   rescue
     e in ErlangError ->
-      reraise ArgumentError, [message: "could not read declared SP3 start: #{inspect(e.original)}"], __STACKTRACE__
+      reraise ArgumentError, [message: "could not read declared SP3 start: #{NifCall.describe(e)}"], __STACKTRACE__
   end
 
   @doc "Alias for `declared_start_j2000_seconds/1`."
@@ -427,7 +448,7 @@ defmodule Sidereon.GNSS.SP3 do
     NIF.sp3_epochs_j2000_seconds(handle)
   rescue
     e in ErlangError ->
-      reraise ArgumentError, [message: "could not read SP3 epochs: #{inspect(e.original)}"], __STACKTRACE__
+      reraise ArgumentError, [message: "could not read SP3 epochs: #{NifCall.describe(e)}"], __STACKTRACE__
   end
 
   @doc """
@@ -439,7 +460,7 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not read SP3 gap threshold factor: #{inspect(e.original)}"],
+              [message: "could not read SP3 gap threshold factor: #{NifCall.describe(e)}"],
               __STACKTRACE__
   end
 
@@ -457,8 +478,27 @@ defmodule Sidereon.GNSS.SP3 do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_stencil_extent)
   end
+
+  @doc """
+  Epochs of the position nodes that some interpolation of `satellite` in the
+  inclusive J2000-seconds window selects, ascending; `[]` when no query in the
+  window is served for it.
+
+  The core applies the position interpolator's own serving and node-selection
+  rule to the satellite's node series, under the product's interpolation
+  options. Merge continuity verdicts read the merged product's nodes this way.
+  """
+  @spec selected_nodes(t(), String.t(), number(), number()) :: {:ok, [float()]} | {:error, term()}
+  def selected_nodes(%__MODULE__{handle: handle}, satellite, from_j2000_s, through_j2000_s)
+      when is_binary(satellite) and is_number(from_j2000_s) and is_number(through_j2000_s) do
+    NIF.sp3_selected_nodes(handle, satellite, from_j2000_s / 1.0, through_j2000_s / 1.0)
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_selected_nodes)
+  end
+
+  def selected_nodes(_sp3, _satellite, _from_j2000_s, _through_j2000_s), do: {:error, :invalid_selected_nodes_query}
 
   @doc """
   Attest that this product is physically continuous, or report each violation.
@@ -491,6 +531,16 @@ defmodule Sidereon.GNSS.SP3 do
   "not checked". This reports rather than refuses: whether a product with
   defects is acceptable is the caller's decision.
 
+  Each defect has `:kind` (`:duplicate_epoch`, `:single_sample_series`,
+  `:unusable_sample`, `:speed_bound` or `:hold_out_residual`), `:satellite`, the summary
+  `:from_j2000_s`, `:to_j2000_s`, `:magnitude` and `:bound` (`nil` where the
+  kind has none), and every field of its kind under the core's name:
+  `:epoch_j2000_s` and `:occurrences`; `:interval_s`, `:displacement_m`,
+  `:implied_speed_m_s` and `:bound_m_s`; or `:epoch_j2000_s`,
+  `:preceding_j2000_s`, `:residual_m`, `:tolerance_m` and `:node_epochs_j2000_s`.
+  An `:unusable_sample` also includes `:sample_index`, `:epoch_j2000_s` (when
+  placed), and a `:reason` of `:epoch_not_placed` or `:non_finite_position`.
+
   ## Example
 
       {:ok, report} = Sidereon.GNSS.SP3.check_continuity(sp3)
@@ -505,7 +555,7 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_check_continuity)
   end
 
   @doc """
@@ -535,7 +585,7 @@ defmodule Sidereon.GNSS.SP3 do
       {:ok, decode_window_continuity_verdict(verdict)}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_continuity_verdict)
   end
 
   def continuity_verdict(_sp3, _from_j2000_s, _through_j2000_s, _opts), do: {:error, :invalid_continuity_window}
@@ -552,30 +602,76 @@ defmodule Sidereon.GNSS.SP3 do
     }
   end
 
-  defp decode_continuity_defect({kind, satellite, {from_s, to_s}, {magnitude, bound}}) do
-    %{
-      kind: continuity_defect_kind(kind),
-      satellite: satellite,
-      from_j2000_s: from_s,
-      to_j2000_s: to_s,
-      magnitude: magnitude,
-      bound: bound
-    }
+  # The summary fields every kind fills where it has them, then every field of
+  # the defect's kind under the core's name; the NIF leaves the fields of other
+  # kinds nil, and none of a kind's own fields is ever nil.
+  defp decode_continuity_defect({kind, satellite, {from_s, to_s}, {magnitude, bound}, details}) do
+    kind_fields = for {field, value} <- details, value != nil, into: %{}, do: {field, value}
+
+    kind_fields =
+      if kind == "unusable_sample" and Map.has_key?(kind_fields, :reason),
+        do: Map.update!(kind_fields, :reason, &unusable_sample_reason/1),
+        else: kind_fields
+
+    Map.merge(
+      %{
+        kind: continuity_defect_kind(kind),
+        satellite: satellite,
+        from_j2000_s: from_s,
+        to_j2000_s: to_s,
+        magnitude: magnitude,
+        bound: bound
+      },
+      kind_fields
+    )
   end
 
   defp continuity_defect_kind("duplicate_epoch"), do: :duplicate_epoch
   defp continuity_defect_kind("single_sample_series"), do: :single_sample_series
+  defp continuity_defect_kind("unusable_sample"), do: :unusable_sample
   defp continuity_defect_kind("speed_bound"), do: :speed_bound
   defp continuity_defect_kind("hold_out_residual"), do: :hold_out_residual
 
-  defp decode_merge_continuity_violation({defect, from_sources, to_sources, crosses_contributors}) do
+  defp unusable_sample_reason("epoch_not_placed"), do: :epoch_not_placed
+  defp unusable_sample_reason("non_finite_position"), do: :non_finite_position
+
+  defp decode_merge_continuity_violation({defect, from_sources, to_sources, crosses_contributors, cells, sources}) do
     %{
       defect: decode_continuity_defect(defect),
       from_sources: from_sources,
       to_sources: to_sources,
+      cells: Enum.map(cells, &decode_merge_continuity_cell/1),
+      sources: sources,
       crosses_contributors: crosses_contributors
     }
   end
+
+  defp decode_merge_continuity_cell(%{epoch_j2000_s: epoch_j2000_s, role: role, selection: selection}) do
+    %{
+      epoch_j2000_s: epoch_j2000_s,
+      role: merge_continuity_cell_role(role),
+      selection: decode_cell_selection(selection)
+    }
+  end
+
+  defp merge_continuity_cell_role("held_out"), do: :held_out
+  defp merge_continuity_cell_role("interpolation_node"), do: :interpolation_node
+  defp merge_continuity_cell_role("pair_end"), do: :pair_end
+  defp merge_continuity_cell_role("repeated_epoch"), do: :repeated_epoch
+
+  defp decode_cell_selection(nil), do: nil
+
+  defp decode_cell_selection(%{kind: "single_source", source: source}), do: %{kind: :single_source, source: source}
+
+  defp decode_cell_selection(%{kind: "precedence", source: source, members: members}),
+    do: %{kind: :precedence, source: source, members: members}
+
+  defp decode_cell_selection(%{kind: "combined", rule: rule, members: members}),
+    do: %{kind: :combined, rule: merge_rule(rule), members: members}
+
+  defp merge_rule("mean"), do: :mean
+  defp merge_rule("median"), do: :median
+  defp merge_rule("precedence"), do: :precedence
 
   defp decode_merge_continuity_report(nil), do: nil
 
@@ -620,8 +716,15 @@ defmodule Sidereon.GNSS.SP3 do
         {:bad_orbit_class, other} = orbit_class
         {:error, {:bad_orbit_class, other}}
 
-      not (is_nil(tolerance) or is_number(tolerance)) ->
-        {:error, {:bad_residual_tolerance_m, tolerance}}
+      # A residual tolerance is a distance.
+      not (is_nil(tolerance) or (is_number(tolerance) and tolerance >= 0)) ->
+        {:error,
+         {:continuity_options,
+          %{
+            field: :residual_tolerance_m,
+            value: if(is_number(tolerance), do: json_safe_number(tolerance), else: inspect(tolerance)),
+            reason: if(is_number(tolerance) and tolerance < 0, do: :negative, else: :not_numeric_or_finite)
+          }}}
 
       not (is_nil(gap_threshold_factor) or is_number(gap_threshold_factor)) ->
         {:error, {:bad_gap_threshold_factor, gap_threshold_factor}}
@@ -670,7 +773,7 @@ defmodule Sidereon.GNSS.SP3 do
     }
   rescue
     e in ErlangError ->
-      reraise ArgumentError, [message: "could not read SP3 prediction status: #{inspect(e.original)}"], __STACKTRACE__
+      reraise ArgumentError, [message: "could not read SP3 prediction status: #{NifCall.describe(e)}"], __STACKTRACE__
   end
 
   @doc """
@@ -695,7 +798,7 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_state)
   end
 
   def state(%__MODULE__{}, sat_id, epoch_index) do
@@ -729,7 +832,7 @@ defmodule Sidereon.GNSS.SP3 do
         {:error, other}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_states_at)
   end
 
   def states_at(%__MODULE__{}, epoch_index), do: {:error, {:bad_epoch_index, epoch_index}}
@@ -759,8 +862,54 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not extract precise-ephemeris samples: #{inspect(e.original)}"],
+              [message: "could not extract precise-ephemeris samples: #{NifCall.describe(e)}"],
               __STACKTRACE__
+  end
+
+  @doc "Return raw signed P/V accuracy codes and their source bases for one record."
+  @spec record_accuracy_codes(t(), String.t(), non_neg_integer()) ::
+          {:ok, RawRecordAccuracy.t()} | {:error, term()}
+  def record_accuracy_codes(%__MODULE__{handle: handle}, sat_id, epoch_index)
+      when is_binary(sat_id) and is_integer(epoch_index) and epoch_index >= 0 do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_record_accuracy_codes(handle, letter, prn, epoch_index) do
+        {:ok, tuple} -> {:ok, RawRecordAccuracy.from_nif_tuple(tuple)}
+        {:error, _} = error -> error
+        other -> {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_record_accuracy_codes)
+  end
+
+  def record_accuracy_codes(_sp3, _satellite, _epoch_index), do: {:error, :invalid_sp3_accuracy_query}
+
+  @doc "Return decoded P/V standard deviations for one retained satellite record."
+  @spec record_accuracy(t(), String.t(), non_neg_integer()) ::
+          {:ok, RecordAccuracy.t()} | {:error, term()}
+  def record_accuracy(%__MODULE__{handle: handle}, sat_id, epoch_index)
+      when is_binary(sat_id) and is_integer(epoch_index) and epoch_index >= 0 do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_record_accuracy(handle, letter, prn, epoch_index) do
+        {:ok, tuple} -> {:ok, RecordAccuracy.from_nif_tuple(tuple)}
+        {:error, _} = error -> error
+        other -> {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_record_accuracy)
+  end
+
+  def record_accuracy(_sp3, _satellite, _epoch_index), do: {:error, :invalid_sp3_accuracy_query}
+
+  @doc "Extract variance sidecars aligned by satellite and epoch with precise samples."
+  @spec precise_ephemeris_accuracy_samples(t()) :: [PreciseEphemerisAccuracySample.t()]
+  def precise_ephemeris_accuracy_samples(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.sp3_precise_ephemeris_accuracy_samples()
+    |> Enum.map(&PreciseEphemerisAccuracySample.from_nif_tuple/1)
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_precise_ephemeris_accuracy_samples)
   end
 
   @doc """
@@ -775,41 +924,100 @@ defmodule Sidereon.GNSS.SP3 do
     Interpolant.artifact_bytes(sp3, opts)
   end
 
+  @typedoc """
+  Typed refusal returned by `to_iodata/2` and `to_sp3_string/2`.
+  The final `{atom(), map()}` case covers additional already named variants.
+  """
+  @type writer_error ::
+          {
+            :satellite_not_representable,
+            %{satellite: binary(), system: binary(), prn: 0..255}
+          }
+          | {
+              :accuracy_not_representable,
+              %{
+                satellite: binary(),
+                epoch_index: non_neg_integer(),
+                component: binary(),
+                exponent: integer() | nil,
+                message: binary()
+              }
+            }
+          | {
+              :accuracy_record_mismatch | :accuracy_basis_missing,
+              %{satellite: binary(), epoch_index: non_neg_integer(), message: binary()}
+            }
+          | {atom(), map()}
+
   @doc """
   Serialize the product to standard SP3-c / SP3-d text as iodata. Pure, no I/O.
 
   This is the inverse of `load/1` / `parse/1`: a read → (`merge/2`) → write
   pipeline round-trips to a single standard SP3 file any reader consumes. The
-  output is deterministic (same product → identical bytes). Header fields
-  (version, epoch count, satellite list, time system, week / seconds-of-week /
-  MJD / interval) are derived from the product. A satellite absent at an epoch is
-  written as the SP3 missing-orbit sentinel, so a quarantined `merge/2` cell
-  re-reads as missing, never a fabricated position.
+  output is deterministic (same product → identical bytes). A satellite absent
+  at an epoch is written as the SP3 missing-orbit sentinel, so a quarantined
+  `merge/2` cell re-reads as missing, never a fabricated position. A satellite
+  holding a clock and no position at an epoch is written as that clock-only
+  record and reads back as one.
+
+  The writer states back the header descriptors the product holds and checks
+  every numeric field by reading its column back the way the reader does. A
+  value its column cannot state bit for bit, a value that would read back as one
+  of the format's absence sentinels, an epoch no record restates exactly, or
+  text that would not survive the reader's trim is refused by name rather than
+  rounded, shifted or dropped. A mean-combined `merge/2` product commonly holds
+  positions finer than the millimetre columns and is refused for that reason;
+  a precedence merge keeps each contributor's own values.
+
+  Returns `{:ok, iodata}` or `{:error, {tag, fields}}`, `tag` naming the refusal
+  and `fields` holding every field it carries. The record-field refusals are
+  `:record_value_not_representable`, `:record_value_too_wide`,
+  `:record_value_non_finite`, `:record_reads_as_absent` and
+  `:record_fields_disagree`, each with `field`, `satellite` and `epoch_index`;
+  the epoch refusals are `:epoch_not_restatable` (with `field_seconds` and
+  `residual_s`),
+  `:epoch_time_scale_mismatch` and `:year_not_representable`;
+  `:accuracy_not_representable` carries `satellite`, `epoch_index`,
+  `component`, `exponent` and the core `message`; `:accuracy_record_mismatch`
+  and `:accuracy_basis_missing` carry `satellite`, `epoch_index` and `message`.
+  `:satellite_not_representable` carries the rendered identifier and its separate
+  constellation `system` and numeric `prn`, since the identifier cannot be
+  written as a two-digit SP3 token. The remaining entries name the header field
+  or count they concern.
+  A double the BEAM cannot hold, such as
+  the `NaN` residual of an epoch no candidate record reads back, is
+  `{:nonfinite, bits}`. A refusal this binding predates is
+  `{:unhandled, %{message: text}}` with the core's own text.
 
   ## Examples
 
       {:ok, sp3} = Sidereon.GNSS.SP3.load("igs.sp3")
-      iodata = Sidereon.GNSS.SP3.to_iodata(sp3)
+      {:ok, iodata} = Sidereon.GNSS.SP3.to_iodata(sp3)
       {:ok, reparsed} = Sidereon.GNSS.SP3.parse(IO.iodata_to_binary(iodata))
       Sidereon.GNSS.SP3.satellite_ids(reparsed) == Sidereon.GNSS.SP3.satellite_ids(sp3)
       #=> true
   """
-  @spec to_iodata(t(), keyword()) :: iodata()
+  @spec to_iodata(t(), keyword()) :: {:ok, iodata()} | {:error, writer_error()}
   def to_iodata(%__MODULE__{handle: handle}, _opts \\ []) do
-    NIF.sp3_to_iodata(handle)
+    case NIF.sp3_to_iodata(handle) do
+      {:ok, text} -> {:ok, text}
+      {:error, _reason} = error -> error
+    end
   rescue
-    e in ErlangError ->
-      reraise ArgumentError, [message: "could not serialize SP3 product: #{inspect(e.original)}"], __STACKTRACE__
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_to_iodata)
   end
 
   @doc """
   Serialize the product to an SP3 text binary.
+
+  Returns `{:ok, text}` or the refusal `to_iodata/2` documents.
   """
-  @spec to_sp3_string(t(), keyword()) :: binary()
+  @spec to_sp3_string(t(), keyword()) :: {:ok, binary()} | {:error, writer_error()}
   def to_sp3_string(%__MODULE__{} = sp3, opts \\ []) do
-    sp3
-    |> to_iodata(opts)
-    |> IO.iodata_to_binary()
+    case to_iodata(sp3, opts) do
+      {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      {:error, _reason} = error -> error
+    end
   end
 
   @doc """
@@ -837,6 +1045,10 @@ defmodule Sidereon.GNSS.SP3 do
   `{:error, :outside_coverage}`. Pass `extrapolate: true` to opt into the
   lower-level interpolation behavior near the product edges.
 
+  Positions are interpolated from the eleven nodes RTKLIB pephpos selects; a
+  query whose contiguous run holds fewer returns
+  `{:error, {:insufficient_precise_nodes, sat_id, nodes, 11}}`.
+
   Returns `{:ok, %Sidereon.GNSS.SP3.State{}}` or `{:error, reason}`.
   """
   @spec position(t(), String.t(), NaiveDateTime.t() | tuple(), keyword()) ::
@@ -845,7 +1057,7 @@ defmodule Sidereon.GNSS.SP3 do
       when is_binary(sat_id) do
     with {:ok, system_letter, prn} <- Types.parse_sat_id(sat_id),
          :ok <- validate_coverage(sp3, epoch, opts),
-         {jd_whole, jd_fraction} <- Time.epoch_to_split_jd(epoch) do
+         {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
       case NIF.sp3_position(handle, system_letter, prn, scale, jd_whole, jd_fraction) do
         {x_m, y_m, z_m, clock} ->
           # `clock` is already `nil` (no estimate) or a float (seconds).
@@ -859,8 +1071,151 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_position)
   end
+
+  @doc "Interpolate an SP3 state at an exact query without converting it to a civil float."
+  @spec position_at_epoch_query(t(), String.t(), ExactEpochQuery.t()) ::
+          {:ok, State.t()} | {:error, term()}
+  def position_at_epoch_query(%__MODULE__{handle: handle}, sat_id, %ExactEpochQuery{handle: query})
+      when is_binary(sat_id) do
+    with {:ok, system_letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_position_at_epoch_query(handle, system_letter, prn, query) do
+        {x_m, y_m, z_m, clock} -> {:ok, %State{x_m: x_m, y_m: y_m, z_m: z_m, clock_s: clock}}
+        {:error, _} = error -> error
+        other -> {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_position_at_epoch_query)
+  end
+
+  def position_at_epoch_query(_sp3, _satellite, _query), do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read selected state and group delay at independent exact state and selection queries."
+  @spec selected_state_at_epoch_queries(t(), String.t(), ExactEpochQuery.t(), ExactEpochQuery.t()) ::
+          {:ok, nil | map()} | {:error, term()}
+  def selected_state_at_epoch_queries(
+        %__MODULE__{handle: handle},
+        sat_id,
+        %ExactEpochQuery{handle: state_query},
+        %ExactEpochQuery{handle: selection_query}
+      ) do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_selected_state_at_epoch_queries(
+             handle,
+             letter,
+             prn,
+             state_query,
+             selection_query
+           ) do
+        {:ok, nil} ->
+          {:ok, nil}
+
+        {:ok, {position_x, position_y, position_z, clock_s, group_delay_s, degraded}} ->
+          {:ok,
+           %{
+             position_ecef_m: {position_x, position_y, position_z},
+             clock_s: clock_s,
+             group_delay_s: group_delay_s,
+             degraded: degraded
+           }}
+
+        {:error, _} = error ->
+          error
+
+        other ->
+          {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_selected_state_at_epoch_queries)
+  end
+
+  def selected_state_at_epoch_queries(_sp3, _satellite, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read the clock used for transmission placement at exact state and selection queries."
+  def transmit_clock_at_epoch_queries(
+        %__MODULE__{handle: handle},
+        sat_id,
+        %ExactEpochQuery{handle: state_query},
+        %ExactEpochQuery{handle: selection_query}
+      ) do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_transmit_clock_at_epoch_queries(
+             handle,
+             letter,
+             prn,
+             state_query,
+             selection_query
+           ) do
+        {:ok, nil} -> {:ok, nil}
+        {:ok, {clock_s, degraded}} -> {:ok, %{clock_s: clock_s, degraded: degraded}}
+        {:error, _} = error -> error
+        other -> {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_transmit_clock_at_epoch_queries)
+  end
+
+  def transmit_clock_at_epoch_queries(_sp3, _satellite, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Evaluate the product-clock relativistic term for an exact queried state."
+  def clock_relativity_for_state_at_epoch_query(
+        %__MODULE__{handle: handle},
+        sat_id,
+        %ExactEpochQuery{handle: query},
+        {position_x, position_y, position_z} = position
+      )
+      when is_number(position_x) and is_number(position_y) and is_number(position_z) do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      case NIF.sp3_clock_relativity_for_state_at_epoch_query(
+             handle,
+             letter,
+             prn,
+             query,
+             position
+           ) do
+        :not_applicable -> :not_applicable
+        :unavailable -> :unavailable
+        {:term, seconds} -> {:term, seconds}
+        {:error, _} = error -> error
+        other -> {:error, other}
+      end
+    end
+  rescue
+    error in ErlangError ->
+      NifCall.error(error, __STACKTRACE__, :sp3_clock_relativity_for_state_at_epoch_query)
+  end
+
+  def clock_relativity_for_state_at_epoch_query(_sp3, _satellite, _query, _position),
+    do: {:error, :invalid_exact_epoch_query}
+
+  @doc "Read SP3 position variance at independent exact state and selection queries."
+  def ephemeris_variance_at_epoch_queries(
+        %__MODULE__{handle: handle},
+        sat_id,
+        %ExactEpochQuery{handle: state_query},
+        %ExactEpochQuery{handle: selection_query}
+      ) do
+    with {:ok, letter, prn} <- Types.parse_sat_id(sat_id) do
+      NIF.sp3_ephemeris_variance_at_epoch_queries(
+        handle,
+        letter,
+        prn,
+        state_query,
+        selection_query
+      )
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :sp3_ephemeris_variance_at_epoch_queries)
+  end
+
+  def ephemeris_variance_at_epoch_queries(_sp3, _satellite, _state_query, _selection_query),
+    do: {:error, :invalid_exact_epoch_query}
 
   @doc """
   Merge several SP3 products from different analysis centers into one consistent
@@ -868,9 +1223,10 @@ defmodule Sidereon.GNSS.SP3 do
 
   `sources` is a list of loaded products **in precedence order** (earlier wins
   ties). This is orthogonal to time-stitching: it combines providers at the same
-  epochs on one shared time grid. Mixed-cadence products are unioned onto the
-  finest input cadence by default, using only records actually present in an
-  input and never interpolating. For every `(epoch, satellite)` cell:
+  epochs on one shared time grid. By default the grid step is the greatest
+  common divisor of the inputs' epoch steps and offsets, which holds every input
+  epoch (900 s and 400 s products merge on a 100 s grid); only records actually
+  present in an input are used, and nothing is interpolated. For every `(epoch, satellite)` cell:
 
     * **Union satellite coverage**: a satellite present in any input may appear
       in the merged product wherever a source actually carries it.
@@ -897,11 +1253,58 @@ defmodule Sidereon.GNSS.SP3 do
   the combined product. It is a map with the whole-product aggregates
   `:position_rms_m`, `:position_max_m`, `:clock_rms_s`, and `:clock_max_s`, plus
   `:cells` (per-(epoch, satellite) statistics, one per accepted cell) and
-  `:epochs` (per-epoch aggregates). The RMS fields are `nil` when no
-  multi-source consensus exists for that channel. Position maximum covers every
-  accepted cell; clock maximum covers every clock-bearing accepted cell, so
-  either maximum may be `0.0` for a single-source cell. The clock fields of a
-  cell are `nil` only when the cell carries no clock.
+  `:epochs` (per-epoch aggregates). The whole-product RMS fields are `nil` when
+  no multi-source consensus exists for that channel; its maxima cover every
+  accepted position cell and every clock-bearing cell, so either may be `0.0`
+  for single-source cells, and is `nil` when no accepted cell carries that
+  channel. A cell's position fields are `nil` when the cell
+  carries no position, such as a clock-only record, and its clock fields `nil`
+  when it carries no clock; neither is read as `0.0`. An epoch's aggregates
+  cover its multi-source cells and are `nil` for a channel with none there.
+
+  The report also states what the merge did not write:
+
+    * `:dropped_input_epochs` - input epochs that took no part, in (source,
+      epoch) order, each `%{source: 0, epoch_index: 3, epoch: epoch, reason:
+      reason}` with `reason` `:off_target_grid` (off an explicit
+      `:epoch_interval_s` grid) or `:not_on_tick_axis` (no SP3 epoch record
+      states the instant exactly).
+    * `:omitted_epochs` - union-grid epochs at which the merge accepted no cell
+      and wrote no epoch.
+    * `:arc_withheld` - cells whose position `:precedence` did not write because
+      the preferred source carried none there, each
+      `%{satellite: "G03", epoch: epoch, sources: [1]}`.
+    * `:clock_omissions` - each source clock the merge did not write, in
+      (epoch, satellite, source) order, each `%{epoch: epoch, satellite: "G03",
+      source: 1, reason: reason, preferred: nil | 0, cell_has_clock: true}` with
+      `reason` `:datum_not_observable`, `:preferred_source_without_clock` (with
+      the preferred source under `:preferred` when the merge had one) or
+      `:no_consensus`.
+
+  An `epoch` there is `%{time_scale: "GPST", jd_whole: float, jd_fraction:
+  float}` or, for an integer-nanosecond instant,
+  `%{time_scale: "GPST", nanos_since_j2000: integer}`, as the merge recorded it.
+
+  `report.continuity` is `nil` unless `:verify_continuity` was set, and
+  otherwise the `check_continuity/2` report of the merged product with
+  `:violations` and `:splices` (the violations that cross a contributor change).
+  Each violation has `:defect`, `:from_sources`, `:to_sources`, `:sources`,
+  `:crosses_contributors` and `:cells`, each cell `%{epoch_j2000_s: float,
+  role: role, selection: selection | nil}` with `role` `:held_out`,
+  `:interpolation_node`, `:pair_end` or `:repeated_epoch`. A selection is
+  `%{kind: :single_source, source: 0}`, `%{kind: :precedence, source: 0,
+  members: [0, 1]}` or `%{kind: :combined, rule: :mean, members: [0, 1]}`.
+
+  `report.provenance` is `nil` unless `:provenance` was set, and otherwise
+  `%{mode: mode, cells: cells, transitions: transitions, coverage: coverage}`:
+  `:cells` has one `%{epoch: epoch, satellite: "G03", position: selection |
+  nil, clock: selection | nil}` per accepted cell under `:full` and none under
+  `:summary`; each transition is `%{satellite: "G03", epoch: epoch,
+  from_source: 0 | nil, to_source: 1 | nil, reason: reason}` with `reason`
+  `:sole_availability`, `:precedence`, `:outlier_rejection` or
+  `:consensus_change`; each coverage entry is `%{source: 0, cells_contributed:
+  integer, cells_selected: integer, first_epoch: epoch | nil, last_epoch: epoch
+  | nil, cells_absent: integer}`.
 
   ## Options
 
@@ -913,7 +1316,9 @@ defmodule Sidereon.GNSS.SP3 do
     * `:precedence_scope`: `:cell` (default) or `:satellite_arc`
     * `:outlier_reject`: `nil` (default/current behavior), or a map/keyword list
       with `:position_m` and `:clock_ns` tolerances
-    * `:epoch_interval_s`: require this target epoch interval, seconds
+    * `:epoch_interval_s`: require this target epoch interval, seconds: a whole
+      number of the 10-nanosecond ticks an SP3 interval states. The grid is
+      anchored at the earliest input epoch.
     * `:systems`: restrict output to systems such as `[:gps]` or `["G", "E"]`
     * `:asserted_frame_label_sets`: coordinate-label sets the caller asserts
       are equivalent without frame math
@@ -921,6 +1326,7 @@ defmodule Sidereon.GNSS.SP3 do
       labels
     * `:verify_continuity`: `false` (default), `true` for the standard options,
       or continuity options with `:orbit_class` and `:residual_tolerance_m`
+    * `:provenance`: `nil` (default, none recorded), `:summary` or `:full`
   """
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
@@ -940,7 +1346,8 @@ defmodule Sidereon.GNSS.SP3 do
              policy.systems,
              policy.asserted_frame_label_sets,
              policy.helmert,
-             policy.verify_continuity
+             policy.verify_continuity,
+             policy.provenance && Atom.to_string(policy.provenance)
            ) do
         {handle,
          {quarantined, single_source, position_outliers, clock_outliers,
@@ -956,6 +1363,11 @@ defmodule Sidereon.GNSS.SP3 do
             agreement: to_agreement(agreement),
             continuity: decode_merge_continuity_report(continuity)
           }
+
+          report =
+            report
+            |> Map.merge(merge_omissions(report_handle))
+            |> Map.put(:provenance, merge_provenance(report_handle))
 
           {:ok,
            %__MODULE__{
@@ -974,39 +1386,52 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_merge)
   end
 
   @doc """
-  Decide whether an opt-in merge continuity report can influence an inclusive
+  Decide whether an opt-in merge continuity report influences an inclusive
   evaluation window on the merged product's J2000-seconds axis.
+
+  The report holds the merged product's interpolation nodes, so a violation
+  influences the window when the nodes its interpolations select include the
+  violation's held-out, repeated or pair-end record or straddle a handover
+  between its records.
 
   Returns `{:ok, nil}` when merge continuity verification was not requested.
   """
-  @spec merge_continuity_verdict(map(), t(), number(), number()) ::
+  @spec merge_continuity_verdict(map(), number(), number()) ::
           {:ok, map() | nil} | {:error, term()}
-  def merge_continuity_verdict(
-        %{handle: report_handle},
-        %__MODULE__{handle: merged_handle},
-        from_j2000_s,
-        through_j2000_s
-      )
+  def merge_continuity_verdict(%{handle: report_handle}, from_j2000_s, through_j2000_s)
       when is_number(from_j2000_s) and is_number(through_j2000_s) do
-    case NIF.sp3_merge_continuity_verdict(
-           report_handle,
-           merged_handle,
-           from_j2000_s / 1.0,
-           through_j2000_s / 1.0
-         ) do
+    case NIF.sp3_merge_continuity_verdict(report_handle, from_j2000_s / 1.0, through_j2000_s / 1.0) do
       {:ok, nil} -> {:ok, nil}
       {:ok, verdict} -> {:ok, decode_window_continuity_verdict(verdict)}
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_merge_continuity_verdict)
   end
 
-  def merge_continuity_verdict(_report, _merged, _from_j2000_s, _through_j2000_s),
+  def merge_continuity_verdict(_report, _from_j2000_s, _through_j2000_s), do: {:error, :invalid_merge_continuity_query}
+
+  @doc """
+  Epochs of the merged product's position nodes that some interpolation of
+  `satellite` in the inclusive window selects, ascending and seconds since
+  J2000: the nodes `merge_continuity_verdict/3` reads for that window.
+
+  Returns `{:ok, nil}` when merge continuity verification was not requested.
+  """
+  @spec merge_continuity_selected_nodes(map(), String.t(), number(), number()) ::
+          {:ok, [float()] | nil} | {:error, term()}
+  def merge_continuity_selected_nodes(%{handle: report_handle}, satellite, from_j2000_s, through_j2000_s)
+      when is_binary(satellite) and is_number(from_j2000_s) and is_number(through_j2000_s) do
+    NIF.sp3_merge_continuity_selected_nodes(report_handle, satellite, from_j2000_s / 1.0, through_j2000_s / 1.0)
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_merge_continuity_selected_nodes)
+  end
+
+  def merge_continuity_selected_nodes(_report, _satellite, _from_j2000_s, _through_j2000_s),
     do: {:error, :invalid_merge_continuity_query}
 
   @doc """
@@ -1020,13 +1445,21 @@ defmodule Sidereon.GNSS.SP3 do
   intentionally excluded. The returned map includes core's complete canonical
   `:contributors` and, for precedence combination, the ordered
   `:precedence_contributors`.
+
+  The options are those of `merge/2`, including the same exact positive
+  10-nanosecond tick and under-100000-second interval validation. The returned
+  `:merge_policy` records every option, including `:verify_continuity` (`nil`
+  or `%{orbit_class: ..., residual_tolerance_m: ..., gap_threshold_factor:
+  ...}`) and `:provenance` (`nil`, `"summary"` or `"full"`), which change
+  neither the merged product nor the stable identity.
   """
   @spec merge_input_identity([map()], keyword()) :: {:ok, map()} | {:error, term()}
   def merge_input_identity(contributors, opts \\ [])
 
   def merge_input_identity(contributors, opts) when is_list(contributors) do
     with {:ok, encoded} <- encode_merge_contributors(contributors),
-         {:ok, policy} <- normalize_merge_policy(opts) do
+         {:ok, policy} <- normalize_merge_policy(opts),
+         :ok <- validate_core_identity_interval(policy.epoch_interval_s) do
       result =
         NIF.sp3_merge_input_identity(
           encoded,
@@ -1066,10 +1499,21 @@ defmodule Sidereon.GNSS.SP3 do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_merge_input_identity)
   end
 
   def merge_input_identity(_contributors, _opts), do: {:error, {:invalid_merge_contributors, :not_a_list}}
+
+  # The policy checks merge/2 and merge_input_identity/2 apply to their
+  # options, without products, so a caller can refuse a policy before it
+  # fetches any.
+  @doc false
+  @spec validate_identity_policy(keyword()) :: :ok | {:error, term()}
+  def validate_identity_policy(opts) do
+    with {:ok, policy} <- normalize_merge_policy(opts) do
+      validate_core_identity_interval(policy.epoch_interval_s)
+    end
+  end
 
   @doc """
   Estimate the per-epoch reference-clock offset of `other` relative to
@@ -1100,7 +1544,7 @@ defmodule Sidereon.GNSS.SP3 do
   rescue
     e in ErlangError ->
       reraise ArgumentError,
-              [message: "could not estimate clock reference offset: #{inspect(e.original)}"],
+              [message: "could not estimate clock reference offset: #{NifCall.describe(e)}"],
               __STACKTRACE__
   end
 
@@ -1140,7 +1584,7 @@ defmodule Sidereon.GNSS.SP3 do
         {:error, other_result}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_align_clock_reference)
   end
 
   # --- helpers -------------------------------------------------------------
@@ -1162,6 +1606,100 @@ defmodule Sidereon.GNSS.SP3 do
       orbit_predicted: orbit_predicted
     }
   end
+
+  defp merge_omissions(report_handle) do
+    omissions = NIF.sp3_merge_report_omissions(report_handle)
+
+    %{
+      dropped_input_epochs:
+        Enum.map(omissions.dropped_input_epochs, fn dropped ->
+          %{
+            source: dropped.source,
+            epoch_index: dropped.epoch_index,
+            epoch: merge_epoch(dropped.epoch),
+            reason: merge_omission_reason(dropped.reason)
+          }
+        end),
+      omitted_epochs: Enum.map(omissions.omitted_epochs, &merge_epoch/1),
+      arc_withheld:
+        Enum.map(omissions.arc_withheld, fn flag ->
+          %{satellite: flag.satellite, epoch: merge_epoch(flag.epoch), sources: flag.sources}
+        end),
+      clock_omissions:
+        Enum.map(omissions.clock_omissions, fn omission ->
+          %{
+            epoch: merge_epoch(omission.epoch),
+            satellite: omission.satellite,
+            source: omission.source,
+            reason: merge_omission_reason(omission.reason),
+            preferred: omission.preferred,
+            cell_has_clock: omission.cell_has_clock
+          }
+        end)
+    }
+  end
+
+  defp merge_provenance(report_handle) do
+    case NIF.sp3_merge_report_provenance(report_handle) do
+      nil ->
+        nil
+
+      provenance ->
+        %{
+          mode: provenance_mode(provenance.mode),
+          cells:
+            Enum.map(provenance.cells, fn cell ->
+              %{
+                epoch: merge_epoch(cell.epoch),
+                satellite: cell.satellite,
+                position: decode_cell_selection(cell.position),
+                clock: decode_cell_selection(cell.clock)
+              }
+            end),
+          transitions:
+            Enum.map(provenance.transitions, fn transition ->
+              %{
+                satellite: transition.satellite,
+                epoch: merge_epoch(transition.epoch),
+                from_source: transition.from_source,
+                to_source: transition.to_source,
+                reason: transition_reason(transition.reason)
+              }
+            end),
+          coverage:
+            Enum.map(provenance.coverage, fn coverage ->
+              %{
+                source: coverage.source,
+                cells_contributed: coverage.cells_contributed,
+                cells_selected: coverage.cells_selected,
+                first_epoch: coverage.first_epoch && merge_epoch(coverage.first_epoch),
+                last_epoch: coverage.last_epoch && merge_epoch(coverage.last_epoch),
+                cells_absent: coverage.cells_absent
+              }
+            end)
+        }
+    end
+  end
+
+  defp provenance_mode("summary"), do: :summary
+  defp provenance_mode("full"), do: :full
+
+  defp transition_reason("sole_availability"), do: :sole_availability
+  defp transition_reason("precedence"), do: :precedence
+  defp transition_reason("outlier_rejection"), do: :outlier_rejection
+  defp transition_reason("consensus_change"), do: :consensus_change
+
+  defp merge_epoch(%{time_scale: scale, julian_date: {jd_whole, jd_fraction}}),
+    do: %{time_scale: scale, jd_whole: jd_whole, jd_fraction: jd_fraction}
+
+  defp merge_epoch(%{time_scale: scale, nanos_since_j2000: nanos}) when is_binary(nanos),
+    do: %{time_scale: scale, nanos_since_j2000: String.to_integer(nanos)}
+
+  defp merge_omission_reason("off_target_grid"), do: :off_target_grid
+  defp merge_omission_reason("not_on_tick_axis"), do: :not_on_tick_axis
+  defp merge_omission_reason("datum_not_observable"), do: :datum_not_observable
+  defp merge_omission_reason("preferred_source_without_clock"), do: :preferred_source_without_clock
+  defp merge_omission_reason("no_consensus"), do: :no_consensus
 
   defp to_flag({satellite, jd_whole, jd_fraction, sources}) do
     %{satellite: satellite, jd_whole: jd_whole, jd_fraction: jd_fraction, sources: sources}
@@ -1256,9 +1794,18 @@ defmodule Sidereon.GNSS.SP3 do
     }
   end
 
+  # The merged product's coverage is its first and last epoch on the J2000-second
+  # axis it interpolates on. It is read from the product rather than from text
+  # written for it, because the writer refuses a product it cannot state
+  # exactly - a mean-combined merge commonly holds positions finer than the
+  # record columns - and a merge the core performed is not refused for that.
   defp attach_coverage({:ok, %__MODULE__{handle: handle} = sp3, report}) do
-    with {:ok, {coverage_start, coverage_end}} <- coverage_from_bytes(NIF.sp3_to_iodata(handle)) do
-      {:ok, %{sp3 | coverage_start: coverage_start, coverage_end: coverage_end}, report}
+    case NIF.sp3_epochs_j2000_seconds(handle) do
+      [] ->
+        {:error, :missing_coverage}
+
+      [coverage_start | _rest] = epochs ->
+        {:ok, %{sp3 | coverage_start: coverage_start, coverage_end: List.last(epochs)}, report}
     end
   end
 
@@ -1432,7 +1979,22 @@ defmodule Sidereon.GNSS.SP3 do
       epoch_interval_s: policy.epoch_interval_s,
       systems: policy.systems,
       asserted_frame_label_sets: policy.asserted_frame_label_sets,
-      helmert: policy.helmert
+      helmert: policy.helmert,
+      verify_continuity: continuity_policy_map(policy.verify_continuity),
+      provenance: policy.provenance && Atom.to_string(policy.provenance)
+    }
+  end
+
+  # Neither option changes the merged product or the stable identity; the
+  # policy records them so a persisted report states what its merge was asked
+  # to report.
+  defp continuity_policy_map(nil), do: nil
+
+  defp continuity_policy_map({orbit_class, residual_tolerance_m, gap_threshold_factor}) do
+    %{
+      orbit_class: orbit_class,
+      residual_tolerance_m: residual_tolerance_m,
+      gap_threshold_factor: gap_threshold_factor
     }
   end
 
@@ -1448,7 +2010,8 @@ defmodule Sidereon.GNSS.SP3 do
     :systems,
     :asserted_frame_label_sets,
     :helmert,
-    :verify_continuity
+    :verify_continuity,
+    :provenance
   ]
 
   defp normalize_merge_policy(opts) when is_list(opts) do
@@ -1474,7 +2037,8 @@ defmodule Sidereon.GNSS.SP3 do
            normalize_asserted_frame_label_sets(Keyword.get(opts, :asserted_frame_label_sets, [])),
          {:ok, helmert} <- normalize_boolean(Keyword.get(opts, :helmert, false), :helmert),
          {:ok, verify_continuity} <-
-           normalize_verify_continuity(Keyword.get(opts, :verify_continuity, false)) do
+           normalize_verify_continuity(Keyword.get(opts, :verify_continuity, false)),
+         {:ok, provenance} <- normalize_provenance(Keyword.get(opts, :provenance)) do
       {:ok,
        %{
          position_tolerance_m: position_tolerance_m,
@@ -1488,7 +2052,8 @@ defmodule Sidereon.GNSS.SP3 do
          systems: systems,
          asserted_frame_label_sets: asserted_frame_label_sets,
          helmert: helmert,
-         verify_continuity: verify_continuity
+         verify_continuity: verify_continuity,
+         provenance: provenance
        }}
     else
       false -> {:error, {:invalid_merge_policy, :invalid}}
@@ -1504,11 +2069,14 @@ defmodule Sidereon.GNSS.SP3 do
     if value >= 0.0 and value - value == 0.0 do
       {:ok, if(value == 0.0, do: 0.0, else: value)}
     else
-      {:error, {:invalid_merge_policy, field}}
+      reason = if value < 0.0, do: :negative, else: :not_finite
+
+      {:error, {:sp3_merge_tolerance, %{field: field, value: json_safe_number(value), reason: reason}}}
     end
   end
 
-  defp normalize_nonnegative_float(_value, field), do: {:error, {:invalid_merge_policy, field}}
+  defp normalize_nonnegative_float(value, field),
+    do: {:error, {:sp3_merge_tolerance, %{field: field, value: inspect(value), reason: :not_numeric}}}
 
   defp normalize_positive_integer(value, _field) when is_integer(value) and value > 0, do: {:ok, value}
   defp normalize_positive_integer(_value, field), do: {:error, {:invalid_merge_policy, field}}
@@ -1516,20 +2084,38 @@ defmodule Sidereon.GNSS.SP3 do
   defp normalize_combine(value) when value in [:mean, :median, :precedence], do: {:ok, value}
   defp normalize_combine(_value), do: {:error, {:invalid_merge_policy, :combine}}
 
+  defp normalize_provenance(nil), do: {:ok, nil}
+  defp normalize_provenance(mode) when mode in [:summary, :full], do: {:ok, mode}
+  defp normalize_provenance(_mode), do: {:error, {:invalid_merge_policy, :provenance}}
+
   defp normalize_epoch_interval(nil), do: {:ok, nil}
 
+  # Preserve the caller's interval for the core's exact 10 ns tick and range
+  # validation; rounding here would erase the value the core needs to report.
   defp normalize_epoch_interval(value) when is_number(value) do
-    value = value / 1.0
-    rounded = Float.round(value)
-
-    if value - value == 0.0 and rounded >= 1.0 and abs(value - rounded) <= 1.0e-9 do
-      {:ok, rounded}
-    else
-      {:error, {:invalid_merge_policy, :epoch_interval_s}}
-    end
+    {:ok, value / 1.0}
   end
 
   defp normalize_epoch_interval(_value), do: {:error, {:invalid_merge_policy, :epoch_interval_s}}
+
+  # Ask the core's identity validator to check the same exact tick interval
+  # and specification range before data acquisition begins.
+  defp validate_core_identity_interval(value) do
+    case NIF.sp3_validate_merge_target_interval(value) do
+      {:ok, {}} -> :ok
+      :ok -> :ok
+      {:error, _reason} = error -> error
+      other -> {:error, {:invalid_merge_input_identity, other}}
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_validate_merge_target_interval)
+  end
+
+  defp json_safe_number(value) when is_float(value) do
+    if value - value == 0.0, do: value, else: inspect(value)
+  end
+
+  defp json_safe_number(value), do: value
 
   defp normalize_policy_systems(opts) do
     case Keyword.fetch(opts, :systems) do

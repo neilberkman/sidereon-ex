@@ -7,7 +7,7 @@ defmodule CoarseColdStart202606 do
   # the pre-registered 0.95 @ 5.0 m bar. See coarse-cold-start-spec.md.
   #
   # Run from the sidereon worktree root:
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/coarse_cold_start_measurement_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/coarse_cold_start_measurement_2026_06.exs
   # Options: --results FILE, --report FILE.
 
   alias Sidereon.GNSS.Broadcast

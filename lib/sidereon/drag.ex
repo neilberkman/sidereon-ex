@@ -5,6 +5,7 @@ defmodule Sidereon.Drag do
 
   alias Sidereon.Astro.Relative.State
   alias Sidereon.NIF
+  alias Sidereon.NifCall
   alias Sidereon.SpaceWeather, as: SpaceWeatherTable
 
   defmodule SpaceWeather do
@@ -52,7 +53,8 @@ defmodule Sidereon.Drag do
     %SpaceWeather{f107: fields.f107, f107a: fields.f107a, ap: fields.ap}
   end
 
-  @spec from_area_mass(number(), number(), number(), keyword()) :: {:ok, Parameters.t()} | {:error, atom()}
+  @spec from_area_mass(number(), number(), number(), keyword()) ::
+          {:ok, Parameters.t()} | {:error, atom() | Sidereon.argument_error()}
   def from_area_mass(cd, area_m2, mass_kg, opts \\ []) do
     call_params(:drag_parameters_from_area_mass, [
       cd / 1.0,
@@ -63,7 +65,7 @@ defmodule Sidereon.Drag do
     ])
   end
 
-  @spec from_bc_factor(number(), keyword()) :: {:ok, Parameters.t()} | {:error, atom()}
+  @spec from_bc_factor(number(), keyword()) :: {:ok, Parameters.t()} | {:error, atom() | Sidereon.argument_error()}
   def from_bc_factor(bc_factor_m2_kg, opts \\ []) do
     call_params(:drag_parameters_from_bc_factor, [
       bc_factor_m2_kg / 1.0,
@@ -72,7 +74,8 @@ defmodule Sidereon.Drag do
     ])
   end
 
-  @spec from_ballistic_coefficient(number(), keyword()) :: {:ok, Parameters.t()} | {:error, atom()}
+  @spec from_ballistic_coefficient(number(), keyword()) ::
+          {:ok, Parameters.t()} | {:error, atom() | Sidereon.argument_error()}
   def from_ballistic_coefficient(bc_kg_m2, opts \\ []) do
     call_params(:drag_parameters_from_ballistic_coefficient, [
       bc_kg_m2 / 1.0,
@@ -81,13 +84,26 @@ defmodule Sidereon.Drag do
     ])
   end
 
-  @spec acceleration(Parameters.t(), State.t()) :: {:ok, {float(), float(), float()}} | {:error, atom()}
+  @spec acceleration(Parameters.t(), State.t()) ::
+          {:ok, {float(), float(), float()}} | {:error, atom() | Sidereon.argument_error()}
   def acceleration(%Parameters{} = params, %State{} = state) do
     NIF.drag_force_acceleration(params_map(params), Map.from_struct(state))
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :drag_force_acceleration)
   end
 
+  @doc """
+  Estimate the time until the state decays to the reentry altitude.
+
+  Options: `:force_model` (default `:twobody`), `:abs_tol`, `:rel_tol`,
+  `:reentry_altitude_km`, `:scan_step_s`, `:crossing_tolerance_s`,
+  `:max_duration_s`, `:max_scan_samples`, `:space_weather_table` (a
+  `Sidereon.SpaceWeather` table the drag inputs are read from along the arc)
+  and `:space_weather_policy` (a `Sidereon.SpaceWeather.Policy` or keyword list
+  the table is read under; without it the table is read under the default
+  policy, which refuses Ap values the file does not state and rows with no
+  flux observation).
+  """
   @spec estimate_decay(State.t(), Parameters.t(), keyword()) :: {:ok, DecayEstimate.t()} | {:error, term()}
   def estimate_decay(%State{} = state, %Parameters{} = params, opts \\ []) do
     args = decay_args(state, params, opts)
@@ -95,7 +111,13 @@ defmodule Sidereon.Drag do
     result =
       case Keyword.get(opts, :space_weather_table) do
         %SpaceWeatherTable{handle: handle} ->
-          apply(NIF, :drag_estimate_decay_with_space_weather_table, args ++ [handle])
+          policy =
+            case Keyword.get(opts, :space_weather_policy) do
+              nil -> nil
+              policy -> SpaceWeatherTable.policy_to_native(policy)
+            end
+
+          apply(NIF, :drag_estimate_decay_with_space_weather_table, args ++ [handle, policy])
 
         nil ->
           apply(NIF, :drag_estimate_decay, args)
@@ -106,7 +128,7 @@ defmodule Sidereon.Drag do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :drag_estimate_decay)
   end
 
   def from_area_mass!(cd, area_m2, mass_kg, opts \\ []), do: bang(from_area_mass(cd, area_m2, mass_kg, opts))
@@ -121,7 +143,7 @@ defmodule Sidereon.Drag do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, fun)
   end
 
   defp decay_args(%State{} = state, %Parameters{} = params, opts) do

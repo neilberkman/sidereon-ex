@@ -78,6 +78,7 @@ defmodule Sidereon.GNSS.Geometry do
   alias Sidereon.GNSS.Core.Types
   alias Sidereon.GNSS.{SP3, Time}
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_mask_deg 5.0
 
@@ -108,6 +109,7 @@ defmodule Sidereon.GNSS.Geometry do
           | :too_few_satellites
           | :singular_geometry
           | option_error()
+          | Sidereon.argument_error()
 
   # --- visibility -----------------------------------------------------------
 
@@ -129,13 +131,12 @@ defmodule Sidereon.GNSS.Geometry do
   error for malformed input. Never raises.
   """
   @spec visible(SP3.t(), receiver(), NaiveDateTime.t(), keyword()) ::
-          [visible_sat()] | {:error, :invalid_receiver | :outside_coverage | option_error()}
+          [visible_sat()] | {:error, :invalid_receiver | :outside_coverage | option_error() | Sidereon.argument_error()}
   def visible(%SP3{handle: handle} = sp3, receiver, %NaiveDateTime{} = epoch, opts \\ []) do
     with {:ok, rx} <- Types.normalize_ecef(receiver),
          {:ok, {elevation_mask_deg, systems, extrapolate?}} <- visibility_options(opts),
-         :ok <- validate_epoch_coverage(sp3, epoch, extrapolate?) do
-      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
-
+         :ok <- validate_epoch_coverage(sp3, epoch, extrapolate?),
+         {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
       handle
       |> NIF.sp3_geometry_visible(
         rx,
@@ -153,7 +154,7 @@ defmodule Sidereon.GNSS.Geometry do
       end)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_geometry_visible)
   end
 
   # --- dilution of precision ------------------------------------------------
@@ -189,9 +190,8 @@ defmodule Sidereon.GNSS.Geometry do
           dop_result() | {:error, geometry_error()}
   def dop(%SP3{handle: handle} = sp3, receiver, %NaiveDateTime{} = epoch, opts \\ []) do
     with {:ok, rx} <- Types.normalize_ecef(receiver),
-         {:ok, dop_opts} <- dop_options(opts) do
-      {jd_whole, jd_fraction} = Time.epoch_to_split_jd(epoch)
-
+         {:ok, dop_opts} <- dop_options(opts),
+         {:ok, {jd_whole, jd_fraction}} <- Time.epoch_to_split_jd(epoch) do
       {elevation_mask_deg, systems, weighting, light_time?, use_explicit?, satellites, extrapolate?} = dop_opts
 
       with :ok <- validate_epoch_coverage(sp3, epoch, extrapolate?) do
@@ -224,7 +224,7 @@ defmodule Sidereon.GNSS.Geometry do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_geometry_dop)
   end
 
   # --- time series ----------------------------------------------------------
@@ -253,10 +253,9 @@ defmodule Sidereon.GNSS.Geometry do
   def dop_series(%SP3{handle: handle} = sp3, receiver, {t0, t1}, step_seconds, opts \\ []) do
     with {:ok, rx} <- Types.normalize_ecef(receiver),
          {:ok, step_seconds} <- validate_step_seconds(step_seconds),
-         {:ok, dop_opts} <- dop_options(opts) do
-      {start_jd_whole, start_jd_fraction} = Time.epoch_to_split_jd(t0)
-      {end_jd_whole, end_jd_fraction} = Time.epoch_to_split_jd(t1)
-
+         {:ok, dop_opts} <- dop_options(opts),
+         {:ok, {start_jd_whole, start_jd_fraction}} <- Time.epoch_to_split_jd(t0),
+         {:ok, {end_jd_whole, end_jd_fraction}} <- Time.epoch_to_split_jd(t1) do
       {elevation_mask_deg, systems, weighting, light_time?, use_explicit?, satellites, extrapolate?} = dop_opts
 
       with :ok <- validate_window_coverage(sp3, {t0, t1}, extrapolate?) do
@@ -290,7 +289,7 @@ defmodule Sidereon.GNSS.Geometry do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_geometry_dop_series)
   end
 
   @doc """
@@ -310,14 +309,13 @@ defmodule Sidereon.GNSS.Geometry do
           keyword()
         ) ::
           [%{epoch: NaiveDateTime.t(), n_visible: non_neg_integer()}]
-          | {:error, :invalid_receiver | :outside_coverage | option_error()}
+          | {:error, :invalid_receiver | :outside_coverage | option_error() | Sidereon.argument_error()}
   def visibility_series(%SP3{handle: handle} = sp3, receiver, {t0, t1}, step_seconds, opts \\ []) do
     with {:ok, rx} <- Types.normalize_ecef(receiver),
          {:ok, step_seconds} <- validate_step_seconds(step_seconds),
-         {:ok, {elevation_mask_deg, systems, extrapolate?}} <- visibility_options(opts) do
-      {start_jd_whole, start_jd_fraction} = Time.epoch_to_split_jd(t0)
-      {end_jd_whole, end_jd_fraction} = Time.epoch_to_split_jd(t1)
-
+         {:ok, {elevation_mask_deg, systems, extrapolate?}} <- visibility_options(opts),
+         {:ok, {start_jd_whole, start_jd_fraction}} <- Time.epoch_to_split_jd(t0),
+         {:ok, {end_jd_whole, end_jd_fraction}} <- Time.epoch_to_split_jd(t1) do
       with :ok <- validate_window_coverage(sp3, {t0, t1}, extrapolate?) do
         handle
         |> NIF.sp3_geometry_visibility_series(
@@ -336,7 +334,7 @@ defmodule Sidereon.GNSS.Geometry do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_geometry_visibility_series)
   end
 
   # --- passes ---------------------------------------------------------------
@@ -369,14 +367,13 @@ defmodule Sidereon.GNSS.Geometry do
           pos_integer(),
           keyword()
         ) ::
-          [map()] | {:error, :invalid_receiver | :outside_coverage | option_error()}
+          [map()] | {:error, :invalid_receiver | :outside_coverage | option_error() | Sidereon.argument_error()}
   def passes(%SP3{handle: handle} = sp3, receiver, {t0, t1}, step_seconds, opts \\ []) do
     with {:ok, rx} <- Types.normalize_ecef(receiver),
          {:ok, step_seconds} <- validate_step_seconds(step_seconds),
-         {:ok, {elevation_mask_deg, systems, extrapolate?}} <- visibility_options(opts) do
-      {start_jd_whole, start_jd_fraction} = Time.epoch_to_split_jd(t0)
-      {end_jd_whole, end_jd_fraction} = Time.epoch_to_split_jd(t1)
-
+         {:ok, {elevation_mask_deg, systems, extrapolate?}} <- visibility_options(opts),
+         {:ok, {start_jd_whole, start_jd_fraction}} <- Time.epoch_to_split_jd(t0),
+         {:ok, {end_jd_whole, end_jd_fraction}} <- Time.epoch_to_split_jd(t1) do
       with :ok <- validate_window_coverage(sp3, {t0, t1}, extrapolate?) do
         handle
         |> NIF.sp3_geometry_passes(
@@ -401,7 +398,7 @@ defmodule Sidereon.GNSS.Geometry do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_geometry_passes)
   end
 
   # --- direct line-of-sight DOP --------------------------------------------

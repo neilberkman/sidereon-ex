@@ -8,6 +8,7 @@ defmodule Sidereon.Astro.Observe do
 
   alias Sidereon.Ephemeris
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @type station ::
           {number(), number(), number()} | %{latitude_deg: number(), longitude_deg: number(), altitude_km: number()}
@@ -21,7 +22,7 @@ defmodule Sidereon.Astro.Observe do
     NIF.observe_analytic(lat, lon, alt, datetime(time), target_name(target), options(opts))
     |> normalize()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observe_analytic)
   end
 
   @doc "Observe a body from an SPK kernel by NAIF id or known body atom."
@@ -31,7 +32,7 @@ defmodule Sidereon.Astro.Observe do
     NIF.observe_spk_body_full(handle, lat, lon, alt, datetime(time), body_code(body), options(opts))
     |> normalize()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observe_spk_body_full)
   end
 
   @doc "Observe an SPK body with core default observation options."
@@ -41,7 +42,7 @@ defmodule Sidereon.Astro.Observe do
     NIF.observe_spk_body_default(handle, lat, lon, alt, datetime(time), body_code(body))
     |> normalize()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observe_spk_body_default)
   end
 
   @doc "Observe a caller-supplied SSB-centered barycentric state."
@@ -60,7 +61,7 @@ defmodule Sidereon.Astro.Observe do
     )
     |> normalize()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :observe_barycentric_state)
   end
 
   def observe!(station, time, target, opts \\ []), do: bang(observe(station, time, target, opts))

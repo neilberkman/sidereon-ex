@@ -23,6 +23,7 @@ defmodule Sidereon.Geoid do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Egm2008GridSpacing do
     @moduledoc """
@@ -144,6 +145,51 @@ defmodule Sidereon.Geoid do
     end
   end
 
+  defmodule GridError do
+    @moduledoc """
+    Typed geoid-grid construction or parsing error returned by the core.
+    """
+
+    @enforce_keys [:kind]
+    defstruct [:kind, :expected, :found, :field, :index, :reason]
+
+    @typedoc "Typed geoid grid error with the core variant's complete payload."
+    @type t :: %__MODULE__{
+            kind: :invalid_dimensions | :invalid_spacing | :non_finite_value | :parse,
+            expected: non_neg_integer() | nil,
+            found: non_neg_integer() | nil,
+            field: String.t() | nil,
+            index: non_neg_integer() | nil,
+            reason: String.t() | nil
+          }
+
+    @doc false
+    @spec from_nif(term()) :: t() | term()
+    def from_nif({:geoid_invalid_dimensions, expected, found}) do
+      %__MODULE__{kind: :invalid_dimensions, expected: expected, found: found}
+    end
+
+    def from_nif({:geoid_invalid_spacing, field}), do: %__MODULE__{kind: :invalid_spacing, field: field}
+
+    def from_nif({:geoid_non_finite_value, index}), do: %__MODULE__{kind: :non_finite_value, index: index}
+
+    def from_nif({:geoid_parse, reason}), do: %__MODULE__{kind: :parse, reason: reason}
+
+    def from_nif(other), do: other
+  end
+
+  defp grid_result({:ok, _handle} = result), do: result
+
+  defp grid_result({:error, {:geoid_invalid_dimensions, _, _} = error}), do: {:error, GridError.from_nif(error)}
+
+  defp grid_result({:error, {:geoid_invalid_spacing, _} = error}), do: {:error, GridError.from_nif(error)}
+
+  defp grid_result({:error, {:geoid_non_finite_value, _} = error}), do: {:error, GridError.from_nif(error)}
+
+  defp grid_result({:error, {:geoid_parse, _} = error}), do: {:error, GridError.from_nif(error)}
+
+  defp grid_result(other), do: other
+
   @type grid :: reference()
   @type egm2008_spacing :: :one_minute | :two_point_five_minute | String.t()
   @type proj_vgridshift_arithmetic :: :separate_multiply_add | :fused_multiply_add
@@ -248,12 +294,9 @@ defmodule Sidereon.Geoid do
   """
   @spec load_grid(binary()) :: {:ok, grid()} | {:error, term()}
   def load_grid(text) when is_binary(text) do
-    case NIF.geoid_grid_from_text(text) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_from_text(text) |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_from_text)
   end
 
   @doc """
@@ -267,12 +310,9 @@ defmodule Sidereon.Geoid do
   """
   @spec load_egm96_dac(binary()) :: {:ok, grid()} | {:error, term()}
   def load_egm96_dac(bytes) when is_binary(bytes) do
-    case NIF.geoid_grid_from_egm96_dac(bytes) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_from_egm96_dac(bytes) |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_from_egm96_dac)
   end
 
   @doc """
@@ -289,12 +329,9 @@ defmodule Sidereon.Geoid do
   """
   @spec load_proj_egm96_gtx(binary()) :: {:ok, grid()} | {:error, term()}
   def load_proj_egm96_gtx(bytes) when is_binary(bytes) do
-    case NIF.geoid_grid_from_proj_egm96_gtx(bytes) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_from_proj_egm96_gtx(bytes) |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_from_proj_egm96_gtx)
   end
 
   @doc """
@@ -312,12 +349,9 @@ defmodule Sidereon.Geoid do
   """
   @spec load_egm2008_raster(binary(), egm2008_spacing()) :: {:ok, grid()} | {:error, term()}
   def load_egm2008_raster(bytes, spacing) when is_binary(bytes) do
-    case NIF.geoid_grid_from_egm2008_raster(bytes, egm2008_spacing(spacing)) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_from_egm2008_raster(bytes, egm2008_spacing(spacing)) |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_from_egm2008_raster)
   end
 
   @doc """
@@ -341,19 +375,17 @@ defmodule Sidereon.Geoid do
           pos_integer()
         ) :: {:ok, grid()} | {:error, term()}
   def load_egm2008_raster_window(bytes, spacing, lat_min_deg, lon_min_deg, n_lat, n_lon) when is_binary(bytes) do
-    case NIF.geoid_grid_from_egm2008_raster_window(
-           bytes,
-           egm2008_spacing(spacing),
-           lat_min_deg / 1.0,
-           lon_min_deg / 1.0,
-           n_lat,
-           n_lon
-         ) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_from_egm2008_raster_window(
+      bytes,
+      egm2008_spacing(spacing),
+      lat_min_deg / 1.0,
+      lon_min_deg / 1.0,
+      n_lat,
+      n_lon
+    )
+    |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_from_egm2008_raster_window)
   end
 
   @doc """
@@ -387,20 +419,18 @@ defmodule Sidereon.Geoid do
   @spec grid(number(), number(), number(), number(), non_neg_integer(), non_neg_integer(), [number()]) ::
           {:ok, grid()} | {:error, term()}
   def grid(lat_min_deg, lon_min_deg, dlat_deg, dlon_deg, n_lat, n_lon, values_m) when is_list(values_m) do
-    case NIF.geoid_grid_new(
-           lat_min_deg / 1.0,
-           lon_min_deg / 1.0,
-           dlat_deg / 1.0,
-           dlon_deg / 1.0,
-           n_lat,
-           n_lon,
-           Enum.map(values_m, &(&1 / 1.0))
-         ) do
-      {:ok, handle} -> {:ok, handle}
-      {:error, _} = err -> err
-    end
+    NIF.geoid_grid_new(
+      lat_min_deg / 1.0,
+      lon_min_deg / 1.0,
+      dlat_deg / 1.0,
+      dlon_deg / 1.0,
+      n_lat,
+      n_lon,
+      Enum.map(values_m, &(&1 / 1.0))
+    )
+    |> grid_result()
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_new)
   end
 
   @doc """
@@ -431,7 +461,7 @@ defmodule Sidereon.Geoid do
   typed `ProjVgridshiftError` and are never clamped or extrapolated.
   """
   @spec grid_undulation_proj_rad(grid(), number(), number(), proj_vgridshift_arithmetic()) ::
-          {:ok, float()} | {:error, ProjVgridshiftError.t()}
+          {:ok, float()} | {:error, ProjVgridshiftError.t() | Sidereon.argument_error()}
   def grid_undulation_proj_rad(handle, lat_rad, lon_rad, arithmetic)
       when is_reference(handle) and arithmetic in [:separate_multiply_add, :fused_multiply_add] do
     case NIF.geoid_grid_undulation_proj_rad(
@@ -445,7 +475,7 @@ defmodule Sidereon.Geoid do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :geoid_grid_undulation_proj_rad)
   end
 
   @doc """

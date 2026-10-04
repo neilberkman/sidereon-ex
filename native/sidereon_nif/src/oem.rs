@@ -6,19 +6,17 @@
 //! here. Date/time fields cross as raw strings; the Elixir binding owns any
 //! resolution to its native `DateTime`. Failure categories cross as atoms.
 
+use crate::ndm_errors::{oem_error_term, oem_state_line_error_term, InputRefusal};
 use rustler::{Encoder, Env, Term};
-use sidereon_core::astro::covariance::{Covariance6, Mat6};
 use sidereon_core::astro::oem::{
-    self as core_oem, Oem, OemCovariance, OemError, OemMetadata, OemSegment, OemState,
+    self as core_oem, Oem, OemComment, OemCovariance, OemError, OemMetadata, OemSegment,
+    OemSkippedState, OemState, OemStateLineError,
 };
 
 mod atoms {
     rustler::atoms! {
         ok,
         error,
-        missing_field,
-        invalid_field,
-        malformed
     }
 }
 
@@ -33,22 +31,32 @@ struct OemStateFields {
     acceleration_km_s2: Option<(f64, f64, f64)>,
 }
 
-/// One covariance block exchanged with the Elixir binding. The 6x6 matrix is a
-/// row-major list of six six-element rows.
+/// One covariance block exchanged with the Elixir binding: the 21
+/// lower-triangle values exactly as read.
 #[derive(Debug, Clone, rustler::NifMap)]
 struct OemCovarianceFields {
     epoch: String,
     cov_ref_frame: Option<String>,
-    matrix: Vec<Vec<f64>>,
+    lower_triangle: Vec<f64>,
+}
+
+/// A comment among a segment's state lines or covariance matrices, with the
+/// number of items of its list that precede it.
+#[derive(Debug, Clone, rustler::NifMap)]
+struct OemCommentFields {
+    position: u64,
+    text: String,
 }
 
 /// Segment metadata exchanged with the Elixir binding.
 #[derive(Debug, Clone, rustler::NifMap)]
 struct OemMetadataFields {
+    comments: Vec<String>,
     object_name: String,
     object_id: String,
     center_name: String,
     ref_frame: String,
+    ref_frame_epoch: Option<String>,
     time_system: String,
     start_time: String,
     stop_time: String,
@@ -62,19 +70,76 @@ struct OemMetadataFields {
 #[derive(Debug, Clone, rustler::NifMap)]
 struct OemSegmentFields {
     metadata: OemMetadataFields,
+    data_comments: Vec<OemCommentFields>,
     states: Vec<OemStateFields>,
+    covariance_comments: Vec<OemCommentFields>,
     covariances: Vec<OemCovarianceFields>,
 }
 
-/// Normalized OEM fields exchanged with the Elixir binding, mirroring
+/// Why a KVN ephemeris data line was skipped: `{:item_count, n}` or
+/// `{:invalid_field, item, kind}`.
+#[derive(Debug, Clone)]
+struct SkipReason(OemStateLineError);
+
+impl Encoder for SkipReason {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        oem_state_line_error_term(env, &self.0)
+    }
+}
+
+/// A skip reason is reader output only; the encode NIFs take
+/// `OemInputFields`, which carries no skipped lines, so none is ever decoded.
+impl<'a> rustler::Decoder<'a> for SkipReason {
+    fn decode(_term: Term<'a>) -> rustler::NifResult<Self> {
+        Err(rustler::Error::BadArg)
+    }
+}
+
+/// A KVN ephemeris data line the reader skipped.
+#[derive(Debug, Clone, rustler::NifMap)]
+struct OemSkippedStateFields {
+    line: u64,
+    segment: u64,
+    text: String,
+    reason: SkipReason,
+}
+
+impl From<OemSkippedState> for OemSkippedStateFields {
+    fn from(s: OemSkippedState) -> Self {
+        Self {
+            line: s.line as u64,
+            segment: s.segment as u64,
+            text: s.text,
+            reason: SkipReason(s.reason),
+        }
+    }
+}
+
+/// Normalized OEM fields sent to the Elixir binding, mirroring
 /// `%Sidereon.CCSDS.OEM{}`.
 #[derive(Debug, Clone, rustler::NifMap)]
 struct OemFields {
     ccsds_oem_vers: String,
+    comments: Vec<String>,
+    classification: Option<String>,
     creation_date: Option<String>,
     originator: Option<String>,
+    message_id: Option<String>,
     segments: Vec<OemSegmentFields>,
-    skipped_states: i64,
+    skipped_states: Vec<OemSkippedStateFields>,
+}
+
+/// OEM fields received from the Elixir binding. The skipped lines a reader
+/// reported are not written by either encoder, so they are not read back.
+#[derive(Debug, Clone, rustler::NifMap)]
+struct OemInputFields {
+    ccsds_oem_vers: String,
+    comments: Vec<String>,
+    classification: Option<String>,
+    creation_date: Option<String>,
+    originator: Option<String>,
+    message_id: Option<String>,
+    segments: Vec<OemSegmentFields>,
 }
 
 fn vec3((x, y, z): (f64, f64, f64)) -> [f64; 3] {
@@ -83,23 +148,6 @@ fn vec3((x, y, z): (f64, f64, f64)) -> [f64; 3] {
 
 fn tuple3(v: [f64; 3]) -> (f64, f64, f64) {
     (v[0], v[1], v[2])
-}
-
-fn matrix_rows(matrix: &Mat6) -> Vec<Vec<f64>> {
-    matrix.iter().map(|row| row.to_vec()).collect()
-}
-
-/// Rebuild a 6x6 covariance from the row-major list. Missing or short rows leave
-/// the remaining cells at zero; the round-trip carries trusted parsed data, so
-/// the matrix is wrapped without re-validation.
-fn covariance_from_rows(rows: &[Vec<f64>]) -> Covariance6 {
-    let mut matrix: Mat6 = [[0.0_f64; 6]; 6];
-    for (out_row, in_row) in matrix.iter_mut().zip(rows) {
-        for (slot, value) in out_row.iter_mut().zip(in_row) {
-            *slot = *value;
-        }
-    }
-    Covariance6::from_matrix_unchecked(matrix)
 }
 
 impl From<OemState> for OemStateFields {
@@ -129,28 +177,62 @@ impl From<OemCovariance> for OemCovarianceFields {
         Self {
             epoch: c.epoch,
             cov_ref_frame: c.cov_ref_frame,
-            matrix: matrix_rows(c.matrix.as_matrix()),
+            lower_triangle: c.lower_triangle.to_vec(),
         }
     }
 }
 
-impl From<OemCovarianceFields> for OemCovariance {
-    fn from(f: OemCovarianceFields) -> Self {
-        Self {
+impl TryFrom<OemCovarianceFields> for OemCovariance {
+    type Error = InputRefusal;
+
+    /// The 21 lower-triangle values, exactly as given; any other count is
+    /// refused rather than padded or cut.
+    fn try_from(f: OemCovarianceFields) -> Result<Self, InputRefusal> {
+        Ok(Self {
             epoch: f.epoch,
             cov_ref_frame: f.cov_ref_frame,
-            matrix: covariance_from_rows(&f.matrix),
+            lower_triangle: f.lower_triangle.try_into().map_err(|v: Vec<f64>| {
+                InputRefusal::Length {
+                    group: "covariance.lower_triangle",
+                    expected: 21,
+                    got: v.len(),
+                }
+            })?,
+        })
+    }
+}
+
+impl From<OemComment> for OemCommentFields {
+    fn from(c: OemComment) -> Self {
+        Self {
+            position: c.position as u64,
+            text: c.text,
         }
+    }
+}
+
+impl TryFrom<OemCommentFields> for OemComment {
+    type Error = InputRefusal;
+
+    fn try_from(f: OemCommentFields) -> Result<Self, InputRefusal> {
+        Ok(Self {
+            position: usize::try_from(f.position).map_err(|_| InputRefusal::OutOfRange {
+                field: "comment.position",
+            })?,
+            text: f.text,
+        })
     }
 }
 
 impl From<OemMetadata> for OemMetadataFields {
     fn from(m: OemMetadata) -> Self {
         Self {
+            comments: m.comments,
             object_name: m.object_name,
             object_id: m.object_id,
             center_name: m.center_name,
             ref_frame: m.ref_frame,
+            ref_frame_epoch: m.ref_frame_epoch,
             time_system: m.time_system,
             start_time: m.start_time,
             stop_time: m.stop_time,
@@ -165,10 +247,12 @@ impl From<OemMetadata> for OemMetadataFields {
 impl From<OemMetadataFields> for OemMetadata {
     fn from(f: OemMetadataFields) -> Self {
         Self {
+            comments: f.comments,
             object_name: f.object_name,
             object_id: f.object_id,
             center_name: f.center_name,
             ref_frame: f.ref_frame,
+            ref_frame_epoch: f.ref_frame_epoch,
             time_system: f.time_system,
             start_time: f.start_time,
             stop_time: f.stop_time,
@@ -184,19 +268,37 @@ impl From<OemSegment> for OemSegmentFields {
     fn from(s: OemSegment) -> Self {
         Self {
             metadata: s.metadata.into(),
+            data_comments: s.data_comments.into_iter().map(Into::into).collect(),
             states: s.states.into_iter().map(Into::into).collect(),
+            covariance_comments: s.covariance_comments.into_iter().map(Into::into).collect(),
             covariances: s.covariances.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<OemSegmentFields> for OemSegment {
-    fn from(f: OemSegmentFields) -> Self {
-        Self {
+impl TryFrom<OemSegmentFields> for OemSegment {
+    type Error = InputRefusal;
+
+    fn try_from(f: OemSegmentFields) -> Result<Self, InputRefusal> {
+        Ok(Self {
             metadata: f.metadata.into(),
+            data_comments: f
+                .data_comments
+                .into_iter()
+                .map(OemComment::try_from)
+                .collect::<Result<_, _>>()?,
             states: f.states.into_iter().map(Into::into).collect(),
-            covariances: f.covariances.into_iter().map(Into::into).collect(),
-        }
+            covariance_comments: f
+                .covariance_comments
+                .into_iter()
+                .map(OemComment::try_from)
+                .collect::<Result<_, _>>()?,
+            covariances: f
+                .covariances
+                .into_iter()
+                .map(OemCovariance::try_from)
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -204,40 +306,42 @@ impl From<Oem> for OemFields {
     fn from(o: Oem) -> Self {
         Self {
             ccsds_oem_vers: o.ccsds_oem_vers,
+            comments: o.comments,
+            classification: o.classification,
             creation_date: o.creation_date,
             originator: o.originator,
+            message_id: o.message_id,
             segments: o.segments.into_iter().map(Into::into).collect(),
-            skipped_states: o.skipped_states as i64,
+            skipped_states: o.skipped_states.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<OemFields> for Oem {
-    fn from(f: OemFields) -> Self {
-        Self {
+impl TryFrom<OemInputFields> for Oem {
+    type Error = InputRefusal;
+
+    fn try_from(f: OemInputFields) -> Result<Self, InputRefusal> {
+        Ok(Self {
             ccsds_oem_vers: f.ccsds_oem_vers,
+            comments: f.comments,
+            classification: f.classification,
             creation_date: f.creation_date,
             originator: f.originator,
-            segments: f.segments.into_iter().map(Into::into).collect(),
-            skipped_states: f.skipped_states.max(0) as usize,
-        }
-    }
-}
-
-/// Map a core OEM failure to its category atom, so the Elixir caller sees a
-/// `{:error, atom}` reason rather than a leaked Rust string.
-fn error_atom(error: &OemError) -> rustler::Atom {
-    match error {
-        OemError::MissingField(_) => atoms::missing_field(),
-        OemError::InvalidField { .. } => atoms::invalid_field(),
-        OemError::Field(_) => atoms::malformed(),
+            message_id: f.message_id,
+            segments: f
+                .segments
+                .into_iter()
+                .map(OemSegment::try_from)
+                .collect::<Result<_, _>>()?,
+            skipped_states: Vec::new(),
+        })
     }
 }
 
 fn parse_result<'a>(env: Env<'a>, result: Result<Oem, OemError>) -> Term<'a> {
     match result {
         Ok(parsed) => (atoms::ok(), OemFields::from(parsed)).encode(env),
-        Err(e) => (atoms::error(), error_atom(&e)).encode(env),
+        Err(e) => (atoms::error(), oem_error_term(env, &e)).encode(env),
     }
 }
 
@@ -253,14 +357,34 @@ fn oem_parse_xml<'a>(env: Env<'a>, text: String) -> Term<'a> {
     parse_result(env, core_oem::parse_xml(&text))
 }
 
+/// `{:ok, text}`; `{:error, {:invalid_length, :"covariance.lower_triangle",
+/// 21, got}}` for a covariance without exactly 21 lower-triangle values,
+/// `{:error, {:invalid_field, :"comment.position", :out_of_range}}` for a
+/// comment position no index holds, or `{:error, reason}` with the typed term
+/// for a message the writer refuses.
+fn encode_result<'a>(
+    env: Env<'a>,
+    fields: OemInputFields,
+    encode: fn(&Oem) -> Result<String, OemError>,
+) -> Term<'a> {
+    let oem = match Oem::try_from(fields) {
+        Ok(oem) => oem,
+        Err(refusal) => return (atoms::error(), refusal.term(env)).encode(env),
+    };
+    match encode(&oem) {
+        Ok(text) => (atoms::ok(), text).encode(env),
+        Err(e) => (atoms::error(), oem_error_term(env, &e)).encode(env),
+    }
+}
+
 /// Serialize normalized OEM fields as CCSDS OEM KVN text.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn oem_encode_kvn(fields: OemFields) -> String {
-    core_oem::encode_kvn(&fields.into())
+fn oem_encode_kvn<'a>(env: Env<'a>, fields: OemInputFields) -> Term<'a> {
+    encode_result(env, fields, core_oem::encode_kvn)
 }
 
 /// Serialize normalized OEM fields as CCSDS OEM XML text.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn oem_encode_xml(fields: OemFields) -> String {
-    core_oem::encode_xml(&fields.into())
+fn oem_encode_xml<'a>(env: Env<'a>, fields: OemInputFields) -> Term<'a> {
+    encode_result(env, fields, core_oem::encode_xml)
 }

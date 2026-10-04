@@ -167,14 +167,24 @@ fn rinex_band_lookup<'a>(
         None => None,
     };
 
-    if system_id == GnssSystem::Glonass && matches!(band_char, '1' | '2') && channel.is_none() {
+    let glonass_fdma = system_id == GnssSystem::Glonass && matches!(band_char, '1' | '2');
+    if glonass_fdma && channel.is_none() {
         return error(env, atoms::missing_glonass_channel());
     }
 
     match lookup(system_id, band_char, channel) {
         Some(value) => (atoms::ok(), value).encode(env),
+        None if glonass_fdma && outside_fdma_allocation(channel) => {
+            error(env, atoms::invalid_channel())
+        }
         None => error(env, atoms::unknown_band()),
     }
+}
+
+/// Whether a GLONASS FDMA channel lies outside the `-7..=6` allocation, for
+/// which the core resolves no G1 or G2 carrier (as RTKLIB `code2freq_GLO`).
+fn outside_fdma_allocation(channel: Option<i8>) -> bool {
+    channel.is_some_and(|channel| !(-7..=6).contains(&channel))
 }
 
 fn rinex_observation_lookup<'a>(
@@ -198,12 +208,16 @@ fn rinex_observation_lookup<'a>(
     };
 
     let band = code.chars().nth(1);
-    if system_id == GnssSystem::Glonass && matches!(band, Some('1' | '2')) && channel.is_none() {
+    let glonass_fdma = system_id == GnssSystem::Glonass && matches!(band, Some('1' | '2'));
+    if glonass_fdma && channel.is_none() {
         return error(env, atoms::missing_glonass_channel());
     }
 
     match lookup(system_id, &code, rinex_version, channel) {
         Some(value) => (atoms::ok(), value).encode(env),
+        None if glonass_fdma && outside_fdma_allocation(channel) => {
+            error(env, atoms::invalid_channel())
+        }
         None => error(env, atoms::unknown_observation_code()),
     }
 }

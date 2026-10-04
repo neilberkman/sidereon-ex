@@ -13,15 +13,33 @@ defmodule Sidereon.GNSS.QC do
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.Positioning.Solution
-  alias Sidereon.GNSS.QC.{RaimInput, RaimResult}
+  alias Sidereon.GNSS.QC.{QualityError, RaimInput, RaimResult}
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_a 0.3
   @default_b 0.3
   @default_p_fa 1.0e-3
+  @default_max_exclusions 1
+  @default_max_exclusion_rms_m 100.0
+  @quality_error_kinds [
+    :invalid_elevation,
+    :missing_cn0,
+    :invalid_parameter,
+    :invalid_reliability_parameter,
+    :invalid_probability,
+    :invalid_system_count,
+    :invalid_dof,
+    :invalid_weight,
+    :invalid_residuals,
+    :invalid_design,
+    :singular_geometry,
+    :missing_variances,
+    :invalid_variance
+  ]
 
   @default_initial_guess {0.0, 0.0, 0.0, 0.0}
   @default_alpha {0.0, 0.0, 0.0, 0.0}
@@ -345,7 +363,21 @@ defmodule Sidereon.GNSS.QC do
   end
 
   defmodule ObservationNote do
-    @moduledoc "Non-fatal QC note."
+    @moduledoc """
+    Non-fatal QC note.
+
+    `kind` is one of:
+
+      * `"non_monotonic_epoch"` - the observation epoch at `epoch_index` is a
+        duplicate of, or earlier than, the one before it.
+      * `"interval_unresolved"` - no epoch interval could be resolved.
+      * `"event_header_records_unread"` - an event's header records did not
+        read, so every epoch was taken with the file header. A product read
+        from text always reads, so a product this binding parsed never carries
+        this note.
+
+    `epoch_index` is `nil` for every kind but `"non_monotonic_epoch"`.
+    """
     defstruct [:kind, :epoch_index]
 
     @type t :: %__MODULE__{kind: String.t(), epoch_index: non_neg_integer() | nil}
@@ -360,27 +392,63 @@ defmodule Sidereon.GNSS.QC do
     Post-solve RAIM input.
 
     `:used_sats` and `:residuals_m` must use the same order. Residuals are the
-    post-fit range residuals in meters.
+    post-fit range residuals in meters. `:variances_m2`, when supplied, are the
+    positive finite variances the estimator used, in that same order.
     """
 
     @enforce_keys [:used_sats, :residuals_m]
-    defstruct [:used_sats, :residuals_m]
+    defstruct [:used_sats, :residuals_m, :variances_m2]
 
     @type t :: %__MODULE__{
             used_sats: [String.t()],
-            residuals_m: [float()]
+            residuals_m: [float()],
+            variances_m2: [float()] | nil
           }
 
     @doc """
     Build post-solve RAIM input from satellite ids and residuals.
     """
     @spec new([String.t()], [number()]) :: t()
-    def new(used_sats, residuals_m) when is_list(used_sats) and is_list(residuals_m) do
+    @spec new([String.t()], [number()], [number()] | nil) :: t()
+    def new(used_sats, residuals_m, variances_m2 \\ nil)
+
+    def new(used_sats, residuals_m, variances_m2)
+        when is_list(used_sats) and is_list(residuals_m) and (is_list(variances_m2) or is_nil(variances_m2)) do
       %__MODULE__{
         used_sats: used_sats,
-        residuals_m: Enum.map(residuals_m, &(&1 / 1.0))
+        residuals_m: Enum.map(residuals_m, &(&1 / 1.0)),
+        variances_m2: if(variances_m2, do: Enum.map(variances_m2, &(&1 / 1.0)))
       }
     end
+  end
+
+  defmodule QualityError do
+    @moduledoc "A unit core quality-control refusal, retaining its core variant as `kind`."
+
+    @enforce_keys [:kind]
+    defexception [:kind, :message]
+
+    @type kind ::
+            :invalid_elevation
+            | :missing_cn0
+            | :invalid_parameter
+            | :invalid_reliability_parameter
+            | :invalid_probability
+            | :invalid_system_count
+            | :invalid_dof
+            | :invalid_weight
+            | :invalid_residuals
+            | :invalid_design
+            | :singular_geometry
+            | :missing_variances
+            | :invalid_variance
+
+    @type t :: %__MODULE__{kind: kind(), message: String.t() | nil}
+
+    @impl true
+    def message(%__MODULE__{message: message}) when is_binary(message), do: message
+
+    def message(%__MODULE__{kind: kind}), do: "quality control refused input: #{kind}"
   end
 
   defmodule RaimResult do
@@ -441,26 +509,34 @@ defmodule Sidereon.GNSS.QC do
           worst_sat: String.t() | nil
         }
 
+  @typedoc "The public exception raised or returned for a core quality-control refusal."
+  @type quality_error :: QualityError.t()
+
+  @typedoc "FDE state returned when the core stops with a detected fault."
+  @type fde_unresolved :: %{
+          reason: String.t(),
+          solution: Solution.t(),
+          excluded: [{String.t(), :raim_excluded}],
+          iterations: non_neg_integer(),
+          raim: raim_result()
+        }
+
   @doc """
   Pseudorange measurement variance (m^2) from satellite elevation.
 
-  Returns a float, `{:error, :invalid_elevation}` for elevations at or below the
-  horizon, or `{:error, :missing_cn0}` when `model: :elevation_cn0` is selected
-  without `:cn0`.
+  Returns a float or a tagged core refusal. The core accepts finite elevations
+  in `[-90, 90]`; a zero-elevation observation is valid when `b: 0.0`, while a
+  nonzero elevation-scaled term has undefined variance at the horizon.
   """
-  @spec pseudorange_variance(number(), keyword()) ::
-          float() | {:error, :invalid_elevation | :missing_cn0}
+  @spec pseudorange_variance(number(), keyword()) :: float() | {:error, QualityError.kind()}
   def pseudorange_variance(elevation_deg, opts \\ [])
-
-  def pseudorange_variance(elevation_deg, _opts) when elevation_deg <= 0, do: {:error, :invalid_elevation}
 
   def pseudorange_variance(elevation_deg, opts) do
     {a, b, model, cn0, scale} = variance_args(opts)
 
     case NIF.qc_pseudorange_variance(elevation_deg / 1.0, a, b, model, cn0, scale) do
       {:ok, value} -> value
-      {:error, :invalid_elevation} -> {:error, :invalid_elevation}
-      {:error, :missing_cn0} -> {:error, :missing_cn0}
+      {:error, kind} when kind in @quality_error_kinds -> {:error, kind}
     end
   end
 
@@ -493,10 +569,19 @@ defmodule Sidereon.GNSS.QC do
   @doc """
   Residual-based RAIM: a chi-square goodness-of-fit test on a positioning solution.
 
+  The default `weights: :solution` uses the actual per-satellite variances from
+  the solution or `RaimInput`; pass `weights: :unit` or a satellite-weight map
+  for the other modes. Solution input also carries its actual receiver-clock
+  count so shared GPS/QZSS/SBAS clocks are not counted as separate parameters.
+
   Pass inverse-variance weights derived from per-satellite residual variances,
   either as a `%{sat => weight}` map or as weight entries consumed by
   `weight_vector/2`. Unit weights with metre-scale residuals make
   `fault_detected` saturate near 100%.
+
+  A core refusal raises `Sidereon.GNSS.QC.QualityError`, whose `:kind` is the
+  core variant (for example `:missing_variances` or `:invalid_variance`).
+  Binding-level malformed options continue to raise `ArgumentError`.
 
       entries = [
         %{satellite_id: "G01", elevation_deg: 72.0},
@@ -511,13 +596,17 @@ defmodule Sidereon.GNSS.QC do
 
   def raim(%RaimInput{} = input, opts) do
     input.used_sats
-    |> run_raim(input.residuals_m, opts)
+    |> run_raim(input.residuals_m, input.variances_m2, opts)
     |> decode_raim_result(:struct)
   end
 
   def raim(%Solution{} = solution, opts) do
     solution.used_sats
-    |> run_raim(solution.residuals_m, opts)
+    |> run_raim(
+      solution.residuals_m,
+      solution.pseudorange_variances_m2,
+      solution_raim_opts(solution, opts)
+    )
     |> decode_raim_result(:map)
   end
 
@@ -526,12 +615,18 @@ defmodule Sidereon.GNSS.QC do
 
   This is the direct post-solve variant matching the Rust and C
   `raim_for_solution` surface. It uses the solution's used satellites and
-  post-fit residuals, with the same options accepted by `raim/2`.
+  post-fit residuals, actual variances and solved receiver-clock count, with the
+  same options accepted by `raim/2`. An explicit `:n_systems` overrides that
+  count.
   """
   @spec raim_for_solution(Solution.t(), keyword()) :: raim_result()
   def raim_for_solution(%Solution{} = solution, opts \\ []) do
     solution.used_sats
-    |> run_raim(solution.residuals_m, opts)
+    |> run_raim(
+      solution.residuals_m,
+      solution.pseudorange_variances_m2,
+      solution_raim_opts(solution, opts)
+    )
     |> decode_raim_result(:map)
   end
 
@@ -553,51 +648,87 @@ defmodule Sidereon.GNSS.QC do
     * `:p_fa` - false-alarm probability for the global chi-square test
       (default `#{@default_p_fa}`)
     * `:max_exclusions` - maximum measurements the exclusion loop may remove
-      (default: the row count)
+      (default: one, matching RTKLIB demo5)
     * `:min_redundancy` - minimum redundancy an exclusion must leave behind
       (default `1`)
+    * `:max_exclusion_rms_m` - largest admissible unweighted residual RMS for a
+      leave-one-out candidate (default `100.0`; `:infinity` disables this cap)
 
   Returns `{:ok, result}` where `result` carries the protected
   `:state_correction`, `:state_covariance`, the `:global_test` chi-square map,
   the `:excluded` ids, per-measurement `:diagnostics`, and the exclusion
   `:iterations`; or `{:error, reason}` for a malformed or rank-deficient input.
+  The removed `:max_iterations` option is explicitly rejected as
+  `{:invalid_option, :max_iterations}`.
+  Core quality refusals return `{:error, %Sidereon.GNSS.QC.QualityError{}}`.
   """
   @spec raim_fde_design([map()], keyword()) :: {:ok, map()} | {:error, term()}
   def raim_fde_design(rows, opts \\ []) when is_list(rows) do
     p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
-    max_exclusions = Keyword.get(opts, :max_exclusions, length(rows))
+    max_exclusions = Keyword.get(opts, :max_exclusions, @default_max_exclusions)
     min_redundancy = Keyword.get(opts, :min_redundancy, 1)
+    max_exclusion_rms_m = Keyword.get(opts, :max_exclusion_rms_m, @default_max_exclusion_rms_m)
 
-    case NIF.qc_raim_fde_design(
-           Enum.map(rows, &normalize_fde_row/1),
-           p_fa / 1.0,
-           max_exclusions,
-           min_redundancy
-         ) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
+    with false <- Keyword.has_key?(opts, :max_iterations),
+         {:ok, max_exclusions} <- max_exclusions_arg(max_exclusions),
+         {:ok, min_redundancy} <- min_redundancy_arg(min_redundancy),
+         {:ok, cap} <- exclusion_rms_cap_arg(max_exclusion_rms_m) do
+      case NIF.qc_raim_fde_design(
+             Enum.map(rows, &normalize_fde_row/1),
+             p_fa / 1.0,
+             max_exclusions,
+             min_redundancy,
+             cap
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, kind} when kind in @quality_error_kinds -> {:error, quality_error(kind)}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      true -> {:error, {:invalid_option, :max_iterations}}
+      other -> other
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :qc_raim_fde_design)
   end
 
   @doc """
-  Fault detection and exclusion: solve, run RAIM, exclude the worst satellite,
-  and repeat until the measurement set is self-consistent or the exclusion
-  budget is exhausted.
+  Fault detection and exclusion: solve, run RAIM, compare leave-one-out
+  candidate solves when a fault is detected, and repeat until the accepted
+  solution passes RAIM or the exclusion budget is exhausted.
+
+  `:pseudorange_code` selects the code of the pseudoranges as in
+  `Sidereon.GNSS.Positioning.solve/4` (default `:single_frequency`).
 
   Malformed FDE options are returned as tagged errors, including
-  `{:invalid_option, :p_fa}`, `{:invalid_option, :weights}`, and
-  `{:invalid_option, :max_iterations}`.
+  `{:invalid_option, :p_fa}`, `{:invalid_option, :weights}`,
+  `{:invalid_option, :max_exclusions}`, `{:invalid_option, :max_exclusion_rms_m}`
+  and `{:invalid_option, :pseudorange_code}`. Weighting defaults to the solution's
+  actual per-satellite variances; `weights: :unit` and a positive satellite map
+  remain explicit alternatives. `max_exclusions` defaults to one and the RMS cap
+  defaults to 100 metres; use `:infinity` to remove the cap.
+  The removed `:max_iterations` option is explicitly rejected, including when
+  supplied together with `:max_exclusions`.
+  Core quality refusals return `{:error, %Sidereon.GNSS.QC.QualityError{}}`;
+  malformed binding options remain tagged with `:invalid_option`.
+  Success returns the accepted `:solution`, ordered `:excluded` list, number of
+  exclusions, and the accepted solution's `:raim` result. An unresolved fault
+  returns `{:error, {:fault_unresolved, unresolved}}`; the map includes the
+  core `:reason` (`"exclusion_budget_exhausted"` or
+  `"no_admissible_exclusion"`), last `:solution`, `:excluded` list,
+  `:iterations`, and its faulted `:raim` result. An ephemeris source that
+  refuses a satellite state reading UT1 outside the UT1 table fails with
+  `{:ut1_outside_coverage, :before_coverage | :after_coverage}`.
   """
   @spec fde(term(), [Positioning.observation()], Positioning.epoch(), keyword()) ::
           {:ok,
            %{
              solution: Solution.t(),
              excluded: [{String.t(), :raim_excluded}],
-             iterations: non_neg_integer()
+             iterations: non_neg_integer(),
+             raim: raim_result()
            }}
-          | {:error, {:fault_unresolved, float()}}
+          | {:error, {:fault_unresolved, fde_unresolved()}}
           | {:error, term()}
   def fde(source, observations, epoch, opts \\ [])
 
@@ -611,14 +742,20 @@ defmodule Sidereon.GNSS.QC do
 
   @doc """
   Core robust-reweighted SPP under the RAIM/FDE exclusion loop.
+
+  The successful result carries the accepted solution, ordered exclusions,
+  exclusion count and that solution's `:raim` test. An unresolved fault carries
+  the core stop reason, last solution, exclusions and faulted RAIM result.
   """
   @spec robust_fde(term(), [Positioning.observation()], Positioning.epoch(), keyword()) ::
           {:ok,
            %{
              solution: Solution.t(),
              excluded: [{String.t(), :raim_excluded}],
-             iterations: non_neg_integer()
+             iterations: non_neg_integer(),
+             raim: raim_result()
            }}
+          | {:error, {:fault_unresolved, fde_unresolved()}}
           | {:error, term()}
   def robust_fde(source, observations, epoch, opts \\ [])
 
@@ -633,7 +770,8 @@ defmodule Sidereon.GNSS.QC do
   @doc """
   Observation completeness and signal-quality rollup for a parsed RINEX OBS file.
   """
-  @spec observation_report(Observations.t(), keyword()) :: {:ok, ObservationReport.t()} | {:error, term()}
+  @spec observation_report(Observations.t(), keyword()) ::
+          {:ok, ObservationReport.t()} | {:error, term()}
   def observation_report(%Observations{handle: handle}, opts \\ []) do
     interval = Keyword.get(opts, :interval_s)
     gap_factor = Keyword.get(opts, :gap_factor, 1.5)
@@ -649,7 +787,7 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_obs_observation_qc)
   end
 
   @doc """
@@ -659,7 +797,7 @@ defmodule Sidereon.GNSS.QC do
   def render_text(%ObservationReport{handle: handle}) when is_reference(handle) do
     {:ok, NIF.rinex_qc_report_render_text(handle)}
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_report_render_text)
   end
 
   def render_text(%ObservationReport{}), do: {:error, :missing_report_handle}
@@ -671,7 +809,7 @@ defmodule Sidereon.GNSS.QC do
   def render_html(%ObservationReport{handle: handle}) when is_reference(handle) do
     {:ok, NIF.rinex_qc_report_render_html(handle)}
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_report_render_html)
   end
 
   def render_html(%ObservationReport{}), do: {:error, :missing_report_handle}
@@ -686,13 +824,18 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_report_to_json)
   end
 
   def to_json(%ObservationReport{}), do: {:error, :missing_report_handle}
 
   @doc """
   Lint a parsed RINEX OBS file.
+
+  Each finding preserves :code, :severity, :spec_ref, :repairable, and :at,
+  and also reports :kind plus :details. A populated detail is a tagged tuple
+  such as {:obs_event_epoch, %{flag: 4}}; a fieldless detail is the variant
+  atom, such as :obs_interval_unavailable.
   """
   @spec lint_obs(Observations.t()) :: {:ok, map()} | {:error, term()}
   def lint_obs(%Observations{handle: handle}) do
@@ -701,11 +844,15 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_lint_obs)
   end
 
   @doc """
   Lint RINEX OBS or CRINEX text.
+
+  Findings include their tagged variant and typed payload in :details, while
+  retaining the existing code, severity, spec reference, repairability, and
+  source-location fields.
   """
   @spec lint_obs_text(String.t()) :: {:ok, map()} | {:error, term()}
   def lint_obs_text(text) when is_binary(text) do
@@ -714,11 +861,15 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_lint_obs_text)
   end
 
   @doc """
   Lint RINEX NAV text.
+
+  A NavImplausibleRecord detail keeps finite :value fields as floats;
+  non-finite values are represented by :nan, :infinity, or
+  :negative_infinity.
   """
   @spec lint_nav_text(String.t()) :: {:ok, map()} | {:error, term()}
   def lint_nav_text(text) when is_binary(text) do
@@ -727,7 +878,7 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_lint_nav_text)
   end
 
   @doc """
@@ -736,6 +887,22 @@ defmodule Sidereon.GNSS.QC do
   Content-changing repairs other than record sorting are opt-in. Set
   `:set_interval` to `true` to replace an unavailable or mismatched `INTERVAL`
   from the observed epoch cadence, for example.
+
+  The repaired product is written with the observation writer, which returns
+  text only when it reads back as the product, and that text is then
+  compressed to CRINEX. On success the map holds both texts, the actions taken
+  and the lint report after repair. Each failure keeps its own shape:
+
+    * `{:error, {:parse, message}}` or `{:error, {:invalid_input, message}}` -
+      the input does not read, or repair refuses it, such as text whose
+      unretained header records a repair would drop without
+      `drop_unsupported: true`.
+    * `{:error, {:repaired_product_unwritable, {tag, fields}}}` - the repaired
+      product cannot be written exactly; `{tag, fields}` is one of the writer
+      refusals `Sidereon.GNSS.RINEX.Observations` lists.
+    * `{:error, {:crinex_encode_failed, {kind, message}}}` - the written RINEX
+      does not compress, `kind` being `:parse`, `:invalid_input` or
+      `:unhandled`.
   """
   @spec repair_obs_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def repair_obs_text(text, opts \\ []) when is_binary(text) do
@@ -744,13 +911,22 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_repair_obs_text)
   end
 
   @doc """
   Mechanically repair RINEX NAV text.
 
-  Content-changing repairs other than record sorting are opt-in.
+  Content-changing repairs other than record sorting are opt-in. The repaired
+  product's `iono` map carries every broadcast ionosphere set the header
+  states: `gps`, `beidou`, `qzss` and `navic` Klobuchar `{alpha, beta}` pairs,
+  `galileo` NeQuick G coefficients, `galileo_disturbance_flags` and the BeiDou
+  BDGIM `beidou_bdgim` coefficients, each `nil` when absent.
+
+  Returns `{:error, {:repaired_product_unwritable, {:not_representable, line,
+  reason}}}` when the repaired record set cannot be written as RINEX
+  navigation text, such as a set holding both a CNAV-family record and an
+  unclassified Galileo record.
   """
   @spec repair_nav_text(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def repair_nav_text(text, opts \\ []) when is_binary(text) do
@@ -759,21 +935,35 @@ defmodule Sidereon.GNSS.QC do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rinex_qc_repair_nav_text)
   end
 
   @doc """
   Chi-square inverse CDF (quantile).
   """
-  @spec chi2_inv(float(), pos_integer()) :: float()
-  def chi2_inv(p, k) when is_number(p) and p > 0.0 and p < 1.0 and is_integer(k) and k >= 1 do
-    case NIF.qc_chi2_inv(p / 1.0, k) do
-      {:ok, value} -> value
-      {:error, _reason} -> raise_chi2_error!(p, k)
+  @spec chi2_inv(number(), integer()) :: float()
+  def chi2_inv(p, k)
+      when is_number(p) and is_integer(k) and k >= -9_223_372_036_854_775_808 and k <= 9_223_372_036_854_775_807 do
+    case chi2_probability_float(p) do
+      {:ok, probability} ->
+        case NIF.qc_chi2_inv(probability, k) do
+          {:ok, value} -> value
+          {:error, kind} when kind in @quality_error_kinds -> raise quality_error(kind)
+          {:error, _reason} -> raise_chi2_error!(p, k)
+        end
+
+      :unrepresentable ->
+        raise_chi2_error!(p, k)
     end
   end
 
   def chi2_inv(p, k), do: raise_chi2_error!(p, k)
+
+  defp chi2_probability_float(p) do
+    {:ok, p / 1.0}
+  rescue
+    ArithmeticError -> :unrepresentable
+  end
 
   defp variance_args(opts) do
     a = Keyword.get(opts, :a, @default_a) / 1.0
@@ -803,27 +993,64 @@ defmodule Sidereon.GNSS.QC do
     %{satellite_id: sat, elevation_deg: el / 1.0, cn0: cn0 / 1.0}
   end
 
-  defp run_raim(used_sats, residuals_m, opts) do
+  defp run_raim(used_sats, residuals_m, variances_m2, opts) do
     p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
-    weights_opt = Keyword.get(opts, :weights, :unit)
+    weights_opt = Keyword.get(opts, :weights, :solution)
 
     validate_p_fa!(p_fa)
-    {unit_weights?, weights} = raim_weight_args(weights_opt, opts)
+    validate_weights!(weights_opt)
+    {weights_mode, weights} = raim_weight_args(weights_opt, opts)
     n_systems = n_systems_arg(Keyword.get(opts, :n_systems))
 
     case NIF.qc_raim(
            used_sats,
            residuals_m,
+           variances_m2,
            p_fa / 1.0,
-           unit_weights?,
+           weights_mode,
            weights,
            n_systems
          ) do
-      {:ok, result} -> result
-      {:error, :invalid_probability} -> raise_chi2_error!(1.0 - p_fa, nil)
-      {:error, :invalid_weight} -> raise_weights_error!(weights_opt)
+      {:ok, result} ->
+        result
+
+      {:error, kind} when kind in @quality_error_kinds ->
+        raise quality_error(kind)
+
+      {:error, reason} ->
+        raise ArgumentError, "RAIM refused input: #{inspect(reason)}"
     end
   end
+
+  defp solution_raim_opts(solution, opts) do
+    case Keyword.fetch(opts, :n_systems) do
+      {:ok, nil} -> Keyword.put(opts, :n_systems, map_size(solution.system_clocks_s))
+      {:ok, _explicit} -> opts
+      :error -> Keyword.put(opts, :n_systems, map_size(solution.system_clocks_s))
+    end
+  end
+
+  defp quality_error(kind) when kind in @quality_error_kinds do
+    %QualityError{kind: kind, message: quality_error_message(kind)}
+  end
+
+  defp quality_error_message(:invalid_elevation), do: "invalid elevation"
+  defp quality_error_message(:missing_cn0), do: "missing C/N0"
+  defp quality_error_message(:invalid_parameter), do: "invalid quality parameter"
+  defp quality_error_message(:invalid_reliability_parameter), do: "invalid reliability parameter"
+  defp quality_error_message(:invalid_probability), do: "invalid probability"
+  defp quality_error_message(:invalid_system_count), do: "invalid RAIM system count"
+  defp quality_error_message(:invalid_dof), do: "invalid degrees of freedom"
+  defp quality_error_message(:invalid_weight), do: "invalid RAIM weight"
+  defp quality_error_message(:invalid_residuals), do: "invalid RAIM residuals"
+  defp quality_error_message(:invalid_design), do: "invalid linearized measurement design"
+  defp quality_error_message(:singular_geometry), do: "singular or rank-deficient geometry"
+
+  defp quality_error_message(:missing_variances),
+    do: "RAIM solution weighting requires actual variances in residual order"
+
+  defp quality_error_message(:invalid_variance),
+    do: "RAIM variances must be finite, positive, and aligned with used satellites"
 
   defp decode_raim_result(fields, :map) do
     %{
@@ -866,7 +1093,7 @@ defmodule Sidereon.GNSS.QC do
     end
   end
 
-  defp validate_p_fa(p) when is_number(p) and p > 0.0 and p < 1.0 and 1.0 - p < 1.0, do: :ok
+  defp validate_p_fa(p) when is_number(p) and p > 0.0 and p < 1.0, do: :ok
 
   defp validate_p_fa(_p), do: {:error, {:invalid_option, :p_fa}}
 
@@ -880,14 +1107,23 @@ defmodule Sidereon.GNSS.QC do
 
       {:error, {:invalid_option, :weights}} ->
         raise ArgumentError,
-              "raim :weights must be :unit or a %{sat => weight} map, got: #{inspect(weights)}"
+              "raim :weights must be :solution, :unit, a %{sat => weight} map, or weight-entry list, got: #{inspect(weights)}"
     end
   end
 
+  defp validate_weights(:solution), do: :ok
   defp validate_weights(:unit), do: :ok
 
   defp validate_weights(weights) when is_map(weights) do
-    if Enum.all?(weights, fn {sat, w} -> is_binary(sat) and is_number(w) and w > 0.0 end) do
+    if Enum.all?(weights, fn {sat, w} -> is_binary(sat) and positive_finite_number?(w) end) do
+      :ok
+    else
+      {:error, {:invalid_option, :weights}}
+    end
+  end
+
+  defp validate_weights(entries) when is_list(entries) do
+    if Enum.all?(entries, &valid_weight_entry?/1) do
       :ok
     else
       {:error, {:invalid_option, :weights}}
@@ -896,15 +1132,37 @@ defmodule Sidereon.GNSS.QC do
 
   defp validate_weights(_other), do: {:error, {:invalid_option, :weights}}
 
+  defp valid_weight_entry?({sat, elevation}) do
+    is_binary(sat) and finite_number?(elevation)
+  end
+
+  defp valid_weight_entry?({sat, elevation, cn0}) do
+    is_binary(sat) and finite_number?(elevation) and finite_number?(cn0)
+  end
+
+  defp valid_weight_entry?(_entry), do: false
+
+  defp positive_finite_number?(value), do: finite_number?(value) and value > 0
+
+  defp finite_number?(value) when is_number(value) do
+    converted = value / 1.0
+    converted == converted and abs(converted) <= 1.7976931348623157e308
+  rescue
+    ArithmeticError -> false
+  end
+
+  defp finite_number?(_value), do: false
+
   defp raise_weights_error!(weights) do
     raise ArgumentError, "raim :weights must all be positive numbers, got: #{inspect(weights)}"
   end
 
-  defp raim_weight_args(:unit, _opts), do: {true, []}
+  defp raim_weight_args(:solution, _opts), do: {:solution, []}
+  defp raim_weight_args(:unit, _opts), do: {:unit, []}
 
   defp raim_weight_args(weights, _opts) when is_map(weights) do
     validate_weights!(weights)
-    {false, string_weight_pairs(weights)}
+    {:satellite, string_weight_pairs(weights)}
   end
 
   defp raim_weight_args(entries, opts) when is_list(entries) do
@@ -913,12 +1171,12 @@ defmodule Sidereon.GNSS.QC do
       |> weight_vector(raim_variance_opts(opts))
       |> string_weight_pairs()
 
-    {false, weights}
+    {:satellite, weights}
   end
 
   defp raim_weight_args(weights, _opts) when not is_map(weights) and not is_list(weights) do
     raise ArgumentError,
-          "raim :weights must be :unit, a %{sat => weight} map, or a weight-entry list, got: #{inspect(weights)}"
+          "raim :weights must be :solution, :unit, a %{sat => weight} map, or a weight-entry list, got: #{inspect(weights)}"
   end
 
   defp raim_variance_opts(opts) do
@@ -937,8 +1195,10 @@ defmodule Sidereon.GNSS.QC do
   end
 
   defp n_systems_arg(nil), do: nil
-  defp n_systems_arg(false), do: nil
-  defp n_systems_arg(value), do: value
+
+  defp n_systems_arg(value) when is_integer(value) and value > 0 and value <= 9_223_372_036_854_775_807, do: value
+
+  defp n_systems_arg(_value), do: raise(quality_error(:invalid_system_count))
 
   defp normalize_fde_row(%{id: id, residual_m: residual_m, design_row: design_row, weight: weight})
        when is_binary(id) and is_list(design_row) do
@@ -954,6 +1214,9 @@ defmodule Sidereon.GNSS.QC do
     huber? = Keyword.get(opts, :huber, false)
 
     cond do
+      Keyword.has_key?(opts, :max_iterations) ->
+        {:error, {:invalid_option, :max_iterations}}
+
       huber? == true ->
         {:error, {:incompatible_options, [:robust, :huber]}}
 
@@ -967,15 +1230,19 @@ defmodule Sidereon.GNSS.QC do
 
   defp run_core_fde(source, handle, observations, epoch, opts, robust?) do
     p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
-    weights_opt = Keyword.get(opts, :weights, :unit)
+    weights_opt = Keyword.get(opts, :weights, :solution)
+    max_exclusions = Keyword.get(opts, :max_exclusions, @default_max_exclusions)
+    max_exclusion_rms_m = Keyword.get(opts, :max_exclusion_rms_m, @default_max_exclusion_rms_m)
 
     with :ok <- validate_p_fa(p_fa),
          :ok <- validate_weights(weights_opt),
          :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
-         {:ok, max_iterations} <- max_iterations_arg(observations, opts),
+         {:ok, max_exclusions} <- max_exclusions_arg(max_exclusions),
+         {:ok, max_exclusion_rms_m} <- exclusion_rms_cap_arg(max_exclusion_rms_m),
+         {:ok, pseudorange_code} <- Positioning.pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- Positioning.model_options(opts),
          {:ok, args} <- fde_common_args(observations, epoch, opts) do
-      unit_weights? = weights_opt == :unit
-      weights = if unit_weights?, do: [], else: string_weight_pairs(weights_opt)
+      {weights_mode, weights} = raim_weight_args(weights_opt, opts)
       n_systems = n_systems_arg(Keyword.get(opts, :n_systems))
       max_pdop = Keyword.get(opts, :max_pdop)
 
@@ -992,13 +1259,24 @@ defmodule Sidereon.GNSS.QC do
           NIF,
           nif_fun,
           [handle | args] ++
-            [p_fa / 1.0, unit_weights?, weights, n_systems, max_iterations, max_pdop]
+            [
+              p_fa / 1.0,
+              weights_mode,
+              weights,
+              n_systems,
+              max_exclusions,
+              max_exclusion_rms_m,
+              max_pdop,
+              pseudorange_code,
+              qzss_clock,
+              troposphere_model
+            ]
         )
 
       decode_fde_result(result)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :qc_fde)
   end
 
   defp validate_max_pdop(nil), do: :ok
@@ -1006,10 +1284,9 @@ defmodule Sidereon.GNSS.QC do
   defp validate_max_pdop(_value), do: {:error, {:invalid_option, :max_pdop}}
 
   defp fde_common_args(observations, epoch, opts) do
-    with {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
-      sod = Time.second_of_day(epoch)
-      doy = Time.day_of_year(epoch)
-
+    with {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, sod} <- Time.second_of_day(epoch),
+         {:ok, doy} <- Time.day_of_year(epoch) do
       obs = Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end)
 
       {:ok,
@@ -1031,23 +1308,64 @@ defmodule Sidereon.GNSS.QC do
     end
   end
 
-  defp max_iterations_arg(observations, opts) do
-    case Keyword.get(opts, :max_iterations, max(length(observations) - 4, 0)) do
-      n when is_integer(n) and n >= 0 -> {:ok, n}
-      _other -> {:error, {:invalid_option, :max_iterations}}
+  defp max_exclusions_arg(n) when is_integer(n) and n >= 0 and n <= 18_446_744_073_709_551_615, do: {:ok, n}
+
+  defp max_exclusions_arg(_n), do: {:error, {:invalid_option, :max_exclusions}}
+
+  defp min_redundancy_arg(n) when is_integer(n) and n >= 0 and n <= 18_446_744_073_709_551_615, do: {:ok, n}
+
+  defp min_redundancy_arg(_n), do: {:error, {:invalid_option, :min_redundancy}}
+
+  defp exclusion_rms_cap_arg(:infinity), do: {:ok, :infinity}
+
+  defp exclusion_rms_cap_arg(n) when is_number(n) and n > 0 do
+    if finite_number?(n) do
+      {:ok, n / 1.0}
+    else
+      {:error, {:invalid_option, :max_exclusion_rms_m}}
     end
+  rescue
+    ArithmeticError -> {:error, {:invalid_option, :max_exclusion_rms_m}}
   end
 
-  defp decode_fde_result({:ok, {solution_raw, excluded, iterations}}) do
+  defp exclusion_rms_cap_arg(_n), do: {:error, {:invalid_option, :max_exclusion_rms_m}}
+
+  defp decode_fde_result({:ok, {solution_raw, excluded, iterations, raim_fields}}) do
     case Decode.decode(solution_raw) do
-      {:ok, solution} -> {:ok, %{solution: solution, excluded: excluded, iterations: iterations}}
-      {:error, _reason} = error -> error
+      {:ok, solution} ->
+        {:ok,
+         %{
+           solution: solution,
+           excluded: excluded,
+           iterations: iterations,
+           raim: decode_raim_result(raim_fields, :map)
+         }}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  defp decode_fde_result({:error, :invalid_probability}), do: {:error, {:invalid_option, :p_fa}}
+  defp decode_fde_result({:error, {:fault_unresolved, {reason, solution_raw, excluded, iterations, raim_fields}}}) do
+    case Decode.decode(solution_raw) do
+      {:ok, solution} ->
+        {:error,
+         {:fault_unresolved,
+          %{
+            reason: reason,
+            solution: solution,
+            excluded: excluded,
+            iterations: iterations,
+            raim: decode_raim_result(raim_fields, :map)
+          }}}
 
-  defp decode_fde_result({:error, :invalid_weight}), do: {:error, {:invalid_option, :weights}}
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp decode_fde_result({:error, kind}) when kind in @quality_error_kinds, do: {:error, quality_error(kind)}
+
   defp decode_fde_result({:error, reason}), do: {:error, reason}
 
   defp to_tuple4({_a, _b, _c, _d} = t), do: t

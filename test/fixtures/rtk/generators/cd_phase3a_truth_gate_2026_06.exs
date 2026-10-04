@@ -14,7 +14,7 @@ defmodule CDPhase3aTruthGate202606 do
   #   (d) batch fixed   with    corrections
   #
   # Usage (from the repo root):
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/cd_phase3a_truth_gate_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/cd_phase3a_truth_gate_2026_06.exs
 
   alias Sidereon.GNSS.Antex
   alias Sidereon.GNSS.RINEX.Observations

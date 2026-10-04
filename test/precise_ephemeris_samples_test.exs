@@ -2,13 +2,14 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
   use ExUnit.Case, async: true
 
   alias Sidereon.GNSS.{Observables, PreciseEphemeris, PreciseEphemerisSample, SP3}
+  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
+  alias Sidereon.GNSS.PreciseEphemerisAccuracySample
+  alias Sidereon.NIF
 
   # Real IGS final product (the same fixture the core parity tests use). On a
   # real product the km -> meters map is not injective, so a meters-carrying
   # sample reconstructs to the correctly-rounded km, within <= 1 ULP of the fit
   # node. The resulting round-trip divergence is bounded well below a micron.
-  alias Sidereon.GNSS.PreciseEphemeris.StateBatch
-
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
   # Documented round-trip tolerance: sub-micron position/range, from the
@@ -33,6 +34,15 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
       position_ecef_m: position,
       clock_s: clock_s,
       clock_event: clock_event
+    }
+  end
+
+  defp accuracy_sample(sample, variance \\ {:known, 0.0}) do
+    %PreciseEphemerisAccuracySample{
+      sat: sample.sat,
+      epoch: sample.epoch,
+      position_variance_m2: {variance, variance, variance},
+      clock_variance_m2: variance
     }
   end
 
@@ -63,7 +73,7 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
 
     test "single-sample satellite" do
       samples = [gps_sample(21, 0.0, {2.0e7, 1.4e7, 2.1e7}, 1.0e-6)]
-      assert {:error, :single_sample_satellite} = PreciseEphemeris.from_samples(samples)
+      assert {:error, {:single_sample_satellite, "G21"}} = PreciseEphemeris.from_samples(samples)
     end
 
     test "non-monotonic epochs" do
@@ -72,7 +82,7 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
         gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
       ]
 
-      assert {:error, :non_monotonic} = PreciseEphemeris.from_samples(samples)
+      assert {:error, {:non_monotonic, "G21"}} = PreciseEphemeris.from_samples(samples)
     end
 
     test "mixed time scales" do
@@ -85,6 +95,102 @@ defmodule Sidereon.GNSS.PreciseEphemerisSamplesTest do
       ]
 
       assert {:error, :mixed_timescale} = PreciseEphemeris.from_samples(samples)
+    end
+
+    test "satellite-bearing validation reasons retain the satellite for both constructors" do
+      single = [gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil)]
+
+      repeated_epoch = gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+      non_monotonic = [repeated_epoch, repeated_epoch]
+
+      mixed_time_scales = [
+        gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil),
+        %{
+          gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+          | epoch: %{time_scale: "UTC", jd_whole: 2_451_545.0, jd_fraction: 900.0 / 86_400.0}
+        }
+      ]
+
+      # Every integer-nanosecond count has J2000 seconds; a Julian date this
+      # large does not (its seconds overflow), so the core refuses it.
+      out_of_range_epoch = %{time_scale: "GPST", jd_whole: 1.0e308, jd_fraction: 0.0}
+
+      out_of_range = [
+        %{gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil) | epoch: out_of_range_epoch},
+        gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+      ]
+
+      non_finite = [
+        gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, 1.0e308),
+        gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+      ]
+
+      cases = [
+        {single, {:single_sample_satellite, "G21"}},
+        {non_monotonic, {:non_monotonic, "G21"}},
+        {mixed_time_scales, :mixed_timescale},
+        {out_of_range, {:out_of_range, "G21"}},
+        {non_finite, {:non_finite, "G21"}}
+      ]
+
+      for {samples, expected} <- cases do
+        assert {:error, ^expected} = PreciseEphemeris.from_samples(samples)
+
+        aligned_accuracy = Enum.map(samples, &accuracy_sample/1)
+
+        assert {:error, ^expected} =
+                 PreciseEphemeris.from_samples_with_accuracy(samples, aligned_accuracy)
+      end
+    end
+
+    test "payload-free validation reasons stay atoms and accuracy failures are satellite-tagged" do
+      assert {:error, :empty} = PreciseEphemeris.from_samples([])
+      assert {:error, :empty} = PreciseEphemeris.from_samples_with_accuracy([], [])
+
+      samples = [
+        gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil),
+        gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+      ]
+
+      assert {:error, :accuracy_samples_mismatch} =
+               PreciseEphemeris.from_samples_with_accuracy(samples, [])
+
+      invalid_accuracy = [
+        accuracy_sample(hd(samples), {:known, -1.0}),
+        accuracy_sample(List.last(samples))
+      ]
+
+      assert {:error, {:invalid_accuracy_value, "G21"}} =
+               PreciseEphemeris.from_samples_with_accuracy(samples, invalid_accuracy)
+    end
+
+    test "native invalid-accuracy validation retains the satellite payload" do
+      samples = [
+        gps_sample(21, 0.0, {1.0e7, 2.0e7, 3.0e7}, nil),
+        gps_sample(21, 900.0, {1.0e7, 2.0e7, 3.0e7}, nil)
+      ]
+
+      sample_tuples =
+        Enum.map(samples, fn sample ->
+          assert {:ok, tuple} = PreciseEphemerisSample.to_nif_tuple(sample)
+          tuple
+        end)
+
+      {:ok, {letter, prn, epoch_term, _position, clock}} =
+        PreciseEphemerisAccuracySample.to_nif_tuple(accuracy_sample(hd(samples)))
+
+      invalid_sidecar =
+        {letter, prn, epoch_term, {{:known, -1.0}, {:known, 0.0}, {:known, 0.0}}, clock}
+
+      {:ok, valid_sidecar} =
+        PreciseEphemerisAccuracySample.to_nif_tuple(accuracy_sample(List.last(samples)))
+
+      assert {:error, {:invalid_accuracy_value, "G21"}} =
+               NIF.precise_samples_from_samples_with_accuracy(
+                 sample_tuples,
+                 [invalid_sidecar, valid_sidecar],
+                 nil
+               )
     end
 
     test "malformed satellite token is returned without raising" do

@@ -1,0 +1,145 @@
+{
+  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b positioning::solve_with_policy on the unmodified spp_trace_L2_tropo.json inputs",
+  "epoch": "2020-06-24T12:00:00",
+  "t_rx_j2000_s": "0x41c342aa00000000",
+  "solves": {
+    "near_guess": {
+      "initial_guess": [
+        "0x41512a8800000000",
+        "0x411e848000000000",
+        "0x41512a8800000000",
+        "0x0000000000000000"
+      ],
+      "solution": {
+        "position_m": [
+          "0x41511b0ae1afc2f6",
+          "0x4120cd6506fbf5a6",
+          "0x41511e65417d201a"
+        ],
+        "rx_clock_s": "0x3f1a3dabc100535d",
+        "rx_clock_drift_s_s": null,
+        "geodetic": {
+          "lat_rad": "0x3fe921fba8e9d592",
+          "lon_rad": "0x3fbf46aab1d1b180",
+          "height_m": "0x4073ca5df103311f"
+        },
+        "position_covariance_ecef_m2": [
+          [
+            "0x403b149f0e04ed52",
+            "0xbfc307ead69faed8",
+            "0x402f058f50441988"
+          ],
+          [
+            "0xbfc307ead69faed8",
+            "0x4019661feed003a7",
+            "0x400505786c32af02"
+          ],
+          [
+            "0x402f058f50441988",
+            "0x400505786c32af02",
+            "0x4038fa3e9eefe28f"
+          ]
+        ],
+        "position_covariance_enu_m2": [
+          [
+            "0x401ac63cddea6691",
+            "0x40030fcbd2e906da",
+            "0xbff5e1a246a35210"
+          ],
+          [
+            "0x40030fcbd2e906da",
+            "0x40244883b4a3491a",
+            "0xbfec259d99711288"
+          ],
+          [
+            "0xbff5e1a246a35210",
+            "0xbfec259d997112a0",
+            "0x4044c94a4b6e494a"
+          ]
+        ],
+        "used_sats": [
+          "G08",
+          "G10",
+          "G16",
+          "G18",
+          "G20",
+          "G21",
+          "G26",
+          "G27"
+        ],
+        "status": "SelectionSettled",
+        "iterations": 9,
+        "converged": true
+      }
+    },
+    "frozen_guess": {
+      "initial_guess": [
+        "0x41512a8800000000",
+        "0x411e848000000000",
+        "0x41512a8800000000",
+        "0x0000000000000000"
+      ],
+      "solution": {
+        "position_m": [
+          "0x41511b0ae1afc2f6",
+          "0x4120cd6506fbf5a6",
+          "0x41511e65417d201a"
+        ],
+        "rx_clock_s": "0x3f1a3dabc100535d",
+        "rx_clock_drift_s_s": null,
+        "geodetic": {
+          "lat_rad": "0x3fe921fba8e9d592",
+          "lon_rad": "0x3fbf46aab1d1b180",
+          "height_m": "0x4073ca5df103311f"
+        },
+        "position_covariance_ecef_m2": [
+          [
+            "0x403b149f0e04ed52",
+            "0xbfc307ead69faed8",
+            "0x402f058f50441988"
+          ],
+          [
+            "0xbfc307ead69faed8",
+            "0x4019661feed003a7",
+            "0x400505786c32af02"
+          ],
+          [
+            "0x402f058f50441988",
+            "0x400505786c32af02",
+            "0x4038fa3e9eefe28f"
+          ]
+        ],
+        "position_covariance_enu_m2": [
+          [
+            "0x401ac63cddea6691",
+            "0x40030fcbd2e906da",
+            "0xbff5e1a246a35210"
+          ],
+          [
+            "0x40030fcbd2e906da",
+            "0x40244883b4a3491a",
+            "0xbfec259d99711288"
+          ],
+          [
+            "0xbff5e1a246a35210",
+            "0xbfec259d997112a0",
+            "0x4044c94a4b6e494a"
+          ]
+        ],
+        "used_sats": [
+          "G08",
+          "G10",
+          "G16",
+          "G18",
+          "G20",
+          "G21",
+          "G26",
+          "G27"
+        ],
+        "status": "SelectionSettled",
+        "iterations": 9,
+        "converged": true
+      }
+    }
+  }
+}

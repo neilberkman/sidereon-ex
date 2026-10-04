@@ -9,7 +9,7 @@ defmodule ArmingDefault do
   # filter_kernel: :elixir (Elixir reference only).
   #
   # Usage (from the repo root):
-  #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/arming_default_2026_06.exs
+  #   mix run test/fixtures/rtk/generators/arming_default_2026_06.exs
 
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.RTK

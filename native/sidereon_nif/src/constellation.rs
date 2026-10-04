@@ -8,9 +8,10 @@
 //! which covers GPS, Galileo, GLONASS, BeiDou, and QZSS.
 
 use crate::errors;
+use crate::ndm_errors::omm_error_term;
 use rustler::types::atom::Atom;
 use rustler::{Decoder, Encoder, Env, NifResult, Term};
-use sidereon_core::astro::omm::{parse_json_array, Omm, OmmEpoch};
+use sidereon_core::astro::omm::{parse_json_array, Omm, OmmEpoch, OmmSkippedRecord};
 use sidereon_core::astro::passes::UtcInstant;
 use sidereon_core::constellation::{
     self as cc, BoolStyle, CelestrakSource, ConstellationError, Diff, NavcenAssessment,
@@ -23,6 +24,8 @@ mod atoms {
         ok,
         error,
         missing_prn,
+        missing_norad_id,
+        unreadable_record,
     }
 }
 
@@ -79,40 +82,58 @@ fn submap<'a>(env: Env<'a>, map: Term<'a>, key: &str) -> Option<Term<'a>> {
 
 /// Build a minimal core [`Omm`] from the identity fields the constellation
 /// catalog reads (`OBJECT_NAME`, `NORAD_CAT_ID`, `OBJECT_ID`, `EPOCH`). The
-/// remaining mean-element fields are never consulted by
-/// `sidereon_core::constellation`, so they are placeholders.
+/// mean elements are never consulted by `sidereon_core::constellation`, so the
+/// required ones are placeholders and the optional ones are absent. A `nil`
+/// `norad_id` is an OMM that states no `NORAD_CAT_ID`, which the core refuses
+/// or skips by name.
 fn omm_from_term<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Omm> {
     let object_name: Option<String> = opt(env, term, "object_name");
-    let norad_id: i64 = req(env, term, "norad_id")?;
+    let norad_id: Option<i64> = req(env, term, "norad_id")?;
     let object_id: Option<String> = opt(env, term, "object_id");
     let epoch: Option<String> = opt(env, term, "epoch");
+    let norad_cat_id = norad_id
+        .map(|id| {
+            u32::try_from(id)
+                .map_err(|_| rustler::Error::Term(Box::new("norad_id out of range for u32")))
+        })
+        .transpose()?;
 
     Ok(Omm {
-        ccsds_omm_vers: String::new(),
+        ccsds_omm_vers: None,
+        classification: None,
         creation_date: None,
         originator: None,
+        message_id: None,
         object_name,
         object_id,
         center_name: None,
         ref_frame: None,
+        ref_frame_epoch: None,
         time_system: None,
         mean_element_theory: None,
         epoch: parse_epoch(epoch.as_deref()),
-        mean_motion: 0.0,
+        mean_motion: None,
+        semi_major_axis_km: None,
         eccentricity: 0.0,
         inclination_deg: 0.0,
         ra_of_asc_node_deg: 0.0,
         arg_of_pericenter_deg: 0.0,
         mean_anomaly_deg: 0.0,
-        ephemeris_type: 0,
-        classification_type: "U".to_string(),
-        norad_cat_id: u32::try_from(norad_id)
-            .map_err(|_| rustler::Error::Term(Box::new("norad_id out of range for u32")))?,
-        element_set_no: 0,
-        rev_at_epoch: 0,
-        bstar: 0.0,
-        mean_motion_dot: 0.0,
-        mean_motion_ddot: 0.0,
+        gm_km3_s2: None,
+        spacecraft: None,
+        ephemeris_type: None,
+        classification_type: None,
+        norad_cat_id,
+        element_set_no: None,
+        rev_at_epoch: None,
+        bstar: None,
+        bterm_m2_kg: None,
+        mean_motion_dot: None,
+        mean_motion_ddot: None,
+        agom_m2_kg: None,
+        covariance: None,
+        user_defined: Vec::new(),
+        comments: Default::default(),
         exact_sgp4_epoch: None,
         quantize_tle_derived_fields: true,
     })
@@ -466,14 +487,39 @@ fn missing_prn_term<'a>(env: Env<'a>, name: Option<String>) -> Term<'a> {
     (atoms::error(), (atoms::missing_prn(), name)).encode(env)
 }
 
-fn encode_catalog<'a>(env: Env<'a>, catalog: &cc::Catalog) -> Term<'a> {
+/// The strict catalog result: records, `{:missing_prn, name}`,
+/// `{:missing_norad_id, name}`, or the core error text.
+fn strict_catalog_term<'a>(
+    env: Env<'a>,
+    result: Result<Vec<Record>, ConstellationError>,
+) -> Term<'a> {
+    match result {
+        Ok(records) => (atoms::ok(), encode_records(env, &records)).encode(env),
+        Err(ConstellationError::MissingPrn(name)) => missing_prn_term(env, name),
+        Err(ConstellationError::MissingNoradId(name)) => {
+            (atoms::error(), (atoms::missing_norad_id(), name)).encode(env)
+        }
+        Err(e) => (atoms::error(), e.to_string()).encode(env),
+    }
+}
+
+/// The GP JSON array elements the OMM reader could not read, as
+/// `{index, reason}` with the reader's typed reason.
+fn unread_records<'a>(env: Env<'a>, skipped: &[OmmSkippedRecord]) -> Vec<Term<'a>> {
+    skipped
+        .iter()
+        .map(|record| (record.index as u64, omm_error_term(env, &record.reason)).encode(env))
+        .collect()
+}
+
+fn encode_catalog<'a>(env: Env<'a>, catalog: &cc::Catalog, unread: Vec<Term<'a>>) -> Term<'a> {
     let skipped: Vec<Term> = catalog
         .skipped
         .iter()
         .map(|s| {
             let m = Term::map_new(env);
             let m = put(env, m, "object_name", s.object_name.clone());
-            put(env, m, "norad_id", i64::from(s.norad_id))
+            put(env, m, "norad_id", s.norad_id.map(i64::from))
         })
         .collect();
 
@@ -484,7 +530,8 @@ fn encode_catalog<'a>(env: Env<'a>, catalog: &cc::Catalog) -> Term<'a> {
         "records",
         encode_records(env, &catalog.records),
     );
-    put(env, result, "skipped", skipped)
+    let result = put(env, result, "skipped", skipped);
+    put(env, result, "unread", unread)
 }
 
 // ── NIFs ─────────────────────────────────────────────────────────────────────
@@ -501,13 +548,15 @@ pub fn constellation_from_celestrak_omm<'a>(
         .map(|t| omm_from_term(env, t))
         .collect::<NifResult<_>>()?;
 
-    match cc::from_celestrak_omm(system, &core_omms) {
-        Ok(records) => Ok((atoms::ok(), encode_records(env, &records)).encode(env)),
-        Err(ConstellationError::MissingPrn(name)) => Ok(missing_prn_term(env, name)),
-        Err(e) => Ok((atoms::error(), e.to_string()).encode(env)),
-    }
+    Ok(strict_catalog_term(
+        env,
+        cc::from_celestrak_omm(system, &core_omms),
+    ))
 }
 
+/// Strict JSON catalog: a GP JSON array element the OMM reader cannot read is
+/// refused as `{:unreadable_record, index, reason}`, as an entry that does not
+/// resolve is refused, rather than left out of the catalog.
 #[rustler::nif(schedule = "DirtyCpu")]
 pub fn constellation_from_celestrak_json<'a>(
     env: Env<'a>,
@@ -517,14 +566,24 @@ pub fn constellation_from_celestrak_json<'a>(
     let system = system_from_letter(&system_letter)?;
     let parsed = match parse_json_array(&json) {
         Ok(parsed) => parsed,
-        Err(e) => return Ok((atoms::error(), e.to_string()).encode(env)),
+        Err(e) => return Ok((atoms::error(), omm_error_term(env, &e)).encode(env)),
     };
-
-    match cc::from_celestrak_omm(system, &parsed.omms) {
-        Ok(records) => Ok((atoms::ok(), encode_records(env, &records)).encode(env)),
-        Err(ConstellationError::MissingPrn(name)) => Ok(missing_prn_term(env, name)),
-        Err(e) => Ok((atoms::error(), e.to_string()).encode(env)),
+    if let Some(record) = parsed.skipped.first() {
+        return Ok((
+            atoms::error(),
+            (
+                atoms::unreadable_record(),
+                record.index as u64,
+                omm_error_term(env, &record.reason),
+            ),
+        )
+            .encode(env));
     }
+
+    Ok(strict_catalog_term(
+        env,
+        cc::from_celestrak_omm(system, &parsed.omms),
+    ))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -540,7 +599,7 @@ pub fn constellation_from_celestrak_omm_lenient<'a>(
         .collect::<NifResult<_>>()?;
 
     let catalog = cc::from_celestrak_omm_lenient(system, &core_omms);
-    Ok((atoms::ok(), encode_catalog(env, &catalog)).encode(env))
+    Ok((atoms::ok(), encode_catalog(env, &catalog, Vec::new())).encode(env))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -552,11 +611,12 @@ pub fn constellation_from_celestrak_json_lenient<'a>(
     let system = system_from_letter(&system_letter)?;
     let parsed = match parse_json_array(&json) {
         Ok(parsed) => parsed,
-        Err(e) => return Ok((atoms::error(), e.to_string()).encode(env)),
+        Err(e) => return Ok((atoms::error(), omm_error_term(env, &e)).encode(env)),
     };
 
     let catalog = cc::from_celestrak_omm_lenient(system, &parsed.omms);
-    Ok((atoms::ok(), encode_catalog(env, &catalog)).encode(env))
+    let unread = unread_records(env, &parsed.skipped);
+    Ok((atoms::ok(), encode_catalog(env, &catalog, unread)).encode(env))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]

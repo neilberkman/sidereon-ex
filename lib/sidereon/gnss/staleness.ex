@@ -41,6 +41,7 @@ defmodule Sidereon.GNSS.Staleness do
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Time
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Policy do
     @moduledoc """
@@ -170,6 +171,7 @@ defmodule Sidereon.GNSS.Staleness do
           | {:invalid_product, String.t()}
           | {:invalid_policy, float()}
           | {:overflow, String.t()}
+          | {:ionex_epoch, term()}
 
   @doc """
   Select the SP3 product to use for `epoch`, degrading to the most-recent prior
@@ -193,7 +195,7 @@ defmodule Sidereon.GNSS.Staleness do
       |> decode_sp3_selection(products)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :staleness_select_sp3)
   end
 
   @doc """
@@ -214,7 +216,7 @@ defmodule Sidereon.GNSS.Staleness do
       |> decode_sp3_selection(products)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :staleness_select_sp3_over_range)
   end
 
   @doc """
@@ -235,7 +237,7 @@ defmodule Sidereon.GNSS.Staleness do
       |> decode_ionex_selection(handles)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :staleness_select_ionex)
   end
 
   @doc """
@@ -253,7 +255,7 @@ defmodule Sidereon.GNSS.Staleness do
       |> decode_ionex_selection(handles)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :staleness_select_ionex_over_range)
   end
 
   # --- decoding (shared with the precise-to-broadcast fallback source) ------

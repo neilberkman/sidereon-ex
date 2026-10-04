@@ -24,15 +24,17 @@ defmodule Sidereon.GNSS.CarrierPhase do
         lli1: integer | nil,  # band-1 LLI (bit 0 = loss of lock)
         lli2: integer | nil,  # band-2 LLI
         f1:   float | nil,    # band-1 carrier frequency, Hz (nil => skip)
-        f2:   float | nil     # band-2 carrier frequency, Hz
+        f2:   float | nil,    # band-2 carrier frequency, Hz
+        gap_epoch: ExactEpoch.t() | nil # optional exact data-gap epoch
       }
 
   An epoch with an unknown band frequency is skipped and reported with
-  `skipped: true`. `epoch` is passed through unchanged. The data-gap detector
-  can compare numeric-second epochs and `NaiveDateTime` epochs; other epoch
-  terms remain opaque and do not trigger `:data_gap`.
+  `skipped: true`. `epoch` is passed through unchanged. When adjacent entries
+  both provide `gap_epoch`, the detector compares those exact epochs; otherwise
+  it retains the legacy numeric-second and `NaiveDateTime` comparison.
   """
 
+  alias Sidereon.GNSS.Time.ExactEpoch
   alias Sidereon.NIF
 
   @default_gf_threshold_m 0.05
@@ -307,8 +309,16 @@ defmodule Sidereon.GNSS.CarrierPhase do
       lli2: integer_or_nil(Map.get(ep, :lli2)),
       f1: number_or_nil(Map.get(ep, :f1)),
       f2: number_or_nil(Map.get(ep, :f2)),
-      gap_time_s: epoch_time_s(Map.get(ep, :epoch))
+      gap_time_s: epoch_time_s(Map.get(ep, :epoch)),
+      gap_epoch: exact_epoch_handle(Map.get(ep, :gap_epoch))
     }
+  end
+
+  defp exact_epoch_handle(nil), do: nil
+  defp exact_epoch_handle(%ExactEpoch{handle: handle}), do: handle
+
+  defp exact_epoch_handle(value) do
+    raise ArgumentError, "gap_epoch must be an ExactEpoch or nil, got: #{inspect(value)}"
   end
 
   defp number_or_nil(value) when is_number(value), do: value / 1.0

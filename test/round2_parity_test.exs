@@ -102,6 +102,40 @@ defmodule Sidereon.Round2ParityTest do
     assert gga == "$GPGGA,123519.00,4807.038,N,01131.000,E,1,08,0.90,545.4,M,46.9,M,,*59\r\n"
   end
 
+  test "NMEA finish_with_output keeps final sentences, epochs, and diagnostics" do
+    first = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n"
+    final = "$GPGGA,123520,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,"
+    {:ok, accumulator} = NMEA.accumulator()
+
+    {:ok, first_output} = NMEA.push(accumulator, first)
+    assert length(first_output.sentences) == 1
+    assert first_output.snapshots == []
+
+    {:ok, pending} = NMEA.push(accumulator, final)
+    assert pending.sentences == []
+    {:ok, output} = NMEA.finish_with_output(accumulator)
+
+    assert Enum.map(output.sentences, & &1.kind) == [:gga]
+    assert Enum.map(output.snapshots, & &1.time_of_day.second) == [19, 20]
+    assert output.diagnostics.skips == []
+    assert length(output.diagnostics.warnings) == 1
+    assert hd(output.diagnostics.warnings).at.line == 2
+    assert hd(output.diagnostics.warnings).kind == "missing_metadata"
+
+    {:ok, repeated} = NMEA.finish_with_output(accumulator)
+    assert repeated.sentences == []
+    assert repeated.snapshots == []
+    assert repeated.diagnostics == %{skips: [], warnings: []}
+
+    {:ok, malformed} = NMEA.accumulator()
+    {:ok, _pending} = NMEA.push(malformed, "bad")
+    {:ok, malformed_output} = NMEA.finish_with_output(malformed)
+    assert malformed_output.sentences == []
+    assert malformed_output.snapshots == []
+    assert length(malformed_output.diagnostics.skips) == 1
+    assert hd(malformed_output.diagnostics.skips).at.line == 1
+  end
+
   test "6x6 covariance propagation is numerically pinned" do
     {:ok, covariance} = Sidereon.Covariance.from_diagonal6([1.0e-6, 2.0e-6, 3.0e-6, 1.0e-8, 2.0e-8, 3.0e-8])
     state = {0.0, {7000.0, 0.0, 0.0}, {0.0, 7.546049108166282, 0.0}}
@@ -151,17 +185,26 @@ defmodule Sidereon.Round2ParityTest do
     {:ok, legacy} = Broadcast.parse(text)
     {:ok, modern} = Broadcast.parse(text, message_preference: :modern)
 
-    assert Broadcast.record_count(legacy) == 4
+    # Every decoded record is kept whatever its health: the GPS CNAV records and
+    # the QZSS LNAV record state health 1 and were dropped before. The BeiDou
+    # CNAV-2 frame is recognized and not decoded.
+    assert Broadcast.record_count(legacy) == 7
     assert Broadcast.message_preference(legacy) == :legacy
     assert Broadcast.message_preference(modern) == :modern
 
     records = Broadcast.records_detailed(legacy)
-    assert Enum.frequencies_by(records, & &1.message) == %{gps_lnav: 2, qzss_cnav: 1, qzss_cnav2: 1}
 
-    cnav = Enum.find(records, &(&1.cnav != nil))
+    assert Enum.frequencies_by(records, & &1.message) ==
+             %{gps_lnav: 2, gps_cnav: 2, qzss_lnav: 1, qzss_cnav: 1, qzss_cnav2: 1}
+
+    assert records |> Enum.filter(&(&1.sv_health != 0.0)) |> Enum.map(&{&1.satellite_id, &1.message}) ==
+             [{"G01", :gps_cnav}, {"G03", :gps_cnav}, {"J02", :qzss_lnav}]
+
+    cnav = Enum.find(records, &(&1.message == :qzss_cnav))
     assert cnav.satellite_id == "J02"
     assert cnav.message == :qzss_cnav
-    assert cnav.issue_of_data.issue == 288
+    # A RINEX 4 CNAV record states no issue of data.
+    assert cnav.issue_of_data == nil
     assert_close(cnav.cnav.adot_m_s, 0.07648849487305, 1.0e-14)
     assert_close(cnav.cnav.ura_ed_nominal_m, 0.125)
     assert_close(cnav.cnav.ura_ned0_nominal_m, 0.7071067811865476)
@@ -203,12 +246,15 @@ defmodule Sidereon.Round2ParityTest do
 
     assert report.clock_jumps == []
 
-    assert report.cycle_slips.observations == 68
+    # R09 carries G3 (C3Q/L3Q) in both epochs; its CDMA carrier resolves, so
+    # both of its satellite-epochs count for GLONASS. SBAS forms no
+    # dual-frequency observation.
+    assert report.cycle_slips.observations == 70
     assert report.cycle_slips.total_slips == 0
     assert report.cycle_slips.observations_per_slip == nil
 
     assert Enum.map(report.cycle_slips.by_system, &{&1.system, &1.observations, &1.slips, &1.observations_per_slip}) ==
-             [{"G", 22, 0, nil}, {"R", 14, 0, nil}, {"E", 16, 0, nil}, {"C", 16, 0, nil}]
+             [{"G", 22, 0, nil}, {"R", 16, 0, nil}, {"E", 16, 0, nil}, {"C", 16, 0, nil}]
 
     gps_mp = Enum.find(report.multipath.systems, &(&1.system == "G"))
     assert gps_mp.mp1.n == 22
@@ -306,5 +352,196 @@ defmodule Sidereon.Round2ParityTest do
     assert_close(fit.elements.eccentricity, 6.351002166405574e-4, relative: 1.0e-9, absolute: 1.0e-12)
     assert_close(fit.elements.right_ascension_deg, 299.5431999999641, relative: 1.0e-9)
     refute fit.stats.bstar_observable
+    assert is_nil(fit.elements.omm_epoch_days)
+    assert is_tuple(fit.omm_exact_sgp4_epoch)
+    assert fit.omm_quantize_tle_derived_fields == false
+    assert fit.omm_kvn =~ "CCSDS_OMM_VERS"
+
+    assert Enum.all?(
+             [
+               :epoch,
+               :omm_epoch_days,
+               :bstar,
+               :mean_motion_dot,
+               :mean_motion_double_dot,
+               :eccentricity,
+               :argument_of_perigee_deg,
+               :inclination_deg,
+               :mean_anomaly_deg,
+               :mean_motion_rev_per_day,
+               :right_ascension_deg,
+               :catalog_number
+             ],
+             &Map.has_key?(fit.elements, &1)
+           )
+
+    assert Enum.all?(
+             [
+               :rms_position_km,
+               :max_position_km,
+               :rms_position_axes_km,
+               :rms_velocity_km_s,
+               :tle_rms_position_km,
+               :status,
+               :nfev,
+               :njev,
+               :cost,
+               :optimality,
+               :bstar_observable,
+               :seed_refine_passes
+             ],
+             &Map.has_key?(fit.stats, &1)
+           )
+
+    assert Enum.all?(
+             [
+               :ccsds_omm_vers,
+               :classification,
+               :creation_date,
+               :originator,
+               :message_id,
+               :object_name,
+               :object_id,
+               :center_name,
+               :ref_frame,
+               :ref_frame_epoch,
+               :time_system,
+               :mean_element_theory,
+               :epoch,
+               :mean_motion,
+               :semi_major_axis_km,
+               :eccentricity,
+               :inclination_deg,
+               :ra_of_asc_node_deg,
+               :arg_of_pericenter_deg,
+               :mean_anomaly_deg,
+               :gm_km3_s2,
+               :spacecraft,
+               :ephemeris_type,
+               :classification_type,
+               :norad_cat_id,
+               :element_set_no,
+               :rev_at_epoch,
+               :bstar,
+               :bterm_m2_kg,
+               :mean_motion_dot,
+               :mean_motion_ddot,
+               :agom_m2_kg,
+               :covariance,
+               :user_defined,
+               :comments
+             ],
+             &Map.has_key?(fit.omm, &1)
+           )
+
+    assert {:error, {:tle_fit_error, :arc_too_short, message, {2, 3}}} =
+             Sidereon.SGP4.fit_tle(Enum.take(samples, 2),
+               epoch: {:sample, 0},
+               fit_bstar: false
+             )
+
+    assert message =~ "fit arc has 2 samples; need at least 3"
+
+    assert {:error, {:did_not_converge, best_effort}} =
+             Sidereon.SGP4.fit_tle(samples,
+               epoch: {:sample, 2},
+               max_nfev: 1,
+               fit_bstar: false,
+               metadata: [catalog_number: 25_544, international_designator: "98067A", object_name: "ISS"]
+             )
+
+    assert best_effort.stats.status == 0
+    assert best_effort.line1 != ""
+    assert best_effort.line2 != ""
+    assert is_nil(best_effort.elements.omm_epoch_days)
+    assert best_effort.omm_exact_sgp4_epoch == fit.omm_exact_sgp4_epoch
+    assert best_effort.omm_quantize_tle_derived_fields == false
+
+    assert Enum.all?(
+             [
+               :epoch,
+               :omm_epoch_days,
+               :bstar,
+               :mean_motion_dot,
+               :mean_motion_double_dot,
+               :eccentricity,
+               :argument_of_perigee_deg,
+               :inclination_deg,
+               :mean_anomaly_deg,
+               :mean_motion_rev_per_day,
+               :right_ascension_deg,
+               :catalog_number
+             ],
+             &Map.has_key?(best_effort.elements, &1)
+           )
+
+    assert Enum.all?(
+             [
+               :rms_position_km,
+               :max_position_km,
+               :rms_position_axes_km,
+               :rms_velocity_km_s,
+               :tle_rms_position_km,
+               :status,
+               :nfev,
+               :njev,
+               :cost,
+               :optimality,
+               :bstar_observable,
+               :seed_refine_passes
+             ],
+             &Map.has_key?(best_effort.stats, &1)
+           )
+
+    assert Enum.all?(
+             [
+               :ccsds_omm_vers,
+               :classification,
+               :creation_date,
+               :originator,
+               :message_id,
+               :object_name,
+               :object_id,
+               :center_name,
+               :ref_frame,
+               :ref_frame_epoch,
+               :time_system,
+               :mean_element_theory,
+               :epoch,
+               :mean_motion,
+               :semi_major_axis_km,
+               :eccentricity,
+               :inclination_deg,
+               :ra_of_asc_node_deg,
+               :arg_of_pericenter_deg,
+               :mean_anomaly_deg,
+               :gm_km3_s2,
+               :spacecraft,
+               :ephemeris_type,
+               :classification_type,
+               :norad_cat_id,
+               :element_set_no,
+               :rev_at_epoch,
+               :bstar,
+               :bterm_m2_kg,
+               :mean_motion_dot,
+               :mean_motion_ddot,
+               :agom_m2_kg,
+               :covariance,
+               :user_defined,
+               :comments
+             ],
+             &Map.has_key?(best_effort.omm, &1)
+           )
+
+    assert {:error,
+            {:tle_fit_error, :invalid_input, "fit input invalid: max_nfev: must be positive",
+             {"max_nfev", "must be positive"}}} =
+             Sidereon.SGP4.fit_tle(samples,
+               epoch: {:sample, 2},
+               max_nfev: 0,
+               fit_bstar: false,
+               metadata: [catalog_number: 25_544, international_designator: "98067A", object_name: "ISS"]
+             )
   end
 end

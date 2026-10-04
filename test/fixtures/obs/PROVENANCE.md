@@ -50,7 +50,7 @@ the network by default.
   `nav-solutions/data` redistribution
   (`https://github.com/nav-solutions/data`).
 - **Decode / trim:** decompressed the upstream `.crx.gz`, decoded the `.crx`
-  with `Orbis.GNSS.RINEX.Observations.decode_crinex/1`, kept the verbatim
+  with the Hatanaka CRINEX decoder of this library (`Sidereon.GNSS.RINEX.Observations.decode_crinex/1`), kept the verbatim
   header plus the first 120 epochs (00:00:00 through 00:59:30 GPST), and updated
   `TIME OF LAST OBS` to the last retained epoch. The committed fixture is plain
   `.rnx`; it is not re-compressed because the real-arc gate only needs the RINEX
@@ -60,7 +60,7 @@ the network by default.
     `f1b689715e2b5e71b42196a9c8941d5a8826a161dca6c6e8fc509979268df382`
   - upstream `.crx`:
     `28f6470df726adf2daa497af0802b02fd64f17ececd0259bc6672ae3b4f2a531`
-  - Orbis-decoded full `.rnx`:
+  - decoded full `.rnx`:
     `09f3f8fe46880c458964cc8a115999244587b947ff39a367245bbaa67a0df77a`
   - committed 120-epoch `.rnx`:
     `8ed476c011802032040beaf7a3fb774f06bb180a93f856eb7ae2396366496c45`
@@ -81,7 +81,7 @@ the network by default.
   - `WTZR00DEU_R_20201770000_01D_30S_MO.crx.gz`
   - `WTZZ00DEU_R_20201770000_01D_30S_MO.crx.gz`
 - **Decode / trim:** decompressed the upstream `.crx.gz`, decoded each `.crx`
-  with `Orbis.GNSS.RINEX.Observations.decode_crinex/1`, kept the verbatim header
+  with the Hatanaka CRINEX decoder of this library (`Sidereon.GNSS.RINEX.Observations.decode_crinex/1`), kept the verbatim header
   plus the first 120 epochs (00:00:00 through 00:59:30 GPST), and updated
   `TIME OF LAST OBS` to the last retained epoch. The committed fixtures are
   plain `.rnx`; they are not re-compressed because the RTK real-arc gate only
@@ -164,9 +164,11 @@ CRINEX round-trip and RINEX observation parser tests.
   identical) with a single header edit: the `G L1C ... SYS / PHASE SHIFT` record
   was changed from a blank (0.0) correction to `0.25000` cycles. Every other
   `SYS / PHASE SHIFT` record stays 0.0.
-- **Purpose:** regression fixture for `Observations.phases/3` applying the
-  `SYS / PHASE SHIFT` `correction_cycles` to the carrier-phase `value_cycles`
-  (and `value_m`). The all-zero parent verifies the correction is a no-op when
-  no shift is present; this fixture verifies a non-zero shift is added.
+- **Purpose:** regression fixture for `Observations.phases/3` reporting the
+  `SYS / PHASE SHIFT` correction beside the carrier phase. RINEX 3 phases are
+  stored already aligned, so the record states the correction that alignment
+  applied; this fixture verifies a non-zero shift is reported as
+  `phase_shift_cycles` while `value_cycles` and `value_m` stay the recorded
+  phase, equal to the parent's.
 - **Edit recipe:** copy the parent file and replace the `G L1C` phase-shift line
   with `G L1C  0.25000` padded to the RINEX label column.

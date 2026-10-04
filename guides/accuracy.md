@@ -128,13 +128,13 @@ distance-magnitude **sanity bounds** (within ~20,000 km of the expected
 lunar distance / 0.02 AU of 1 AU in `ephemeris_test.exs`); they are
 **not** 0-ULP verified.
 
-**Test tag:** `:spk_file`, requires `/tmp/de421.bsp`.
+**Test tag:** `:spk_file`, requires `de421.bsp`, named by `SIDEREON_DE421_BSP` or in the working directory.
 
 **Not verified in CI.** CI runs `mix test --only skyfield_parity`, so the
 Mars/Venus 0-ULP test is **excluded** from CI.
 The `de421.bsp` fixture it depends on is not committed to the repository,
 so the only way to exercise this row is locally with the file present:
-`mix test --include spk_file` after placing `de421.bsp` at `/tmp/de421.bsp`.
+`SIDEREON_DE421_BSP=path/to/de421.bsp mix test --include spk_file`.
 
 ## What Is NOT Validated
 

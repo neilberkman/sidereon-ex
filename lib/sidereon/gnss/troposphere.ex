@@ -30,9 +30,42 @@ defmodule Sidereon.GNSS.Troposphere do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @typedoc "Failure reason returned by checked troposphere mapping."
   @type mapping_error :: :below_mapping_elevation | :above_mapping_elevation | :outside_mapping_height | term()
+
+  @typedoc """
+  Complete typed refusal returned by the detailed troposphere calls.
+
+  `family` is `CoreError`, `FrameValueError`, or `TimeModelError`. `kind` is
+  `INVALID_INPUT`, `FRAME_VALUE_INVALID_INPUT`, or
+  `TIME_MODEL_INVALID_INPUT`; frame and time-model details also retain their
+  exact `field` and `reason` strings. The NIF map always includes `field`,
+  `reason`, and `debug`; fields not used by a family are `nil`.
+  """
+  @type core_error_detail :: %{
+          required(:family) => String.t(),
+          required(:kind) => String.t(),
+          required(:message) => String.t(),
+          required(:field) => String.t() | nil,
+          required(:reason) => String.t() | nil,
+          required(:debug) => String.t() | nil
+        }
+
+  @typedoc "Input failure returned by a detailed troposphere call."
+  @type detailed_error ::
+          {:invalid_input, core_error_detail()}
+          | :bad_meteorology
+          | :bad_epoch
+          | {:invalid_epoch_field, atom(), term()}
+          | {:value_out_of_range, atom(), term()}
+          | {:invalid_argument, atom()}
+          | {:arithmetic_error, atom()}
+          | :nif_panicked
+
+  @typedoc "Detailed troposphere result with typed input and core refusals."
+  @type detailed_result(value) :: {:ok, value} | {:error, detailed_error()}
 
   @doc """
   Zenith hydrostatic and wet tropospheric delays from supplied meteorology.
@@ -45,13 +78,39 @@ defmodule Sidereon.GNSS.Troposphere do
           {:ok, %{dry_m: float(), wet_m: float()}} | {:error, term()}
   def zenith_delay(lat_deg, height_m, met) do
     with {:ok, p, t, rh} <- meteorology(met) do
-      {dry_m, wet_m} =
-        NIF.tropo_zenith_delay(lat_deg / 1.0, height_m / 1.0, p, t, rh)
+      case NIF.tropo_zenith_delay(lat_deg / 1.0, height_m / 1.0, p, t, rh) do
+        {dry_m, wet_m} when is_number(dry_m) and is_number(wet_m) ->
+          {:ok, %{dry_m: dry_m, wet_m: wet_m}}
 
-      {:ok, %{dry_m: dry_m, wet_m: wet_m}}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_zenith_delay)
+  end
+
+  @doc """
+  Detailed sibling of `zenith_delay/3` that returns complete typed refusals.
+
+  Successful values match `zenith_delay/3`. Core errors retain their kind,
+  message, and debug detail; frame-value and time-model errors retain their
+  family, message, exact field, and reason. The original `zenith_delay/3`
+  continues to return its established error atom.
+  """
+  @spec zenith_delay_detailed(number(), number(), map()) :: detailed_result(%{dry_m: float(), wet_m: float()})
+  def zenith_delay_detailed(lat_deg, height_m, met) do
+    with {:ok, p, t, rh} <- meteorology(met) do
+      case NIF.tropo_zenith_delay_detailed(lat_deg / 1.0, height_m / 1.0, p, t, rh) do
+        {dry_m, wet_m} when is_number(dry_m) and is_number(wet_m) ->
+          {:ok, %{dry_m: dry_m, wet_m: wet_m}}
+
+        {:error, {kind, detail}} ->
+          {:error, {kind, detail}}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_zenith_delay_detailed)
   end
 
   @doc """
@@ -66,7 +125,7 @@ defmodule Sidereon.GNSS.Troposphere do
   @spec mapping(number(), number(), number(), NaiveDateTime.t() | tuple()) ::
           {:ok, %{dry: float(), wet: float()}} | {:error, mapping_error()}
   def mapping(elevation_deg, lat_deg, height_m, epoch) do
-    with {jd_whole, jd_fraction} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
+    with {:ok, {jd_whole, jd_fraction}} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
       case NIF.tropo_mapping_factors(
              elevation_deg / 1.0,
              lat_deg / 1.0,
@@ -79,7 +138,32 @@ defmodule Sidereon.GNSS.Troposphere do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_mapping_factors)
+  end
+
+  @doc """
+  Detailed sibling of `mapping/4` that returns complete typed refusals,
+  including field and reason for frame-value and time-model constructor errors.
+
+  The legacy mapping function keeps returning its existing error categories.
+  """
+  @spec mapping_detailed(number(), number(), number(), NaiveDateTime.t() | tuple()) ::
+          detailed_result(%{dry: float(), wet: float()})
+  def mapping_detailed(elevation_deg, lat_deg, height_m, epoch) do
+    with {:ok, {jd_whole, jd_fraction}} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
+      case NIF.tropo_mapping_factors_detailed(
+             elevation_deg / 1.0,
+             lat_deg / 1.0,
+             height_m / 1.0,
+             jd_whole,
+             jd_fraction
+           ) do
+        {dry, wet} when is_number(dry) and is_number(wet) -> {:ok, %{dry: dry, wet: wet}}
+        {:error, {kind, detail}} -> {:error, {kind, detail}}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_mapping_factors_detailed)
   end
 
   @doc """
@@ -101,24 +185,57 @@ defmodule Sidereon.GNSS.Troposphere do
 
   def slant_delay(elevation_deg, lat_deg, lon_deg, height_m, met, epoch) do
     with {:ok, p, t, rh} <- meteorology(met),
-         {jd_whole, jd_fraction} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
-      delay =
-        NIF.tropo_slant_delay(
-          elevation_deg / 1.0,
-          lat_deg / 1.0,
-          lon_deg / 1.0,
-          height_m / 1.0,
-          p,
-          t,
-          rh,
-          jd_whole,
-          jd_fraction
-        )
-
-      {:ok, delay}
+         {:ok, {jd_whole, jd_fraction}} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
+      case NIF.tropo_slant_delay(
+             elevation_deg / 1.0,
+             lat_deg / 1.0,
+             lon_deg / 1.0,
+             height_m / 1.0,
+             p,
+             t,
+             rh,
+             jd_whole,
+             jd_fraction
+           ) do
+        delay when is_number(delay) -> {:ok, delay}
+        {:error, reason} -> {:error, reason}
+      end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_slant_delay)
+  end
+
+  @doc """
+  Detailed sibling of `slant_delay/6` that returns complete typed refusals,
+  including field and reason for frame-value and time-model constructor errors.
+
+  Successful values and the below-horizon zero retain the legacy behavior.
+  """
+  @spec slant_delay_detailed(number(), number(), number(), number(), map(), NaiveDateTime.t() | tuple()) ::
+          detailed_result(float())
+  def slant_delay_detailed(elevation_deg, _lat_deg, _lon_deg, _height_m, _met, _epoch) when elevation_deg < 0.0,
+    do: {:ok, 0.0}
+
+  def slant_delay_detailed(elevation_deg, lat_deg, lon_deg, height_m, met, epoch) do
+    with {:ok, p, t, rh} <- meteorology(met),
+         {:ok, {jd_whole, jd_fraction}} <- Sidereon.GNSS.Time.epoch_to_split_jd(epoch) do
+      case NIF.tropo_slant_delay_detailed(
+             elevation_deg / 1.0,
+             lat_deg / 1.0,
+             lon_deg / 1.0,
+             height_m / 1.0,
+             p,
+             t,
+             rh,
+             jd_whole,
+             jd_fraction
+           ) do
+        delay when is_number(delay) -> {:ok, delay}
+        {:error, {kind, detail}} -> {:error, {kind, detail}}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :tropo_slant_delay_detailed)
   end
 
   # --- helpers -------------------------------------------------------------

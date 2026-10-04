@@ -17,6 +17,9 @@ defmodule Sidereon.GNSS.Time do
   caller supplied it in (typically GPS time for these models).
   """
 
+  alias Sidereon.GNSS.Ionosphere.CivilFields
+  alias Sidereon.GNSS.Ionosphere.Numeric
+  alias Sidereon.GNSS.Time.ExactEpoch
   alias Sidereon.NIF
 
   # Named time scales the core resolves, mapped to the abbreviations the NIF
@@ -207,30 +210,50 @@ defmodule Sidereon.GNSS.Time do
   defp scale_abbrev(scale), do: {:error, {:unknown_time_scale, scale}}
 
   @doc """
-  Convert an epoch to the split Julian date `{jd_whole, fraction}`.
+  Convert an epoch to the split Julian date `{:ok, {jd_whole, fraction}}`.
 
   The calendar arithmetic lives in `sidereon-core`
   (`sidereon_core::astro::time::civil::split_julian_date`); this module only
   marshals the epoch into civil `(year, month, day, hour, minute, second)`
-  fields.
+  fields. A field the core cannot take is named rather than raised; see
+  "Epoch refusals" below.
+
+  ## Epoch refusals
+
+  Every epoch helper here reads the fields it passes through the one check the
+  IONEX epochs use, so a `NaiveDateTime` and a tuple holding the same fields are
+  refused the same way:
+
+    * `{:invalid_epoch_field, field, value}` - a `year`, `month`, `day`, `hour`
+      or `minute` that is not an integer, or a `second` that is not a number,
+    * `{:value_out_of_range, field, value}` - one of the first five outside the
+      signed 32-bit range the core takes, or an integer `second` larger in
+      magnitude than the largest finite double,
+    * `:bad_epoch` - a value that is neither a `NaiveDateTime` nor a
+      `{{year, month, day}, {hour, minute, second}}` tuple.
   """
-  @spec epoch_to_split_jd(NaiveDateTime.t() | tuple()) :: {float(), float()}
+  @spec epoch_to_split_jd(NaiveDateTime.t() | tuple()) :: {:ok, {float(), float()}} | {:error, term()}
   def epoch_to_split_jd(epoch) do
-    {year, month, day, hour, minute, second} = civil_fields(epoch)
-    NIF.civil_split_julian_date(year, month, day, hour, minute, second)
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      {:ok, NIF.civil_split_julian_date(year, month, day, hour, minute, second)}
+    end
   end
 
   @doc """
-  Seconds-of-day in `[0, 86400)`, formed from the epoch's clock fields.
+  Seconds-of-day in `[0, 86400)`, formed from the epoch's clock fields, as
+  `{:ok, seconds}`.
 
   Used by the Klobuchar diurnal term, which takes the GPS second-of-day
   directly. The arithmetic delegates to
-  `sidereon_core::astro::time::civil::second_of_day`.
+  `sidereon_core::astro::time::civil::second_of_day`. Only the clock fields are
+  read, so only `hour`, `minute` and `second` are checked; the refusals are
+  those of `epoch_to_split_jd/1`.
   """
-  @spec second_of_day(NaiveDateTime.t() | tuple()) :: float()
+  @spec second_of_day(NaiveDateTime.t() | tuple()) :: {:ok, float()} | {:error, term()}
   def second_of_day(epoch) do
-    {_year, _month, _day, hour, minute, second} = civil_fields(epoch)
-    NIF.civil_second_of_day(hour, minute, second)
+    with {:ok, {hour, minute, second}} <- clock_fields(epoch) do
+      {:ok, NIF.civil_second_of_day(hour, minute, second)}
+    end
   end
 
   @doc """
@@ -239,8 +262,8 @@ defmodule Sidereon.GNSS.Time do
   A whole-second epoch yields an exact integer (the core returns the exact
   whole-second value, which is converted back to an integer here). Returns
   `{:ok, seconds}` or `{:error, :non_integer_second_epoch}` if the epoch carries
-  a sub-second part. The continuous seconds come from
-  `sidereon_core::astro::time::civil::j2000_seconds`.
+  a sub-second part, with the field refusals of `epoch_to_split_jd/1`. The
+  continuous seconds come from `sidereon_core::astro::time::civil::j2000_seconds`.
   """
   @spec epoch_to_j2000_seconds(NaiveDateTime.t() | tuple()) ::
           {:ok, integer()} | {:error, term()}
@@ -254,9 +277,10 @@ defmodule Sidereon.GNSS.Time do
     end
   end
 
-  def epoch_to_j2000_seconds({{year, month, day}, {hour, minute, second}}) when is_integer(second) do
-    seconds = NIF.civil_j2000_seconds(year, month, day, hour, minute, second / 1.0)
-    {:ok, trunc(seconds)}
+  def epoch_to_j2000_seconds({{_year, _month, _day}, {_hour, _minute, second}} = epoch) when is_integer(second) do
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      {:ok, trunc(NIF.civil_j2000_seconds(year, month, day, hour, minute, second))}
+    end
   end
 
   def epoch_to_j2000_seconds(_other), do: {:error, :non_integer_second_epoch}
@@ -266,35 +290,42 @@ defmodule Sidereon.GNSS.Time do
 
   Unlike `epoch_to_j2000_seconds/1`, this accepts sub-second `NaiveDateTime`
   values and tuple epochs with a floating-point seconds field. Delegates to
-  `sidereon_core::astro::time::civil::j2000_seconds`.
+  `sidereon_core::astro::time::civil::j2000_seconds`. Returns `{:ok, seconds}`
+  or the refusals of `epoch_to_split_jd/1`; a value of another shape is
+  `{:error, :non_integer_second_epoch}`.
   """
   @spec epoch_to_j2000_seconds_fractional(NaiveDateTime.t() | tuple()) ::
           {:ok, float()} | {:error, term()}
-  def epoch_to_j2000_seconds_fractional(%NaiveDateTime{} = epoch) do
-    {year, month, day, hour, minute, second} = civil_fields(epoch)
-    {:ok, NIF.civil_j2000_seconds(year, month, day, hour, minute, second)}
-  end
+  def epoch_to_j2000_seconds_fractional(%NaiveDateTime{} = epoch), do: j2000_seconds_fractional(epoch)
 
-  def epoch_to_j2000_seconds_fractional({{_year, _month, _day}, {_hour, _minute, _second}} = epoch) do
-    {year, month, day, hour, minute, second} = civil_fields(epoch)
-    {:ok, NIF.civil_j2000_seconds(year, month, day, hour, minute, second)}
-  end
+  def epoch_to_j2000_seconds_fractional({{_year, _month, _day}, {_hour, _minute, _second}} = epoch),
+    do: j2000_seconds_fractional(epoch)
 
   def epoch_to_j2000_seconds_fractional(_other), do: {:error, :non_integer_second_epoch}
 
+  @doc "Build an exact epoch label from a civil time value."
+  @spec exact_epoch(NaiveDateTime.t() | tuple()) :: {:ok, ExactEpoch.t()} | {:error, term()}
+  def exact_epoch(epoch) do
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      ExactEpoch.from_civil(year, month, day, hour, minute, second)
+    end
+  end
+
   @doc """
-  Fractional day-of-year of the epoch, as the `float` the Niell troposphere
-  seasonal term consumes.
+  Fractional day-of-year of the epoch, as `{:ok, day}` with the `float` the
+  Niell troposphere seasonal term consumes.
 
   January 1 00:00 is 1.0. The continuous day-of-year comes from
   `sidereon_core::astro::time::civil::day_of_year`, matching the crate's
   fractional `SolveInputs.day_of_year` convention, so the SPP troposphere and
-  `Sidereon.GNSS.Troposphere` agree for the same epoch.
+  `Sidereon.GNSS.Troposphere` agree for the same epoch. The refusals are those
+  of `epoch_to_split_jd/1`.
   """
-  @spec day_of_year(NaiveDateTime.t() | tuple()) :: float()
+  @spec day_of_year(NaiveDateTime.t() | tuple()) :: {:ok, float()} | {:error, term()}
   def day_of_year(epoch) do
-    {year, month, day, hour, minute, second} = civil_fields(epoch)
-    NIF.civil_day_of_year(year, month, day, hour, minute, second)
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      {:ok, NIF.civil_day_of_year(year, month, day, hour, minute, second)}
+    end
   end
 
   @doc """
@@ -304,7 +335,8 @@ defmodule Sidereon.GNSS.Time do
   entry the ionosphere/troposphere delay dispatchers build their `epoch` argument
   from. Unlike `epoch_to_split_jd/1`, this runs the core's `JulianDateSplit`
   guard, so an out-of-day clock field is rejected as `{:error, :invalid_instant}`
-  rather than producing an out-of-range fraction.
+  rather than producing an out-of-range fraction. A field the core cannot take
+  is refused as in `epoch_to_split_jd/1`.
 
       iex> {:ok, {jd_whole, _fraction}} =
       ...>   Sidereon.GNSS.Time.utc_instant_split({{2020, 6, 25}, {12, 0, 0}})
@@ -314,18 +346,90 @@ defmodule Sidereon.GNSS.Time do
   @spec utc_instant_split(NaiveDateTime.t() | tuple()) ::
           {:ok, {float(), float()}} | {:error, term()}
   def utc_instant_split(epoch) do
-    {year, month, day, hour, minute, second} = civil_fields(epoch)
-    NIF.civil_utc_instant_split(year, month, day, hour, minute, second)
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      NIF.civil_utc_instant_split(year, month, day, hour, minute, second)
+    end
+  end
+
+  @typedoc """
+  The complete `TimeModelError::InvalidInput` detail returned by the detailed
+  UTC split endpoint. `family` is `TimeModelError`, `kind` is
+  `TIME_MODEL_INVALID_INPUT`, and `field`/`reason` preserve the core values.
+  The family and kind fields are strings with those fixed values; they use
+  `String.t()` because Elixir typespecs cannot express binary-string literals.
+  """
+  @type time_model_error_detail() :: %{
+          required(:family) => String.t(),
+          required(:kind) => String.t(),
+          required(:message) => String.t(),
+          required(:field) => String.t(),
+          required(:reason) => String.t(),
+          required(:debug) => nil
+        }
+
+  @doc """
+  Typed counterpart to `utc_instant_split/1` that returns the full core time-model
+  refusal detail while retaining the legacy endpoint's `:invalid_instant` result.
+  """
+  @spec utc_instant_split_detailed(NaiveDateTime.t() | tuple()) ::
+          {:ok, {float(), float()}}
+          | {:error, {:invalid_input, time_model_error_detail()}}
+          | {:error, {:invalid_epoch_field, atom(), term()}}
+          | {:error, {:value_out_of_range, atom(), integer() | float()}}
+          | {:error, :bad_epoch}
+  def utc_instant_split_detailed(epoch) do
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      NIF.civil_utc_instant_split_detailed(year, month, day, hour, minute, second)
+    end
+  end
+
+  defp j2000_seconds_fractional(epoch) do
+    with {:ok, {year, month, day, hour, minute, second}} <- civil_fields(epoch) do
+      {:ok, NIF.civil_j2000_seconds(year, month, day, hour, minute, second)}
+    end
   end
 
   # Marshal an epoch into civil `(year, month, day, hour, minute, second)` fields
-  # with a floating-point seconds component (sub-second microseconds folded in).
+  # with a floating-point seconds component (sub-second microseconds folded in),
+  # after checking each against the parameter the core takes it as.
   defp civil_fields(%NaiveDateTime{} = ndt) do
-    {micro, _precision} = ndt.microsecond
-    {ndt.year, ndt.month, ndt.day, ndt.hour, ndt.minute, ndt.second + micro / 1_000_000.0}
+    with :ok <- CivilFields.calendar(ndt) do
+      {micro, _precision} = ndt.microsecond
+      {:ok, {ndt.year, ndt.month, ndt.day, ndt.hour, ndt.minute, ndt.second + micro / 1_000_000.0}}
+    end
   end
 
-  defp civil_fields({{year, month, day}, {hour, minute, second}}) do
-    {year, month, day, hour, minute, second / 1.0}
+  defp civil_fields({{year, month, day}, {hour, minute, second}} = epoch) do
+    with :ok <- CivilFields.calendar(epoch),
+         {:ok, second} <- float_second(second) do
+      {:ok, {year, month, day, hour, minute, second}}
+    end
+  end
+
+  defp civil_fields(_other), do: {:error, :bad_epoch}
+
+  # The clock fields alone, for a helper that reads no date.
+  defp clock_fields(%NaiveDateTime{} = ndt) do
+    with :ok <- CivilFields.clock(ndt) do
+      {micro, _precision} = ndt.microsecond
+      {:ok, {ndt.hour, ndt.minute, ndt.second + micro / 1_000_000.0}}
+    end
+  end
+
+  defp clock_fields({{_year, _month, _day}, {hour, minute, second}} = epoch) do
+    with :ok <- CivilFields.clock(epoch),
+         {:ok, second} <- float_second(second) do
+      {:ok, {hour, minute, second}}
+    end
+  end
+
+  defp clock_fields(_other), do: {:error, :bad_epoch}
+
+  defp float_second(second) do
+    case Numeric.float(second) do
+      {:ok, float} -> {:ok, float}
+      {:out_of_range, value} -> {:error, {:value_out_of_range, :second, value}}
+      :not_a_number -> {:error, {:invalid_epoch_field, :second, second}}
+    end
   end
 end

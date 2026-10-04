@@ -199,20 +199,32 @@ defmodule Sidereon.GNSS.RINEX.ObservationsSppTest do
       {:ok, eph: eph, prs: prs, epoch: epoch}
     end
 
-    test "refuses an implausible converged fix instead of returning garbage", ctx do
-      # From the earth-center default seed with iono/troposphere on, the kernel
-      # step-tolerance test can fire at iteration 0 and flag a ~6.36e6 m fix as
-      # converged. It must be refused: the position-plausibility gate catches it
-      # (the fix is near radius zero), or failing that the residual-RMS gate does.
-      assert {:error, reason} =
-               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
-                 ionosphere: true,
-                 troposphere: true,
-                 klobuchar_alpha: @gps_alpha,
-                 klobuchar_beta: @gps_beta
+    test "from the earth-centre default seed reaches the fix a nearby seed reaches", ctx do
+      # The satellites are selected, masked and weighted at every iterate, as
+      # RTKLIB `estpos` does from its own geocentre start, so the default seed
+      # converges to the same fixed point of that iteration as a seed near the
+      # station. Each solve ends on a step below 1e-4 m (`SELECTION_STEP_TOL_M`),
+      # so each fix lies within that step of the fixed point and the two agree
+      # to within twice it.
+      opts = [ionosphere: true, troposphere: true, klobuchar_alpha: @gps_alpha, klobuchar_beta: @gps_beta]
+
+      assert {:ok, from_centre} = Positioning.solve(ctx.eph, ctx.prs, ctx.epoch, opts)
+
+      assert {:ok, from_nearby} =
+               Positioning.solve(
+                 ctx.eph,
+                 ctx.prs,
+                 ctx.epoch,
+                 [initial_guess: {3_582_135.0, 532_569.0, 5_232_779.0, 0.0}] ++ opts
                )
 
-      assert match?({:implausible_position, _}, reason) or match?({:no_convergence, _}, reason)
+      assert from_centre.metadata.status == :selection_settled
+      assert from_centre.metadata.converged
+      assert from_centre.used_sats == from_nearby.used_sats
+
+      for axis <- [:x_m, :y_m, :z_m] do
+        assert_in_delta Map.fetch!(from_centre.position, axis), Map.fetch!(from_nearby.position, axis), 2.0e-4
+      end
     end
 
     test "surfaces redundancy and RAIM checkability in metadata", ctx do

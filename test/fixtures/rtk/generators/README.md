@@ -137,7 +137,7 @@ Run the local byte-identical regeneration check with:
 
 ```sh
 RTKLIB_RNX2RTKP=/tmp/cd-phase1-tools/RTKLIB/app/rnx2rtkp/gcc/rnx2rtkp \
-  ORBIS_BUILD=1 mix test --include local_data test/gnss_rtk_rtklib_oracle_test.exs
+  mix test --include local_data test/gnss_rtk_rtklib_oracle_test.exs
 ```
 
 The committed RTKLIB configs enable solid earth tides

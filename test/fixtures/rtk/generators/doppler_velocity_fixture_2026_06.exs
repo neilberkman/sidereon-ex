@@ -23,7 +23,7 @@ defmodule DopplerVelocityFixture202606 do
   self-contained while still running the real `Velocity.solve` as the code under
   test. Regenerate with:
 
-      ORBIS_BUILD=1 mix run \\
+      mix run \\
         test/fixtures/rtk/generators/doppler_velocity_fixture_2026_06.exs
 
   Requires the staged corpus under /tmp/gsdc-work (phone RINEX + broadcast NAV).

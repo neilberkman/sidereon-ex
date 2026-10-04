@@ -419,7 +419,14 @@ fn encode_event<'a>(env: Env<'a>, event: NtripEvent) -> Term<'a> {
 
 fn encode_message_result<'a>(env: Env<'a>, result: sidereon_core::Result<Message>) -> Term<'a> {
     match result {
-        Ok(message) => (atoms::ok(), crate::rtcm::encode_message(env, message)).encode(env),
+        Ok(message) => match crate::rtcm::encode_message(env, message) {
+            Ok(term) => (atoms::ok(), term).encode(env),
+            Err(error) => (
+                atoms::error(),
+                crate::rtcm::encode_error_reason(env, &error),
+            )
+                .encode(env),
+        },
         Err(error) => (atoms::error(), error.to_string()).encode(env),
     }
 }

@@ -5,6 +5,7 @@ defmodule Sidereon.GNSS.CarrierPhaseTest do
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.Time.ExactEpoch
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @rx {3_512_900.0, 780_500.0, 5_248_700.0}
@@ -340,6 +341,41 @@ defmodule Sidereon.GNSS.CarrierPhaseTest do
         |> List.last()
 
       assert :data_gap in flagged.reasons
+    end
+
+    test "exact gap epochs distinguish labels that round to the same float" do
+      {:ok, base} = ExactEpoch.new(9_007_199_254_741_092, 0)
+      {:ok, at_threshold} = ExactEpoch.new(9_007_199_254_741_392, 0)
+      {:ok, beyond_threshold} = ExactEpoch.new(9_007_199_254_741_393, 0)
+      assert ExactEpoch.j2000_seconds(at_threshold) == ExactEpoch.j2000_seconds(beyond_threshold)
+
+      arc = fn gap_epoch ->
+        [
+          %{
+            epoch: 0,
+            gap_epoch: base,
+            phi1: 1000.0,
+            phi2: 800.0,
+            p1: 20_000.0,
+            p2: 20_001.0,
+            f1: @f_l1,
+            f2: @f_l2
+          },
+          %{
+            epoch: 0,
+            gap_epoch: gap_epoch,
+            phi1: 1000.0,
+            phi2: 800.0,
+            p1: 20_000.0,
+            p2: 20_001.0,
+            f1: @f_l1,
+            f2: @f_l2
+          }
+        ]
+      end
+
+      refute :data_gap in (arc.(at_threshold) |> CarrierPhase.detect_cycle_slips() |> List.last()).reasons
+      assert :data_gap in (arc.(beyond_threshold) |> CarrierPhase.detect_cycle_slips() |> List.last()).reasons
     end
 
     test "min_arc_gap_s option overrides the default" do

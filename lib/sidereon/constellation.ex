@@ -36,7 +36,7 @@ defmodule Sidereon.Constellation do
         }
 
   @type visible_satellite :: %{
-          catalog_number: String.t(),
+          catalog_number: String.t() | nil,
           elevation: float(),
           azimuth: float(),
           range_km: float(),
@@ -51,7 +51,7 @@ defmodule Sidereon.Constellation do
 
   @type fleet_pass :: %{
           satellite_index: non_neg_integer(),
-          catalog_number: String.t(),
+          catalog_number: String.t() | nil,
           pass: Pass.t()
         }
 
@@ -59,7 +59,31 @@ defmodule Sidereon.Constellation do
           {:invalid_satellites, invalid_satellites()}
           | {:invalid_option, term()}
           | {:invalid_field, atom(), term()}
+          | :invalid_input
           | {:nif_error, String.t()}
+
+  @type detailed_look_arc :: %{
+          satellite_index: non_neg_integer(),
+          value: [LookAngle.t()] | nil,
+          error: Sidereon.Coverage.look_angle_error() | nil
+        }
+
+  @type detailed_ground_track :: %{
+          satellite_index: non_neg_integer(),
+          value: [Geodetic.t()] | nil,
+          error: Sidereon.Coverage.look_angle_error() | nil
+        }
+
+  @type detailed_pass_error ::
+          {:satellite_initialization, Sidereon.Coverage.sgp4_error()}
+          | {:invalid_input, String.t(), String.t()}
+          | {:ut1_outside_coverage, :before_coverage | :after_coverage}
+
+  @type detailed_fleet_pass :: %{
+          satellite_index: non_neg_integer(),
+          value: %{catalog_number: String.t() | nil, passes: [Pass.t()]} | nil,
+          error: detailed_pass_error() | nil
+        }
 
   @doc """
   Create a constellation from a list of TLEs.
@@ -191,6 +215,67 @@ defmodule Sidereon.Constellation do
   end
 
   @doc """
+  Compute typed, index-preserving look-angle outcomes for every satellite.
+
+  Every input satellite receives one outcome; a successful empty arc has a nil
+  error, while initialization, propagation, and frame errors retain their typed
+  `Sidereon.Coverage.look_angle_error/0` value.
+  """
+  @spec look_angle_arcs_detailed(t(), map(), [DateTime.t()], keyword()) ::
+          {:ok, [detailed_look_arc()]} | {:error, batch_error()}
+  def look_angle_arcs_detailed(%__MODULE__{} = constellation, station, datetimes, opts \\ []) when is_list(datetimes) do
+    with {:ok, opsmode} <- validate_opsmode(Keyword.get(opts, :opsmode, :afspc)),
+         {:ok, datetimes} <- validate_datetimes(datetimes),
+         {:ok, elements_maps} <- constellation_elements_maps(constellation),
+         {:ok, outcomes} <-
+           look_angle_arcs_detailed_nif(elements_maps, station, datetimes, opsmode) do
+      {:ok,
+       Enum.map(outcomes, fn
+         {index, {:ok, looks}} ->
+           %{
+             satellite_index: index,
+             value:
+               Enum.map(looks, fn {azimuth, elevation, range_km} ->
+                 %LookAngle{azimuth: azimuth, elevation: elevation, range_km: range_km}
+               end),
+             error: nil
+           }
+
+         {index, {:error, error}} ->
+           %{satellite_index: index, value: nil, error: error}
+       end)}
+    end
+  end
+
+  @doc """
+  Compute typed, index-preserving WGS84 ground-track outcomes for every satellite.
+  """
+  @spec ground_tracks_detailed(t(), [DateTime.t()], keyword()) ::
+          {:ok, [detailed_ground_track()]} | {:error, batch_error()}
+  def ground_tracks_detailed(%__MODULE__{} = constellation, datetimes, opts \\ []) when is_list(datetimes) do
+    with {:ok, opsmode} <- validate_opsmode(Keyword.get(opts, :opsmode, :afspc)),
+         {:ok, datetimes} <- validate_datetimes(datetimes),
+         {:ok, elements_maps} <- constellation_elements_maps(constellation),
+         {:ok, outcomes} <- ground_tracks_detailed_nif(elements_maps, datetimes, opsmode) do
+      {:ok,
+       Enum.map(outcomes, fn
+         {index, {:ok, points}} ->
+           %{
+             satellite_index: index,
+             value:
+               Enum.map(points, fn {latitude, longitude, altitude_km} ->
+                 %Geodetic{latitude: latitude, longitude: longitude, altitude_km: altitude_km}
+               end),
+             error: nil
+           }
+
+         {index, {:error, error}} ->
+           %{satellite_index: index, value: nil, error: error}
+       end)}
+    end
+  end
+
+  @doc """
   Compute WGS84 sub-satellite ground tracks for every satellite over a shared
   epoch grid.
 
@@ -236,7 +321,7 @@ defmodule Sidereon.Constellation do
 
       {:ok, [%{
         satellite_index: non_neg_integer(),
-        catalog_number: String.t(),
+        catalog_number: String.t() | nil,
         pass: %Sidereon.Pass{}
       }]}
 
@@ -272,6 +357,89 @@ defmodule Sidereon.Constellation do
            passes_nif(elements_maps, station, start_dt, end_dt, options) do
       {:ok, Enum.map(pass_terms, &decode_fleet_pass/1)}
     end
+  end
+
+  @doc """
+  Predict typed, index-preserving per-satellite pass outcomes over a time window.
+  Successful satellites retain an empty pass list; initialization and finder
+  failures retain their complete typed cause at that satellite's fleet index.
+  """
+  @spec passes_detailed(t(), map(), DateTime.t(), DateTime.t(), keyword()) ::
+          {:ok, [detailed_fleet_pass()]} | {:error, batch_error()}
+  def passes_detailed(%__MODULE__{} = constellation, station, start_dt, end_dt, opts \\ []) do
+    with {:ok, %DateTime{} = start_dt} <- validate_datetime(start_dt, :start_dt),
+         {:ok, %DateTime{} = end_dt} <- validate_datetime(end_dt, :end_dt),
+         {:ok, options} <- validate_pass_options(opts),
+         {:ok, elements_maps} <- constellation_elements_maps(constellation),
+         {:ok, outcomes} <- passes_detailed_nif(elements_maps, station, start_dt, end_dt, options) do
+      {:ok,
+       Enum.map(outcomes, fn
+         {index, {:ok, {catalog_number, rows}}} ->
+           passes =
+             Enum.map(rows, fn {aos_us, los_us, max_elevation, culmination_us} ->
+               %Pass{
+                 rise: DateTime.from_unix!(aos_us, :microsecond),
+                 set: DateTime.from_unix!(los_us, :microsecond),
+                 max_elevation: max_elevation,
+                 max_elevation_time: DateTime.from_unix!(culmination_us, :microsecond),
+                 duration_seconds: (los_us - aos_us) / 1_000_000
+               }
+             end)
+
+           %{satellite_index: index, value: %{catalog_number: catalog_number, passes: passes}, error: nil}
+
+         {index, {:error, error}} ->
+           %{satellite_index: index, value: nil, error: error}
+       end)}
+    end
+  end
+
+  defp look_angle_arcs_detailed_nif(elements_maps, station, datetimes, opsmode) do
+    case NIF.constellation_look_angle_arcs_detailed(
+           elements_maps,
+           station.latitude,
+           station.longitude,
+           station.altitude_m,
+           Enum.map(datetimes, &to_nif_datetime/1),
+           opsmode
+         ) do
+      {:error, error} -> {:error, error}
+      outcomes -> {:ok, outcomes}
+    end
+  rescue
+    e in ErlangError -> {:error, {:nif_error, Exception.message(e)}}
+  end
+
+  defp ground_tracks_detailed_nif(elements_maps, datetimes, opsmode) do
+    case NIF.constellation_ground_tracks_detailed(
+           elements_maps,
+           Enum.map(datetimes, &to_nif_datetime/1),
+           opsmode
+         ) do
+      {:error, error} -> {:error, error}
+      outcomes -> {:ok, outcomes}
+    end
+  rescue
+    e in ErlangError -> {:error, {:nif_error, Exception.message(e)}}
+  end
+
+  defp passes_detailed_nif(elements_maps, station, start_dt, end_dt, options) do
+    case NIF.constellation_passes_detailed(
+           elements_maps,
+           station.latitude,
+           station.longitude,
+           station.altitude_m,
+           to_nif_datetime(start_dt),
+           to_nif_datetime(end_dt),
+           options.min_elevation,
+           options.step_seconds,
+           options.opsmode
+         ) do
+      {:error, error} -> {:error, error}
+      outcomes -> {:ok, outcomes}
+    end
+  rescue
+    e in ErlangError -> {:error, {:nif_error, Exception.message(e)}}
   end
 
   defp validate_opsmode(opsmode) when opsmode in [:afspc, :improved], do: {:ok, opsmode}

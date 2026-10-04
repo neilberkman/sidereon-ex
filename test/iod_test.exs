@@ -21,6 +21,11 @@ defmodule Sidereon.IODTest do
     assert_ulp(copa, 0.0, 0, "copa")
   end
 
+  test "Gibbs refuses zero-vector geometry with a typed error" do
+    assert {:error, {:iod_error, :zero_vector, "position vector has near-zero magnitude"}} =
+             Sidereon.IOD.gibbs({0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0})
+  end
+
   test "Herrick-Gibbs Example 7-4 velocity matches Vallado at zero ULP" do
     r1 = {3419.85564, 6019.82602, 2784.60022}
     r2 = {2935.91195, 6326.18324, 2660.59584}
@@ -36,6 +41,15 @@ defmodule Sidereon.IODTest do
     assert_ulp(elem(v2, 2), -1.7205675602414345, 0, "v2_z")
     assert_ulp(theta12 * 180.0 / :math.pi(), 4.499996147374992, 2, "theta12")
     assert_ulp(theta23 * 180.0 / :math.pi(), 4.499998402168982, 2, "theta23")
+  end
+
+  test "Herrick-Gibbs refuses repeated epochs with a typed error" do
+    r1 = {3419.85564, 6019.82602, 2784.60022}
+    r2 = {2935.91195, 6326.18324, 2660.59584}
+    r3 = {2434.95202, 6597.38674, 2521.52311}
+
+    assert {:error, {:iod_error, :invalid_time_geometry, "observation times are equal or near-equal"}} =
+             Sidereon.IOD.hgibbs(r1, r2, r3, 1.0, 1.0, 1.0)
   end
 
   test "Gauss angles-only Example 7-2 matches Vallado" do
@@ -62,6 +76,27 @@ defmodule Sidereon.IODTest do
 
     assert_relative(r2, {6313.378130210396, 5247.50563344895, 6467.707164431651}, "position")
     assert_relative(v2, {-4.185488280436629, 4.7884929168898145, 1.721714659663034}, "velocity")
+  end
+
+  test "Gauss refuses singular sightline geometry with a typed error" do
+    assert {:error, {:iod_error, :determinant_too_small, "line-of-sight determinant too small"}} =
+             Sidereon.IOD.gauss(
+               0.1,
+               0.1,
+               0.1,
+               0.2,
+               0.2,
+               0.2,
+               2_456_159.5,
+               0.4864351851851852,
+               2_456_159.5,
+               0.49199074074074073,
+               2_456_159.5,
+               0.4947685185185185,
+               {4054.881, 2748.195, 4074.237},
+               {3956.224, 2888.232, 4074.364},
+               {3905.073, 2956.935, 4074.430}
+             )
   end
 
   defp assert_relative(actual, expected, label) do

@@ -32,7 +32,7 @@ struct SiderealFilterOutputTerm {
 type OptionsTerm = (f64, i64, i64, String, f64);
 
 fn duration(seconds: f64) -> NifResult<Duration> {
-    Duration::from_seconds(seconds).map_err(crate::errors::invalid_input)
+    Duration::from_seconds(seconds).map_err(crate::tropo::time_model_error_detail)
 }
 
 fn method(kind: &str, alpha: f64) -> NifResult<SiderealTemplateMethod> {

@@ -3,7 +3,48 @@ defmodule Sidereon.GNSS.NMEA do
   NMEA 0183 parsing, epoch accumulation, and GGA writing.
   """
 
+  alias Sidereon.GNSS.NMEA
   alias Sidereon.NIF
+  alias Sidereon.NifCall
+
+  @type record_ref :: %{
+          line: non_neg_integer() | nil,
+          record_index: non_neg_integer() | nil,
+          satellite: String.t() | nil
+        }
+  @typedoc "Stable string kind: missing, non_finite, not_positive, negative, out_of_range, float_parse, int_parse, invalid_civil_date, or invalid_civil_time."
+  @type field_error_kind :: String.t()
+  @type field_error :: %{
+          kind: field_error_kind(),
+          field: String.t(),
+          min: number() | nil,
+          max: number() | nil,
+          upper_inclusive: boolean() | nil,
+          value: String.t() | nil,
+          year: integer() | nil,
+          month: integer() | nil,
+          day: integer() | nil,
+          hour: integer() | nil,
+          minute: integer() | nil,
+          second: number() | nil
+        }
+  @typedoc "Stable string kind: unrepresentable_satellite, unsupported_record_type, malformed_field, out_of_range_epoch, truncated, unsupported_unit, unknown_block, or inconsistent_record."
+  @type skip_reason_kind :: String.t()
+  @type skip_diagnostic :: %{
+          at: record_ref(),
+          reason: String.t(),
+          detail: String.t() | nil,
+          reason_kind: skip_reason_kind(),
+          record_type: String.t() | nil,
+          unit: String.t() | nil,
+          block: String.t() | nil,
+          inconsistent_reason: String.t() | nil,
+          cause: field_error() | nil
+        }
+  @typedoc "Stable warning string: checksum, clamped, degraded, mismatch, overlap, or missing_metadata."
+  @type warning_kind :: String.t()
+  @type warning_diagnostic :: %{at: record_ref(), kind: warning_kind()}
+  @type diagnostics :: %{skips: [skip_diagnostic()], warnings: [warning_diagnostic()]}
 
   defmodule Sentence do
     @moduledoc """
@@ -17,7 +58,7 @@ defmodule Sidereon.GNSS.NMEA do
             system: String.t() | nil,
             kind: atom(),
             body: map(),
-            diagnostics: map()
+            diagnostics: NMEA.diagnostics()
           }
   end
 
@@ -62,31 +103,35 @@ defmodule Sidereon.GNSS.NMEA do
   @doc """
   Parse one NMEA sentence.
   """
-  @spec parse_sentence(String.t()) :: {:ok, %{sentence: Sentence.t(), diagnostics: map()}} | {:error, term()}
+  @spec parse_sentence(String.t()) ::
+          {:ok, %{sentence: Sentence.t(), diagnostics: diagnostics()}} | {:error, term()}
   def parse_sentence(line) when is_binary(line) do
     with {:ok, result} <- NIF.nmea_parse_sentence(line) do
       {:ok, %{sentence: decode_sentence(result.sentence, result.diagnostics), diagnostics: result.diagnostics}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_parse_sentence)
   end
 
   @doc """
   Forgiving parse of a text buffer into supported NMEA sentences.
   """
-  @spec parse(String.t()) :: {:ok, %{sentences: [Sentence.t()], diagnostics: map()}} | {:error, term()}
+  @spec parse(String.t()) ::
+          {:ok, %{sentences: [Sentence.t()], diagnostics: diagnostics()}} | {:error, term()}
   def parse(text) when is_binary(text) do
     with {:ok, result} <- NIF.nmea_parse(text) do
       {:ok, %{sentences: decode_sentences(result.sentences), diagnostics: result.diagnostics}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_parse)
   end
 
   @doc """
   Parse a text buffer and group decoded sentences into epochs.
   """
-  @spec group_epochs(String.t()) :: {:ok, %{sentences: [Sentence.t()], epochs: [Snapshot.t()], diagnostics: map()}}
+  @spec group_epochs(String.t()) ::
+          {:ok, %{sentences: [Sentence.t()], epochs: [Snapshot.t()], diagnostics: diagnostics()}}
+          | {:error, term()}
   def group_epochs(text) when is_binary(text) do
     with {:ok, result} <- NIF.nmea_group_epochs(text) do
       {:ok,
@@ -97,7 +142,7 @@ defmodule Sidereon.GNSS.NMEA do
        }}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_group_epochs)
   end
 
   @doc """
@@ -113,14 +158,15 @@ defmodule Sidereon.GNSS.NMEA do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_accumulator_new)
   end
 
   @doc """
   Push bytes into an accumulator.
   """
   @spec push(Accumulator.t(), binary()) ::
-          {:ok, %{sentences: [Sentence.t()], snapshots: [Snapshot.t()], diagnostics: map()}} | {:error, term()}
+          {:ok, %{sentences: [Sentence.t()], snapshots: [Snapshot.t()], diagnostics: diagnostics()}}
+          | {:error, term()}
   def push(%Accumulator{handle: handle}, bytes) when is_binary(bytes) do
     case NIF.nmea_accumulator_push(handle, bytes) do
       {:ok, output} ->
@@ -135,7 +181,7 @@ defmodule Sidereon.GNSS.NMEA do
         err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_accumulator_push)
   end
 
   @doc """
@@ -149,7 +195,32 @@ defmodule Sidereon.GNSS.NMEA do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_accumulator_finish)
+  end
+
+  @doc """
+  Finish buffered input and return all final sentences, snapshots, and parser
+  diagnostics. Use this additive API when the final unterminated line may
+  contain results that the legacy `finish/1` snapshot return cannot represent.
+  """
+  @spec finish_with_output(Accumulator.t()) ::
+          {:ok, %{sentences: [Sentence.t()], snapshots: [Snapshot.t()], diagnostics: diagnostics()}}
+          | {:error, term()}
+  def finish_with_output(%Accumulator{handle: handle}) do
+    case NIF.nmea_accumulator_finish_with_output(handle) do
+      {:ok, output} ->
+        {:ok,
+         %{
+           sentences: decode_sentences(output.sentences),
+           snapshots: Enum.map(output.snapshots, &decode_snapshot/1),
+           diagnostics: output.diagnostics
+         }}
+
+      {:error, _reason} = err ->
+        err
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_accumulator_finish_with_output)
   end
 
   @doc """
@@ -170,7 +241,7 @@ defmodule Sidereon.GNSS.NMEA do
       {:error, _reason} = err -> err
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :nmea_write_gga)
   end
 
   defp decode_sentences(sentences), do: Enum.map(sentences, &decode_sentence(&1, %{}))

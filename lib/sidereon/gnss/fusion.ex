@@ -10,6 +10,7 @@ defmodule Sidereon.GNSS.Fusion do
   alias Sidereon.GNSS.Fusion
   alias Sidereon.GNSS.SP3
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Filter do
     @moduledoc """
@@ -75,6 +76,166 @@ defmodule Sidereon.GNSS.Fusion do
         dt_s: dt_s
       }
     end
+  end
+
+  defmodule CorrectedImuIncrement do
+    @moduledoc "Coning/sculling-corrected truth IMU increment."
+
+    @enforce_keys [:t_j2000_s, :delta_velocity_mps, :delta_theta_rad, :dt_s]
+    defstruct [:t_j2000_s, :delta_velocity_mps, :delta_theta_rad, :dt_s]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            delta_velocity_mps: Fusion.vec3(),
+            delta_theta_rad: Fusion.vec3(),
+            dt_s: number()
+          }
+  end
+
+  defmodule ImuBias do
+    @moduledoc "Accelerometer and gyroscope bias state."
+
+    @enforce_keys [:accel_mps2, :gyro_rps]
+    defstruct [:accel_mps2, :gyro_rps]
+    @type t :: %__MODULE__{accel_mps2: Fusion.vec3(), gyro_rps: Fusion.vec3()}
+  end
+
+  defmodule SimulatedImuSequence do
+    @moduledoc "Batch IMU samples and the stochastic states used to generate them."
+
+    @enforce_keys [:samples, :bias_history, :rate_random_walk_history]
+    defstruct [:samples, :bias_history, :rate_random_walk_history]
+
+    @type t :: %__MODULE__{
+            samples: [ImuSample.t()],
+            bias_history: [ImuBias.t()],
+            rate_random_walk_history: [ImuBias.t()]
+          }
+  end
+
+  defmodule NavState do
+    @moduledoc "ECEF navigation state consumed by the standalone mechanizer."
+
+    @enforce_keys [:t_j2000_s, :position_ecef_m, :velocity_ecef_mps, :attitude_body_to_ecef]
+    defstruct [
+      :t_j2000_s,
+      :position_ecef_m,
+      :velocity_ecef_mps,
+      :attitude_body_to_ecef,
+      accel_bias_mps2: {0.0, 0.0, 0.0},
+      gyro_bias_rps: {0.0, 0.0, 0.0}
+    ]
+
+    @type t :: %__MODULE__{
+            t_j2000_s: number(),
+            position_ecef_m: Fusion.vec3(),
+            velocity_ecef_mps: Fusion.vec3(),
+            attitude_body_to_ecef: Fusion.mat3(),
+            accel_bias_mps2: Fusion.vec3(),
+            gyro_bias_rps: Fusion.vec3()
+          }
+  end
+
+  defmodule AttitudeQuaternion do
+    @moduledoc "Scalar-first unit quaternion for body-to-ECEF attitude."
+
+    @enforce_keys [:w, :x, :y, :z]
+    defstruct [:w, :x, :y, :z]
+
+    @type t :: %__MODULE__{w: float(), x: float(), y: float(), z: float()}
+  end
+
+  defmodule ImuSpec do
+    @moduledoc "Datasheet-level inertial sensor stochastic parameters."
+
+    @enforce_keys [
+      :accel_vrw_mps_sqrt_s,
+      :gyro_arw_rad_sqrt_s,
+      :accel_bias_instab_mps2,
+      :gyro_bias_instab_rps,
+      :accel_bias_tau_s,
+      :gyro_bias_tau_s
+    ]
+    defstruct [
+      :accel_vrw_mps_sqrt_s,
+      :gyro_arw_rad_sqrt_s,
+      :accel_bias_instab_mps2,
+      :gyro_bias_instab_rps,
+      :accel_bias_tau_s,
+      :gyro_bias_tau_s,
+      :accel_scale_instab_ppm,
+      :gyro_scale_instab_ppm
+    ]
+
+    @type t :: %__MODULE__{
+            accel_vrw_mps_sqrt_s: number(),
+            gyro_arw_rad_sqrt_s: number(),
+            accel_bias_instab_mps2: number(),
+            gyro_bias_instab_rps: number(),
+            accel_bias_tau_s: number() | :infinity,
+            gyro_bias_tau_s: number() | :infinity,
+            accel_scale_instab_ppm: number() | nil,
+            gyro_scale_instab_ppm: number() | nil
+          }
+
+    @spec datasheet(keyword() | map()) :: t()
+    def datasheet(values), do: struct!(__MODULE__, Map.new(values))
+
+    @spec preset(:mems | :tactical | :navigation) :: t()
+    def preset(grade), do: struct!(__MODULE__, Fusion.imu_spec(grade))
+  end
+
+  defmodule MechanizationConfig do
+    @moduledoc "Options for standalone ECEF strapdown propagation."
+
+    defstruct coning_correction: :off
+    @type t :: %__MODULE__{coning_correction: :off}
+
+    @spec new(keyword() | map()) :: t()
+    def new(options \\ []), do: struct!(__MODULE__, Map.new(options))
+  end
+
+  defmodule StrapdownMechanizer do
+    @moduledoc "Stateful standalone ECEF strapdown mechanizer."
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @type t :: %__MODULE__{handle: reference()}
+
+    @spec new(NavState.t() | map(), keyword() | map()) :: {:ok, t()} | {:error, term()}
+    def new(state, opts \\ []) do
+      Fusion.new_strapdown_mechanizer(state, opts)
+    end
+
+    @spec state(t()) :: {:ok, NavState.t()} | {:error, term()}
+    def state(%__MODULE__{handle: handle}), do: Fusion.strapdown_state(handle)
+
+    @spec propagate(t(), ImuSample.t() | map()) :: {:ok, NavState.t()} | {:error, term()}
+    def propagate(%__MODULE__{handle: handle}, sample), do: Fusion.strapdown_propagate(handle, sample)
+  end
+
+  defmodule ImuSimulator do
+    @moduledoc "Stateful deterministic synthetic IMU generator."
+
+    @enforce_keys [:handle]
+    defstruct [:handle]
+
+    @type t :: %__MODULE__{handle: reference()}
+
+    @spec new(Fusion.imu_spec(), keyword() | map()) :: {:ok, t()} | {:error, term()}
+    def new(spec \\ :mems, opts \\ []) do
+      Fusion.new_imu_simulator(spec, opts)
+    end
+
+    @spec sample_increment(t(), map()) :: {:ok, ImuSample.t()} | {:error, term()}
+    def sample_increment(%__MODULE__{handle: handle}, truth), do: Fusion.simulate_imu_increment(handle, truth)
+
+    @spec bias(t()) :: {:ok, map()} | {:error, term()}
+    def bias(%__MODULE__{handle: handle}), do: Fusion.imu_simulator_bias(handle)
+
+    @spec rate_random_walk(t()) :: {:ok, map()} | {:error, term()}
+    def rate_random_walk(%__MODULE__{handle: handle}), do: Fusion.imu_simulator_rate_random_walk(handle)
   end
 
   defmodule GnssFixMeasurement do
@@ -470,11 +631,14 @@ defmodule Sidereon.GNSS.Fusion do
   @typedoc "Three-by-three row-major matrix."
   @type mat3 :: [vec3()]
 
+  @typedoc "Unit quaternion in scalar-first component order."
+  @type attitude_quaternion :: AttitudeQuaternion.t() | {number(), number(), number(), number()}
+
   @typedoc "Initial closed-loop INS state and covariance."
   @type filter_state :: map()
 
   @typedoc "IMU specification map accepted by `filter_config/2`."
-  @type imu_spec :: map() | :mems | :tactical | :navigation
+  @type imu_spec :: ImuSpec.t() | map() | :mems | :tactical | :navigation
 
   @typedoc "Fusion filter configuration map."
   @type filter_config :: map()
@@ -490,6 +654,11 @@ defmodule Sidereon.GNSS.Fusion do
 
   @typedoc "One position and velocity sample used by outage velocity matching."
   @type velocity_match_state :: VelocityMatchState.t() | map()
+  @type inertial_error ::
+          {:invalid_input, String.t(), String.t()}
+          | :non_monotonic_sample
+          | :singular_calibration
+          | :degenerate_attitude
 
   @doc """
   Return a strapdown mechanization config.
@@ -501,6 +670,249 @@ defmodule Sidereon.GNSS.Fusion do
     %{coning_correction: field(opts, :coning_correction, :off)}
   end
 
+  @doc "Return WGS84 normal-gravity magnitude at geodetic latitude and height."
+  @spec normal_gravity_mps2(number(), number()) :: {:ok, float()} | {:error, inertial_error()}
+  def normal_gravity_mps2(lat_rad, height_m) when is_number(lat_rad) and is_number(height_m) do
+    inertial_result(NIF.inertial_normal_gravity_mps2(lat_rad / 1.0, height_m / 1.0))
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_normal_gravity_mps2)
+  end
+
+  @doc "Return the WGS84 normal-gravity vector at an ECEF position."
+  @spec gravity_ecef_mps2(vec3()) :: {:ok, vec3()} | {:error, inertial_error()}
+  def gravity_ecef_mps2(position_ecef_m) do
+    [x, y, z] = vec3(position_ecef_m)
+    inertial_result(NIF.inertial_gravity_ecef_mps2({x, y, z}))
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_gravity_ecef_mps2)
+  end
+
+  @doc "Return a first-order Gauss-Markov bias decay factor."
+  @spec gauss_markov_bias_decay(number(), number() | :infinity | nil) ::
+          {:ok, float()} | {:error, inertial_error()}
+  def gauss_markov_bias_decay(dt_s, tau_s) when is_number(dt_s) do
+    inertial_result(NIF.inertial_gauss_markov_bias_decay(dt_s / 1.0, tau_float(tau_s)))
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_gauss_markov_bias_decay)
+  end
+
+  @doc "Return the Gauss-Markov bias variance increment over a time interval."
+  @spec gauss_markov_bias_variance_increment(number(), number(), number() | :infinity | nil) ::
+          {:ok, float()} | {:error, inertial_error()}
+  def gauss_markov_bias_variance_increment(instability, dt_s, tau_s) when is_number(instability) and is_number(dt_s) do
+    inertial_result(
+      NIF.inertial_gauss_markov_bias_variance_increment(
+        instability / 1.0,
+        dt_s / 1.0,
+        tau_float(tau_s)
+      )
+    )
+  rescue
+    error in ErlangError ->
+      NifCall.error(error, __STACKTRACE__, :inertial_gauss_markov_bias_variance_increment)
+  end
+
+  @doc "Convert a body-to-ECEF direction cosine matrix to a normalized quaternion."
+  @spec attitude_quaternion_from_dcm(mat3()) ::
+          {:ok, AttitudeQuaternion.t()} | {:error, inertial_error()}
+  def attitude_quaternion_from_dcm(dcm) do
+    dcm
+    |> matrix()
+    |> NIF.inertial_quaternion_from_dcm()
+    |> inertial_result(fn {w, x, y, z} -> %AttitudeQuaternion{w: w, x: x, y: y, z: z} end)
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_quaternion_from_dcm)
+  end
+
+  @doc "Read a navigation state's body-to-ECEF attitude as a normalized quaternion."
+  @spec nav_state_attitude_quaternion(NavState.t() | map()) ::
+          {:ok, AttitudeQuaternion.t()} | {:error, inertial_error()}
+  def nav_state_attitude_quaternion(state), do: attitude_quaternion_from_dcm(field!(state, :attitude_body_to_ecef))
+
+  @doc "Read a navigation state's attitude as yaw, pitch, and roll in radians."
+  @spec nav_state_attitude_yaw_pitch_roll_rad(NavState.t() | map()) ::
+          {:ok, vec3()} | {:error, inertial_error()}
+  def nav_state_attitude_yaw_pitch_roll_rad(state),
+    do: attitude_yaw_pitch_roll_rad(field!(state, :attitude_body_to_ecef))
+
+  @doc "Convert a scalar-first quaternion to its body-to-ECEF direction cosine matrix."
+  @spec attitude_dcm_from_quaternion(attitude_quaternion()) ::
+          {:ok, mat3()} | {:error, inertial_error()}
+  def attitude_dcm_from_quaternion(quaternion) do
+    quaternion
+    |> quaternion_values()
+    |> NIF.inertial_dcm_from_quaternion()
+    |> inertial_result(fn matrix -> Enum.map(matrix, &List.to_tuple/1) end)
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_dcm_from_quaternion)
+  end
+
+  @doc "Return yaw, pitch, and roll in radians for a body-to-ECEF matrix."
+  @spec attitude_yaw_pitch_roll_rad(mat3()) :: {:ok, vec3()} | {:error, term()}
+  def attitude_yaw_pitch_roll_rad(dcm) do
+    dcm |> matrix() |> NIF.inertial_yaw_pitch_roll_rad() |> inertial_result()
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :inertial_yaw_pitch_roll_rad)
+  end
+
+  @doc "Create a standalone ECEF strapdown mechanizer from a navigation state."
+  @spec new_strapdown_mechanizer(NavState.t() | map(), keyword() | map()) ::
+          {:ok, StrapdownMechanizer.t()} | {:error, term()}
+  def new_strapdown_mechanizer(state, opts \\ []) do
+    nominal = field(state, :nominal, state)
+
+    state_term = %{
+      t_j2000_s: field!(nominal, :t_j2000_s) / 1.0,
+      position_ecef_m: vec3(field!(nominal, :position_ecef_m)),
+      velocity_ecef_mps: vec3(field!(nominal, :velocity_ecef_mps)),
+      attitude_body_to_ecef: mat3(field!(nominal, :attitude_body_to_ecef)),
+      accel_bias_mps2: vec3(field(nominal, :accel_bias_mps2, {0.0, 0.0, 0.0})),
+      gyro_bias_rps: vec3(field(nominal, :gyro_bias_rps, {0.0, 0.0, 0.0}))
+    }
+
+    model = opts |> field(:imu_model, %{}) |> normalize_imu_model() |> imu_model_term()
+    config = opts |> field(:mechanization, %{}) |> strapdown_config() |> Map.update!(:coning_correction, &label/1)
+
+    case NIF.fusion_strapdown_new(state_term, model, config) do
+      {:ok, handle} -> {:ok, %StrapdownMechanizer{handle: handle}}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_strapdown_new)
+  end
+
+  @doc "Return the current standalone mechanizer navigation state."
+  @spec strapdown_state(reference()) :: {:ok, NavState.t()} | {:error, term()}
+  def strapdown_state(handle) do
+    case NIF.fusion_strapdown_state(handle) do
+      {:ok, state} -> {:ok, struct(NavState, state)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_strapdown_state)
+  end
+
+  @doc "Propagate a standalone mechanizer by one IMU sample."
+  @spec strapdown_propagate(reference(), ImuSample.t() | map()) ::
+          {:ok, NavState.t()} | {:error, term()}
+  def strapdown_propagate(handle, sample) do
+    case NIF.fusion_strapdown_propagate(handle, imu_sample_term(sample)) do
+      {:ok, state} -> {:ok, struct(NavState, state)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_strapdown_propagate)
+  end
+
+  @doc "Create a deterministic stateful IMU simulator."
+  @spec new_imu_simulator(imu_spec(), keyword() | map()) ::
+          {:ok, ImuSimulator.t()} | {:error, term()}
+  def new_imu_simulator(spec, opts \\ []) do
+    options = %{
+      output: opts |> field(:output, :increment) |> label(),
+      seed: field(opts, :seed, nil),
+      initial_bias: %{
+        accel_mps2: opts |> field(:initial_bias, %{}) |> field(:accel_mps2, {0.0, 0.0, 0.0}) |> vec3(),
+        gyro_rps: opts |> field(:initial_bias, %{}) |> field(:gyro_rps, {0.0, 0.0, 0.0}) |> vec3()
+      },
+      calibration: %{
+        accel_scale_misalignment:
+          opts |> field(:calibration, %{}) |> field(:accel_scale_misalignment, zero3()) |> mat3(),
+        gyro_scale_misalignment: opts |> field(:calibration, %{}) |> field(:gyro_scale_misalignment, zero3()) |> mat3()
+      },
+      rate_random_walk:
+        case field(opts, :rate_random_walk, nil) do
+          nil ->
+            nil
+
+          walk ->
+            %{
+              accel_mps2_sqrt_s: field!(walk, :accel_mps2_sqrt_s) / 1.0,
+              gyro_rps_sqrt_s: field!(walk, :gyro_rps_sqrt_s) / 1.0
+            }
+        end
+    }
+
+    case NIF.fusion_imu_simulator_new(imu_spec_term(imu_spec(spec)), options) do
+      {:ok, handle} -> {:ok, %ImuSimulator{handle: handle}}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_imu_simulator_new)
+  end
+
+  @doc "Generate one simulated sample from a truth IMU increment."
+  @spec simulate_imu_increment(reference(), map()) :: {:ok, ImuSample.t()} | {:error, term()}
+  def simulate_imu_increment(handle, truth) do
+    truth_term = %{
+      t_j2000_s: field!(truth, :t_j2000_s) / 1.0,
+      delta_velocity_mps: vec3(field!(truth, :delta_velocity_mps)),
+      delta_theta_rad: vec3(field!(truth, :delta_theta_rad)),
+      dt_s: field!(truth, :dt_s) / 1.0
+    }
+
+    case NIF.fusion_imu_simulator_sample_increment(handle, truth_term) do
+      {:ok, sample} -> {:ok, sample_from_term(sample)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_imu_simulator_sample_increment)
+  end
+
+  @doc "Return the simulator's current Gauss-Markov bias state."
+  @spec imu_simulator_bias(reference()) :: {:ok, map()} | {:error, term()}
+  def imu_simulator_bias(handle), do: NIF.fusion_imu_simulator_bias(handle)
+
+  @doc "Return the simulator's current rate-random-walk state."
+  @spec imu_simulator_rate_random_walk(reference()) :: {:ok, map()} | {:error, term()}
+  def imu_simulator_rate_random_walk(handle), do: NIF.fusion_imu_simulator_rate_random_walk(handle)
+
+  @doc "Reconstruct the mechanization-consistent truth increment between two navigation states."
+  @spec true_imu_increment_between(NavState.t() | map(), NavState.t() | map()) ::
+          {:ok, CorrectedImuIncrement.t()} | {:error, term()}
+  def true_imu_increment_between(start_state, end_state) do
+    case NIF.fusion_true_imu_increment_between(nav_state_term(start_state), nav_state_term(end_state)) do
+      {:ok, increment} -> {:ok, struct(CorrectedImuIncrement, increment)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_true_imu_increment_between)
+  end
+
+  @doc "Generate a batch of samples from a navigation-state truth trajectory."
+  @spec simulate_imu_samples([NavState.t() | map()], imu_spec(), keyword() | map()) ::
+          {:ok, SimulatedImuSequence.t()} | {:error, term()}
+  def simulate_imu_samples(trajectory, spec, opts \\ []) when is_list(trajectory) do
+    case NIF.fusion_simulate_imu_samples(
+           Enum.map(trajectory, &nav_state_term/1),
+           imu_spec_term(imu_spec(spec)),
+           imu_simulation_options_term(opts)
+         ) do
+      {:ok, sequence} -> {:ok, simulated_sequence_from_term(sequence)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_simulate_imu_samples)
+  end
+
+  @doc "Generate a batch of samples from explicit corrected truth increments."
+  @spec simulate_imu_samples_from_increments([CorrectedImuIncrement.t() | map()], imu_spec(), keyword() | map()) ::
+          {:ok, SimulatedImuSequence.t()} | {:error, term()}
+  def simulate_imu_samples_from_increments(increments, spec, opts \\ []) when is_list(increments) do
+    terms = Enum.map(increments, &corrected_increment_term/1)
+
+    case NIF.fusion_simulate_imu_samples_from_increments(
+           terms,
+           imu_spec_term(imu_spec(spec)),
+           imu_simulation_options_term(opts)
+         ) do
+      {:ok, sequence} -> {:ok, simulated_sequence_from_term(sequence)}
+      error -> error
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :fusion_simulate_imu_samples_from_increments)
+  end
+
   @doc """
   Return an IMU stochastic specification.
 
@@ -508,6 +920,8 @@ defmodule Sidereon.GNSS.Fusion do
   after numeric normalization.
   """
   @spec imu_spec(imu_spec()) :: map()
+  def imu_spec(%ImuSpec{} = spec), do: spec |> Map.from_struct() |> imu_spec()
+
   def imu_spec(grade) when grade in [:mems, :tactical, :navigation] do
     case NIF.fusion_imu_spec_preset(Atom.to_string(grade)) do
       {:ok, spec} -> spec
@@ -739,7 +1153,15 @@ defmodule Sidereon.GNSS.Fusion do
   @doc """
   Apply a tight raw GNSS epoch at the current filter epoch.
 
-  The ephemeris source must be an existing SP3 or broadcast resource.
+  The ephemeris source must be an existing SP3 or broadcast resource. The
+  single-frequency code model subtracts the broadcast group delay of the record
+  a broadcast clock came from, and takes the relativistic clock term RTKLIB
+  `peph2pos` applies to a precise clock. A satellite state the source refuses
+  because it reads UT1 outside the UT1 table fails the update with
+  `{:error, {:ut1_outside_coverage, :before_coverage | :after_coverage}}` and
+  leaves the filter unchanged; every update map carries `:ut1_degraded`, `nil`
+  or the side of the table a state was read outside under a permissive UT1
+  policy.
   """
   @spec update_tight(Filter.t(), SP3.t() | Broadcast.t(), tight_epoch()) :: {:ok, map()} | {:error, term()}
   def update_tight(%Filter{handle: handle}, %SP3{handle: source}, epoch) do
@@ -916,6 +1338,63 @@ defmodule Sidereon.GNSS.Fusion do
     }
   end
 
+  defp nav_state_term(state) do
+    nominal = field(state, :nominal, state)
+
+    %{
+      t_j2000_s: field!(nominal, :t_j2000_s) / 1.0,
+      position_ecef_m: vec3(field!(nominal, :position_ecef_m)),
+      velocity_ecef_mps: vec3(field!(nominal, :velocity_ecef_mps)),
+      attitude_body_to_ecef: mat3(field!(nominal, :attitude_body_to_ecef)),
+      accel_bias_mps2: vec3(field(nominal, :accel_bias_mps2, {0.0, 0.0, 0.0})),
+      gyro_bias_rps: vec3(field(nominal, :gyro_bias_rps, {0.0, 0.0, 0.0}))
+    }
+  end
+
+  defp corrected_increment_term(increment) do
+    %{
+      t_j2000_s: field!(increment, :t_j2000_s) / 1.0,
+      delta_velocity_mps: vec3(field!(increment, :delta_velocity_mps)),
+      delta_theta_rad: vec3(field!(increment, :delta_theta_rad)),
+      dt_s: field!(increment, :dt_s) / 1.0
+    }
+  end
+
+  defp imu_simulation_options_term(opts) do
+    %{
+      output: opts |> field(:output, :increment) |> label(),
+      seed: field(opts, :seed, nil),
+      initial_bias: %{
+        accel_mps2: opts |> field(:initial_bias, %{}) |> field(:accel_mps2, {0.0, 0.0, 0.0}) |> vec3(),
+        gyro_rps: opts |> field(:initial_bias, %{}) |> field(:gyro_rps, {0.0, 0.0, 0.0}) |> vec3()
+      },
+      calibration: %{
+        accel_scale_misalignment:
+          opts |> field(:calibration, %{}) |> field(:accel_scale_misalignment, zero3()) |> mat3(),
+        gyro_scale_misalignment: opts |> field(:calibration, %{}) |> field(:gyro_scale_misalignment, zero3()) |> mat3()
+      },
+      rate_random_walk:
+        case field(opts, :rate_random_walk, nil) do
+          nil ->
+            nil
+
+          walk ->
+            %{
+              accel_mps2_sqrt_s: field!(walk, :accel_mps2_sqrt_s) / 1.0,
+              gyro_rps_sqrt_s: field!(walk, :gyro_rps_sqrt_s) / 1.0
+            }
+        end
+    }
+  end
+
+  defp simulated_sequence_from_term(sequence) do
+    struct(SimulatedImuSequence, %{
+      samples: Enum.map(sequence.samples, &sample_from_term/1),
+      bias_history: Enum.map(sequence.bias_history, &struct(ImuBias, &1)),
+      rate_random_walk_history: Enum.map(sequence.rate_random_walk_history, &struct(ImuBias, &1))
+    })
+  end
+
   defp normalize_imu_model(model) do
     %{
       bias: %{
@@ -1088,14 +1567,41 @@ defmodule Sidereon.GNSS.Fusion do
   defp imu_sample_term(sample) do
     kind = field!(sample, :kind)
 
+    # An `%ImuSample{}` states the pair its kind does not carry as `nil`; the
+    # boundary takes zeros for it, as it does for an absent key.
     %{
       t_j2000_s: field!(sample, :t_j2000_s) / 1.0,
       kind: label(kind),
-      specific_force_mps2: vec3(field(sample, :specific_force_mps2, {0.0, 0.0, 0.0})),
-      angular_rate_rps: vec3(field(sample, :angular_rate_rps, {0.0, 0.0, 0.0})),
-      delta_velocity_mps: vec3(field(sample, :delta_velocity_mps, {0.0, 0.0, 0.0})),
-      delta_theta_rad: vec3(field(sample, :delta_theta_rad, {0.0, 0.0, 0.0})),
-      dt_s: field(sample, :dt_s, 0.0) / 1.0
+      specific_force_mps2: vec3(present(sample, :specific_force_mps2, {0.0, 0.0, 0.0})),
+      angular_rate_rps: vec3(present(sample, :angular_rate_rps, {0.0, 0.0, 0.0})),
+      delta_velocity_mps: vec3(present(sample, :delta_velocity_mps, {0.0, 0.0, 0.0})),
+      delta_theta_rad: vec3(present(sample, :delta_theta_rad, {0.0, 0.0, 0.0})),
+      dt_s: present(sample, :dt_s, 0.0) / 1.0
+    }
+  end
+
+  defp present(map, key, default) do
+    case field(map, key, nil) do
+      nil -> default
+      value -> value
+    end
+  end
+
+  defp sample_from_term(sample) do
+    kind =
+      case field!(sample, :kind) do
+        "rate" -> :rate
+        "increment" -> :increment
+      end
+
+    %ImuSample{
+      t_j2000_s: sample.t_j2000_s,
+      kind: kind,
+      specific_force_mps2: if(kind == :rate, do: sample.specific_force_mps2),
+      angular_rate_rps: if(kind == :rate, do: sample.angular_rate_rps),
+      delta_velocity_mps: if(kind == :increment, do: sample.delta_velocity_mps),
+      delta_theta_rad: if(kind == :increment, do: sample.delta_theta_rad),
+      dt_s: if(kind == :increment, do: sample.dt_s)
     }
   end
 
@@ -1179,6 +1685,10 @@ defmodule Sidereon.GNSS.Fusion do
   defp row(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> row()
   defp row(list) when is_list(list), do: Enum.map(list, &(&1 / 1.0))
 
+  defp quaternion_values(%AttitudeQuaternion{w: w, x: x, y: y, z: z}), do: {w / 1.0, x / 1.0, y / 1.0, z / 1.0}
+
+  defp quaternion_values({w, x, y, z}), do: {w / 1.0, x / 1.0, y / 1.0, z / 1.0}
+
   defp identity3, do: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
   defp zero3, do: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
   defp label(value) when is_atom(value), do: Atom.to_string(value)
@@ -1192,6 +1702,12 @@ defmodule Sidereon.GNSS.Fusion do
       :error -> raise KeyError, key: key, term: map
     end
   end
+
+  # The inertial NIFs return a refusal as `{:error, reason}` rather than
+  # raising, so a value is wrapped only when it is not one.
+  defp inertial_result(value, decode \\ & &1)
+  defp inertial_result({:error, _reason} = error, _decode), do: error
+  defp inertial_result(value, decode), do: {:ok, decode.(value)}
 
   defp field(map, key, default) do
     case fetch(map, key) do

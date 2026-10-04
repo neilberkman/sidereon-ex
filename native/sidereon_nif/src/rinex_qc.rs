@@ -13,13 +13,14 @@ use sidereon_core::observation_qc::{
     SatelliteSignalQc, SnrStats, SsiHistogram, SystemCycleSlipQc, SystemMultipathQc,
     SystemObservationQc, SystemSignalQc,
 };
+use sidereon_core::rinex::encode_crinex;
 use sidereon_core::rinex::nav::encode_nav;
 use sidereon_core::rinex::observations::{ObsEpochTime, PgmRunByDate};
 use sidereon_core::rinex::qc::{
-    lint_nav_text, lint_obs, lint_obs_text, repair_nav_text, repair_obs_text,
-    repair_obs_to_crinex_string, FindingRef, LintReport, RepairAction, RepairOptions, Severity,
+    lint_nav_text, lint_obs, lint_obs_text, repair_nav_text, repair_obs_text, FindingRef,
+    LintReport, RepairAction, RepairOptions, Severity,
 };
-use sidereon_core::GnssSystem;
+use sidereon_core::{Error as CoreError, GnssSystem};
 
 mod atoms {
     rustler::atoms! {
@@ -27,7 +28,16 @@ mod atoms {
         error,
         invalid_interval,
         invalid_gap_factor,
-        invalid_clock_jump_threshold
+        invalid_clock_jump_threshold,
+        parse,
+        invalid_input,
+        unhandled,
+        repaired_product_unwritable,
+        crinex_encode_failed,
+        not_representable,
+        nan,
+        infinity,
+        negative_infinity
     }
 }
 
@@ -221,18 +231,449 @@ struct ObservationReportTerm {
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct FindingRefTerm {
-    epoch_index: Option<i64>,
+    epoch_index: Option<u64>,
     satellite: Option<String>,
     field: Option<String>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct FindingTerm {
+struct FindingTerm<'a> {
+    kind: String,
+    details: Term<'a>,
     code: String,
     severity: String,
     spec_ref: String,
     repairable: bool,
     at: FindingRefTerm,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FindingNumberTerm {
+    Finite(f64),
+    NaN,
+    PositiveInfinity,
+    NegativeInfinity,
+}
+
+impl From<f64> for FindingNumberTerm {
+    fn from(value: f64) -> Self {
+        if value.is_nan() {
+            Self::NaN
+        } else if value == f64::INFINITY {
+            Self::PositiveInfinity
+        } else if value == f64::NEG_INFINITY {
+            Self::NegativeInfinity
+        } else {
+            Self::Finite(value)
+        }
+    }
+}
+
+impl Encoder for FindingNumberTerm {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        match self {
+            Self::Finite(value) => value.encode(env),
+            Self::NaN => atoms::nan().encode(env),
+            Self::PositiveInfinity => atoms::infinity().encode(env),
+            Self::NegativeInfinity => atoms::negative_infinity().encode(env),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, rustler::NifTaggedEnum)]
+enum FindingDetailsTerm<'a> {
+    ObsFatalParse {
+        message: String,
+    },
+    ObsUnpublishedVersion {
+        version: Term<'a>,
+    },
+    ObsMissingHeader {
+        label: String,
+    },
+    ObsMissingObsTypes,
+    ObsInvalidObsCode {
+        system: String,
+        code: String,
+    },
+    ObsDuplicateObsCode {
+        system: String,
+        code: String,
+    },
+    ObsTimeOfFirstMismatch {
+        declared: ((i32, i64, i64), (i64, i64, f64)),
+        declared_scale: String,
+        observed: ((i32, i64, i64), (i64, i64, f64)),
+        observed_scale: String,
+    },
+    ObsTimeOfLastMismatch {
+        declared: ((i32, i64, i64), (i64, i64, f64)),
+        declared_scale: String,
+        observed: ((i32, i64, i64), (i64, i64, f64)),
+        observed_scale: String,
+    },
+    ObsIntervalMismatch {
+        declared_s: Term<'a>,
+        observed_s: Term<'a>,
+    },
+    ObsSatelliteCountMismatch {
+        declared: u64,
+        observed: u64,
+    },
+    ObsPrnObsCountMismatch {
+        satellite: String,
+        code: String,
+        declared: Option<u64>,
+        observed: u64,
+    },
+    ObsGlonassSlotIssue {
+        satellite: String,
+        issue: String,
+    },
+    ObsPhaseShiftUndeclaredCode {
+        system: String,
+        code: String,
+    },
+    ObsScaleFactorIssue {
+        system: String,
+        code: Option<String>,
+    },
+    ObsMarkerTypeIssue {
+        marker_type: String,
+    },
+    ObsIdentityFieldIssue {
+        label: String,
+        value: String,
+    },
+    ObsImplausibleApproxPosition {
+        radius_m: Term<'a>,
+    },
+    ObsImplausibleAntennaDelta {
+        component: u64,
+        value_m: Term<'a>,
+    },
+    ObsEpochOrder {
+        previous: ((i32, i64, i64), (i64, i64, f64)),
+        current: ((i32, i64, i64), (i64, i64, f64)),
+    },
+    ObsDuplicateEpoch {
+        epoch: ((i32, i64, i64), (i64, i64, f64)),
+    },
+    ObsSkippedRecords {
+        count: u64,
+    },
+    ObsEpochSatCountMismatch {
+        declared: u64,
+        retained: u64,
+    },
+    ObsUnretainedHeader {
+        label: String,
+    },
+    ObsPseudorangeOutOfRange {
+        code: String,
+        value_m: Term<'a>,
+    },
+    ObsLossOfLockOutOfRange {
+        code: String,
+        lli: i64,
+    },
+    ObsEventHeaderUnreadable {
+        message: String,
+    },
+    ObsEventEpoch {
+        flag: i64,
+    },
+    ObsEmptySatelliteRecord,
+    ObsEpochGap {
+        gap_s: Term<'a>,
+        interval_s: Term<'a>,
+    },
+    NavFatalParse {
+        message: String,
+    },
+    NavLeapSecondsAbsent,
+    NavIonoMalformed {
+        message: String,
+    },
+    NavDroppedBlock {
+        satellite: String,
+        message: String,
+    },
+    NavDuplicateRecord {
+        satellite: String,
+        same_payload: bool,
+    },
+    NavUnsortedRecords,
+    NavImplausibleRecord {
+        satellite: String,
+        field: String,
+        value: Term<'a>,
+    },
+    NavUnhealthyRecords {
+        system: String,
+        count: u64,
+    },
+    NavOutOfScopeRecords {
+        class: String,
+        count: u64,
+    },
+    ObsIntervalUnavailable,
+    ObsInvalidInterval {
+        declared_s: Term<'a>,
+    },
+    Unknown,
+}
+
+impl FindingDetailsTerm<'_> {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::ObsFatalParse { .. } => "ObsFatalParse",
+            Self::ObsUnpublishedVersion { .. } => "ObsUnpublishedVersion",
+            Self::ObsMissingHeader { .. } => "ObsMissingHeader",
+            Self::ObsMissingObsTypes => "ObsMissingObsTypes",
+            Self::ObsInvalidObsCode { .. } => "ObsInvalidObsCode",
+            Self::ObsDuplicateObsCode { .. } => "ObsDuplicateObsCode",
+            Self::ObsTimeOfFirstMismatch { .. } => "ObsTimeOfFirstMismatch",
+            Self::ObsTimeOfLastMismatch { .. } => "ObsTimeOfLastMismatch",
+            Self::ObsIntervalMismatch { .. } => "ObsIntervalMismatch",
+            Self::ObsSatelliteCountMismatch { .. } => "ObsSatelliteCountMismatch",
+            Self::ObsPrnObsCountMismatch { .. } => "ObsPrnObsCountMismatch",
+            Self::ObsGlonassSlotIssue { .. } => "ObsGlonassSlotIssue",
+            Self::ObsPhaseShiftUndeclaredCode { .. } => "ObsPhaseShiftUndeclaredCode",
+            Self::ObsScaleFactorIssue { .. } => "ObsScaleFactorIssue",
+            Self::ObsMarkerTypeIssue { .. } => "ObsMarkerTypeIssue",
+            Self::ObsIdentityFieldIssue { .. } => "ObsIdentityFieldIssue",
+            Self::ObsImplausibleApproxPosition { .. } => "ObsImplausibleApproxPosition",
+            Self::ObsImplausibleAntennaDelta { .. } => "ObsImplausibleAntennaDelta",
+            Self::ObsEpochOrder { .. } => "ObsEpochOrder",
+            Self::ObsDuplicateEpoch { .. } => "ObsDuplicateEpoch",
+            Self::ObsSkippedRecords { .. } => "ObsSkippedRecords",
+            Self::ObsEpochSatCountMismatch { .. } => "ObsEpochSatCountMismatch",
+            Self::ObsUnretainedHeader { .. } => "ObsUnretainedHeader",
+            Self::ObsPseudorangeOutOfRange { .. } => "ObsPseudorangeOutOfRange",
+            Self::ObsLossOfLockOutOfRange { .. } => "ObsLossOfLockOutOfRange",
+            Self::ObsEventHeaderUnreadable { .. } => "ObsEventHeaderUnreadable",
+            Self::ObsEventEpoch { .. } => "ObsEventEpoch",
+            Self::ObsEmptySatelliteRecord => "ObsEmptySatelliteRecord",
+            Self::ObsEpochGap { .. } => "ObsEpochGap",
+            Self::NavFatalParse { .. } => "NavFatalParse",
+            Self::NavLeapSecondsAbsent => "NavLeapSecondsAbsent",
+            Self::NavIonoMalformed { .. } => "NavIonoMalformed",
+            Self::NavDroppedBlock { .. } => "NavDroppedBlock",
+            Self::NavDuplicateRecord { .. } => "NavDuplicateRecord",
+            Self::NavUnsortedRecords => "NavUnsortedRecords",
+            Self::NavImplausibleRecord { .. } => "NavImplausibleRecord",
+            Self::NavUnhealthyRecords { .. } => "NavUnhealthyRecords",
+            Self::NavOutOfScopeRecords { .. } => "NavOutOfScopeRecords",
+            Self::ObsIntervalUnavailable => "ObsIntervalUnavailable",
+            Self::ObsInvalidInterval { .. } => "ObsInvalidInterval",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
+fn finding_details_term<'a>(
+    env: Env<'a>,
+    finding: &sidereon_core::rinex::qc::Finding,
+) -> FindingDetailsTerm<'a> {
+    use sidereon_core::rinex::qc::Finding as F;
+    match finding {
+        F::ObsFatalParse { message, .. } => FindingDetailsTerm::ObsFatalParse {
+            message: message.clone(),
+        },
+        F::ObsUnpublishedVersion { version, .. } => FindingDetailsTerm::ObsUnpublishedVersion {
+            version: FindingNumberTerm::from(*version).encode(env),
+        },
+        F::ObsMissingHeader { label, .. } => FindingDetailsTerm::ObsMissingHeader {
+            label: (*label).to_string(),
+        },
+        F::ObsMissingObsTypes { .. } => FindingDetailsTerm::ObsMissingObsTypes,
+        F::ObsInvalidObsCode { system, code, .. } => FindingDetailsTerm::ObsInvalidObsCode {
+            system: system.to_string(),
+            code: code.clone(),
+        },
+        F::ObsDuplicateObsCode { system, code, .. } => FindingDetailsTerm::ObsDuplicateObsCode {
+            system: system.to_string(),
+            code: code.clone(),
+        },
+        F::ObsTimeOfFirstMismatch {
+            declared,
+            declared_scale,
+            observed,
+            observed_scale,
+            ..
+        } => FindingDetailsTerm::ObsTimeOfFirstMismatch {
+            declared: epoch_term(*declared),
+            declared_scale: declared_scale.abbrev().to_string(),
+            observed: epoch_term(*observed),
+            observed_scale: observed_scale.abbrev().to_string(),
+        },
+        F::ObsTimeOfLastMismatch {
+            declared,
+            declared_scale,
+            observed,
+            observed_scale,
+            ..
+        } => FindingDetailsTerm::ObsTimeOfLastMismatch {
+            declared: epoch_term(*declared),
+            declared_scale: declared_scale.abbrev().to_string(),
+            observed: epoch_term(*observed),
+            observed_scale: observed_scale.abbrev().to_string(),
+        },
+        F::ObsIntervalMismatch {
+            declared_s,
+            observed_s,
+            ..
+        } => FindingDetailsTerm::ObsIntervalMismatch {
+            declared_s: FindingNumberTerm::from(*declared_s).encode(env),
+            observed_s: FindingNumberTerm::from(*observed_s).encode(env),
+        },
+        F::ObsSatelliteCountMismatch {
+            declared, observed, ..
+        } => FindingDetailsTerm::ObsSatelliteCountMismatch {
+            declared: usize_term(*declared),
+            observed: usize_term(*observed),
+        },
+        F::ObsPrnObsCountMismatch {
+            satellite,
+            code,
+            declared,
+            observed,
+            ..
+        } => FindingDetailsTerm::ObsPrnObsCountMismatch {
+            satellite: satellite.to_string(),
+            code: code.clone(),
+            declared: optional_usize_term(*declared),
+            observed: usize_term(*observed),
+        },
+        F::ObsGlonassSlotIssue {
+            satellite, issue, ..
+        } => FindingDetailsTerm::ObsGlonassSlotIssue {
+            satellite: satellite.to_string(),
+            issue: (*issue).to_string(),
+        },
+        F::ObsPhaseShiftUndeclaredCode { system, code, .. } => {
+            FindingDetailsTerm::ObsPhaseShiftUndeclaredCode {
+                system: system.to_string(),
+                code: code.clone(),
+            }
+        }
+        F::ObsScaleFactorIssue { system, code, .. } => FindingDetailsTerm::ObsScaleFactorIssue {
+            system: system.to_string(),
+            code: code.clone(),
+        },
+        F::ObsMarkerTypeIssue { marker_type, .. } => FindingDetailsTerm::ObsMarkerTypeIssue {
+            marker_type: marker_type.clone(),
+        },
+        F::ObsIdentityFieldIssue { label, value, .. } => {
+            FindingDetailsTerm::ObsIdentityFieldIssue {
+                label: (*label).to_string(),
+                value: value.clone(),
+            }
+        }
+        F::ObsImplausibleApproxPosition { radius_m, .. } => {
+            FindingDetailsTerm::ObsImplausibleApproxPosition {
+                radius_m: FindingNumberTerm::from(*radius_m).encode(env),
+            }
+        }
+        F::ObsImplausibleAntennaDelta {
+            component, value_m, ..
+        } => FindingDetailsTerm::ObsImplausibleAntennaDelta {
+            component: usize_term(*component),
+            value_m: FindingNumberTerm::from(*value_m).encode(env),
+        },
+        F::ObsEpochOrder {
+            previous, current, ..
+        } => FindingDetailsTerm::ObsEpochOrder {
+            previous: epoch_term(*previous),
+            current: epoch_term(*current),
+        },
+        F::ObsDuplicateEpoch { epoch, .. } => FindingDetailsTerm::ObsDuplicateEpoch {
+            epoch: epoch_term(*epoch),
+        },
+        F::ObsSkippedRecords { count, .. } => FindingDetailsTerm::ObsSkippedRecords {
+            count: usize_term(*count),
+        },
+        F::ObsEpochSatCountMismatch {
+            declared, retained, ..
+        } => FindingDetailsTerm::ObsEpochSatCountMismatch {
+            declared: usize_term(*declared),
+            retained: usize_term(*retained),
+        },
+        F::ObsUnretainedHeader { label, .. } => FindingDetailsTerm::ObsUnretainedHeader {
+            label: label.clone(),
+        },
+        F::ObsPseudorangeOutOfRange { code, value_m, .. } => {
+            FindingDetailsTerm::ObsPseudorangeOutOfRange {
+                code: code.clone(),
+                value_m: FindingNumberTerm::from(*value_m).encode(env),
+            }
+        }
+        F::ObsLossOfLockOutOfRange { code, lli, .. } => {
+            FindingDetailsTerm::ObsLossOfLockOutOfRange {
+                code: code.clone(),
+                lli: *lli as i64,
+            }
+        }
+        F::ObsEventHeaderUnreadable { message, .. } => {
+            FindingDetailsTerm::ObsEventHeaderUnreadable {
+                message: message.clone(),
+            }
+        }
+        F::ObsEventEpoch { flag, .. } => FindingDetailsTerm::ObsEventEpoch { flag: *flag as i64 },
+        F::ObsEmptySatelliteRecord { .. } => FindingDetailsTerm::ObsEmptySatelliteRecord,
+        F::ObsEpochGap {
+            gap_s, interval_s, ..
+        } => FindingDetailsTerm::ObsEpochGap {
+            gap_s: FindingNumberTerm::from(*gap_s).encode(env),
+            interval_s: FindingNumberTerm::from(*interval_s).encode(env),
+        },
+        F::NavFatalParse { message, .. } => FindingDetailsTerm::NavFatalParse {
+            message: message.clone(),
+        },
+        F::NavLeapSecondsAbsent { .. } => FindingDetailsTerm::NavLeapSecondsAbsent,
+        F::NavIonoMalformed { message, .. } => FindingDetailsTerm::NavIonoMalformed {
+            message: message.clone(),
+        },
+        F::NavDroppedBlock {
+            satellite, message, ..
+        } => FindingDetailsTerm::NavDroppedBlock {
+            satellite: satellite.clone(),
+            message: message.clone(),
+        },
+        F::NavDuplicateRecord {
+            satellite,
+            same_payload,
+            ..
+        } => FindingDetailsTerm::NavDuplicateRecord {
+            satellite: satellite.to_string(),
+            same_payload: *same_payload,
+        },
+        F::NavUnsortedRecords { .. } => FindingDetailsTerm::NavUnsortedRecords,
+        F::NavImplausibleRecord {
+            satellite,
+            field,
+            value,
+            ..
+        } => FindingDetailsTerm::NavImplausibleRecord {
+            satellite: satellite.to_string(),
+            field: (*field).to_string(),
+            value: FindingNumberTerm::from(*value).encode(env),
+        },
+        F::NavUnhealthyRecords { system, count, .. } => FindingDetailsTerm::NavUnhealthyRecords {
+            system: system.to_string(),
+            count: usize_term(*count),
+        },
+        F::NavOutOfScopeRecords { class, count, .. } => FindingDetailsTerm::NavOutOfScopeRecords {
+            class: class.clone(),
+            count: usize_term(*count),
+        },
+        F::ObsIntervalUnavailable { .. } => FindingDetailsTerm::ObsIntervalUnavailable,
+        F::ObsInvalidInterval { declared_s, .. } => FindingDetailsTerm::ObsInvalidInterval {
+            declared_s: FindingNumberTerm::from(*declared_s).encode(env),
+        },
+        _ => FindingDetailsTerm::Unknown,
+    }
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -244,11 +685,11 @@ struct SeverityCountsTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct LintReportTerm {
+struct LintReportTerm<'a> {
     clean: bool,
     decoded_from_crinex: bool,
     counts: SeverityCountsTerm,
-    findings: Vec<FindingTerm>,
+    findings: Vec<FindingTerm<'a>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -280,22 +721,26 @@ struct IonoTupleTerm {
     gps: Option<(Vec<f64>, Vec<f64>)>,
     beidou: Option<(Vec<f64>, Vec<f64>)>,
     galileo: Option<Vec<f64>>,
+    galileo_disturbance_flags: Option<f64>,
+    qzss: Option<(Vec<f64>, Vec<f64>)>,
+    navic: Option<(Vec<f64>, Vec<f64>)>,
+    beidou_bdgim: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct ObsRepairTerm {
+struct ObsRepairTerm<'a> {
     rinex: String,
     crinex: String,
     actions: Vec<RepairActionTerm>,
-    remaining: LintReportTerm,
+    remaining: LintReportTerm<'a>,
     decoded_from_crinex: bool,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct NavRepairTerm {
+struct NavRepairTerm<'a> {
     rinex: String,
     actions: Vec<RepairActionTerm>,
-    remaining: LintReportTerm,
+    remaining: LintReportTerm<'a>,
     iono: IonoTupleTerm,
     leap_seconds: Option<f64>,
 }
@@ -366,6 +811,12 @@ fn note_term(note: ObservationQcNote) -> ObservationNoteTerm {
         },
         ObservationQcNote::IntervalUnresolved => ObservationNoteTerm {
             kind: "interval_unresolved".to_string(),
+            epoch_index: None,
+        },
+        // Every epoch was taken with the file header because an event's header
+        // records did not read. A product read from text always reads.
+        ObservationQcNote::EventHeaderRecordsUnread => ObservationNoteTerm {
+            kind: "event_header_records_unread".to_string(),
             epoch_index: None,
         },
     }
@@ -581,15 +1032,23 @@ fn severity_label(severity: Severity) -> String {
     .to_string()
 }
 
+fn usize_term(value: usize) -> u64 {
+    u64::try_from(value).expect("usize fits in u64 on supported targets")
+}
+
+fn optional_usize_term(value: Option<usize>) -> Option<u64> {
+    value.map(usize_term)
+}
+
 fn finding_ref_term(at: &FindingRef) -> FindingRefTerm {
     FindingRefTerm {
-        epoch_index: at.epoch_index.map(|value| value as i64),
+        epoch_index: at.epoch_index.map(usize_term),
         satellite: at.satellite.clone(),
         field: at.field.map(str::to_string),
     }
 }
 
-fn lint_report_term(report: LintReport) -> LintReportTerm {
+fn lint_report_term<'a>(env: Env<'a>, report: LintReport) -> LintReportTerm<'a> {
     LintReportTerm {
         clean: report.is_clean(),
         decoded_from_crinex: report.decoded_from_crinex,
@@ -602,12 +1061,17 @@ fn lint_report_term(report: LintReport) -> LintReportTerm {
         findings: report
             .findings
             .iter()
-            .map(|finding| FindingTerm {
-                code: finding.code().to_string(),
-                severity: severity_label(finding.severity()),
-                spec_ref: finding.spec_ref().to_string(),
-                repairable: finding.is_repairable(),
-                at: finding_ref_term(finding.at()),
+            .map(|finding| {
+                let details = finding_details_term(env, finding);
+                FindingTerm {
+                    kind: details.kind().to_string(),
+                    details: details.encode(env),
+                    code: finding.code().to_string(),
+                    severity: severity_label(finding.severity()),
+                    spec_ref: finding.spec_ref().to_string(),
+                    repairable: finding.is_repairable(),
+                    at: finding_ref_term(finding.at()),
+                }
             })
             .collect(),
     }
@@ -645,6 +1109,10 @@ fn iono_term(iono: Option<sidereon_core::rinex::nav::IonoCorrections>) -> IonoTu
             gps: None,
             beidou: None,
             galileo: None,
+            galileo_disturbance_flags: None,
+            qzss: None,
+            navic: None,
+            beidou_bdgim: None,
         };
     };
     let coeffs = |value: sidereon_core::rinex::nav::KlobucharAlphaBeta| {
@@ -656,6 +1124,10 @@ fn iono_term(iono: Option<sidereon_core::rinex::nav::IonoCorrections>) -> IonoTu
         galileo: iono
             .galileo
             .map(|values| vec![values.ai0, values.ai1, values.ai2]),
+        galileo_disturbance_flags: iono.galileo_disturbance_flags,
+        qzss: iono.qzss.map(coeffs),
+        navic: iono.navic.map(coeffs),
+        beidou_bdgim: iono.beidou_bdgim.map(|alpha| alpha.to_vec()),
     }
 }
 
@@ -712,41 +1184,88 @@ fn rinex_qc_lint_obs<'a>(
     env: Env<'a>,
     handle: ResourceArc<crate::rinex_obs::RinexObsResource>,
 ) -> Term<'a> {
-    (atoms::ok(), lint_report_term(lint_obs(&handle.obs))).encode(env)
+    (atoms::ok(), lint_report_term(env, lint_obs(&handle.obs))).encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_qc_lint_obs_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
-    (atoms::ok(), lint_report_term(lint_obs_text(&text))).encode(env)
+    (atoms::ok(), lint_report_term(env, lint_obs_text(&text))).encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_qc_lint_nav_text<'a>(env: Env<'a>, text: String) -> Term<'a> {
-    (atoms::ok(), lint_report_term(lint_nav_text(&text))).encode(env)
+    (atoms::ok(), lint_report_term(env, lint_nav_text(&text))).encode(env)
 }
 
+/// Repair RINEX observation or CRINEX text and write the repaired product
+/// back as RINEX and as CRINEX.
+///
+/// The repaired product is written with its own fallible writer and the text
+/// then compressed, rather than through the core's one-call CRINEX helper,
+/// which reports a writer refusal only as text. Each failure keeps its own
+/// shape:
+///
+/// - the input does not read, or repair refuses it: `{:parse, message}` or
+///   `{:invalid_input, message}`, as the core names it;
+/// - the repaired product cannot be written exactly:
+///   `{:repaired_product_unwritable, {tag, fields}}`, the writer's refusal with
+///   every field its variant carries;
+/// - the written RINEX does not compress: `{:crinex_encode_failed, reason}`,
+///   `reason` again tagged by the core's error kind.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_qc_repair_obs_text<'a>(
     env: Env<'a>,
     text: String,
     options: RepairOptionsTerm,
 ) -> Term<'a> {
-    match repair_obs_text(&text, &repair_options(options)) {
-        Ok(repair) => match repair_obs_to_crinex_string(&repair) {
-            Ok(crinex) => (
-                atoms::ok(),
-                ObsRepairTerm {
-                    rinex: repair.repaired.to_rinex_string(),
-                    crinex,
-                    actions: action_terms(repair.actions),
-                    remaining: lint_report_term(repair.remaining),
-                    decoded_from_crinex: repair.decoded_from_crinex,
-                },
+    let repair = match repair_obs_text(&text, &repair_options(options)) {
+        Ok(repair) => repair,
+        Err(error) => return (atoms::error(), core_error_term(env, error)).encode(env),
+    };
+    let rinex = match repair.repaired.to_rinex_string() {
+        Ok(rinex) => rinex,
+        Err(error) => {
+            return (
+                atoms::error(),
+                (
+                    atoms::repaired_product_unwritable(),
+                    crate::rinex_obs::encode_write_error(env, error),
+                ),
             )
-                .encode(env),
-            Err(error) => (atoms::error(), error.to_string()).encode(env),
+                .encode(env)
+        }
+    };
+    let crinex = match encode_crinex(&rinex) {
+        Ok(crinex) => crinex,
+        Err(error) => {
+            return (
+                atoms::error(),
+                (atoms::crinex_encode_failed(), core_error_term(env, error)),
+            )
+                .encode(env)
+        }
+    };
+    (
+        atoms::ok(),
+        ObsRepairTerm {
+            rinex,
+            crinex,
+            actions: action_terms(repair.actions),
+            remaining: lint_report_term(env, repair.remaining),
+            decoded_from_crinex: repair.decoded_from_crinex,
         },
-        Err(error) => (atoms::error(), error.to_string()).encode(env),
+    )
+        .encode(env)
+}
+
+/// A core error tagged by its kind: `{:parse, message}` for text that does not
+/// read, `{:invalid_input, message}` for a value the operation refuses, and
+/// `{:unhandled, message}` for any other kind, each with the core's own text.
+fn core_error_term<'a>(env: Env<'a>, error: CoreError) -> Term<'a> {
+    match error {
+        CoreError::Parse(message) => (atoms::parse(), message).encode(env),
+        CoreError::InvalidInput(message) => (atoms::invalid_input(), message).encode(env),
+        other => (atoms::unhandled(), other.to_string()).encode(env),
     }
 }
 
@@ -757,17 +1276,68 @@ fn rinex_qc_repair_nav_text<'a>(
     options: RepairOptionsTerm,
 ) -> Term<'a> {
     match repair_nav_text(&text, &repair_options(options)) {
-        Ok(repair) => (
-            atoms::ok(),
-            NavRepairTerm {
-                rinex: encode_nav(&repair.records),
-                actions: action_terms(repair.actions),
-                remaining: lint_report_term(repair.remaining),
-                iono: iono_term(repair.iono),
-                leap_seconds: repair.leap_seconds,
-            },
-        )
-            .encode(env),
+        Ok(repair) => {
+            let rinex = match encode_nav(&repair.records) {
+                Ok(rinex) => rinex,
+                Err(sidereon_core::rinex::nav::NavWriteError::NotRepresentable {
+                    line,
+                    reason,
+                }) => {
+                    return (
+                        atoms::error(),
+                        (
+                            atoms::repaired_product_unwritable(),
+                            (atoms::not_representable(), line as u64, reason),
+                        ),
+                    )
+                        .encode(env)
+                }
+            };
+            (
+                atoms::ok(),
+                NavRepairTerm {
+                    rinex,
+                    actions: action_terms(repair.actions),
+                    remaining: lint_report_term(env, repair.remaining),
+                    iono: iono_term(repair.iono),
+                    leap_seconds: repair.leap_seconds,
+                },
+            )
+                .encode(env)
+        }
         Err(error) => (atoms::error(), error.to_string()).encode(env),
+    }
+}
+
+#[cfg(test)]
+mod finding_details_tests {
+    use super::{optional_usize_term, usize_term, FindingNumberTerm};
+
+    #[test]
+    fn usize_values_encode_without_signed_truncation_and_options_keep_presence() {
+        assert_eq!(usize_term(usize::MAX), u64::try_from(usize::MAX).unwrap());
+        assert_eq!(optional_usize_term(Some(0)), Some(0));
+        assert_eq!(optional_usize_term(None), None);
+    }
+
+    #[test]
+    fn finding_numbers_classify_finite_and_non_finite_values() {
+        assert_eq!(FindingNumberTerm::from(f64::NAN), FindingNumberTerm::NaN);
+        assert_eq!(
+            FindingNumberTerm::from(f64::INFINITY),
+            FindingNumberTerm::PositiveInfinity
+        );
+        assert_eq!(
+            FindingNumberTerm::from(f64::NEG_INFINITY),
+            FindingNumberTerm::NegativeInfinity
+        );
+        assert_eq!(
+            FindingNumberTerm::from(12.5),
+            FindingNumberTerm::Finite(12.5)
+        );
+        let FindingNumberTerm::Finite(negative_zero) = FindingNumberTerm::from(-0.0) else {
+            panic!("negative zero must remain an ordinary finite number");
+        };
+        assert!(negative_zero.is_sign_negative());
     }
 }

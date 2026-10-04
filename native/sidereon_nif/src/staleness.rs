@@ -96,6 +96,44 @@ pub(crate) fn selection_error_term<'a>(env: Env<'a>, error: &SelectionError) -> 
             (atom_from(env, "invalid_policy"), *max_staleness_s).encode(env)
         }
         SelectionError::Overflow { context } => (atom_from(env, "overflow"), *context).encode(env),
+        SelectionError::IonexEpoch(error) => (
+            atom_from(env, "ionex_epoch"),
+            ionex_epoch_error_term(env, error),
+        )
+            .encode(env),
+    }
+}
+
+fn ionex_epoch_error_term<'a>(
+    env: Env<'a>,
+    error: &sidereon_core::atmosphere::ionosphere::IonexEpochError,
+) -> Term<'a> {
+    use sidereon_core::atmosphere::ionosphere::IonexEpochError as EpochError;
+    match error {
+        EpochError::NotWholeSecond { scale } => {
+            (atom_from(env, "not_whole_second"), scale.abbrev()).encode(env)
+        }
+        EpochError::FractionalUtcSecond { scale } => {
+            (atom_from(env, "fractional_utc_second"), scale.abbrev()).encode(env)
+        }
+        EpochError::NoExactUtcOffset { scale } => {
+            (atom_from(env, "no_exact_utc_offset"), scale.abbrev()).encode(env)
+        }
+        EpochError::InsertedLeapSecond { scale } => {
+            (atom_from(env, "inserted_leap_second"), scale.abbrev()).encode(env)
+        }
+        EpochError::BeforeIntegerLeapSeconds { scale } => (
+            atom_from(env, "before_integer_leap_seconds"),
+            scale.abbrev(),
+        )
+            .encode(env),
+        EpochError::OutOfRange { scale } => {
+            (atom_from(env, "out_of_range"), scale.abbrev()).encode(env)
+        }
+        EpochError::YearOutOfField { utc_j2000_s } => {
+            (atom_from(env, "year_out_of_field"), utc_j2000_s).encode(env)
+        }
+        other => (atom_from(env, "unhandled"), other.to_string()).encode(env),
     }
 }
 
@@ -238,9 +276,27 @@ fn ionex_selection<'a>(
     let products: Vec<Ionex> = handles.iter().map(|h| h.ionex.clone()).collect();
     let policy = StalenessPolicy::seconds(max_staleness_s);
     let result = if start_epoch_j2000_s == end_epoch_j2000_s {
-        select_ionex(&products, start_epoch_j2000_s, policy)
+        select_ionex(
+            &products,
+            sidereon_core::astro::time::model::Instant::from_nanos(
+                sidereon_core::astro::time::model::TimeScale::Gpst,
+                i128::from(start_epoch_j2000_s) * 1_000_000_000,
+            ),
+            policy,
+        )
     } else {
-        select_ionex_over_range(&products, start_epoch_j2000_s, end_epoch_j2000_s, policy)
+        select_ionex_over_range(
+            &products,
+            sidereon_core::astro::time::model::Instant::from_nanos(
+                sidereon_core::astro::time::model::TimeScale::Gpst,
+                i128::from(start_epoch_j2000_s) * 1_000_000_000,
+            ),
+            sidereon_core::astro::time::model::Instant::from_nanos(
+                sidereon_core::astro::time::model::TimeScale::Gpst,
+                i128::from(end_epoch_j2000_s) * 1_000_000_000,
+            ),
+            policy,
+        )
     };
     match result {
         Ok(selection) => {

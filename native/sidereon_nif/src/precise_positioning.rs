@@ -22,7 +22,17 @@ type Vec3 = (f64, f64, f64);
 type DateTuple = (i32, i32, i32);
 type TimeTuple = (i32, i32, i32, i32);
 type DateTimeTuple = (DateTuple, TimeTuple);
-type ObservationTerm = (String, String, f64, f64, f64, f64);
+// (code1, code2, phase1, phase2) signal codes, each `"1C"` or `"C1C"`.
+type ObservationSignalsTerm = (String, String, String, String);
+type ObservationTerm = (
+    String,
+    String,
+    f64,
+    f64,
+    f64,
+    f64,
+    Option<ObservationSignalsTerm>,
+);
 type EpochTerm = (DateTimeTuple, f64, f64, Vec<ObservationTerm>);
 type InitialStateTerm = (
     Vec3,
@@ -56,13 +66,41 @@ type FloatStateExtrasTerm = (
     Option<f64>,
     Option<(f64, f64)>,
 );
+// (epoch_index, satellite_id, ambiguity_id, code_m, phase_m, code_weight,
+//  phase_weight).
+type ResidualTerm = (u64, String, String, f64, f64, (f64, f64));
+// (max_iterations, position_tolerance_m, clock_tolerance_m,
+//  ambiguity_tolerance_m, ztd_tolerance_m).
+type FloatSolveOptionsTerm = (u64, f64, f64, f64, f64);
+
+#[derive(Debug, Clone, rustler::NifMap)]
+struct SsrCorrectionSizeFields {
+    orbit_m: f64,
+    clock_m: f64,
+}
+use crate::ssr_bias_exclusion::{
+    decode_ssr_bias_exclusions, encode_ssr_bias_exclusions, SsrBiasExclusionTerm,
+};
+// (epoch_index, satellite_id, ambiguity_id, reason).
+type UnplacedObservationTerm<'a> = (u64, String, String, Term<'a>);
+// (ssr_bias_exclusions, unplaced_observations, residual_screen,
+//  solve_options, residual_screen_removals, solved_epoch_indices).
+type FloatProvenanceTerm<'a> = (
+    Vec<SsrBiasExclusionTerm>,
+    Vec<UnplacedObservationTerm<'a>>,
+    bool,
+    FloatSolveOptionsTerm,
+    Vec<(u64, String)>,
+    Vec<u64>,
+);
 type FloatPayloadTerm<'a> = (
     Vec3,
     Vec<f64>,
     FloatStateExtrasTerm,
-    Vec<(u64, String, f64, f64, f64, f64)>,
+    Vec<ResidualTerm>,
     Vec<String>,
     (u64, bool, Term<'a>, f64, f64, f64, FloatCovarianceTerm),
+    FloatProvenanceTerm<'a>,
 );
 type WeightsTerm = (f64, f64, bool);
 type SolveOptionsTerm = (u64, f64, f64, f64, f64, Option<f64>, bool);
@@ -86,8 +124,8 @@ type SatelliteClockTerm = Vec<(String, Vec<(f64, f64)>)>;
 type SatelliteFrequencyTerm = (String, Vec3, Vec<(f64, f64)>);
 type SatelliteAntennaTerm = (
     String,
-    Option<DateTimeTuple>,
-    Option<DateTimeTuple>,
+    Option<ValidityTerm>,
+    Option<ValidityTerm>,
     Vec<SatelliteFrequencyTerm>,
 );
 type SatelliteAntennaOptionsTerm = (String, f64, String, f64, Vec<SatelliteAntennaTerm>);
@@ -134,8 +172,12 @@ mod atoms {
         invalid_solve_option,
         invalid_input,
         insufficient_observations_after_elevation_cutoff,
+        insufficient_observations_after_ssr_bias_exclusion,
         no_epochs,
-        code_seed_failed
+        code_seed_failed,
+        code_not_positive,
+        ssr_correction_exceeds_limit,
+        unrecognized_reason
     }
 }
 
@@ -213,6 +255,20 @@ pub fn precise_positioning_solve_ppp_float<'a>(
     Ok(encode_result(
         env,
         core::solve_float_epochs(&handle.sp3, &epochs, initial, config),
+    ))
+}
+
+/// Decode a float-solution payload into the core solution, as the fixed solve
+/// does, and encode it back, as the float solve does. Returns the payload, or
+/// `{:error, reason}` for one the decoder refuses.
+#[rustler::nif]
+pub fn precise_positioning_float_solution_round_trip<'a>(
+    env: Env<'a>,
+    float_solution: FloatPayloadTerm<'a>,
+) -> NifResult<Term<'a>> {
+    Ok(encode_float_payload(
+        env,
+        decode_float_payload(float_solution)?,
     ))
 }
 
@@ -466,7 +522,7 @@ fn decode_epoch(epoch: EpochTerm) -> NifResult<core::FloatEpoch> {
     let observations = observations
         .into_iter()
         .map(
-            |(satellite_id, ambiguity_id, code_m, phase_m, freq1_hz, freq2_hz)| {
+            |(satellite_id, ambiguity_id, code_m, phase_m, freq1_hz, freq2_hz, signals)| {
                 Ok(core::FloatObservation {
                     sat: sat_from_token(&satellite_id)?,
                     satellite_id,
@@ -476,6 +532,7 @@ fn decode_epoch(epoch: EpochTerm) -> NifResult<core::FloatEpoch> {
                     freq1_hz,
                     freq2_hz,
                     glonass_channel: None,
+                    signals: signals.map(decode_observation_signals).transpose()?,
                 })
             },
         )
@@ -487,6 +544,28 @@ fn decode_epoch(epoch: EpochTerm) -> NifResult<core::FloatEpoch> {
         t_rx_j2000_s: j2000_seconds_from_split(jd_whole, jd_fraction)
             .map_err(crate::errors::invalid_input)?,
         observations,
+    })
+}
+
+/// The tracking codes of an observation's two pseudoranges and two carrier
+/// phases, each a band and attribute (`"1C"`) or a RINEX 3 observation code
+/// (`"C1C"`, `"L1C"`) read as written.
+fn decode_observation_signals(
+    term: ObservationSignalsTerm,
+) -> NifResult<core::FloatObservationSignals> {
+    let (code1, code2, phase1, phase2) = term;
+    let parse = |text: &str, name: &str| {
+        sidereon_core::ssr::SignalCode::parse(text).ok_or_else(|| {
+            Error::Term(Box::new(format!(
+                "observation signal {name} {text:?} is not a band and tracking attribute"
+            )))
+        })
+    };
+    Ok(core::FloatObservationSignals {
+        code1: parse(&code1, "code1")?,
+        code2: parse(&code2, "code2")?,
+        phase1: parse(&phase1, "phase1")?,
+        phase2: parse(&phase2, "phase2")?,
     })
 }
 
@@ -558,6 +637,14 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
                 formal_tropo_gradient_covariance_m2,
             ),
         ),
+        (
+            ssr_bias_exclusions,
+            unplaced_observations,
+            residual_screen,
+            solve_options,
+            residual_screen_removals,
+            solved_epoch_indices,
+        ),
     ) = term;
     let (tropo_gradient_north_m, tropo_gradient_east_m) = match tropo_gradients {
         Some((north, east)) => (Some(north), Some(east)),
@@ -582,18 +669,26 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
         residuals_m: residuals_m
             .into_iter()
             .map(
-                |(epoch_index, satellite_id, code_m, phase_m, code_weight, phase_weight)| {
-                    core::FloatResidual {
-                        epoch_index: epoch_index as usize,
+                |(
+                    epoch_index,
+                    satellite_id,
+                    ambiguity_id,
+                    code_m,
+                    phase_m,
+                    (code_weight, phase_weight),
+                )| {
+                    Ok(core::FloatResidual {
+                        epoch_index: usize_from(epoch_index, "residual epoch_index")?,
                         satellite_id,
+                        ambiguity_id,
                         code_m,
                         phase_m,
                         code_weight,
                         phase_weight,
-                    }
+                    })
                 },
             )
-            .collect(),
+            .collect::<NifResult<Vec<_>>>()?,
         used_sats,
         iterations: iterations as usize,
         converged,
@@ -617,7 +712,143 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
         },
         temporal_position_covariance_scale_factor,
         temporal_correlation: decode_temporal_correlation(temporal_correlation),
+        ssr_bias_exclusions: decode_ssr_bias_exclusions(ssr_bias_exclusions)?,
+        solved_epoch_indices: solved_epoch_indices
+            .into_iter()
+            .map(|index| usize_from(index, "solved_epoch_indices"))
+            .collect::<NifResult<Vec<_>>>()?,
+        unplaced_observations: unplaced_observations
+            .into_iter()
+            .map(decode_unplaced_observation)
+            .collect::<NifResult<Vec<_>>>()?,
+        residual_screen,
+        solve_options: decode_float_solve_options(solve_options),
+        residual_screen_removals: decode_observation_keys(
+            residual_screen_removals,
+            "residual_screen_removals",
+        )?,
     })
+}
+
+fn usize_from(value: u64, name: &str) -> NifResult<usize> {
+    usize::try_from(value).map_err(|_| {
+        Error::Term(Box::new(format!(
+            "float solution {name} {value} does not fit this platform's index width"
+        )))
+    })
+}
+
+fn decode_observation_keys(
+    keys: Vec<(u64, String)>,
+    name: &str,
+) -> NifResult<Vec<(usize, String)>> {
+    keys.into_iter()
+        .map(|(epoch_index, ambiguity_id)| Ok((usize_from(epoch_index, name)?, ambiguity_id)))
+        .collect()
+}
+
+fn decode_float_solve_options(term: FloatSolveOptionsTerm) -> core::FloatSolveOptions {
+    let mut options = core::FloatSolveOptions::default();
+    options.max_iterations = term.0 as usize;
+    options.position_tolerance_m = term.1;
+    options.clock_tolerance_m = term.2;
+    options.ambiguity_tolerance_m = term.3;
+    options.ztd_tolerance_m = term.4;
+    options
+}
+
+fn encode_float_solve_options(options: core::FloatSolveOptions) -> FloatSolveOptionsTerm {
+    (
+        options.max_iterations as u64,
+        options.position_tolerance_m,
+        options.clock_tolerance_m,
+        options.ambiguity_tolerance_m,
+        options.ztd_tolerance_m,
+    )
+}
+
+fn encode_residuals(residuals: Vec<core::FloatResidual>) -> Vec<ResidualTerm> {
+    residuals
+        .into_iter()
+        .map(|r| {
+            (
+                r.epoch_index as u64,
+                r.satellite_id,
+                r.ambiguity_id,
+                r.code_m,
+                r.phase_m,
+                (r.code_weight, r.phase_weight),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn encode_unplaced_observations<'a>(
+    env: Env<'a>,
+    unplaced: &[core::UnplacedObservation],
+) -> Vec<UnplacedObservationTerm<'a>> {
+    unplaced
+        .iter()
+        .map(|observation| {
+            (
+                observation.epoch_index as u64,
+                observation.satellite_id.clone(),
+                observation.ambiguity_id.clone(),
+                match observation.reason {
+                    core::UnplacedObservationReason::CodeNotPositive => {
+                        atoms::code_not_positive().encode(env)
+                    }
+                    core::UnplacedObservationReason::SsrCorrectionExceedsLimit(size) => (
+                        atoms::ssr_correction_exceeds_limit(),
+                        SsrCorrectionSizeFields {
+                            orbit_m: size.orbit_m,
+                            clock_m: size.clock_m,
+                        },
+                    )
+                        .encode(env),
+                    _ => atoms::unrecognized_reason().encode(env),
+                },
+            )
+        })
+        .collect()
+}
+
+fn decode_unplaced_observation(
+    term: UnplacedObservationTerm<'_>,
+) -> NifResult<core::UnplacedObservation> {
+    let (epoch_index, satellite_id, ambiguity_id, reason) = term;
+    let reason = if reason
+        .decode::<rustler::Atom>()
+        .is_ok_and(|value| value == atoms::code_not_positive())
+    {
+        core::UnplacedObservationReason::CodeNotPositive
+    } else if let Ok((reason_atom, size)) =
+        reason.decode::<(rustler::Atom, SsrCorrectionSizeFields)>()
+    {
+        if reason_atom != atoms::ssr_correction_exceeds_limit() {
+            return Err(Error::Term(Box::new("unknown unplaced-observation reason")));
+        }
+        core::UnplacedObservationReason::SsrCorrectionExceedsLimit(
+            sidereon_core::ssr::SsrCorrectionSize {
+                orbit_m: size.orbit_m,
+                clock_m: size.clock_m,
+            },
+        )
+    } else {
+        return Err(Error::Term(Box::new("invalid unplaced-observation reason")));
+    };
+    Ok(core::UnplacedObservation {
+        epoch_index: usize_from(epoch_index, "unplaced_observations")?,
+        satellite_id,
+        ambiguity_id,
+        reason,
+    })
+}
+
+fn encode_observation_keys(keys: &[(usize, String)]) -> Vec<(u64, String)> {
+    keys.iter()
+        .map(|(epoch_index, ambiguity_id)| (*epoch_index as u64, ambiguity_id.clone()))
+        .collect()
 }
 
 fn decode_temporal_correlation(term: TemporalCorrelationTerm) -> core::TemporalCorrelationSummary {
@@ -787,8 +1018,8 @@ fn decode_satellite_antenna_options(
                 .collect();
             Ok(ppp::SatelliteAntenna {
                 sat: sat_from_token(&sat)?,
-                valid_from: valid_from.map(civil_from_tuple),
-                valid_until: valid_until.map(civil_from_tuple),
+                valid_from: valid_from.map(civil_from_validity).transpose()?,
+                valid_until: valid_until.map(civil_from_validity).transpose()?,
                 frequencies,
             })
         })
@@ -812,6 +1043,36 @@ fn civil_from_tuple(tuple: DateTimeTuple) -> ppp::CivilDateTime {
         minute: time.1 as u8,
         second: time.2 as f64 + time.3 as f64 / 1_000_000.0,
     }
+}
+
+/// A satellite antenna validity bound: date, whole clock fields and the exact
+/// fraction of the second as `(digits, scale)`, as the ANTEX reader keeps it.
+type ValidityTerm = ((i32, i32, i32), (i32, i32, i32), (u64, u64));
+
+/// A validity bound as the civil epoch the antenna selection compares, its
+/// seconds the nearest double to the exact decimal the bound states.
+fn civil_from_validity(term: ValidityTerm) -> NifResult<ppp::CivilDateTime> {
+    let ((year, month, day), (hour, minute, second), (digits, scale)) = term;
+    let field = |value: i32, name: &'static str| {
+        u8::try_from(value).map_err(|_| {
+            Error::Term(Box::new(format!(
+                "antenna validity {name} {value} is outside 0..=255"
+            )))
+        })
+    };
+    let second = field(second, "second")?;
+    Ok(ppp::CivilDateTime {
+        year,
+        month: field(month, "month")?,
+        day: field(day, "day")?,
+        hour: field(hour, "hour")?,
+        minute: field(minute, "minute")?,
+        second: crate::antex::validity_seconds(second, digits, scale).ok_or_else(|| {
+            Error::Term(Box::new(
+                "antenna validity fraction is not below one second",
+            ))
+        })?,
+    })
 }
 
 fn sat_from_token(token: &str) -> NifResult<GnssSatelliteId> {
@@ -862,20 +1123,19 @@ fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term
         _ => atoms::nil().encode(env),
     };
     let status = encode_float_status(solution.status);
-    let residuals: Vec<(u64, String, f64, f64, f64, f64)> = solution
-        .residuals_m
-        .into_iter()
-        .map(|r| {
-            (
-                r.epoch_index as u64,
-                r.satellite_id,
-                r.code_m,
-                r.phase_m,
-                r.code_weight,
-                r.phase_weight,
-            )
-        })
-        .collect();
+    let provenance: FloatProvenanceTerm<'a> = (
+        encode_ssr_bias_exclusions(&solution.ssr_bias_exclusions),
+        encode_unplaced_observations(env, &solution.unplaced_observations),
+        solution.residual_screen,
+        encode_float_solve_options(solution.solve_options),
+        encode_observation_keys(&solution.residual_screen_removals),
+        solution
+            .solved_epoch_indices
+            .iter()
+            .map(|index| *index as u64)
+            .collect(),
+    );
+    let residuals = encode_residuals(solution.residuals_m);
     (
         array_to_vec3(solution.position_m),
         solution.epoch_clocks_m,
@@ -899,6 +1159,7 @@ fn encode_float_payload<'a>(env: Env<'a>, solution: core::FloatSolution) -> Term
             solution.weighted_rms_m,
             covariance_bundle,
         ),
+        provenance,
     )
         .encode(env)
 }
@@ -1014,20 +1275,16 @@ fn encode_fixed_result<'a>(
             let covariance_bundle = encode_fixed_covariance_bundle(&solution);
             let integer_best_score = solution.integer.integer_best_score;
             let integer_candidates = solution.integer.integer_candidates as u64;
-            let residuals: Vec<(u64, String, f64, f64, f64, f64)> = solution
-                .residuals_m
-                .into_iter()
-                .map(|r| {
-                    (
-                        r.epoch_index as u64,
-                        r.satellite_id,
-                        r.code_m,
-                        r.phase_m,
-                        r.code_weight,
-                        r.phase_weight,
-                    )
-                })
-                .collect();
+            let fixed_provenance = (
+                encode_ssr_bias_exclusions(&solution.ssr_bias_exclusions),
+                solution
+                    .solved_epoch_indices
+                    .iter()
+                    .map(|index| *index as u64)
+                    .collect::<Vec<_>>(),
+                encode_unplaced_observations(env, &solution.unplaced_observations),
+            );
+            let residuals = encode_residuals(solution.residuals_m);
             let search = solution.integer.ambiguity_search;
             (
                 atoms::ok(),
@@ -1046,6 +1303,7 @@ fn encode_fixed_result<'a>(
                         ztd,
                         tropo_gradients,
                         encode_float_payload(env, solution.float_solution),
+                        fixed_provenance,
                     ),
                     residuals,
                     solution.used_sats,
@@ -1143,6 +1401,25 @@ fn encode_float_error<'a>(env: Env<'a>, err: core::FloatSolveError) -> Term<'a> 
                 retained_observations as u64,
                 required_observations as u64,
             ),
+        )
+            .encode(env),
+        core::FloatSolveError::InsufficientObservationsAfterSsrBiasExclusion {
+            excluded_observations,
+            retained_observations,
+            required_observations,
+        } => (
+            atoms::error(),
+            (
+                atoms::insufficient_observations_after_ssr_bias_exclusion(),
+                excluded_observations as u64,
+                retained_observations as u64,
+                required_observations as u64,
+            ),
+        )
+            .encode(env),
+        core::FloatSolveError::Ut1OutsideCoverage(reason) => (
+            atoms::error(),
+            crate::errors::ut1_outside_coverage_term(env, reason),
         )
             .encode(env),
         core::FloatSolveError::MissingAmbiguity(ambiguity_id) => {

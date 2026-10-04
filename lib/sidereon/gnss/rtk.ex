@@ -46,7 +46,9 @@ defmodule Sidereon.GNSS.RTK do
   # mirrored by `Sidereon.NIF.core_defaults/0`). `test/constants_test.exs` pins the
   # core values and `test/gnss_rtk_test.exs` checks the default flows through the
   # solve metadata, so the binding default cannot drift from the core.
+  alias Sidereon.GNSS.Time.ExactEpoch
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   @default_code_sigma_m 0.3
   @default_phase_sigma_m 0.003
@@ -62,6 +64,47 @@ defmodule Sidereon.GNSS.RTK do
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
 
+  defmodule RinexUnresolvedCarrier do
+    @moduledoc """
+    A satellite measurement a RINEX RTK arc builder left out of one epoch
+    because no configured phase observable had a carrier frequency.
+
+    A GLONASS slot with no `GLONASS SLOT / FRQ #` channel, or with a channel
+    outside the `-7..6` FDMA allocation (real IGS headers give `R28` channel
+    `7`), has no carrier. The builder forms each satellite's measurement from
+    the first configured signal pair whose values are present and whose
+    carriers resolve, so only a satellite no configured pair resolves for is
+    left out and reported here; the rest of the epoch and the arc are built as
+    usual. A left-out satellite has one entry for each phase observable, among
+    the pairs whose values it held, with no carrier frequency, in pair order.
+    `receiver` is `:base` or `:rover`, the file holding the measurement;
+    `epoch_index` is the epoch's zero-based index in that receiver's file;
+    `observable_code` is the full RINEX phase observable code, such as `"L1C"`.
+    """
+
+    @enforce_keys [:receiver, :epoch_index, :satellite_id, :observable_code]
+    defstruct [:receiver, :epoch_index, :satellite_id, :observable_code]
+
+    @typedoc "A satellite measurement left out for want of a carrier frequency."
+    @type t :: %__MODULE__{
+            receiver: :base | :rover,
+            epoch_index: non_neg_integer(),
+            satellite_id: String.t(),
+            observable_code: String.t()
+          }
+
+    @doc false
+    @spec from_native({:base | :rover, non_neg_integer(), String.t(), String.t()}) :: t()
+    def from_native({receiver, epoch_index, satellite_id, observable_code}) do
+      %__MODULE__{
+        receiver: receiver,
+        epoch_index: epoch_index,
+        satellite_id: satellite_id,
+        observable_code: observable_code
+      }
+    end
+  end
+
   defmodule RinexArc do
     @moduledoc """
     A single-frequency RTK arc built from paired RINEX observation handles and
@@ -69,8 +112,11 @@ defmodule Sidereon.GNSS.RTK do
 
     The resource retains the core-generated arc. Accessors expose the core
     epoch ordering and observation lists without re-reading either input file.
+    `unresolved_carriers/1` lists each satellite measurement left out of an
+    epoch because no configured phase observable had a carrier frequency.
     """
 
+    alias Sidereon.GNSS.RTK.RinexUnresolvedCarrier
     alias Sidereon.NIF
 
     @enforce_keys [:handle]
@@ -87,7 +133,8 @@ defmodule Sidereon.GNSS.RTK do
             required(:base_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
             required(:rover_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
             optional(:velocity_mps) => {float(), float(), float()} | nil,
-            optional(:prediction_time_s) => float() | nil
+            optional(:prediction_time_s) => float() | nil,
+            optional(:prediction_epoch) => ExactEpoch.t() | nil
           }
 
     @doc false
@@ -114,6 +161,17 @@ defmodule Sidereon.GNSS.RTK do
     @spec skipped_epoch_count(t()) :: non_neg_integer()
     def skipped_epoch_count(%__MODULE__{handle: handle}), do: NIF.rtk_rinex_arc_skipped_epoch_count(handle)
 
+    @doc """
+    Return the satellite measurements left out because no configured phase
+    observable had a carrier frequency, in the order the builder met them.
+    """
+    @spec unresolved_carriers(t()) :: [RinexUnresolvedCarrier.t()]
+    def unresolved_carriers(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.rtk_rinex_arc_unresolved_carriers()
+      |> Enum.map(&RinexUnresolvedCarrier.from_native/1)
+    end
+
     @doc "Return ambiguity wavelengths as a map keyed by core ambiguity id."
     @spec wavelengths_m(t()) :: %{String.t() => float()}
     def wavelengths_m(%__MODULE__{handle: handle}), do: handle |> NIF.rtk_rinex_arc_wavelengths_m() |> Map.new()
@@ -135,9 +193,13 @@ defmodule Sidereon.GNSS.RTK do
         epoch
         | satellite_positions_m: Map.new(positions),
           base_satellite_positions_m: Map.new(epoch.base_satellite_positions_m),
-          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m)
+          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m),
+          prediction_epoch: exact_epoch_from_handle(epoch.prediction_epoch)
       }
     end
+
+    defp exact_epoch_from_handle(nil), do: nil
+    defp exact_epoch_from_handle(handle), do: ExactEpoch.from_handle(handle)
   end
 
   defmodule DualFrequencyRinexArc do
@@ -148,8 +210,12 @@ defmodule Sidereon.GNSS.RTK do
     `epochs/1` exposes the exact core records, including ordered paired
     observations and Julian/sort metadata. `baseline_epochs/1` adapts those
     records to the existing dual-frequency RTK preparation helpers.
+    `unresolved_carriers/1` lists each satellite measurement left out of an
+    epoch because no configured phase-observable pair had both carrier
+    frequencies.
     """
 
+    alias Sidereon.GNSS.RTK.RinexUnresolvedCarrier
     alias Sidereon.NIF
 
     @enforce_keys [:handle]
@@ -171,12 +237,14 @@ defmodule Sidereon.GNSS.RTK do
             required(:jd_fraction) => float(),
             required(:epoch_sort_key) => String.t() | nil,
             required(:gap_time_s) => float() | nil,
+            required(:gap_epoch) => ExactEpoch.t() | nil,
             required(:observations) => [satellite_observation()],
             required(:satellite_positions_m) => %{String.t() => {float(), float(), float()}},
             required(:base_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
             required(:rover_satellite_positions_m) => %{String.t() => {float(), float(), float()}},
             required(:velocity_mps) => {float(), float(), float()} | nil,
-            required(:prediction_time_s) => float() | nil
+            required(:prediction_time_s) => float() | nil,
+            required(:prediction_epoch) => ExactEpoch.t() | nil
           }
 
     @doc false
@@ -213,14 +281,31 @@ defmodule Sidereon.GNSS.RTK do
     def skipped_epoch_count(%__MODULE__{handle: handle}),
       do: NIF.rtk_rinex_dual_frequency_arc_skipped_epoch_count(handle)
 
+    @doc """
+    Return the satellite measurements left out because no configured
+    phase-observable pair had both carrier frequencies, in the order the builder
+    met them, one entry for each phase observable without a carrier frequency.
+    """
+    @spec unresolved_carriers(t()) :: [RinexUnresolvedCarrier.t()]
+    def unresolved_carriers(%__MODULE__{handle: handle}) do
+      handle
+      |> NIF.rtk_rinex_dual_frequency_arc_unresolved_carriers()
+      |> Enum.map(&RinexUnresolvedCarrier.from_native/1)
+    end
+
     defp decode_epoch(%{satellite_positions_m: positions} = epoch) do
       %{
         epoch
         | satellite_positions_m: Map.new(positions),
           base_satellite_positions_m: Map.new(epoch.base_satellite_positions_m),
-          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m)
+          rover_satellite_positions_m: Map.new(epoch.rover_satellite_positions_m),
+          gap_epoch: exact_epoch_from_handle(epoch.gap_epoch),
+          prediction_epoch: exact_epoch_from_handle(epoch.prediction_epoch)
       }
     end
+
+    defp exact_epoch_from_handle(nil), do: nil
+    defp exact_epoch_from_handle(handle), do: ExactEpoch.from_handle(handle)
 
     defp to_baseline_epoch({epoch, index}) do
       {base, rover} =
@@ -232,6 +317,8 @@ defmodule Sidereon.GNSS.RTK do
 
       %{
         epoch: epoch.gap_time_s || index,
+        gap_epoch: epoch.gap_epoch,
+        prediction_epoch: epoch.prediction_epoch,
         jd_whole: epoch.jd_whole,
         jd_fraction: epoch.jd_fraction,
         base_observations: Enum.reverse(base),
@@ -740,6 +827,7 @@ defmodule Sidereon.GNSS.RTK do
             | {:frame, String.t(), String.t()}
             | {:corrected_observation, String.t()}
             | {:invalid_corrected_satellite_id, String.t()}
+            | {:ut1_outside_coverage, :before_coverage | :after_coverage}
 
     @type t :: %__MODULE__{
             mode: :code_dgnss | :carrier_float | :carrier_fixed,
@@ -757,15 +845,20 @@ defmodule Sidereon.GNSS.RTK do
     """
 
     @enforce_keys [:position_m, :geodetic, :covariance, :baseline_vector_m, :baseline_m, :diagnostics]
-    defstruct [:position_m, :geodetic, :covariance, :baseline_vector_m, :baseline_m, :diagnostics]
+    defstruct [:position_m, :geodetic, :covariance, :baseline_vector_m, :baseline_m, :diagnostics, :ut1_degraded]
 
+    @typedoc """
+    `ut1_degraded` is `nil`, or the side of the UT1 table a satellite state
+    was read outside under a permissive UT1 policy.
+    """
     @type t :: %__MODULE__{
             position_m: ecef(),
             geodetic: map() | nil,
             covariance: StaticReferenceStationCovariance.t(),
             baseline_vector_m: ecef(),
             baseline_m: float(),
-            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+            diagnostics: [StaticReferenceEpochDiagnostic.t()],
+            ut1_degraded: nil | :before_coverage | :after_coverage
           }
 
     @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
@@ -794,9 +887,14 @@ defmodule Sidereon.GNSS.RTK do
       :baseline_m,
       :integer_status,
       :integer_ratio,
-      :diagnostics
+      :diagnostics,
+      :ut1_degraded
     ]
 
+    @typedoc """
+    `ut1_degraded` is `nil`, or the side of the UT1 table a satellite state
+    was read outside under a permissive UT1 policy.
+    """
     @type t :: %__MODULE__{
             position_m: ecef(),
             geodetic: map() | nil,
@@ -805,7 +903,8 @@ defmodule Sidereon.GNSS.RTK do
             baseline_m: float(),
             integer_status: :fixed | :not_fixed,
             integer_ratio: float() | nil,
-            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+            diagnostics: [StaticReferenceEpochDiagnostic.t()],
+            ut1_degraded: nil | :before_coverage | :after_coverage
           }
 
     @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
@@ -840,9 +939,14 @@ defmodule Sidereon.GNSS.RTK do
       :code_solution,
       :carrier_solution,
       :mode_reports,
-      :diagnostics
+      :diagnostics,
+      :ut1_degraded
     ]
 
+    @typedoc """
+    `ut1_degraded` is `nil`, or the side of the UT1 table a satellite state
+    was read outside under a permissive UT1 policy.
+    """
     @type t :: %__MODULE__{
             mode: :code_dgnss | :carrier_float | :carrier_fixed,
             fix_status: :code_dgnss | :carrier_float | :carrier_fixed,
@@ -854,7 +958,8 @@ defmodule Sidereon.GNSS.RTK do
             code_solution: StaticReferenceCodeSolution.t() | nil,
             carrier_solution: StaticReferenceCarrierSolution.t() | nil,
             mode_reports: [StaticReferenceModeReport.t()],
-            diagnostics: [StaticReferenceEpochDiagnostic.t()]
+            diagnostics: [StaticReferenceEpochDiagnostic.t()],
+            ut1_degraded: nil | :before_coverage | :after_coverage
           }
 
     @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
@@ -1215,8 +1320,10 @@ defmodule Sidereon.GNSS.RTK do
 
   RINEX-derived epochs may include the optional numeric `:jd_whole` and
   `:jd_fraction` split-Julian-date fields. The pair is used for troposphere
-  preparation when `:apply_troposphere` is true. Legacy caller-authored maps
-  using the civil `:epoch` field remain supported.
+  preparation when `:apply_troposphere` is true. Optional `:gap_epoch` and
+  `:prediction_epoch` accept `ExactEpoch.t()` values and remain exact through
+  dual-frequency preprocessing. Legacy caller-authored maps using the civil
+  `:epoch` field remain supported.
   """
   @type dual_frequency_baseline_epoch :: %{
           required(:base_observations) => [dual_frequency_observation()],
@@ -1226,7 +1333,9 @@ defmodule Sidereon.GNSS.RTK do
           optional(:rover_satellite_positions_m) => satellite_positions(),
           optional(:jd_whole) => number(),
           optional(:jd_fraction) => number(),
-          optional(:epoch) => term()
+          optional(:epoch) => term(),
+          optional(:gap_epoch) => ExactEpoch.t() | nil,
+          optional(:prediction_epoch) => ExactEpoch.t() | nil
         }
 
   @typedoc "One non-reference satellite's double-difference observation."
@@ -1285,7 +1394,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_float)
   end
 
   @doc """
@@ -1368,7 +1477,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_fixed)
   end
 
   @doc """
@@ -1385,7 +1494,9 @@ defmodule Sidereon.GNSS.RTK do
     * `:base_satellite_positions_m`, `:rover_satellite_positions_m` - optional
       per-receiver transmit-time position maps (default to the shared map)
     * `:velocity_mps` - optional rover ECEF velocity `{vx, vy, vz}`
-    * `:prediction_time_s` - optional epoch time coordinate
+    * `:prediction_time_s` - optional legacy epoch time coordinate
+    * `:prediction_epoch` - optional `ExactEpoch.t()` used for exact prediction
+      deltas when both adjacent epochs provide one
 
   `config` is a map:
 
@@ -1413,7 +1524,7 @@ defmodule Sidereon.GNSS.RTK do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_arc)
   end
 
   @doc """
@@ -1432,7 +1543,7 @@ defmodule Sidereon.GNSS.RTK do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_static_arc)
   end
 
   @doc """
@@ -1461,7 +1572,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_fix_wide_lane_arc)
   end
 
   def fix_wide_lane_rtk_arc(_epochs, _config), do: {:error, :invalid_epochs}
@@ -1517,7 +1628,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_prepare_ionosphere_free_arc)
   end
 
   def prepare_ionosphere_free_rtk_arc(_epochs, _wide_lane_cycles, _config), do: {:error, :invalid_epochs}
@@ -1553,7 +1664,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_build_rinex_rtk_arc)
   end
 
   def build_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _opts), do: {:error, :invalid_input}
@@ -1593,7 +1704,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_build_dual_frequency_rinex_rtk_arc)
   end
 
   def build_dual_frequency_rinex_rtk_arc(_sp3, _base_obs, _rover_obs, _opts), do: {:error, :invalid_input}
@@ -1605,6 +1716,11 @@ defmodule Sidereon.GNSS.RTK do
   `:model`, `:reference`, `:max_epochs`, `:arc_options`, `:preprocessing`,
   `:float_options`, `:fixed_options`, `:residual_options`, `:float_only_systems`,
   `:initial_baseline_m`, and `:receiver_antenna_corrections`.
+
+  The result map carries `:skipped_epoch_count`, `:epoch_count` and
+  `:unresolved_carriers`, the `Sidereon.GNSS.RTK.RinexUnresolvedCarrier`
+  entries for satellite measurements the arc builder left out because no
+  configured phase observable had a carrier frequency.
   """
   @spec solve_static_rinex_rtk_baseline(
           SP3.t(),
@@ -1626,15 +1742,16 @@ defmodule Sidereon.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_m, :invalid_base_position),
          {:ok, config} <- rinex_static_config_term(base, opts) do
       case NIF.rtk_solve_static_rinex_baseline(sp3_handle, base_handle, rover_handle, config.term) do
-        {:ok, {solution_term, skipped_epoch_count, epoch_count}} ->
-          decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count)
+        {:ok, {solution_term, skipped_epoch_count, epoch_count, unresolved_carriers}} ->
+          counts = {skipped_epoch_count, epoch_count, unresolved_carriers}
+          decode_rinex_static_solution(solution_term, base, config, counts)
 
         {:error, reason} ->
           {:error, reason}
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_static_rinex_baseline)
   end
 
   def solve_static_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts), do: {:error, :invalid_input}
@@ -1672,7 +1789,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_static_reference_station_rinex)
   end
 
   def solve_static_reference_station_rinex(_sp3, _reference_obs, _rover_obs, _reference_position_m, _opts),
@@ -1683,7 +1800,8 @@ defmodule Sidereon.GNSS.RTK do
 
   The result contains the decoded static float and fixed solutions plus
   `:wide_lane` metadata for the wide-lane integers used before the final
-  narrow-lane solve.
+  narrow-lane solve, and `:unresolved_carriers` as for
+  `solve_static_rinex_rtk_baseline/5`.
   """
   @spec solve_wide_lane_fixed_rinex_rtk_baseline(
           SP3.t(),
@@ -1705,9 +1823,10 @@ defmodule Sidereon.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_m, :invalid_base_position),
          {:ok, config} <- rinex_wide_lane_fixed_config_term(base, opts) do
       case NIF.rtk_solve_wide_lane_fixed_rinex_baseline(sp3_handle, base_handle, rover_handle, config.term) do
-        {:ok, {solution_term, metadata_term, skipped_epoch_count, epoch_count}} ->
-          with {:ok, solution} <-
-                 decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
+        {:ok, {solution_term, metadata_term, skipped_epoch_count, epoch_count, unresolved_carriers}} ->
+          counts = {skipped_epoch_count, epoch_count, unresolved_carriers}
+
+          with {:ok, solution} <- decode_rinex_static_solution(solution_term, base, config, counts) do
             {:ok, Map.put(solution, :wide_lane, decode_wide_lane_fixed_metadata(metadata_term))}
           end
 
@@ -1716,7 +1835,7 @@ defmodule Sidereon.GNSS.RTK do
       end
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_wide_lane_fixed_rinex_baseline)
   end
 
   def solve_wide_lane_fixed_rinex_rtk_baseline(_sp3, _base_obs, _rover_obs, _base_m, _opts),
@@ -2139,7 +2258,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_static_reference_station_solution(
          {mode, fix_status, position, geodetic, covariance, baseline_vector, baseline_m, code_solution,
-          carrier_solution, mode_reports, diagnostics}
+          carrier_solution, mode_reports, diagnostics, ut1_degraded}
        ) do
     %StaticReferenceStationSolution{
       mode: mode,
@@ -2152,27 +2271,32 @@ defmodule Sidereon.GNSS.RTK do
       code_solution: decode_static_reference_code_solution(code_solution),
       carrier_solution: decode_static_reference_carrier_solution(carrier_solution),
       mode_reports: Enum.map(mode_reports, &decode_static_reference_mode_report/1),
-      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1),
+      ut1_degraded: ut1_degraded
     }
   end
 
   defp decode_static_reference_code_solution(nil), do: nil
 
-  defp decode_static_reference_code_solution({position, geodetic, covariance, baseline_vector, baseline_m, diagnostics}) do
+  defp decode_static_reference_code_solution(
+         {position, geodetic, covariance, baseline_vector, baseline_m, diagnostics, ut1_degraded}
+       ) do
     %StaticReferenceCodeSolution{
       position_m: ecef_map(position),
       geodetic: decode_static_reference_geodetic(geodetic),
       covariance: decode_static_reference_covariance(covariance),
       baseline_vector_m: ecef_map(baseline_vector),
       baseline_m: baseline_m,
-      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1),
+      ut1_degraded: ut1_degraded
     }
   end
 
   defp decode_static_reference_carrier_solution(nil), do: nil
 
   defp decode_static_reference_carrier_solution(
-         {position, geodetic, covariance, baseline_vector, baseline_m, integer_status, integer_ratio, diagnostics}
+         {position, geodetic, covariance, baseline_vector, baseline_m, integer_status, integer_ratio, diagnostics,
+          ut1_degraded}
        ) do
     %StaticReferenceCarrierSolution{
       position_m: ecef_map(position),
@@ -2182,7 +2306,8 @@ defmodule Sidereon.GNSS.RTK do
       baseline_m: baseline_m,
       integer_status: decode_fixed_integer_status(integer_status),
       integer_ratio: integer_ratio,
-      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1)
+      diagnostics: Enum.map(diagnostics, &decode_static_reference_diagnostic/1),
+      ut1_degraded: ut1_degraded
     }
   end
 
@@ -2231,7 +2356,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_static_reference_station_error(reason), do: reason
 
-  defp decode_rinex_static_solution(solution_term, base, config, skipped_epoch_count, epoch_count) do
+  defp decode_rinex_static_solution(solution_term, base, config, {skipped_epoch_count, epoch_count, unresolved}) do
     static = decode_static_arc_solution(solution_term)
     epochs = rinex_static_epochs(epoch_count)
     prep_meta = rinex_static_prep_meta(static, config)
@@ -2279,7 +2404,8 @@ defmodule Sidereon.GNSS.RTK do
            elevation_masked_sats: static.elevation_masked_sats,
            geometry_quality: static.geometry_quality,
            skipped_epoch_count: skipped_epoch_count,
-           epoch_count: epoch_count
+           epoch_count: epoch_count,
+           unresolved_carriers: Enum.map(unresolved, &RTK.RinexUnresolvedCarrier.from_native/1)
          }}
       end
     end
@@ -2539,7 +2665,8 @@ defmodule Sidereon.GNSS.RTK do
       base_satellite_positions_m: arc_position_pairs(Map.get(epoch, :base_satellite_positions_m, %{})),
       rover_satellite_positions_m: arc_position_pairs(Map.get(epoch, :rover_satellite_positions_m, %{})),
       velocity_mps: arc_vec3_or_nil(Map.get(epoch, :velocity_mps)),
-      prediction_time_s: arc_float_or_nil(Map.get(epoch, :prediction_time_s))
+      prediction_time_s: arc_float_or_nil(Map.get(epoch, :prediction_time_s)),
+      prediction_epoch: exact_epoch_resource(Map.get(epoch, :prediction_epoch))
     }
   end
 
@@ -2956,6 +3083,8 @@ defmodule Sidereon.GNSS.RTK do
        %{
          idx: idx,
          epoch: Map.get(epoch, :epoch, idx),
+         gap_epoch: Map.get(epoch, :gap_epoch),
+         prediction_epoch: Map.get(epoch, :prediction_epoch),
          jd_whole: Map.get(epoch, :jd_whole),
          jd_fraction: Map.get(epoch, :jd_fraction),
          base: base,
@@ -3042,6 +3171,7 @@ defmodule Sidereon.GNSS.RTK do
       jd_fraction: jd_fraction,
       epoch_sort_key: inspect(epoch.epoch),
       gap_time_s: rtk_gap_time_s(epoch.epoch),
+      gap_epoch: exact_epoch_resource(Map.get(epoch, :gap_epoch)),
       observations:
         epoch
         |> dual_epoch_common_sats()
@@ -3056,14 +3186,30 @@ defmodule Sidereon.GNSS.RTK do
       base_satellite_positions_m: rtk_position_terms(epoch.base_positions),
       rover_satellite_positions_m: rtk_position_terms(epoch.rover_positions),
       velocity_mps: nil,
-      prediction_time_s: idx / 1.0
+      prediction_time_s: idx / 1.0,
+      prediction_epoch: exact_epoch_resource(Map.get(epoch, :prediction_epoch))
     }
   end
+
+  defp exact_epoch_resource(nil), do: nil
+  defp exact_epoch_resource(%ExactEpoch{handle: handle}), do: handle
+
+  defp exact_epoch_resource(value) do
+    raise ArgumentError, "exact epoch input must be an ExactEpoch or nil, got: #{inspect(value)}"
+  end
+
+  defp exact_epoch_from_handle(nil), do: nil
+  defp exact_epoch_from_handle(handle), do: ExactEpoch.from_handle(handle)
 
   defp dual_frequency_epoch_split_jd(%{jd_whole: jd_whole, jd_fraction: jd_fraction})
        when is_number(jd_whole) and is_number(jd_fraction), do: {jd_whole / 1.0, jd_fraction / 1.0}
 
-  defp dual_frequency_epoch_split_jd(epoch), do: Sidereon.GNSS.Time.epoch_to_split_jd(epoch.epoch)
+  defp dual_frequency_epoch_split_jd(epoch) do
+    case Sidereon.GNSS.Time.epoch_to_split_jd(epoch.epoch) do
+      {:ok, split} -> split
+      {:error, reason} -> raise ArgumentError, "invalid dual-frequency epoch: #{inspect(reason)}"
+    end
+  end
 
   defp dual_frequency_observation_term(obs) do
     %{
@@ -3116,25 +3262,27 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   defp dual_frequency_epoch_index(
-         {_jd_whole, _jd_fraction, _sort_key, _gap, _obs, _pos, _base_pos, _rover_pos, _vel, idx}
+         {_jd_whole, _jd_fraction, _sort_key, _gap, _obs, _pos, _base_pos, _rover_pos, _vel, idx, _gap_epoch,
+          _prediction_epoch}
        )
        when is_number(idx), do: trunc(idx)
 
   defp decode_dual_frequency_arc_epoch(
          source,
          {_jd_whole, _jd_fraction, _sort_key, _gap, observation_terms, positions, base_positions, rover_positions,
-          _velocity, _prediction_time}
+          _velocity, _prediction_time, gap_epoch, prediction_epoch}
        ) do
     observations = decode_dual_frequency_observations(observation_terms)
 
-    %{
-      source
-      | base: Map.new(observations, fn {sat, base, _rover} -> {sat, base} end),
-        rover: Map.new(observations, fn {sat, _base, rover} -> {sat, rover} end),
-        positions: Map.new(positions),
-        base_positions: Map.new(base_positions),
-        rover_positions: Map.new(rover_positions)
-    }
+    Map.merge(source, %{
+      base: Map.new(observations, fn {sat, base, _rover} -> {sat, base} end),
+      rover: Map.new(observations, fn {sat, _base, rover} -> {sat, rover} end),
+      positions: Map.new(positions),
+      base_positions: Map.new(base_positions),
+      rover_positions: Map.new(rover_positions),
+      gap_epoch: exact_epoch_from_handle(gap_epoch),
+      prediction_epoch: exact_epoch_from_handle(prediction_epoch)
+    })
   end
 
   defp decode_dual_frequency_observations(terms) do
@@ -3169,7 +3317,8 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_ionosphere_free_arc_epochs(input_epochs, if_epoch_terms) do
     Enum.map(if_epoch_terms, fn
-      {base_obs, rover_obs, positions, base_positions, rover_positions, _velocity, idx} when is_number(idx) ->
+      {base_obs, rover_obs, positions, base_positions, rover_positions, _velocity, idx, prediction_epoch}
+      when is_number(idx) ->
         source = Enum.at(input_epochs, trunc(idx))
 
         %{
@@ -3178,7 +3327,8 @@ defmodule Sidereon.GNSS.RTK do
           rover_observations: Enum.map(rover_obs, &decode_rtk_if_arc_observation/1),
           satellite_positions_m: Map.new(positions),
           base_satellite_positions_m: Map.new(base_positions),
-          rover_satellite_positions_m: Map.new(rover_positions)
+          rover_satellite_positions_m: Map.new(rover_positions),
+          prediction_epoch: exact_epoch_from_handle(prediction_epoch)
         }
     end)
   end

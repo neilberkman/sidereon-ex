@@ -4,6 +4,7 @@ defmodule Sidereon.Astro.Equinoctial do
   """
 
   alias Sidereon.NIF
+  alias Sidereon.NifCall
   alias Sidereon.OrbitalElements
 
   defmodule EquinoctialElements do
@@ -64,7 +65,7 @@ defmodule Sidereon.Astro.Equinoctial do
       {r, v} -> {:ok, %{position_km: r, velocity_km_s: v}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :equinoctial_eq2rv)
   end
 
   def rv2mee(r, v, mu \\ OrbitalElements.mu_earth(), factor \\ :prograde) do
@@ -76,7 +77,7 @@ defmodule Sidereon.Astro.Equinoctial do
       {r, v} -> {:ok, %{position_km: r, velocity_km_s: v}}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :equinoctial_mee2rv)
   end
 
   def eq2mee(%EquinoctialElements{} = eq), do: call_mee(:equinoctial_eq2mee, [eq_map(eq)])

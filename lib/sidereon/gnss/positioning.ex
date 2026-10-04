@@ -55,10 +55,13 @@ defmodule Sidereon.GNSS.Positioning do
   alias Sidereon.GNSS.Positioning.Decode
   alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.SSR
   alias Sidereon.GNSS.Staleness
   alias Sidereon.GNSS.Staleness.StalenessMetadata
   alias Sidereon.GNSS.Time
+  alias Sidereon.GNSS.Time.ExactEpoch
   alias Sidereon.NIF
+  alias Sidereon.NifCall
 
   defmodule Solution do
     @moduledoc """
@@ -83,10 +86,18 @@ defmodule Sidereon.GNSS.Positioning do
     pseudorange-only solves. `position_covariance` carries the unit-variance ECEF
     and local ENU position covariance blocks in square metres.
     `residuals_m` are the post-fit
-    pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
+    pseudorange residuals in meters, in `used_sats` order.
+    `pseudorange_variances_m2` and effective `weights` are aligned to the same
+    satellites; the former are the estimator's code variances in square metres,
+    while the latter are inverse variances and include final Huber factors when
+    robust reweighting is enabled. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
-    excluded satellite id with its reason atom (`:no_ephemeris` or
-    `:low_elevation`). `metadata` reports solver iterations, convergence, the
+    excluded satellite id with its reason. Strict SSR size refusals retain
+    `{:ssr_correction_exceeds_limit, %{orbit_m: value, clock_m: value}}`.
+    (the ionosphere correction was requested and the satellite has no resolvable
+    carrier, such as a GLONASS satellite with no channel or a channel outside
+    `-7..6`). A satellite is reported with the first reason that applies, tested
+    in that order. `metadata` reports solver iterations, convergence, the
     corrections applied, and the geometry redundancy: `used_count`, the distinct
     `systems`, the `redundancy` (degrees of freedom, `used_count - (3 + systems)`),
     `raim_checkable?` (`redundancy >= 1`), and `geometry_quality` with the
@@ -108,6 +119,8 @@ defmodule Sidereon.GNSS.Positioning do
       :position_covariance,
       :dop,
       :residuals_m,
+      :pseudorange_variances_m2,
+      :weights,
       :used_sats,
       :rejected_sats,
       :metadata
@@ -122,6 +135,8 @@ defmodule Sidereon.GNSS.Positioning do
       :position_covariance,
       :dop,
       :residuals_m,
+      :pseudorange_variances_m2,
+      :weights,
       :used_sats,
       :rejected_sats,
       :metadata
@@ -148,11 +163,37 @@ defmodule Sidereon.GNSS.Positioning do
             enu_m2: [[float()]]
           }
 
-    @typedoc "Solver metadata and applied correction flags."
+    @typedoc "Why a satellite was left out of the solve, the first reason that applies in this order."
+    @type rejection_reason ::
+            :no_ephemeris
+            | :low_elevation
+            | :sbas_withdrawn
+            | :sbas_iono_uncovered
+            | :ionosphere_carrier_unresolved
+            | {:ssr_correction_exceeds_limit, %{orbit_m: float(), clock_m: float()}}
+
+    @typedoc """
+    How a solve ended. The first four are the trust-region solver's own
+    termination states. `:selection_settled` is a converged SPP or static
+    solve: a least-squares step below 1e-4 m at a satellite selection that
+    held, RTKLIB `estpos`'s `norm(dx) < 1E-4`. `:outer_budget_exhausted` is a
+    robust-reweighted solve that ran out of outer iterations before it
+    settled; `converged` is then `false`.
+    """
+    @type status ::
+            :gradient_tolerance
+            | :cost_tolerance
+            | :step_tolerance
+            | :max_evaluations
+            | :selection_settled
+            | :outer_budget_exhausted
+            | :outer_oscillation
+
+    @typedoc "Solver metadata and applied correction flags. `converged` describes how the whole solve ended."
     @type metadata :: %{
             :iterations => non_neg_integer(),
             :converged => boolean(),
-            :status => atom(),
+            :status => status(),
             :ionosphere_applied => boolean(),
             :troposphere_applied => boolean(),
             :used_count => non_neg_integer(),
@@ -160,9 +201,11 @@ defmodule Sidereon.GNSS.Positioning do
             :redundancy => integer(),
             :raim_checkable? => boolean(),
             :geometry_quality => GeometryQuality.t(),
+            :ut1_degraded => nil | :before_coverage | :after_coverage,
             optional(:fde) => %{
               excluded: [{String.t(), :raim_excluded}],
-              iterations: non_neg_integer()
+              iterations: non_neg_integer(),
+              raim: QC.raim_result()
             },
             optional(:huber) => %{
               outer_iterations: non_neg_integer(),
@@ -181,8 +224,10 @@ defmodule Sidereon.GNSS.Positioning do
             position_covariance: position_covariance(),
             dop: dop() | nil,
             residuals_m: [float()],
+            pseudorange_variances_m2: [float()] | nil,
+            weights: [float()] | nil,
             used_sats: [String.t()],
-            rejected_sats: [{String.t(), :no_ephemeris | :low_elevation}],
+            rejected_sats: [{String.t(), rejection_reason()}],
             metadata: metadata()
           }
   end
@@ -341,9 +386,12 @@ defmodule Sidereon.GNSS.Positioning do
     * `:ionosphere` - apply the broadcast Klobuchar ionosphere correction (default
       `false`); the L1 delay is scaled to each satellite's carrier by `(f_L1/f)^2`,
       covering GPS L1, Galileo E1, and BeiDou B1I. A GLONASS satellite's FDMA
-      carrier is resolved per satellite from `:glonass_channels`; a GLONASS
-      observation with the ionosphere requested but no (or out-of-range) channel
-      is rejected with `{:ionosphere_unsupported, sat}`.
+      carrier is resolved per satellite from `:glonass_channels`; with the
+      ionosphere requested, a GLONASS observation with no channel or a channel
+      outside `-7..6` is left out of the solve and reported in `rejected_sats` as
+      `{sat, :ionosphere_carrier_unresolved}`, and the rest of the epoch is
+      solved. An epoch left with too few satellites fails with
+      `{:too_few_satellites, used, required}`.
     * `:glonass_channels` - the GLONASS FDMA channel map `%{slot => channel}`
       (default `%{}`), where `slot` is the GLONASS satellite slot/PRN and
       `channel` is its FDMA frequency channel `k` (valid `[-7, +6]`), as carried
@@ -361,6 +409,14 @@ defmodule Sidereon.GNSS.Positioning do
     * `:relative_humidity` - relative humidity fraction `[0, 1]` (default `0.5`)
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
+    * `:pseudorange_code` - which code the pseudoranges are:
+      `:single_frequency` (default), from which the broadcast single-frequency
+      group delay (GPS/QZSS TGD, Galileo BGD, BeiDou TGD1, NavIC `(f_S/f_L5)^2`
+      TGD) of the record the satellite clock came from is subtracted, as RTKLIB
+      `prange` does, or `:ionosphere_free`, to which none applies. Any other
+      value returns `{:error, {:invalid_option, :pseudorange_code}}`.
+    * `:qzss_clock` - `:gps` (default) or `:separate` receiver-clock grouping.
+    * `:troposphere_model` - `:rtklib` (default) or `:saastamoinen_niell`.
     * `:max_pdop` - optional positive PDOP ceiling. When set, a fix whose
       geometry is rank-deficient or whose PDOP exceeds the ceiling is refused
       with `{:error, {:degenerate_geometry, pdop}}` (a non-positive value is
@@ -410,16 +466,26 @@ defmodule Sidereon.GNSS.Positioning do
   Returns `{:ok, %Sidereon.GNSS.Positioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
   `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`,
-  `{:ephemeris_lost, sat}`, `{:ionosphere_unsupported, sat}` (the ionosphere
-  correction was requested for a system with no modeled single-frequency
-  carrier), `{:degenerate_geometry, reason}` (the geometry is rank-deficient, so
+  `{:ephemeris_lost, sat}`, `{:degenerate_geometry, reason}` (the geometry is rank-deficient, so
   `reason` is `:rank_deficient`, or exceeds the optional `:max_pdop` ceiling, so
   `reason` is the PDOP), `{:implausible_position, radius_m}` (the fix is outside
   the plausible geocentric-radius band), `{:no_convergence, rms_m}` (a
   converged-flagged fix with physically implausible post-fit residual RMS),
   `{:invalid_option, :max_pdop}`, `{:invalid_option, :coarse_search}`,
-  `{:robust_requires_noise_model, :no_weights}`, or `{:invalid_option, key}` for a
-  malformed `:huber`, `:huber_k`, `:huber_sigma`, or `:huber_max_iter`.
+  `{:robust_requires_noise_model, :no_weights}`,
+  `{:ut1_outside_coverage, :before_coverage | :after_coverage}` (the ephemeris
+  source refused a satellite state that reads UT1 outside the UT1 table),
+  `{:selection_unsettled, passes}` (the satellite selection, re-made at every
+  iterate as RTKLIB `estpos` makes it, did not settle within `passes` passes), or
+  `{:invalid_option, key}` for a malformed `:huber`, `:huber_k`, `:huber_sigma`,
+  `:huber_max_iter` or `:pseudorange_code`.
+
+  On a precise (SP3) source the satellite clock takes the relativistic term
+  `-2 r·v / c²` RTKLIB `peph2pos` applies, formed from the interpolated
+  positions at the transmit epoch and 1 ms later; a satellite within 1 ms of
+  the end of the product's coverage, where that term cannot be formed, has no
+  ephemeris for the solve. `metadata.ut1_degraded` is `nil`, or the side of the
+  UT1 table a state read outside it under a permissive UT1 policy.
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -454,6 +520,123 @@ defmodule Sidereon.GNSS.Positioning do
     solve(source, observations, epoch, opts)
   end
 
+  @doc "Solve SPP using an exact receive label and separate civil-day model fields."
+  @spec solve_at_exact_epoch(
+          SP3.t() | Broadcast.t(),
+          [observation()],
+          epoch(),
+          ExactEpoch.t(),
+          keyword()
+        ) :: {:ok, Solution.t()} | {:error, term()}
+  def solve_at_exact_epoch(source, observations, civil_epoch, exact_epoch, opts \\ [])
+
+  def solve_at_exact_epoch(source, observations, civil_epoch, %ExactEpoch{handle: exact_handle} = exact_epoch, opts)
+      when is_list(observations) and (is_struct(source, SP3) or is_struct(source, Broadcast)) do
+    robust? = Keyword.get(opts, :robust, false)
+    huber? = Keyword.get(opts, :huber, false)
+    coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
+
+    cond do
+      not is_boolean(robust?) ->
+        {:error, {:invalid_option, :robust}}
+
+      robust? ->
+        {:error, {:unsupported_option, :robust}}
+
+      not is_boolean(huber?) ->
+        {:error, {:invalid_option, :huber}}
+
+      huber? and invalid_huber_opt(opts) != nil ->
+        invalid_huber_opt(opts)
+
+      coarse == :invalid ->
+        {:error, {:invalid_option, :coarse_search}}
+
+      true ->
+        run_exact_solve(
+          source,
+          observations,
+          civil_epoch,
+          exact_epoch,
+          exact_handle,
+          opts,
+          coarse
+        )
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :spp_solve_exact)
+  end
+
+  def solve_at_exact_epoch(_source, _observations, _civil_epoch, _exact_epoch, _opts),
+    do: {:error, :invalid_exact_epoch}
+
+  @doc "Solve SPP from an SSR-corrected source at an exact receive-epoch label."
+  @spec solve_ssr_at_exact_epoch(
+          Broadcast.t(),
+          SSR.t(),
+          [observation()],
+          epoch(),
+          ExactEpoch.t(),
+          keyword()
+        ) :: {:ok, Solution.t()} | {:error, term()}
+  def solve_ssr_at_exact_epoch(broadcast, ssr, observations, civil_epoch, exact_epoch, opts \\ [])
+
+  def solve_ssr_at_exact_epoch(
+        %Broadcast{} = broadcast,
+        %SSR{} = ssr,
+        observations,
+        civil_epoch,
+        %ExactEpoch{handle: exact_handle} = exact_epoch,
+        opts
+      )
+      when is_list(observations) do
+    robust? = Keyword.get(opts, :robust, false)
+    huber? = Keyword.get(opts, :huber, false)
+    coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
+
+    cond do
+      not is_boolean(robust?) ->
+        {:error, {:invalid_option, :robust}}
+
+      robust? ->
+        {:error, {:unsupported_option, :robust}}
+
+      not is_boolean(huber?) ->
+        {:error, {:invalid_option, :huber}}
+
+      huber? and invalid_huber_opt(opts) != nil ->
+        invalid_huber_opt(opts)
+
+      coarse == :invalid ->
+        {:error, {:invalid_option, :coarse_search}}
+
+      not is_boolean(Keyword.get(opts, :fallback_to_broadcast, false)) ->
+        {:error, {:invalid_option, :fallback_to_broadcast}}
+
+      not is_list(Keyword.get(opts, :regional_providers, [])) ->
+        {:error, {:invalid_option, :regional_providers}}
+
+      Keyword.get(opts, :correction_size_policy, :strict) not in [:strict, :lenient] ->
+        {:error, {:invalid_option, :correction_size_policy}}
+
+      true ->
+        run_exact_solve(
+          {:ssr, broadcast, ssr, opts},
+          observations,
+          civil_epoch,
+          exact_epoch,
+          exact_handle,
+          opts,
+          coarse
+        )
+    end
+  rescue
+    error in ErlangError -> NifCall.error(error, __STACKTRACE__, :spp_solve_ssr_exact)
+  end
+
+  def solve_ssr_at_exact_epoch(_broadcast, _ssr, _observations, _civil_epoch, _exact_epoch, _opts),
+    do: {:error, :invalid_exact_epoch}
+
   @doc """
   Solve receiver position from pseudoranges and attach a Doppler velocity solve.
 
@@ -461,8 +644,8 @@ defmodule Sidereon.GNSS.Positioning do
   also include `carrier_hz` and `sat_clock_drift_s_s`; omitted carrier defaults
   to GPS L1 and omitted satellite clock drift defaults to zero.
 
-  Options match the atmospheric, initial-guess, geodetic, GLONASS-channel, and
-  Huber options from `solve/4`. This entry calls the core SPP+Doppler primitive
+  Options match the atmospheric, initial-guess, geodetic, GLONASS-channel,
+  `:pseudorange_code`, `:qzss_clock`, `:troposphere_model` and Huber options from `solve/4`. This entry calls the core SPP+Doppler primitive
   directly and does not run the `:max_pdop` or `:coarse_search` policy layer.
   """
   @spec solve_with_doppler(
@@ -514,8 +697,8 @@ defmodule Sidereon.GNSS.Positioning do
 
   The remaining options match `solve/4`: `:ionosphere`, `:troposphere`,
   `:klobuchar_alpha`, `:klobuchar_beta`, `:pressure_hpa`, `:temperature_k`,
-  `:relative_humidity`, `:initial_guess`, `:with_geodetic`, and
-  `:glonass_channels`. The `:huber` and `:coarse_search` convergence aids are
+  `:relative_humidity`, `:initial_guess`, `:with_geodetic`, `:glonass_channels`,
+  `:pseudorange_code`, `:qzss_clock` and `:troposphere_model`. The `:huber` and `:coarse_search` convergence aids are
   not part of the fallback entry, which uses the reference solve on both paths.
   The broadcast fallback solve applies the
   broadcast NAV header's BeiDou and Galileo ionosphere coefficients, exactly as
@@ -529,9 +712,13 @@ defmodule Sidereon.GNSS.Positioning do
           {:ok, SourcedSolution.t()} | {:error, term()}
   def solve_with_fallback(precise, %Broadcast{} = broadcast, observations, epoch, opts \\ [])
       when is_list(precise) and is_list(observations) do
-    with {:ok, glonass_channels} <-
+    with {:ok, pseudorange_code} <- pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- model_options(opts),
+         {:ok, glonass_channels} <-
            validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
-         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, second_of_day} <- Time.second_of_day(epoch),
+         {:ok, day_of_year} <- Time.day_of_year(epoch) do
       policy = Keyword.get(opts, :policy, Staleness.Policy.default())
 
       args = [
@@ -539,8 +726,8 @@ defmodule Sidereon.GNSS.Positioning do
         broadcast.handle,
         Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end),
         t_rx_j2000_s,
-        Time.second_of_day(epoch),
-        Time.day_of_year(epoch),
+        second_of_day,
+        day_of_year,
         to_tuple4(Keyword.get(opts, :initial_guess, @default_initial_guess)),
         Keyword.get(opts, :ionosphere, false),
         Keyword.get(opts, :troposphere, false),
@@ -551,7 +738,10 @@ defmodule Sidereon.GNSS.Positioning do
         Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
         Keyword.get(opts, :with_geodetic, true),
         policy.max_staleness_s,
-        glonass_channels
+        glonass_channels,
+        pseudorange_code,
+        qzss_clock,
+        troposphere_model
       ]
 
       NIF
@@ -559,7 +749,7 @@ defmodule Sidereon.GNSS.Positioning do
       |> decode_sourced_solution()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spp_solve_with_fallback)
   end
 
   @doc """
@@ -581,7 +771,7 @@ defmodule Sidereon.GNSS.Positioning do
   unless a request's `epoch_opts` overrides them: `:ionosphere`, `:troposphere`,
   `:klobuchar_alpha`, `:klobuchar_beta`, `:pressure_hpa`, `:temperature_k`,
   `:relative_humidity`, `:initial_guess`, `:glonass_channels`, `:with_geodetic`,
-  `:max_pdop`, `:coarse_search`, `:robust`, and the `:huber` reweighting levers
+  `:pseudorange_code`, `:qzss_clock`, `:troposphere_model`, `:max_pdop`, `:coarse_search`, `:robust`, and the `:huber` reweighting levers
   (`:huber`, `:huber_k`, `:huber_sigma`, `:huber_max_iter`).
 
     * `:parallel` - fan the independent per-epoch solves across the crate's thread
@@ -589,7 +779,7 @@ defmodule Sidereon.GNSS.Positioning do
       result; this only changes throughput. Set `false` to force the serial path.
 
   A batch-wide configuration error (a malformed `:huber`, `:coarse_search`,
-  `:max_pdop`, `:parallel`, `:glonass_channels`, or an unparseable epoch) fails
+  `:max_pdop`, `:parallel`, `:glonass_channels`, `:pseudorange_code`, model selectors, or an unparseable epoch) fails
   the whole call with `{:error, reason}` rather than producing a partial list.
 
   Returns `{:ok, [per_epoch_result]}` or `{:error, reason}`.
@@ -671,7 +861,7 @@ defmodule Sidereon.GNSS.Positioning do
       {:ok, results}
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spp_solve_batch)
   end
 
   # Build the per-epoch NIF input maps, aborting on the first configuration error
@@ -697,15 +887,19 @@ defmodule Sidereon.GNSS.Positioning do
        when is_list(observations) and is_list(epoch_opts) do
     opts = Keyword.merge(base_opts, epoch_opts)
 
-    with {:ok, glonass_channels} <-
+    with {:ok, pseudorange_code} <- pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- model_options(opts),
+         {:ok, glonass_channels} <-
            validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
-         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, second_of_day} <- Time.second_of_day(epoch),
+         {:ok, day_of_year} <- Time.day_of_year(epoch) do
       {:ok,
        %{
          observations: Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end),
          t_rx_j2000_s: t_rx_j2000_s,
-         t_rx_second_of_day_s: Time.second_of_day(epoch),
-         day_of_year: Time.day_of_year(epoch),
+         t_rx_second_of_day_s: second_of_day,
+         day_of_year: day_of_year,
          initial_guess: to_tuple4(Keyword.get(opts, :initial_guess, @default_initial_guess)),
          apply_iono: Keyword.get(opts, :ionosphere, false),
          apply_tropo: Keyword.get(opts, :troposphere, false),
@@ -714,7 +908,10 @@ defmodule Sidereon.GNSS.Positioning do
          pressure_hpa: Keyword.get(opts, :pressure_hpa, @default_pressure_hpa) / 1.0,
          temperature_k: Keyword.get(opts, :temperature_k, @default_temperature_k) / 1.0,
          relative_humidity: Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
-         glonass_channels: glonass_channels
+         glonass_channels: glonass_channels,
+         pseudorange_code: pseudorange_code,
+         qzss_clock: Atom.to_string(qzss_clock),
+         troposphere_model: Atom.to_string(troposphere_model)
        }}
     end
   end
@@ -748,17 +945,21 @@ defmodule Sidereon.GNSS.Positioning do
     do: {:broadcast, {:precise_degraded_unusable, Staleness.decode_metadata(metadata), spp_reason}}
 
   defp run_solve_with_doppler(source, handle, observations, doppler_observations, epoch, opts) do
-    with {:ok, glonass_channels} <-
+    with {:ok, pseudorange_code} <- pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- model_options(opts),
+         {:ok, glonass_channels} <-
            validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
          {:ok, doppler_rows} <- normalize_doppler_observations(doppler_observations),
-         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, second_of_day} <- Time.second_of_day(epoch),
+         {:ok, day_of_year} <- Time.day_of_year(epoch) do
       args = [
         handle,
         Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end),
         doppler_rows,
         t_rx_j2000_s,
-        Time.second_of_day(epoch),
-        Time.day_of_year(epoch),
+        second_of_day,
+        day_of_year,
         to_tuple4(Keyword.get(opts, :initial_guess, @default_initial_guess)),
         Keyword.get(opts, :ionosphere, false),
         Keyword.get(opts, :troposphere, false),
@@ -769,17 +970,21 @@ defmodule Sidereon.GNSS.Positioning do
         Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
         Keyword.get(opts, :with_geodetic, true),
         huber_arg(opts),
-        glonass_channels
+        glonass_channels,
+        pseudorange_code,
+        qzss_clock,
+        troposphere_model
       ]
 
-      nif = if source == :sp3, do: :spp_solve_with_doppler, else: :spp_solve_broadcast_with_doppler
+      nif =
+        if source == :sp3, do: :spp_solve_with_doppler, else: :spp_solve_broadcast_with_doppler
 
       NIF
       |> apply(nif, args)
       |> decode_doppler_solution()
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spp_solve_with_doppler)
   end
 
   defp normalize_doppler_observations(observations) do
@@ -884,11 +1089,12 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp run_core_robust_solve(source, observations, epoch, opts) do
     case QC.robust_fde(source, observations, epoch, opts) do
-      {:ok, %{solution: solution, excluded: excluded, iterations: iterations}} ->
+      {:ok, %{solution: solution, excluded: excluded, iterations: iterations, raim: raim}} ->
         metadata =
           Map.put(solution.metadata, :fde, %{
             excluded: excluded,
-            iterations: iterations
+            iterations: iterations,
+            raim: raim
           })
 
         {:ok, %{solution | metadata: metadata}}
@@ -954,12 +1160,13 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp run_solve(source, handle, observations, epoch, opts, coarse_search_seeds) do
     with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         {:ok, pseudorange_code} <- pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- model_options(opts),
          {:ok, glonass_channels} <-
            validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
-         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch) do
-      sod = Time.second_of_day(epoch)
-      doy = Time.day_of_year(epoch)
-
+         {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
+         {:ok, sod} <- Time.second_of_day(epoch),
+         {:ok, doy} <- Time.day_of_year(epoch) do
       apply_iono = Keyword.get(opts, :ionosphere, false)
       apply_tropo = Keyword.get(opts, :troposphere, false)
       alpha = Keyword.get(opts, :klobuchar_alpha, @default_alpha)
@@ -991,7 +1198,10 @@ defmodule Sidereon.GNSS.Positioning do
         huber_arg(opts),
         optional_float(max_pdop),
         optional_count(coarse_search_seeds),
-        glonass_channels
+        glonass_channels,
+        pseudorange_code,
+        qzss_clock,
+        troposphere_model
       ]
 
       result =
@@ -1003,7 +1213,105 @@ defmodule Sidereon.GNSS.Positioning do
       Decode.decode(result)
     end
   rescue
-    e in ErlangError -> {:error, e.original}
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :spp_solve)
+  end
+
+  defp run_exact_solve(source, observations, civil_epoch, exact_epoch, exact_handle, opts, coarse_search_seeds) do
+    with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         {:ok, pseudorange_code} <- pseudorange_code_option(opts),
+         {:ok, qzss_clock, troposphere_model} <- model_options(opts),
+         {:ok, glonass_channels} <-
+           validate_glonass_channels(Keyword.get(opts, :glonass_channels, %{})),
+         {:ok, civil_exact_epoch} <- exact_civil_epoch(civil_epoch),
+         true <-
+           ExactEpoch.compare(civil_exact_epoch, exact_epoch) == :equal ||
+             {:error, :epoch_label_mismatch},
+         {:ok, second_of_day} <- Time.second_of_day(civil_epoch),
+         {:ok, day_of_year} <- Time.day_of_year(civil_epoch) do
+      common_args = [
+        Enum.map(observations, fn {satellite_id, pseudorange_m} ->
+          {satellite_id, pseudorange_m / 1.0}
+        end),
+        second_of_day,
+        day_of_year,
+        to_tuple4(Keyword.get(opts, :initial_guess, @default_initial_guess)),
+        Keyword.get(opts, :ionosphere, false),
+        Keyword.get(opts, :troposphere, false),
+        to_tuple4(Keyword.get(opts, :klobuchar_alpha, @default_alpha)),
+        to_tuple4(Keyword.get(opts, :klobuchar_beta, @default_beta)),
+        Keyword.get(opts, :pressure_hpa, @default_pressure_hpa) / 1.0,
+        Keyword.get(opts, :temperature_k, @default_temperature_k) / 1.0,
+        Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
+        Keyword.get(opts, :with_geodetic, true),
+        huber_arg(opts),
+        optional_float(Keyword.get(opts, :max_pdop)),
+        optional_count(coarse_search_seeds),
+        glonass_channels,
+        pseudorange_code,
+        qzss_clock,
+        troposphere_model
+      ]
+
+      {nif, source_args, trailing_args} =
+        case source do
+          %SP3{handle: handle} ->
+            {:spp_solve_exact, [handle, exact_handle], []}
+
+          %Broadcast{handle: handle} ->
+            {:spp_solve_broadcast_exact, [handle, exact_handle], []}
+
+          {:ssr, %Broadcast{handle: broadcast}, %SSR{handle: store}, ssr_opts} ->
+            size_policy =
+              case Keyword.get(ssr_opts, :correction_size_policy, :strict) do
+                :strict -> "strict"
+                :lenient -> "lenient"
+              end
+
+            {:spp_solve_ssr_exact, [broadcast, store, exact_handle],
+             [
+               Keyword.get(ssr_opts, :fallback_to_broadcast, false),
+               Keyword.get(ssr_opts, :regional_providers, []),
+               size_policy
+             ]}
+        end
+
+      NIF |> apply(nif, source_args ++ common_args ++ trailing_args) |> Decode.decode()
+    else
+      {:error, _reason} = error -> error
+      false -> {:error, :epoch_label_mismatch}
+    end
+  end
+
+  defp exact_civil_epoch(%NaiveDateTime{
+         year: year,
+         month: month,
+         day: day,
+         hour: hour,
+         minute: minute,
+         second: second,
+         microsecond: {microsecond, _precision}
+       }) do
+    ExactEpoch.from_civil(year, month, day, hour, minute, second + microsecond / 1_000_000)
+  end
+
+  defp exact_civil_epoch({{year, month, day}, {hour, minute, second}}) do
+    ExactEpoch.from_civil(year, month, day, hour, minute, second)
+  end
+
+  defp exact_civil_epoch(_epoch), do: {:error, :invalid_epoch}
+
+  @doc false
+  # The `:pseudorange_code` option: `:single_frequency` (the default), whose
+  # pseudoranges take the broadcast single-frequency group delay, or
+  # `:ionosphere_free`, which takes none.
+  @spec pseudorange_code_option(keyword()) ::
+          {:ok, :single_frequency | :ionosphere_free}
+          | {:error, {:invalid_option, :pseudorange_code}}
+  def pseudorange_code_option(opts) do
+    case Keyword.get(opts, :pseudorange_code, :single_frequency) do
+      code when code in [:single_frequency, :ionosphere_free] -> {:ok, code}
+      _other -> {:error, {:invalid_option, :pseudorange_code}}
+    end
   end
 
   # The crate `robust` NIF argument: `nil` (off, byte-identical to the static
@@ -1032,9 +1340,10 @@ defmodule Sidereon.GNSS.Positioning do
   # The GLONASS FDMA channel map, `%{slot => channel}`. Slots are GLONASS PRNs
   # (`u8`) and channels are the FDMA `k` index decoded as `i8` at the NIF; only
   # the type/range that the NIF boundary can carry is enforced here. Whether a
-  # channel is a *valid* GLONASS index ([-7, +6]) is the crate's concern; an
-  # out-of-range channel for an observed GLONASS satellite with the ionosphere
-  # requested surfaces as `{:ionosphere_unsupported, sat}`, not an option error.
+  # channel is a *valid* GLONASS index ([-7, +6]) is the crate's concern; with
+  # the ionosphere requested, an observed GLONASS satellite with an out-of-range
+  # channel is reported in `rejected_sats` as `:ionosphere_carrier_unresolved`,
+  # not an option error.
   # Returned as a `[{slot, channel}]` list (the codebase idiom for map NIF args).
   defp validate_glonass_channels(channels) when is_map(channels) do
     if Enum.all?(channels, fn
@@ -1053,6 +1362,21 @@ defmodule Sidereon.GNSS.Positioning do
   end
 
   defp validate_glonass_channels(_other), do: {:error, {:invalid_option, :glonass_channels}}
+
+  @doc false
+  def model_options(opts) do
+    qzss_clock = Keyword.get(opts, :qzss_clock, :gps)
+    troposphere_model = Keyword.get(opts, :troposphere_model, :rtklib)
+
+    with true <- qzss_clock in [:gps, :separate] || {:error, {:invalid_option, :qzss_clock}},
+         true <-
+           troposphere_model in [:rtklib, :saastamoinen_niell] ||
+             {:error, {:invalid_option, :troposphere_model}} do
+      {:ok, qzss_clock, troposphere_model}
+    else
+      {:error, _} = error -> error
+    end
+  end
 
   # --- helpers -------------------------------------------------------------
 

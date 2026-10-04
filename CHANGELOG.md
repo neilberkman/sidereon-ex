@@ -6,6 +6,589 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Sidereon.GNSS.RTK.RinexArc.unresolved_carriers/1` and
+  `Sidereon.GNSS.RTK.DualFrequencyRinexArc.unresolved_carriers/1` list, as
+  `Sidereon.GNSS.RTK.RinexUnresolvedCarrier` structs, each satellite
+  measurement the arc builder left out of an epoch because no configured phase
+  observable had a carrier frequency, naming the receiver (`:base` or
+  `:rover`), the epoch's index in that receiver's file, the satellite and the
+  observable. `solve_static_rinex_rtk_baseline/5` and
+  `solve_wide_lane_fixed_rinex_rtk_baseline/5` carry them as
+  `:unresolved_carriers`.
+- `Sidereon.GNSS.SBAS.unassigned_mask_corrections/2` counts, per PRN mask
+  number, the corrections a GEO addressed to active mask bits that name no
+  satellite.
+- `Sidereon.Terrain.tile_horizontal_datum/1` returns the horizontal datum a DTED
+  tile's DSI record states: `:wgs84`, `:wgs72`, `:unstated` or `{:other, text}`.
+- `Sidereon.GNSS.Antex` keeps every record ANTEX 1.4 defines: `header` (version
+  and system, the `PCV TYPE / REFANT` calibration type and reference antenna,
+  header comments, and whether `END OF HEADER` is present), `blocks` (every
+  antenna block in file order, each validity interval of one id included),
+  `outer_comments` and `skipped_records`. Each antenna keeps its method records,
+  comments before and after `TYPE / SERIAL NO`, whether it carries
+  `# OF FREQUENCIES`, and each frequency section's `START OF FREQ RMS` section.
+  `antenna_intervals/2`, `antenna_at/3`, `frequency/2` and `skipped_records/1`
+  are new.
+- `Sidereon.GNSS.RINEX.Clock` exposes the lossless clock model: `records/1`,
+  `header_records/1`, the scale-tagged `series/1`, `skipped_records/1`,
+  `diagnostics/1`, `notices/1`, `source_line/2`, the header facts
+  (`version/1`, `layout/1`, `satellite_system/1`, `time_system/1`,
+  `time_system_status/1`, `time_scale/1`, `record_count/1`), the edits
+  `set_time_system/2`, `set_record_values/3`, `insert_record/3`,
+  `remove_record/2`, `retain_records/2` and `edit_records/2`, which return a new
+  product, `to_rinex_string_with_policy/2` with a `WritePolicy` and its
+  departures, `from_series_rows/1`, `from_clock_points/2`,
+  `clock_s_at_gps_seconds/3`, `civil_to_instant/2` and `civil_to_gps_seconds/1`.
+- `Sidereon.Format.OMM.parse_xml_all/1` reads every OMM of an XML document or
+  NDM combined instantiation and `parse_json_array/1` every record of a GP JSON
+  array, each returning `{:ok, omms, skipped}` with each unreadable record as
+  `{index, reason}`. `encode_json_discarding_comments/1` writes GP JSON without
+  the comments GP JSON cannot carry.
+- `Sidereon.Format.TLE.parse_with_warnings/3` returns the checksum warnings the
+  policy accepted with the elements.
+- `Sidereon.CCSDS.OPM.Covariance.to_matrix/1` and
+  `Sidereon.CCSDS.OEM.Covariance.to_matrix/1` expand the 21 lower-triangle
+  values to six symmetric rows without validation.
+- `Sidereon.GNSS.Broadcast.skipped/1`, `departures/1` and
+  `iono_corrections_at/2`, the ionosphere sets in effect at an epoch.
+- `Sidereon.GNSS.Bias.notices/1` lists the departures and other findings of a
+  read.
+- `Sidereon.GNSS.RTCM.decode_message_with_policy/2`, `encode_with_policy/2` and
+  `encode_frame_with_reserved/2`.
+- `Sidereon.GNSS.SSR.from_rtcm_strict/4`.
+- `Sidereon.GNSS.SBAS.decode_with_policy/3`, `parse_ems_log/2` and
+  `parse_rtklib_log/2`, which take `:policy` and `:reference_week` and return
+  every line's disposition as a `Sidereon.GNSS.SBAS.Log`.
+- `Sidereon.GNSS.Positioning.solve/4`, `solve_with_doppler/5`,
+  `solve_with_fallback/5`, `solve_batch/3`,
+  `Sidereon.GNSS.StaticPositioning.solve/3` and `Sidereon.GNSS.QC.fde/4` take
+  `:pseudorange_code`: `:single_frequency` (the default), from which the
+  broadcast single-frequency group delay of the record the satellite clock came
+  from is subtracted, as RTKLIB `prange` does, or `:ionosphere_free`, to which
+  none applies.
+- PPP observations accept `:signals`, `%{code1:, code2:, phase1:, phase2:}`,
+  the tracking codes of the two pseudoranges and two carrier phases an
+  ionosphere-free observation was formed from.
+- SPP, static and static reference-station solutions report `ut1_degraded`
+  (`nil`, `:before_coverage` or `:after_coverage`), and every fusion update map
+  carries `:ut1_degraded`.
+- `Sidereon.GNSS.Observables.predict/5` returns `sat_clock_relativity_s`, the
+  relativistic term `-2 r·v / c²` a positioning model adds to a product clock
+  (`:not_applicable` for a broadcast clock, `:unavailable` within 1 ms of the
+  end of the product's coverage), and `single_frequency_group_delay_s`, the
+  broadcast group delay a single-frequency model subtracts from the clock.
+- `Sidereon.GNSS.Observables.pseudorange_transmit_geometry/6` returns the
+  transmit-time geometry of a pseudorange as SPP, the static solve, DGNSS and
+  PPP place it (RTKLIB `satposs` and `geodist`): the transmission epoch, the
+  signal flight time, the satellite clock with its relativistic term and group
+  delay, the unrotated satellite position, the range with the first-order
+  Sagnac term, the line of sight, elevation and azimuth.
+- `Sidereon.SpaceWeather.ap_history_at_with_policy/3` returns the NRLMSISE-00
+  Ap history as a `Sidereon.SpaceWeather.ApHistory` with the least-trusted row
+  class consulted, `ap_defaulted` and `bins_from_daily_ap`, the number of
+  three-hour bins filled from a row's daily Ap.
+- `Sidereon.SpaceWeather.diagnostics/1` returns the skipped lines and warnings
+  of the parse that built a table, which were discarded.
+- `Sidereon.SpaceWeather.Policy.lenient/0`, and the `:space_weather_policy`
+  option of `Sidereon.Drag.estimate_decay/3` and `Sidereon.Propagator.propagate/3`,
+  which reads a `:space_weather_table` under that policy.
+- `Sidereon.GNSS.SP3.merge/2` reports what the merge did not write:
+  `:dropped_input_epochs` (input epochs off an explicit `:epoch_interval_s`
+  grid, or on no SP3 epoch record's tick), `:omitted_epochs` (union-grid epochs
+  with no accepted cell), `:arc_withheld` (cells whose preferred source carried
+  no position) and `:clock_omissions` (each source clock left out, with its
+  reason and whether the cell has a clock from other sources). Epochs keep the
+  representation the merge recorded.
+- **Breaking.** `Sidereon.GNSS.SP3.check_continuity/2` and
+  `continuity_verdict/4` refuse a negative `:residual_tolerance_m` with
+  `{:error, {:bad_residual_tolerance_m, value}}`, and `merge/2` and
+  `merge_input_identity/2` refuse one in `:verify_continuity` with
+  `{:error, {:invalid_verify_continuity, {:bad_residual_tolerance_m, value}}}`;
+  a residual tolerance is a distance.
+- `Sidereon.GNSS.SP3.merge/2` takes `provenance: :summary | :full`, and its
+  report carries `:provenance`, the per-epoch provenance the core recorded
+  (`nil` when not requested): the selection behind each accepted cell under
+  `:full`, every change of supplying source with its reason, and what each
+  contributor covered. `Sidereon.GNSS.Data.fetch_merged_sp3/3` forwards the
+  option.
+- `Sidereon.GNSS.SP3.selected_nodes/4` and
+  `merge_continuity_selected_nodes/4` return the position nodes the
+  interpolations of a satellite in a window select, for a product and for the
+  merged product a merge continuity report holds: the nodes window verdicts
+  read.
+- A merge continuity violation carries `:sources` and `:cells`, each with its
+  epoch, its role in the finding and the selection the merge recorded for it.
+  A continuity defect carries every field of its kind under the core's name
+  beside the summary fields.
+- `Sidereon.solid_earth_tide/8` takes `constants: :conventions | :iers_routine`,
+  the Step 2 constants the core applies (`:conventions` by default);
+  `:iers_routine` reproduces the IERS `DEHANTTIDEINEL` routine.
+
+### Changed
+
+- **Breaking.** `Sidereon.GNSS.SP3.merge_continuity_verdict/3` takes the report
+  and the window alone; it took the merged product as its second argument and
+  ignored it. The report holds the merged product's interpolation nodes, and a
+  violation influences a window when the nodes its interpolations select
+  include the violation's held-out, repeated or pair-end record or straddle a
+  handover between its records.
+- **Breaking.** `Sidereon.GNSS.SP3.merge/2` takes any `:epoch_interval_s` that
+  is a whole number of the 10-nanosecond ticks an SP3 interval states, as the
+  core's merge does, and passes it to the core as given. It refused an interval
+  that was not a whole number of seconds and rounded one within 1e-9 s of it,
+  so a value such as `600.0000000005` merged on a 600 s grid; the core now
+  refuses it, with its message as the error. `merge_input_identity/2` and
+  persisted merge policies still bind whole seconds only, to within the core's
+  1e-6 s, and bind the value as given, so the `stable_id` of such a value
+  changes. `Sidereon.GNSS.Data.fetch_merged_sp3/3` refuses an
+  `:epoch_interval_s` the identity cannot bind, and any option the facade
+  refuses, before it fetches any product.
+- **Breaking.** `Sidereon.GNSS.Data.merge_report_to_map/1` writes
+  `schema_version: 3`, in the record layout the sidereon Python package writes
+  and verifies, so a record either package writes verifies in the other. Each
+  contributor carries `acquisition_facts` (not `acquisition`), and it and the
+  `artifact_identity` carry `schema_version: 1`; the retrieval time is stated
+  in UTC with a `+00:00` offset. The `merge_policy` carries `schema_version: 2`,
+  the target interval as `target_epoch_interval_s`, `nil` systems for no
+  filter, an empty `precedence_artifact_sha256` for a combining rule, and the
+  `verify_continuity` (its residual tolerance null or at least 0) and
+  `provenance` options. The `merge_report` carries the
+  four omission lists `SP3.merge/2` reports, the merge continuity report (its
+  attestation as `attested`, each violation's cells and sources, each defect's
+  fields) and the provenance, the last two `nil` when the merge was not asked
+  for them. `verify_merge_report/1` checks a version 3 record against itself,
+  its agreement and its policy: one violation per defect whose cells are the records the defect
+  rests on, in time order, with its sources, pair-end sources and
+  contributor crossing following from them; the splices; nothing found by a
+  check the policy did not request, and no more findings than checks; full
+  provenance cells against the agreement cells, and the coverage and
+  transitions the cells imply, with reasons the changes admit; clock
+  omissions against the agreement's clock counts, never taking source 0 off
+  its own datum, and a preferred source only under precedence; withheld arc
+  cells only under satellite-arc precedence and never written; an input epoch
+  off the target grid only with a target grid; omitted epochs holding no
+  accepted cell; and every epoch on one known time scale and on the merge
+  grid. It still verifies version 1 and 2 records in the layout this binding
+  wrote them in; version 2 records carry the omission lists, which are checked
+  by the same rules. Every version accepts an epoch the core holds for a UTC
+  `23:59:60.x` label, on the next day's boundary with a negative fraction,
+  which it refused, and a contributor recorded without an issue, which is the
+  catalog's issue `"0000"` its identity states (every fetched final product),
+  which it refused. A canonical or requested-sample contributor is checked
+  against the identity and filename the catalog derives for it, and a
+  canonical one must be a center without issues, a requested-sample one an
+  ultra-rapid center. A version 3 record spells each acquisition failure one
+  way, the vocabulary the Python package writes: `transport_failure`,
+  `decompression_failure`, `product_validation_failure`,
+  `cache_read_failure` and `cache_write_failure` where this binding's
+  `SourceFailure` says `:transport`, `:decompression_failed`,
+  `:product_validation_failed`, `:cache_read_failed` and `:cache_write_failed`,
+  and every other case under the name it has; an `http_status` failure states
+  its status, which in every version is 100-599. A failure no case describes
+  is `unclassified_failure` with a `detail` holding the inspected reason (a
+  new `Sidereon.GNSS.Distribution.SourceFailure` field), where it was
+  `:unknown` or `:acquisition`; a response status outside 100-599 is a
+  transport failure with the value in its message. Version 1 and 2 records
+  may carry either package's earlier spellings, and no unclassified failure. `SP3.merge_input_identity/2` returns the two reporting options in
+  its `:merge_policy`.
+- **Breaking.** A `Sidereon.GNSS.Data.AbsentCenter` reason is one of
+  `"no_candidate"`, `"catalog_unavailable"`, `"offline_cache_miss"`,
+  `"product_not_published"`, `"checksum_mismatch"`, `"http_status"` and
+  `"unclassified"`, the status in `:http_status` and, for an unclassified
+  failure, the inspected reason in the new `:detail`; it was `"offline_miss"`, `"candidate_not_found"`,
+  `"product_not_published:<status>"`, `"checksum"` or `"http_status:<status>"`.
+  A version 3 record states each case with exactly the candidate fields it
+  has; a version 1 or 2 record may also carry the earlier spellings, and no
+  other reason.
+- **Breaking.** `Sidereon.GNSS.SP3.position/4` returns the core's typed
+  refusals, `{:error, {:insufficient_precise_nodes, sat_id, nodes, 11}}` and
+  `{:error, :epoch_out_of_range}`, where it returned their message strings.
+
+- **Breaking.** An ionosphere-corrected SPP or static solve no longer fails the
+  epoch with `{:ionosphere_unsupported, sat}` when one satellite has no
+  resolvable carrier. The satellite is left out and reported in `rejected_sats`
+  as `:ionosphere_carrier_unresolved`, and the rest of the epoch is solved; an
+  epoch left with too few satellites fails with `{:too_few_satellites, used,
+  required}`. Reasons are tested in the order ephemeris, elevation mask,
+  augmentation-grid coverage, carrier.
+- **Breaking.** A RINEX RTK arc no longer fails with
+  `{:missing_frequency, satellite, observable}`; see `unresolved_carriers/1`.
+- **Breaking.** `Sidereon.GNSS.RTCM.encode/1`, `encode_frame/1` and
+  `encode_message/1` refuse a message the wire format cannot state as
+  `{:error, {:invalid_input, message}}` instead of writing it as another
+  satellite or signal: an MSM satellite id outside `1..64`, a signal id outside
+  `1..32`, a satellite or cell listed twice, a signal whose satellite is not
+  listed, an ephemeris satellite field wider than the message's, and any
+  satellite or signal number outside `0..255`. A body over the frame length
+  limit, previously refused with the error text, is refused the same way.
+- **Breaking.** `Sidereon.GNSS.Frequencies` resolves a GLONASS G1 or G2 carrier
+  only for a channel in `-7..6`, returning `{:error, {:invalid_channel,
+  channel}}` for any other, and resolves the GLONASS CDMA, SBAS and NavIC
+  carriers the core added.
+- Satellite identifiers take the shared `01`..`99` token range for every
+  constellation: merge-report verification accepts them, and a GLONASS
+  navigation record for an extended slot such as `R28` is read rather than
+  skipped.
+- **Breaking.** DTED terrain lookups return `{:error,
+  {:unknown_terrain_elevation, fields}}` for a lookup weighting a null posting,
+  `{:error, {:non_wgs84_terrain_tile, fields}}` for a tile on another horizontal
+  datum, `{:error, {:missing_terrain_tile, fields}}` for a missing store tile
+  and `{:error, {:parse, message}}` for a tile that does not read, including one
+  whose origin disagrees with the tile its file name names, in place of
+  `:invalid_input` or the error text. `Terrain.load_tile/1`
+  and `Terrain.tile_elevation/3` return every DTED tile refusal by its own tag
+  with its fields, including `{:null_posting, fields}` and the UHL metadata
+  checks; `load_tile/1` previously returned a failed load inside `{:ok, _}`.
+  Terrain-store errors gain `:tile_id_out_of_range`, `:tile_bounds_mismatch`
+  and `:non_wgs84_tile`. SRTM voids converted to DTED are null postings rather
+  than sea level.
+- **Breaking.** `Sidereon.GNSS.Antex.Antenna` holds `frequencies` as a list of
+  sections in file order, `dazi_deg` and `zenith_grid` as `nil` when the block
+  has no such record, and its validity bounds as `Sidereon.GNSS.Antex.Epoch`
+  with the exact fraction of a second, so `59.9999999` is kept to the seventh
+  decimal. `zenith_start_deg`, `zenith_end_deg` and `zenith_step_deg` are
+  replaced by `zenith_grid`. `satellite_antenna/3` searches every validity
+  interval and takes a `NaiveDateTime` or an `Antex.Epoch`. Parse, write and
+  lookup refusals are `{tag, fields}` pairs with every field the core carries;
+  a label whose sections differ is `{:ambiguous_frequency, fields}`. The
+  precise-positioning satellite antenna option reads every validity interval
+  with its exact bounds.
+- **Breaking.** `Sidereon.GNSS.RINEX.Clock` holds the core product behind a
+  handle; the unedited product is written back byte for byte, header records
+  and `AR`, `CR`, `DR` and `MS` records included. `clock_s/3` takes a civil
+  epoch in the product's time scale, so a UTC or `GLO` product answers a
+  `23:59:60` query on a leap-second day, and reads the query second with every
+  digit. Errors are `{tag, fields}` pairs in place of text.
+- **Breaking.** `Sidereon.GNSS.Time.epoch_to_split_jd/1`, `second_of_day/1` and
+  `day_of_year/1` return `{:ok, value}` or `{:error, reason}`, and every epoch
+  helper there names a field the core cannot take, as `{:invalid_epoch_field,
+  field, value}` or `{:value_out_of_range, field, value}`, instead of raising.
+  `second_of_day/1` reads only the clock fields.
+- `Sidereon.GNSS.Ionosphere.klobuchar_delay/7`, `galileo_nequick_g_delay/7`,
+  `nequick_g_stec/2` and `nequick_g_delay/3` name an argument that is not a
+  number or that no double holds, and a `month` outside `0..255`, before the
+  call. `from_node_samples/5` names an `exponent` outside the signed 32-bit
+  range as `{:value_out_of_range, :exponent, value}`.
+- **Breaking.** `Sidereon.Format.OMM` keeps every item of CCSDS 502.0-B-3
+  tables 4-1 to 4-3: `classification`, `message_id`, `ref_frame_epoch`,
+  `semi_major_axis_km`, `gm_km3_s2`, `spacecraft` (`OMM.Spacecraft`),
+  `bterm_m2_kg`, `agom_m2_kg`, `covariance` (`OMM.Covariance`, the 21
+  lower-triangle values as read), `user_defined` (`OMM.UserDefined`) and
+  `comments` (`OMM.Comments`). `ccsds_omm_vers`, `mean_motion` and the
+  TLE-related parameters are `nil` when the message does not state them; the
+  struct no longer defaults them to `"2.0"`, `"U"`, 999 or 0, and a writer
+  states a version only when the message holds one.
+- **Breaking.** `Sidereon.Format.OMM.encode_kvn/1`, `encode_xml/1` and
+  `encode_json/1` return `{:error, reason}` for a message their reader would
+  not return unchanged: text with a line break or trimmed whitespace, a
+  character XML 1.0 cannot carry, a non-finite number, an epoch the reader
+  refuses, and, in GP JSON, any comment but the single header comment.
+  `parse_json/1` refuses a document holding several records.
+- **Breaking.** `Sidereon.Format.OMM.to_elements/1` returns the SGP4 element
+  set the core forms from the OMM (`Omm::to_element_set`). It refuses a stated
+  `MEAN_ELEMENT_THEORY` other than `SGP4`, `SGP/SGP4` or `SDP4`, a
+  `CENTER_NAME` other than `EARTH`, a `REF_FRAME` other than `TEME` or a
+  `TIME_SYSTEM` other than `UTC` with `{:incompatible_metadata, field, value}`,
+  an OMM without `MEAN_MOTION` or `BSTAR` with `{:missing_field, field}`, and an
+  epoch that names no UTC instant or an element that is not finite or out of
+  range with `{:invalid_field, field, kind}`. An OMM without `NORAD_CAT_ID` gives
+  elements whose `catalog_number` is `nil`, where the conversion refused it.
+  `bstar` and `mean_motion_double_dot` are quantized to the TLE assumed-decimal
+  fields as the core quantizes them, where they were copied unquantized, and
+  the epoch keeps its femtoseconds and a UTC leap second in the new
+  `Sidereon.Elements` field `epoch_jd`, which propagation uses, where they were
+  dropped or refused. The decoded-map `parse/1` requires `"BSTAR"`, which SGP4
+  propagates with, where an absent value was filled with zero, gives `nil` for
+  an absent `"NORAD_CAT_ID"`, where it gave `""`, and leaves unstated
+  mean-motion derivatives, `"CLASSIFICATION_TYPE"`, `"EPHEMERIS_TYPE"`,
+  `"ELEMENT_SET_NO"` and `"REV_AT_EPOCH"` as `nil`.
+- **Breaking.** `Sidereon.Elements` fields `classification`, `mean_motion_dot`,
+  `mean_motion_double_dot`, `ephemeris_type`, `elset_number` and `rev_number`
+  may be `nil`, and the struct gains `bstar_text` and
+  `mean_motion_double_dot_text`, the TLE field text as read, which
+  `Sidereon.Format.TLE.encode/1` writes back while it decodes to the stored
+  value, so `00000+0` is no longer written as `00000-0`. A `nil` ephemeris
+  type, element set number or revolution number is written as a blank field,
+  where encoding refused it; SGP4 propagates a `nil` mean-motion derivative as
+  it does a stated zero. `catalog_number` may be `nil`: SGP4 propagation,
+  visibility and constellation passes carry it as `nil`, and
+  `Sidereon.Format.TLE.encode/1` refuses such elements with `{:missing_field,
+  :catalog_number}`, since a TLE states one. `epoch_jd` is the epoch as the
+  core's split Julian date, `nil` for elements read from a TLE.
+- **Breaking.** `Sidereon.Format.TLE.parse/3`, `parse_file/2`,
+  `Sidereon.parse_tle/3` and `Sidereon.parse_tle_file/2` take `policy:
+  :strict` (the default) or `:lenient`. Under `:strict` a column-69 digit that
+  disagrees with the checksum, or a column 69 that is not a digit, is refused,
+  where it was logged and accepted; `:lenient` reads it and reports it.
+  Checksum warnings are `{line, kind, computed}` with `kind` `{:mismatch,
+  digit}`, `{:not_digit, character}` or `:missing`.
+- **Breaking.** `Sidereon.Format.TLE.parse_file/2` returns `rejected`, every
+  non-blank line that did not become a satellite with its line number, name
+  line and reason (`{:invalid, reason}`, `:missing_line_2`, `:orphan_line_2`,
+  `:orphan_name`), and each satellite's `line_number` and `checksum_warnings`;
+  `skipped` is the number of rejected entries, where it counted only records
+  that failed SGP4 initialization and stray lines were dropped.
+- **Breaking.** `Sidereon.CCSDS.OPM` and `Sidereon.CCSDS.OEM` keep the header
+  `comments`, `classification` and `message_id`, the metadata `comments` and
+  `ref_frame_epoch`, and the comments of every block (OPM state, Keplerian,
+  spacecraft, covariance and maneuvers; OEM `data_comments` and
+  `covariance_comments` as `OEM.Comment` at their positions); OPM gains
+  `user_defined` and `user_defined_comments`. Covariances hold the 21
+  lower-triangle values as read in `lower_triangle`, replacing `matrix`, so a
+  matrix that falls short of positive semidefinite only through its printed
+  digits is read. `OEM.skipped_states` is a list of `OEM.SkippedState` (line,
+  segment, text, reason) instead of a count.
+- **Breaking.** `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM` and
+  `Sidereon.CCSDS.CDM` `encode/2`, `encode_kvn/1` and `encode_xml/1` return
+  `{:ok, text}` or `{:error, reason}`, refusing a message their reader would not
+  return unchanged.
+- **Breaking.** `Sidereon.CCSDS.CDM` keeps every item and comment of CCSDS
+  508.0-B-1 tables 3-1 to 3-4: `ccsds_cdm_vers`, `comments`, `message_for`,
+  `relative_comments`, `relative_position_rtn_m`, `relative_velocity_rtn_m_s`,
+  the screening period, volume frame, shape, size (`screen_volume_m`) and entry
+  and exit times, and per object `metadata_comments`, `od_parameters`
+  (`CDM.OdParameters`), `additional_parameters` (`CDM.AdditionalParameters`),
+  `state_comments`, `covariance_comments` and covariance rows 7 to 9
+  (`drag_covariance_rtn`, `srp_covariance_rtn`, `thrust_covariance_rtn`). A
+  covariance row group of the wrong length is refused by name, where it was
+  padded with zeros or cut.
+- **Breaking.** `Sidereon.GNSS.Constellation.from_celestrak_omm_lenient/2` and
+  `from_celestrak_json_lenient/2` skip an entry without `NORAD_CAT_ID` with
+  `norad_id: nil` instead of aborting; `Catalog` gains `unread`, the GP JSON
+  array elements the OMM reader could not read, which were dropped.
+  `from_celestrak_json/2` refuses such an element with
+  `{:bad_celestrak_record, {:unreadable_record, index, reason}, nil}`.
+- **Breaking.** `Sidereon.SGP4.fit_tle/2` elements carry `mean_motion_dot`,
+  `mean_motion_double_dot` and `catalog_number` as `nil` when unstated, and a
+  fitted OMM the KVN writer refuses is returned as
+  `{:error, {:omm_kvn, reason}}` with the writer's typed reason.
+- **Breaking.** OMM, OPM, OEM and CDM reader and writer refusals, TLE codec
+  refusals and SGP4 element-set refusals are typed terms that carry every field
+  the core refusal holds, documented in the new `Sidereon.CCSDS.Error`, where
+  they were error text (OMM, CDM, TLE, SGP4) or a category atom with no fields
+  (OPM, OEM). A refusal with no fields is its atom; one with fields is a tuple
+  of its atom and its fields, such as `{:duplicate_field, field, first,
+  second}`, `{:unwritable_text, field, value, issue}` with `issue` one of the
+  text issues `:line_break`, `:surrounding_whitespace` and the others, and
+  `{:in_record, index, reason}` for a record of a GP JSON array. A field the
+  core names with a fixed identifier is a lowercased atom (`:mean_motion`),
+  and text taken from the input is a string. The skipped records of
+  `OMM.parse_xml_all/1`, `OMM.parse_json_array/1` and the constellation
+  catalog's `unread` list carry typed reasons, and a rejected TLE file record
+  is `{:invalid, reason}` with the SGP4 refusal. The writers refuse fields that
+  cannot form a message as `{:invalid_length, group, expected, got}` (a
+  covariance without 21 lower-triangle values, a CDM covariance row group of
+  the wrong length) or `{:invalid_field, field, :out_of_range | :non_finite}`;
+  OPM and OEM returned `:invalid_covariance` and CDM the error text.
+- **Breaking.** `Sidereon.GNSS.Broadcast` keeps every record of the
+  single-frequency messages whatever its health. A query selects among a
+  satellite's records as RTKLIB `seleph` and `selgeph` do, and a selected
+  record RTKLIB `satexclude` excludes yields no state. `records/1`,
+  `record_count/1`, `glonass_records/1` and `glonass_record_count/1` include
+  unhealthy records. One unreadable record no longer fails `parse/2`;
+  `skipped/1` and `departures/1` report what was left out or read through.
+- **Breaking.** `Sidereon.GNSS.Broadcast` states and
+  `Sidereon.GNSS.Observables.predict/5` on a broadcast source return the
+  satellite clock RTKLIB `satposs` returns, without the broadcast group delay
+  (GPS and QZSS TGD, Galileo BGD, BeiDou TGD1, CNAV TGD less ISC).
+  Single-frequency SPP, DGNSS and tight fusion subtract the delay, so a
+  single-frequency broadcast SPP solution is unchanged, and ionosphere-free PPP
+  on broadcast clocks no longer carries it.
+- **Breaking.** `Sidereon.GNSS.Broadcast.DetailedRecord.issue_of_data` is `nil`
+  for a GPS or QZSS CNAV-family record, which states none. `sv_accuracy_m` on
+  `Record` and `DetailedRecord` is `nil` where the record states no accuracy.
+  `DetailedRecord` gains `stated` (`Broadcast.StatedNavFields`), which
+  `encode_rinex_nav/1` writes back. `nav_message` gains
+  `:galileo_unclassified` and `:navic_lnav`.
+- **Breaking.** `Sidereon.GNSS.Broadcast.encode_nav/1` returns `{:ok, text}` or
+  `{:error, {:not_representable, line, reason}}`, and `encode_rinex_nav/1`
+  refuses the same record sets: a CNAV-family record together with an
+  unclassified Galileo record. `Sidereon.GNSS.QC.repair_nav_text/2` reports this
+  as `{:repaired_product_unwritable, {:not_representable, line, reason}}`.
+- **Breaking.** `Sidereon.GNSS.Broadcast.parse_rinex_nav_lenient/1` returns
+  `departures` and `other` besides `records` and `skipped`, and each
+  `SkippedNavBlock` has its `line`. `parse_rinex_glonass_lenient/1` keeps every
+  readable record and returns `invalid` and `departures`; `SkippedGlonass` has
+  its `line`.
+- **Breaking.** `Sidereon.GNSS.Broadcast.iono_corrections/1` also returns
+  `qzss`, `navic`, `galileo`, `galileo_disturbance_flags` and `beidou_bdgim`,
+  and takes each set from the header or the latest RINEX 4 ionosphere frame.
+- **Breaking.** `Sidereon.GNSS.Bias` readers are strict by default and take
+  `policy: :lenient` to read a Bias-SINEX file that departs from Bias-SINEX
+  1.00, or a CODE DCB title with an unknown time-system label.
+- **Breaking.** `Sidereon.GNSS.Bias.Record` replaces `is_phase` with `family`
+  (`:code`, `:phase`, `:mixed`) and `unit` (`:nanoseconds`, `:cycles`), and
+  gains `line`. `Bias.info/1`'s `time_scale` is `nil` for a product without a
+  usable time scale; `time_system_label` is new.
+- **Breaking.** `Sidereon.GNSS.Bias.code_osb/5` and `code_dsb/6` return `{:ok,
+  value_s, %{records: [index], overridden: [index]}}`, or a typed error naming
+  why no value is given (`:absent`, `{:unsupported_scale, product, query}`,
+  `{:ambiguous, records}` and others), where `{:error, :not_found}` stood for
+  all of them.
+- **Breaking.** `Sidereon.GNSS.RTCM.decode_messages/1` refuses a stream with any
+  byte outside a CRC-valid frame or any frame that does not decode, as
+  `{:error, text}`. `decode_stream/2` reads a noisy stream frame by frame; its
+  diagnostics add `crc_failures` and `departures`, and a skipped frame's
+  `reason` is an atom (`:truncated`, `:malformed`, `:departure`).
+- **Breaking.** RTCM station coordinates, antenna descriptors, the six
+  ephemerides and MSM messages carry `trailing_bits`, MSM messages carry
+  `signal_mask`, and GLONASS ephemerides carry `negative_zero`.
+  `decode_frame/1` returns `reserved`. `decode_stream/2` takes `policy:
+  :lenient` to read such input, which the new `encode_with_policy/2` writes
+  back byte for byte.
+- **Breaking.** `Sidereon.GNSS.SSR.from_rtcm/4` reads every readable frame under
+  the lenient RTCM policy and returns `{:ok, store, report}` with the stream
+  diagnostics, the length of an unfinished trailing frame and each message the
+  store refused. `from_rtcm!/4` uses `from_rtcm_strict/4`, which refuses
+  anything it cannot read and apply in full. SSR orbit and clock corrections
+  gain `transmitted_epoch_j2000_s` and `has_nav_message`.
+- **Breaking.** `Sidereon.GNSS.SBAS.parse_ems/1` and `parse_rtklib/1` refuse a
+  record whose message-type field differs from the type its message carries,
+  and return `{:error, reason}` for any refused line. `LogBlock` gains
+  `declared_message_type` and `pad_bits`.
+- **Breaking.** `Sidereon.Ephemeris.state/4` always returns `velocity_km_s`; for
+  a type 2 segment it is the derivative of the Chebyshev expansion, as CSPICE
+  `SPKE02` forms it. Legs in different NAIF inertial frames are rotated rather
+  than refused.
+- **Breaking.** `Sidereon.GNSS.Observables.predict/5`, `predict_ranges/3` and
+  the scenario simulator keep every bit of the flight time in the transmission
+  epoch, where it was rounded to whole microseconds, which moved the range by up
+  to 0.4 mm; `transmit_time` stays the reception epoch less the flight time
+  rounded to whole microseconds. On a broadcast source the satellite velocity is
+  the selected record's difference over 1 ms, as RTKLIB `ephpos` forms it, so
+  range rates and Doppler predictions change.
+- **Breaking.** SPP, the static solve, DGNSS and the tight GNSS/INS update place
+  each satellite at its transmission epoch from the pseudorange, `t_tx = (t_rx -
+  P / c) - dts`, as RTKLIB `satposs` does, where they solved the geometric light
+  time from the receiver's time tag, which leaves out the receiver clock
+  offset. `Sidereon.GNSS.Positioning.solve_with_doppler/5` reads each Doppler
+  satellite at the transmission epoch of its pseudorange, the state the
+  position solve used, and adds the rate of the first-order Sagnac term, as
+  RTKLIB `estvel` forms its rows from the `satposs` states; a Doppler satellite
+  without a pseudorange has no row. `Sidereon.GNSS.RTK.build_rinex_rtk_arc/4`,
+  `build_dual_frequency_rinex_rtk_arc/4` and the RINEX baseline and
+  reference-station solves built on them place each receiver's satellites from
+  that receiver's own pseudoranges, and skip a satellite for an epoch where the
+  source has no clock for it or its pseudorange is not a positive distance, as
+  RTKLIB places none there. On an SP3 source the solves add to the satellite
+  clock the relativistic term `-2 r·v / c²` RTKLIB `peph2pos` applies to a
+  precise clock, and a satellite within 1 ms of the end of the product's
+  coverage has no ephemeris. Solutions move by millimetres to decimetres, and on
+  SP3 sources by metres to tens of metres.
+- **Breaking.** PPP places each satellite at its transmission epoch from the
+  observation's pseudorange in the same way. An observation whose code is zero
+  or negative places no transmission epoch; it is left out of the solve and
+  listed in the new `unplaced_observations` of
+  `Sidereon.GNSS.PrecisePositioning.MultiEpochSolution` and `FixedSolution` as
+  `%{epoch_index, satellite_id, ambiguity_id, reason: :code_not_positive}`.
+- **Breaking.** A PPP float or fixed solve leaves out every epoch left without
+  observations and solves the rest. `epoch_clocks` of `MultiEpochSolution` and
+  `FixedSolution` holds one clock per solved epoch, each with its
+  `epoch_index`, and the new `solved_epoch_indices` lists the solved input
+  epochs.
+- **Breaking.** `MultiEpochSolution` gains `ssr_bias_exclusions`,
+  `residual_screen_removals`, `metadata.residual_screen` and
+  `metadata.solve_options`; `FixedSolution` gains `ssr_bias_exclusions`.
+  Residual rows gain `epoch_index` and `ambiguity_id`. `solve_ppp_fixed/4`
+  passes all of them back to the fixed solve, and refuses a residual row
+  without `ambiguity_id` with `{:invalid_float_solution,
+  :residual_ambiguity_id}`. Each SSR bias exclusion carries every field of the
+  core record: the observation, which bias was missing, why the recorded biases
+  do not hold at the transmission time, and the bias lookup's report row with
+  each signal's query result; a phase continuity token and a source error,
+  which the core does not let a caller build, carry a handle holding the core
+  value. The fixed solve takes the records back unchanged and starts from
+  them.
+- **Breaking.** A PPP solve fails with
+  `{:insufficient_observations_after_ssr_bias_exclusion, excluded, retained,
+  required}` when leaving out observations without a required SSR/HAS bias
+  leaves too few.
+- **Breaking.** Every entry point that reads UT1 through an ephemeris source or
+  a frame transform returns a UT1 outside the UT1 table as
+  `{:ut1_outside_coverage, :before_coverage | :after_coverage}`, where it
+  dropped the satellite or reported another error: SPP, DGNSS, static, FDE,
+  PPP, tight fusion updates, RTK RINEX arcs, static reference-station modes,
+  ARAIM, SBAS protection levels, scenarios (`{:ut1_outside_coverage,
+  satellite, side}`), `Sidereon.OrbitDetermination` fits, which also return
+  `:ut1_validity_mismatch` when a provider's UT1 policy differs from the fit's,
+  and `Sidereon.GNSS.ReducedOrbit` fits. `Sidereon.GNSS.DGNSS.corrections/5`
+  returns the refusal instead of raising.
+- **Breaking.** `Sidereon.SpaceWeather.Policy` defaults to the core default
+  policy: `require_geomagnetic: true`, so a blank daily Ap or three-hour Ap bin
+  is refused with `{:missing_data, ...}` instead of filled, and the new
+  `allow_not_observed: false`, so a row whose F10.7 flux qualifier is 3 (no
+  observation) is refused with `{:rejected_by_policy, :not_observed, ...}`.
+  Such rows read as the new class `:not_observed`; flux qualifiers 2 and 4 read
+  as `:interpolated`, where 2 and 3 read as `:observed`. `sample_at/2`,
+  `space_weather_at/2`, `ap_array_at/2`, decay estimation and propagation with
+  drag on a table refuse Ap values the file does not state, where they substituted the quiet Ap of 4
+  or the daily Ap without a report.
+- **Breaking.** SPP and the static solve re-select, re-mask and re-weight the
+  satellites at every iterate, as RTKLIB `estpos` does, and a converged solve
+  reports `metadata.status` `:selection_settled`. `metadata.status` also takes
+  `:outer_budget_exhausted` for a robust-reweighted solve that ran out of outer
+  iterations, with `converged: false`; `converged` describes how the whole
+  solve ended. `Sidereon.GNSS.Positioning` solves return
+  `{:error, {:selection_unsettled, passes}}` and
+  `Sidereon.GNSS.StaticPositioning.solve/3` returns
+  `{:error, {:selection_unsettled, passes}}` when the selection does not
+  settle; `Sidereon.GNSS.QC.fde/4` reports it the same way. SPP, static,
+  DGNSS, fusion and RTK solutions seeded by SPP move with it.
+- **Breaking.** `Sidereon.Elements` gains `omm_epoch_days`, the day count since
+  1949-12-31 an OMM's epoch states. `Sidereon.Format.OMM.to_elements/1` sets it
+  for an epoch of whole microseconds, and SGP4 then initialises the elements
+  as python-sgp4 2.22's `sgp4.omm.initialize` does, with `bstar` and
+  `mean_motion_double_dot` as the OMM states them; the OMM epoch takes
+  python-sgp4's split Julian date. An OMM with any other epoch is bridged as a
+  TLE, with `bstar` and `mean_motion_double_dot` quantized at the TLE writer's
+  rounding, below 1e-10 at exponent -9; a value no TLE field holds passes
+  through unquantized, and `Sidereon.Format.TLE.encode/1` refuses it.
+- **Breaking.** `Sidereon.Format.TLE.encode/1` spells B\* and the second
+  mean-motion derivative as python-sgp4's `export_tle` does: a zero B\* is
+  `" 00000+0"`, a zero second derivative `" 00000-0"`, and ties round to even
+  on the value's own digits.
+- **Breaking.** Pass prediction and look angles propagate SGP4 at the split
+  Julian date Skyfield 1.54 uses for the same UTC instant, so pass maximum
+  elevations and topocentric states move in their last bits.
+- UTC conversions from 1997-01-01 to 1997-06-30 and from 1998-01-01 to
+  1998-12-31 were one second off: the embedded leap-second table dated the
+  1997 and 1999 leap seconds to 1997-01-01 and 1998-01-01, where IERS dates
+  them 1997-07-01 and 1999-01-01.
+- `Sidereon.GNSS.RINEX.Clock` GPS seconds are the correctly rounded value of
+  the civil tag, where the sum of the split Julian date's parts missed it for
+  about one microsecond epoch in seven.
+- PPP auto-initialisation passes each GLONASS observation's FDMA channel to its
+  SPP seed.
+
+### Fixed
+
+- `klobuchar_delay/7` and `galileo_nequick_g_delay/7` returned a value the
+  model refused as `{:ok, {:error, :invalid_input}}`; they return
+  `{:error, :invalid_input}`.
+
+- A function that returns `{:ok, _}` or `{:error, _}` around a native call no
+  longer raises `KeyError` when the call cannot decode an argument: a value of
+  another type, a map without a key the call reads, an integer outside the
+  range the call accepts, or a handle to another kind of resource. It returns
+  `{:error, {:invalid_argument, native_call}}`, and an argument that must be a
+  number and is not one returns `{:error, {:arithmetic_error, native_call}}`;
+  both are `t:Sidereon.argument_error/0`. A failure a decoder reports by field
+  name is returned as before. Any other exception raised from Erlang inside
+  these functions is raised as itself, where it too became `KeyError`.
+- The accessors that raise `ArgumentError` when the native call fails, such as
+  `Sidereon.GNSS.SP3.satellite_ids/1`, `Sidereon.GNSS.Broadcast.records/1` and
+  `Sidereon.GNSS.RINEX.Observations.header/1`, raise it for these arguments too,
+  in place of `KeyError`.
+- `Sidereon.GNSS.Bias` loaders and `Sidereon.GNSS.ARAIM.araim/3` returned the
+  `ArgumentError` struct itself as the reason for such an argument; they return
+  `{:invalid_argument, native_call}`.
+- `Sidereon.GNSS.Ntrip.sourcetable/2` with `:transport_fun` lets an exception
+  the transport raises reach the caller as itself, as the stream already did.
+  An Erlang error the transport raised was returned as `{:error, term}`, and an
+  `ArgumentError` became `KeyError`.
+
 ## [2.1.1] - 2026-09-22
 
 ### Fixed

@@ -4,8 +4,11 @@ defmodule Sidereon.CCSDS.OPM do
 
   Supports both the **KVN** (Keyword=Value Notation) and **XML** formats per
   CCSDS 502.0-B. An OPM carries a single epoch's Cartesian state plus optional
-  Keplerian elements, spacecraft parameters, a 6x6 covariance, and a list of
-  maneuvers.
+  Keplerian elements, spacecraft parameters, a 6x6 covariance, a list of
+  maneuvers and `USER_DEFINED_*` parameters. Every item of CCSDS 502.0-B-3
+  tables 3-1 to 3-3 is kept, with the comments of each block: a KVN comment
+  belongs to the block of the keyword after it and is written at the start of
+  that block.
 
   `parse/1` auto-detects the format from the first non-whitespace character: a
   leading `<` is treated as XML, anything else as KVN. Date/time fields are
@@ -19,37 +22,58 @@ defmodule Sidereon.CCSDS.OPM do
       opm.keplerian.anomaly        # {:true_anomaly, deg} or {:mean_anomaly, deg}
 
       # KVN output (default)
-      kvn = Sidereon.CCSDS.OPM.encode(opm)
+      {:ok, kvn} = Sidereon.CCSDS.OPM.encode(opm)
 
       # XML output
-      xml = Sidereon.CCSDS.OPM.encode(opm, format: :xml)
+      {:ok, xml} = Sidereon.CCSDS.OPM.encode(opm, format: :xml)
 
       # Round-trip through XML
       {:ok, opm2} = Sidereon.CCSDS.OPM.parse(xml)
   """
 
+  alias Sidereon.CCSDS.Error
   alias Sidereon.CCSDS.OPM
   alias Sidereon.NIF
 
   @typedoc "A Cartesian triple `{x, y, z}`."
   @type vec3 :: {float(), float(), float()}
 
-  @typedoc "Failure reason from the OPM readers."
-  @type error :: :missing_field | :invalid_field | :malformed
+  @typedoc """
+  Failure reason from the OPM readers and writers, with every field the core
+  refusal carries (`t:Sidereon.CCSDS.Error.opm/0`): a missing or invalid field, a
+  malformed value, a keyword repeated with a different value, a unit that
+  contradicts the standard's table, a document holding several messages, a
+  keyword the standard does not define at its position, a KVN line that is not
+  blank, a comment or an assignment, text a writer cannot write so that its
+  reader returns it unchanged, or (writers only) fields that do not form a
+  message, such as a covariance without exactly 21 lower-triangle values.
+  """
+  @type error :: Error.opm()
 
   defmodule Metadata do
     @moduledoc """
-    OPM metadata block.
+    OPM metadata block. `ref_frame_epoch` is the `REF_FRAME_EPOCH` text, kept
+    as written.
     """
 
     @enforce_keys [:object_name, :object_id, :center_name, :ref_frame, :time_system]
-    defstruct [:object_name, :object_id, :center_name, :ref_frame, :time_system]
+    defstruct [
+      :object_name,
+      :object_id,
+      :center_name,
+      :ref_frame,
+      :time_system,
+      comments: [],
+      ref_frame_epoch: nil
+    ]
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             object_name: String.t(),
             object_id: String.t(),
             center_name: String.t(),
             ref_frame: String.t(),
+            ref_frame_epoch: String.t() | nil,
             time_system: String.t()
           }
   end
@@ -63,9 +87,10 @@ defmodule Sidereon.CCSDS.OPM do
     """
 
     @enforce_keys [:epoch, :position_km, :velocity_km_s]
-    defstruct [:epoch, :position_km, :velocity_km_s]
+    defstruct [:epoch, :position_km, :velocity_km_s, comments: []]
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             epoch: String.t(),
             position_km: OPM.vec3(),
             velocity_km_s: OPM.vec3()
@@ -96,12 +121,14 @@ defmodule Sidereon.CCSDS.OPM do
       :ra_of_asc_node_deg,
       :arg_of_pericenter_deg,
       :anomaly,
-      :gm_km3_s2
+      :gm_km3_s2,
+      comments: []
     ]
 
     @type anomaly :: {:true_anomaly, float()} | {:mean_anomaly, float()}
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             semi_major_axis_km: float(),
             eccentricity: float(),
             inclination_deg: float(),
@@ -117,9 +144,17 @@ defmodule Sidereon.CCSDS.OPM do
     Optional OPM spacecraft parameters. Every field is optional.
     """
 
-    defstruct [:mass_kg, :solar_rad_area_m2, :solar_rad_coeff, :drag_area_m2, :drag_coeff]
+    defstruct [
+      :mass_kg,
+      :solar_rad_area_m2,
+      :solar_rad_coeff,
+      :drag_area_m2,
+      :drag_coeff,
+      comments: []
+    ]
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             mass_kg: float() | nil,
             solar_rad_area_m2: float() | nil,
             solar_rad_coeff: float() | nil,
@@ -130,17 +165,52 @@ defmodule Sidereon.CCSDS.OPM do
 
   defmodule Covariance do
     @moduledoc """
-    Optional OPM 6x6 covariance. `matrix` is a row-major list of six six-element
-    rows.
+    Optional OPM 6x6 covariance, held exactly as read.
+
+    `lower_triangle` holds the 21 lower-triangle values in keyword order `CX_X`,
+    `CY_X`, `CY_Y`, `CZ_X`, `CZ_Y`, `CZ_Z`, `CX_DOT_X` ... `CZ_DOT_Z_DOT`. No
+    symmetry or definiteness check is applied, so a matrix that falls short of
+    positive semidefinite only through the digits it is printed to is read.
+    `to_matrix/1` expands it to six symmetric rows.
     """
 
-    @enforce_keys [:matrix]
-    defstruct [:cov_ref_frame, :matrix]
+    @enforce_keys [:lower_triangle]
+    defstruct [:cov_ref_frame, :lower_triangle, comments: []]
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             cov_ref_frame: String.t() | nil,
-            matrix: [[float()]]
+            lower_triangle: [float()]
           }
+
+    @doc """
+    The symmetric 6x6 matrix, as six six-element rows, that the 21
+    lower-triangle values state. The values are placed as read; nothing is
+    validated.
+    """
+    @spec to_matrix(t()) :: [[float()]]
+    def to_matrix(%__MODULE__{lower_triangle: values}) when length(values) == 21 do
+      tuple = List.to_tuple(values)
+
+      for row <- 0..5 do
+        for col <- 0..5 do
+          {i, j} = if row >= col, do: {row, col}, else: {col, row}
+          elem(tuple, div(i * (i + 1), 2) + j)
+        end
+      end
+    end
+  end
+
+  defmodule UserDefined do
+    @moduledoc """
+    One `USER_DEFINED_*` parameter: the text after `USER_DEFINED_` and its
+    value, verbatim.
+    """
+
+    @enforce_keys [:parameter, :value]
+    defstruct [:parameter, :value]
+
+    @type t :: %__MODULE__{parameter: String.t(), value: String.t()}
   end
 
   defmodule Maneuver do
@@ -150,9 +220,10 @@ defmodule Sidereon.CCSDS.OPM do
     """
 
     @enforce_keys [:epoch_ignition, :duration_s, :delta_mass_kg, :ref_frame, :dv_km_s]
-    defstruct [:epoch_ignition, :duration_s, :delta_mass_kg, :ref_frame, :dv_km_s]
+    defstruct [:epoch_ignition, :duration_s, :delta_mass_kg, :ref_frame, :dv_km_s, comments: []]
 
     @type t :: %__MODULE__{
+            comments: [String.t()],
             epoch_ignition: String.t(),
             duration_s: float(),
             delta_mass_kg: float(),
@@ -163,25 +234,39 @@ defmodule Sidereon.CCSDS.OPM do
 
   @enforce_keys [:metadata, :state]
   defstruct ccsds_opm_vers: "2.0",
+            comments: [],
+            classification: nil,
             creation_date: nil,
             originator: nil,
+            message_id: nil,
             metadata: nil,
             state: nil,
             keplerian: nil,
             spacecraft: nil,
             covariance: nil,
-            maneuvers: []
+            maneuvers: [],
+            user_defined: [],
+            user_defined_comments: []
 
+  @typedoc """
+  A CCSDS OPM. `comments` are the header comments; `classification` and
+  `message_id` are the optional header items of table 3-1.
+  """
   @type t :: %__MODULE__{
           ccsds_opm_vers: String.t(),
+          comments: [String.t()],
+          classification: String.t() | nil,
           creation_date: String.t() | nil,
           originator: String.t() | nil,
+          message_id: String.t() | nil,
           metadata: Metadata.t(),
           state: State.t(),
           keplerian: Keplerian.t() | nil,
           spacecraft: Spacecraft.t() | nil,
           covariance: Covariance.t() | nil,
-          maneuvers: [Maneuver.t()]
+          maneuvers: [Maneuver.t()],
+          user_defined: [UserDefined.t()],
+          user_defined_comments: [String.t()]
         }
 
   @doc """
@@ -220,10 +305,13 @@ defmodule Sidereon.CCSDS.OPM do
   @doc """
   Encode an OPM.
 
+  Returns `{:ok, text}`, or `{:error, reason}` for a message the writer cannot
+  write so that its reader returns it unchanged (see `t:error/0`).
+
   ## Options
     * `:format` - `:kvn` (default) or `:xml`
   """
-  @spec encode(t(), keyword()) :: String.t()
+  @spec encode(t(), keyword()) :: {:ok, String.t()} | {:error, error()}
   def encode(opm, opts \\ [])
 
   def encode(%__MODULE__{} = opm, opts) do
@@ -235,15 +323,17 @@ defmodule Sidereon.CCSDS.OPM do
   end
 
   @doc """
-  Encode an OPM to KVN text explicitly.
+  Encode an OPM to KVN text explicitly. Returns `{:ok, text}` or
+  `{:error, reason}`.
   """
-  @spec encode_kvn(t()) :: String.t()
+  @spec encode_kvn(t()) :: {:ok, String.t()} | {:error, error()}
   def encode_kvn(%__MODULE__{} = opm), do: NIF.opm_encode_kvn(to_fields(opm))
 
   @doc """
-  Encode an OPM to XML text explicitly.
+  Encode an OPM to XML text explicitly. Returns `{:ok, text}` or
+  `{:error, reason}`.
   """
-  @spec encode_xml(t()) :: String.t()
+  @spec encode_xml(t()) :: {:ok, String.t()} | {:error, error()}
   def encode_xml(%__MODULE__{} = opm), do: NIF.opm_encode_xml(to_fields(opm))
 
   # --- NIF field marshaling ---
@@ -252,37 +342,37 @@ defmodule Sidereon.CCSDS.OPM do
     {:ok,
      %__MODULE__{
        ccsds_opm_vers: fields.ccsds_opm_vers,
+       comments: fields.comments,
+       classification: fields.classification,
        creation_date: fields.creation_date,
        originator: fields.originator,
+       message_id: fields.message_id,
        metadata: metadata_from_fields(fields.metadata),
        state: state_from_fields(fields.state),
        keplerian: keplerian_from_fields(fields.keplerian),
        spacecraft: spacecraft_from_fields(fields.spacecraft),
        covariance: covariance_from_fields(fields.covariance),
-       maneuvers: Enum.map(fields.maneuvers, &maneuver_from_fields/1)
+       maneuvers: Enum.map(fields.maneuvers, &maneuver_from_fields/1),
+       user_defined: Enum.map(fields.user_defined, &struct(UserDefined, &1)),
+       user_defined_comments: fields.user_defined_comments
      }}
   end
 
   defp from_fields({:error, reason}), do: {:error, reason}
 
   defp metadata_from_fields(m) do
-    %Metadata{
-      object_name: m.object_name,
-      object_id: m.object_id,
-      center_name: m.center_name,
-      ref_frame: m.ref_frame,
-      time_system: m.time_system
-    }
+    struct(Metadata, m)
   end
 
   defp state_from_fields(s) do
-    %State{epoch: s.epoch, position_km: s.position_km, velocity_km_s: s.velocity_km_s}
+    struct(State, s)
   end
 
   defp keplerian_from_fields(nil), do: nil
 
   defp keplerian_from_fields(k) do
     %Keplerian{
+      comments: k.comments,
       semi_major_axis_km: k.semi_major_axis_km,
       eccentricity: k.eccentricity,
       inclination_deg: k.inclination_deg,
@@ -299,58 +389,36 @@ defmodule Sidereon.CCSDS.OPM do
   defp spacecraft_from_fields(nil), do: nil
 
   defp spacecraft_from_fields(s) do
-    %Spacecraft{
-      mass_kg: s.mass_kg,
-      solar_rad_area_m2: s.solar_rad_area_m2,
-      solar_rad_coeff: s.solar_rad_coeff,
-      drag_area_m2: s.drag_area_m2,
-      drag_coeff: s.drag_coeff
-    }
+    struct(Spacecraft, s)
   end
 
   defp covariance_from_fields(nil), do: nil
+  defp covariance_from_fields(c), do: struct(Covariance, c)
 
-  defp covariance_from_fields(c) do
-    %Covariance{cov_ref_frame: c.cov_ref_frame, matrix: c.matrix}
-  end
-
-  defp maneuver_from_fields(m) do
-    %Maneuver{
-      epoch_ignition: m.epoch_ignition,
-      duration_s: m.duration_s,
-      delta_mass_kg: m.delta_mass_kg,
-      ref_frame: m.ref_frame,
-      dv_km_s: m.dv_km_s
-    }
-  end
+  defp maneuver_from_fields(m), do: struct(Maneuver, m)
 
   defp to_fields(%__MODULE__{} = opm) do
     %{
       ccsds_opm_vers: opm.ccsds_opm_vers,
+      comments: opm.comments,
+      classification: opm.classification,
       creation_date: opm.creation_date,
       originator: opm.originator,
+      message_id: opm.message_id,
       metadata: metadata_to_fields(opm.metadata),
       state: state_to_fields(opm.state),
       keplerian: keplerian_to_fields(opm.keplerian),
       spacecraft: spacecraft_to_fields(opm.spacecraft),
       covariance: covariance_to_fields(opm.covariance),
-      maneuvers: Enum.map(opm.maneuvers, &maneuver_to_fields/1)
+      maneuvers: Enum.map(opm.maneuvers, &maneuver_to_fields/1),
+      user_defined: Enum.map(opm.user_defined, &Map.from_struct/1),
+      user_defined_comments: opm.user_defined_comments
     }
   end
 
-  defp metadata_to_fields(%Metadata{} = m) do
-    %{
-      object_name: m.object_name,
-      object_id: m.object_id,
-      center_name: m.center_name,
-      ref_frame: m.ref_frame,
-      time_system: m.time_system
-    }
-  end
+  defp metadata_to_fields(%Metadata{} = m), do: Map.from_struct(m)
 
-  defp state_to_fields(%State{} = s) do
-    %{epoch: s.epoch, position_km: s.position_km, velocity_km_s: s.velocity_km_s}
-  end
+  defp state_to_fields(%State{} = s), do: Map.from_struct(s)
 
   defp keplerian_to_fields(nil), do: nil
 
@@ -358,6 +426,7 @@ defmodule Sidereon.CCSDS.OPM do
     {kind, deg} = anomaly_to_fields(k.anomaly)
 
     %{
+      comments: k.comments,
       semi_major_axis_km: k.semi_major_axis_km,
       eccentricity: k.eccentricity,
       inclination_deg: k.inclination_deg,
@@ -374,29 +443,10 @@ defmodule Sidereon.CCSDS.OPM do
 
   defp spacecraft_to_fields(nil), do: nil
 
-  defp spacecraft_to_fields(%Spacecraft{} = s) do
-    %{
-      mass_kg: s.mass_kg,
-      solar_rad_area_m2: s.solar_rad_area_m2,
-      solar_rad_coeff: s.solar_rad_coeff,
-      drag_area_m2: s.drag_area_m2,
-      drag_coeff: s.drag_coeff
-    }
-  end
+  defp spacecraft_to_fields(%Spacecraft{} = s), do: Map.from_struct(s)
 
   defp covariance_to_fields(nil), do: nil
+  defp covariance_to_fields(%Covariance{} = c), do: Map.from_struct(c)
 
-  defp covariance_to_fields(%Covariance{} = c) do
-    %{cov_ref_frame: c.cov_ref_frame, matrix: c.matrix}
-  end
-
-  defp maneuver_to_fields(%Maneuver{} = m) do
-    %{
-      epoch_ignition: m.epoch_ignition,
-      duration_s: m.duration_s,
-      delta_mass_kg: m.delta_mass_kg,
-      ref_frame: m.ref_frame,
-      dv_km_s: m.dv_km_s
-    }
-  end
+  defp maneuver_to_fields(%Maneuver{} = m), do: Map.from_struct(m)
 end
