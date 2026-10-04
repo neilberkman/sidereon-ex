@@ -378,7 +378,23 @@ defmodule Sidereon.GNSS.Distribution do
     end
   end
 
-  @doc "Acquire an exact product from only its ordered, caller-selected sources."
+  @typedoc "A redacted diagnostic emitted for a raised custom HTTP client."
+  @type http_client_exception_diagnostic :: %{
+          exception_class: module(),
+          client_callsite: {module(), atom(), non_neg_integer()},
+          stack_frames: [{module(), atom(), non_neg_integer()}]
+        }
+
+  @doc """
+  Acquire an exact product from only its ordered, caller-selected sources.
+
+  Raised custom HTTP client failures remain terminal and return the same typed
+  failure. To opt in to safe diagnostics, pass
+  `:http_client_exception_diagnostics`, a unary callback receiving a map with
+  `:exception_class`, `:client_callsite`, and up to eight MFA-only
+  `:stack_frames`. Messages, arguments, request URLs and bodies are not
+  included. Callback failures are ignored.
+  """
   @spec acquire(Request.t(), keyword()) :: {:ok, Result.t()} | {:error, error_reason() | term()}
   def acquire(%Request{} = request, opts \\ []) do
     with :ok <- validate_request_identity(request.identity),
@@ -732,23 +748,32 @@ defmodule Sidereon.GNSS.Distribution do
   defp request_http(url, headers, opts) do
     request_opts =
       opts
-      |> Keyword.drop([:earthdata_auth, :http_client, :sha256])
+      |> Keyword.drop([:earthdata_auth, :http_client, :http_client_exception_diagnostics, :sha256])
       |> Keyword.put(:headers, headers)
 
     case Keyword.fetch(opts, :http_client) do
-      {:ok, fun} when is_function(fun, 2) -> request_custom_http(fun, url, request_opts)
-      {:ok, nil} -> request_req_http(url, headers, opts)
-      :error -> request_req_http(url, headers, opts)
-      {:ok, _invalid} -> http_client_failure(:invalid_option, url)
+      {:ok, fun} when is_function(fun, 2) ->
+        request_custom_http(fun, url, request_opts, Keyword.get(opts, :http_client_exception_diagnostics))
+
+      {:ok, nil} ->
+        request_req_http(url, headers, opts)
+
+      :error ->
+        request_req_http(url, headers, opts)
+
+      {:ok, _invalid} ->
+        http_client_failure(:invalid_option, url)
     end
   end
 
-  defp request_custom_http(fun, url, request_opts) do
+  defp request_custom_http(fun, url, request_opts, diagnostics_callback) do
     result =
       try do
         {:ok, fun.(url, request_opts)}
       rescue
-        _exception -> {:error, :raised}
+        exception ->
+          report_http_client_exception(diagnostics_callback, exception, __STACKTRACE__, fun)
+          {:error, :raised}
       catch
         :throw, _reason -> {:error, :thrown}
         :exit, _reason -> {:error, :exited}
@@ -759,6 +784,57 @@ defmodule Sidereon.GNSS.Distribution do
       {:error, kind} -> http_client_failure(kind, url)
     end
   end
+
+  defp report_http_client_exception(callback, exception, stacktrace, client_fun) when is_function(callback, 1) do
+    diagnostic = %{
+      exception_class: exception.__struct__,
+      client_callsite: safe_http_client_callsite(client_fun),
+      stack_frames: safe_http_client_stack_frames(stacktrace)
+    }
+
+    callback.(diagnostic)
+    :ok
+  rescue
+    _diagnostic_or_callback_exception -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp report_http_client_exception(_callback, _exception, _stacktrace, _client_fun), do: :ok
+
+  defp safe_http_client_callsite(fun) do
+    module = fun |> Function.info(:module) |> elem(1)
+    name = fun |> Function.info(:name) |> elem(1)
+    arity = fun |> Function.info(:arity) |> elem(1)
+    {module, name, arity}
+  end
+
+  defp safe_http_client_stack_frames(stacktrace) do
+    stacktrace
+    |> Enum.reject(&distribution_stack_frame?/1)
+    |> Enum.reduce_while([], fn frame, acc ->
+      case safe_http_client_stack_frame(frame) do
+        nil ->
+          {:cont, acc}
+
+        safe_frame ->
+          next = [safe_frame | acc]
+          if length(next) >= 8, do: {:halt, next}, else: {:cont, next}
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp distribution_stack_frame?({module, _function, _arity, _location}), do: module == __MODULE__
+  defp distribution_stack_frame?(_frame), do: false
+
+  defp safe_http_client_stack_frame({module, function, arity, _location})
+       when is_atom(module) and is_atom(function) and is_integer(arity) and arity >= 0, do: {module, function, arity}
+
+  defp safe_http_client_stack_frame({module, function, args, _location})
+       when is_atom(module) and is_atom(function) and is_list(args), do: {module, function, length(args)}
+
+  defp safe_http_client_stack_frame(_frame), do: nil
 
   defp normalize_custom_http_response({:ok, %{status: status, body: body} = response}, url) when is_integer(status),
     do: custom_http_success(status, Map.get(response, :headers, []), body, url)

@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Opt-in `:http_client_exception_diagnostics` callbacks identify raised custom
+  HTTP-client exceptions and call sites using redacted metadata. The terminal
+  acquisition failure result stays unchanged; callback failures are ignored.
 - The default NTRIP user-agent product now follows the core package version.
 
 ## [3.0.0] - 2026-10-04
@@ -131,6 +134,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `:iers_routine` reproduces the IERS `DEHANTTIDEINEL` routine.
 
 ### Changed
+
+- **Breaking.** `Sidereon.GNSS.SP3.to_sp3_string/2` now returns
+  `{:ok, binary}` or `{:error, writer_error()}`; `to_iodata/2` returns
+  `{:ok, iodata}` or the same typed refusal. Callers must unwrap success
+  before passing the result to functions such as `:zlib.gzip/1`; a refusal
+  retains its named tag and fields instead of being an opaque writer failure.
+  See the [SP3 writer migration example](README.md#sp3-writer-return-values-in-30).
 
 - **Breaking.** `Sidereon.GNSS.SP3.merge_continuity_verdict/3` takes the report
   and the window alone; it took the merged product as its second argument and

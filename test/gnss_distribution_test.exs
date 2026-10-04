@@ -6,6 +6,7 @@ defmodule Sidereon.GNSS.DistributionTest do
   alias Sidereon.GNSS.Distribution.EarthdataAuth
   alias Sidereon.GNSS.Distribution.ProductIdentity
   alias Sidereon.GNSS.ExactCache
+  alias Sidereon.GNSS.SP3
   alias Sidereon.TestSupport.ExactSp3Fixture
 
   @date ~D[2026-07-12]
@@ -1212,6 +1213,117 @@ defmodule Sidereon.GNSS.DistributionTest do
 
       assert String.contains?(url, "www.aiub.unibe.ch")
     end
+  end
+
+  test "raised custom HTTP client exposes opt-in redacted diagnostics without changing acquisition failure", %{
+    root: root
+  } do
+    body = sp3_body(@date)
+    assert {:ok, parsed} = SP3.parse(body)
+    writer_result = SP3.to_sp3_string(parsed)
+    assert {:ok, _text} = writer_result
+    test_pid = self()
+    request = request!([Distribution.direct(), Distribution.in_memory(body, compression: :none)])
+
+    client = fn _url, client_opts ->
+      send(test_pid, {:custom_http_client_option_keys, Keyword.keys(client_opts)})
+
+      try do
+        :zlib.gzip(writer_result)
+      rescue
+        exception ->
+          send(test_pid, {:client_exception_message, Exception.message(exception)})
+          reraise exception, __STACKTRACE__
+      end
+    end
+
+    for callback_failure <- [:raise, :throw, :exit] do
+      diagnostics = fn event ->
+        send(test_pid, {:http_client_exception_diagnostic, callback_failure, event})
+
+        case callback_failure do
+          :raise -> raise "PRIVATE_DIAGNOSTIC_CALLBACK_EXCEPTION"
+          :throw -> throw("PRIVATE_DIAGNOSTIC_CALLBACK_THROW")
+          :exit -> exit("PRIVATE_DIAGNOSTIC_CALLBACK_EXIT")
+        end
+      end
+
+      assert {:error, {:http_client_failure, :raised, url}} =
+               Data.acquire(request,
+                 cache_dir: Path.join(root, "raised-client-diagnostic-#{callback_failure}"),
+                 http_client: client,
+                 http_client_exception_diagnostics: diagnostics,
+                 retries: 3
+               )
+
+      assert String.contains?(url, "www.aiub.unibe.ch")
+      assert_receive {:custom_http_client_option_keys, client_option_keys}
+      refute :http_client_exception_diagnostics in client_option_keys
+      assert_receive {:client_exception_message, exception_message}
+      assert_receive {:http_client_exception_diagnostic, ^callback_failure, event}
+      assert Map.keys(event) |> Enum.sort() == [:client_callsite, :exception_class, :stack_frames]
+      assert event.exception_class == ArgumentError
+      assert {__MODULE__, client_name, 2} = event.client_callsite
+      assert is_atom(client_name)
+      assert length(event.stack_frames) <= 8
+      assert {:zlib, :gzip, 1} in event.stack_frames
+      assert Enum.any?(event.stack_frames, fn {module, _function, _arity} -> module == __MODULE__ end)
+
+      assert Enum.all?(event.stack_frames, fn {module, function, arity} ->
+               is_atom(module) and is_atom(function) and is_integer(arity)
+             end)
+
+      rendered = inspect(event)
+      refute rendered =~ "PRIVATE_DIAGNOSTIC_CALLBACK"
+      refute rendered =~ "Authorization"
+      refute rendered =~ body
+      refute rendered =~ url
+      refute rendered =~ exception_message
+    end
+
+    refute_receive {:http_client_exception_diagnostic, _failure, _event}
+  end
+
+  test "raised custom HTTP diagnostics redact request credentials, options, and exception text", %{root: root} do
+    token = "PRIVATE_DIAGNOSTIC_BEARER_TOKEN"
+    body_secret = "PRIVATE_DIAGNOSTIC_BODY"
+    raw_secret = "PRIVATE_DIAGNOSTIC_RAW_OPTION"
+    exception_message = "failure #{token} #{body_secret} #{raw_secret}"
+    parent = self()
+    request = request!([Distribution.nasa_cddis(), Distribution.in_memory(sp3_body(@date), compression: :none)])
+
+    client = fn url, opts ->
+      send(parent, {:diagnostic_request, url, Keyword.fetch!(opts, :headers), Keyword.fetch!(opts, :private_probe)})
+      raise exception_message
+    end
+
+    diagnostics = fn event -> send(parent, {:safe_diagnostic, event}) end
+
+    assert {:error, {:http_client_failure, :raised, safe_url}} =
+             Data.acquire(request,
+               cache_dir: Path.join(root, "raised-client-secret-redaction"),
+               earthdata_auth: EarthdataAuth.bearer(token),
+               private_probe: raw_secret,
+               http_client: client,
+               http_client_exception_diagnostics: diagnostics,
+               retries: 3
+             )
+
+    assert safe_url =~ "cddis.nasa.gov"
+    refute safe_url =~ token
+    refute safe_url =~ "?"
+    assert_received {:diagnostic_request, request_url, headers, ^raw_secret}
+    assert request_url =~ "cddis.nasa.gov"
+    assert header(headers, "authorization") == "Bearer " <> token
+    assert_received {:safe_diagnostic, event}
+    assert Map.keys(event) |> Enum.sort() == [:client_callsite, :exception_class, :stack_frames]
+    rendered = inspect(event)
+    refute rendered =~ token
+    refute rendered =~ body_secret
+    refute rendered =~ raw_secret
+    refute rendered =~ exception_message
+    refute rendered =~ request_url
+    refute rendered =~ inspect(headers)
   end
 
   test "an invalid custom HTTP client option is typed and terminal", %{root: root} do
