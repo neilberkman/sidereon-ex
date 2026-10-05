@@ -80,9 +80,9 @@ for notice in \
   LICENSES/ISC-libloading.txt \
   LICENSES/SciPy-BSD-3-Clause.txt \
   THIRD-PARTY-NOTICES.md \
-  third_party_source/sidereon-core-3.0.1/tides/mod.rs \
-  third_party_source/sidereon-core-3.0.1/tides/ocean.rs \
-  third_party_source/sidereon-core-3.0.1/tides/pole.rs; do
+  third_party_source/sidereon-core-3.0.2/tides/mod.rs \
+  third_party_source/sidereon-core-3.0.2/tides/ocean.rs \
+  third_party_source/sidereon-core-3.0.2/tides/pole.rs; do
   if [[ ! -s "$package_root/$notice" ]]; then
     echo "packaged source is missing required license material: $notice" >&2
     exit 1
@@ -118,13 +118,13 @@ check_sha256 a441d8ffe8151ddd5f1e0a9f82ce88ed54bd2f55e83fee6a519e50b006a8cba2 \
 check_sha256 221e59f5e910fd7f94e44f0dac77436a11338c285c6346232e4a850a50da0e94 \
   "$package_root/LICENSES/SciPy-BSD-3-Clause.txt"
 
-# Exact public sidereon-core v3.0.1 sources.
+# Exact public sidereon-core v3.0.2 sources.
 check_sha256 0703d1b3470f59528880ae34990f064897d34876d5ff30b4fc860afdcadf7433 \
-  "$package_root/third_party_source/sidereon-core-3.0.1/tides/mod.rs"
+  "$package_root/third_party_source/sidereon-core-3.0.2/tides/mod.rs"
 check_sha256 25946677944425671a92717860ac2d70f255de5403eeb1fbf98b361716821d5c \
-  "$package_root/third_party_source/sidereon-core-3.0.1/tides/ocean.rs"
+  "$package_root/third_party_source/sidereon-core-3.0.2/tides/ocean.rs"
 check_sha256 b4cc4c16bdd8ce1d8f04073602ab47dfb85a002b946ab192e8d4d2d600f0a1f8 \
-  "$package_root/third_party_source/sidereon-core-3.0.1/tides/pole.rs"
+  "$package_root/third_party_source/sidereon-core-3.0.2/tides/pole.rs"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update

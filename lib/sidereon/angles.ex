@@ -13,6 +13,9 @@ defmodule Sidereon.Angles do
   All positions are expected in km in the GCRS (J2000/ICRF) frame.
   All returned angles are in degrees.
 
+  Direct helpers return `{:error, :invalid_input}` when their geometry is
+  degenerate or outside the supported domain.
+
   ## Example
 
       {:ok, eph} = Sidereon.Ephemeris.load("de421.bsp")
@@ -35,13 +38,14 @@ defmodule Sidereon.Angles do
     - `satellite_gcrs_position` - `{x, y, z}` satellite position in GCRS (km)
     - `sun_position_from_earth` - `{x, y, z}` Sun position relative to Earth (km)
 
-  Returns angle in degrees (0 = Sun is directly below satellite toward Earth,
-  180 = Sun is directly above/away from Earth).
+  Returns the angle in degrees (0 = Sun is directly below satellite toward
+  Earth, 180 = Sun is directly above/away from Earth), or
+  `{:error, :invalid_input}` for degenerate vectors.
   """
   @spec sun_angle(
           {number(), number(), number()},
           {number(), number(), number()}
-        ) :: float()
+        ) :: float() | {:error, :invalid_input}
   def sun_angle(satellite_gcrs_position, sun_position_from_earth) do
     Sidereon.NIF.angles_sun_angle(
       floats(satellite_gcrs_position),
@@ -57,12 +61,13 @@ defmodule Sidereon.Angles do
     - `satellite_gcrs_position` - `{x, y, z}` satellite position in GCRS (km)
     - `moon_position_from_earth` - `{x, y, z}` Moon position relative to Earth (km)
 
-  Returns angle in degrees.
+  Returns the angle in degrees, or `{:error, :invalid_input}` for degenerate
+  vectors.
   """
   @spec moon_angle(
           {number(), number(), number()},
           {number(), number(), number()}
-        ) :: float()
+        ) :: float() | {:error, :invalid_input}
   def moon_angle(satellite_gcrs_position, moon_position_from_earth) do
     Sidereon.NIF.angles_moon_angle(
       floats(satellite_gcrs_position),
@@ -82,12 +87,13 @@ defmodule Sidereon.Angles do
     - `satellite_gcrs_position` - `{x, y, z}` satellite position in GCRS (km)
     - `sun_position_from_earth` - `{x, y, z}` Sun position relative to Earth (km)
 
-  Returns elevation in degrees (-90 to +90).
+  Returns elevation in degrees (-90 to +90), or `{:error, :invalid_input}` for
+  degenerate vectors.
   """
   @spec sun_elevation(
           {number(), number(), number()},
           {number(), number(), number()}
-        ) :: float()
+        ) :: float() | {:error, :invalid_input}
   def sun_elevation(satellite_gcrs_position, sun_position_from_earth) do
     Sidereon.NIF.angles_sun_elevation(
       floats(satellite_gcrs_position),
@@ -111,13 +117,14 @@ defmodule Sidereon.Angles do
     - `sun_position_from_earth` - `{x, y, z}` Sun position relative to Earth (km)
     - `observer_position` - `{x, y, z}` observer position in GCRS (km)
 
-  Returns phase angle in degrees (0 to 180).
+  Returns the phase angle in degrees (0 to 180), or
+  `{:error, :invalid_input}` for degenerate vectors.
   """
   @spec phase_angle(
           {number(), number(), number()},
           {number(), number(), number()},
           {number(), number(), number()}
-        ) :: float()
+        ) :: float() | {:error, :invalid_input}
   def phase_angle(satellite_gcrs_position, sun_position_from_earth, observer_position) do
     Sidereon.NIF.angles_phase_angle(
       floats(satellite_gcrs_position),
@@ -139,43 +146,49 @@ defmodule Sidereon.Angles do
 
     - `satellite_gcrs_position` - `{x, y, z}` satellite position in GCRS (km)
 
-  Returns angular radius in degrees.
+  Returns the angular radius in degrees, or `{:error, :invalid_input}` when the
+  satellite position is inside the Earth or otherwise unsupported.
   """
-  @spec earth_angular_radius({number(), number(), number()}) :: float()
+  @spec earth_angular_radius({number(), number(), number()}) ::
+          float() | {:error, :invalid_input}
   def earth_angular_radius(satellite_gcrs_position) do
     Sidereon.NIF.angles_earth_angular_radius(floats(satellite_gcrs_position))
   end
 
-  @doc "Angular separation between two non-zero vectors, in degrees."
-  @spec angular_separation({number(), number(), number()}, {number(), number(), number()}) :: float()
+  @doc "Angular separation between two non-zero vectors, in degrees, or an invalid-input error."
+  @spec angular_separation({number(), number(), number()}, {number(), number(), number()}) ::
+          float() | {:error, :invalid_input}
   def angular_separation(a, b) do
     Sidereon.NIF.angles_angular_separation(floats(a), floats(b))
   end
 
-  @doc "Angular separation between two `{longitude_deg, latitude_deg}` pairs."
-  @spec angular_separation_coords({number(), number()}, {number(), number()}) :: float()
+  @doc "Angular separation between two `{longitude_deg, latitude_deg}` pairs, or an invalid-input error."
+  @spec angular_separation_coords({number(), number()}, {number(), number()}) ::
+          float() | {:error, :invalid_input}
   def angular_separation_coords({lon_a, lat_a}, {lon_b, lat_b}) do
     Sidereon.NIF.angles_angular_separation_coords({lon_a / 1.0, lat_a / 1.0}, {lon_b / 1.0, lat_b / 1.0})
   end
 
-  @doc "Position angle from the first `{longitude_deg, latitude_deg}` coordinate to the second, in degrees."
-  @spec position_angle({number(), number()}, {number(), number()}) :: float()
+  @doc "Position angle from the first `{longitude_deg, latitude_deg}` coordinate to the second, in degrees, or an invalid-input error."
+  @spec position_angle({number(), number()}, {number(), number()}) ::
+          float() | {:error, :invalid_input}
   def position_angle({lon_a, lat_a}, {lon_b, lat_b}) do
     Sidereon.NIF.angles_position_angle({lon_a / 1.0, lat_a / 1.0}, {lon_b / 1.0, lat_b / 1.0})
   end
 
-  @doc "Solar beta angle for an orbit normal and Sun vector, in degrees."
-  @spec beta_angle({number(), number(), number()}, {number(), number(), number()}) :: float()
+  @doc "Solar beta angle for an orbit normal and Sun vector, in degrees, or an invalid-input error."
+  @spec beta_angle({number(), number(), number()}, {number(), number(), number()}) ::
+          float() | {:error, :invalid_input}
   def beta_angle(orbit_normal, sun_position) do
     Sidereon.NIF.angles_beta_angle(floats(orbit_normal), floats(sun_position))
   end
 
-  @doc "Solar beta angle computed from position, velocity, and Sun vector, in degrees."
+  @doc "Solar beta angle computed from position, velocity, and Sun vector, in degrees, or an invalid-input error."
   @spec beta_angle_from_state(
           {number(), number(), number()},
           {number(), number(), number()},
           {number(), number(), number()}
-        ) :: float()
+        ) :: float() | {:error, :invalid_input}
   def beta_angle_from_state(r, v, sun_position) do
     Sidereon.NIF.angles_beta_angle_from_state(floats(r), floats(v), floats(sun_position))
   end

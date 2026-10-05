@@ -141,12 +141,16 @@ fn classical_from_term(term: ClassicalTerm) -> NifResult<ClassicalElements> {
         a: term.a,
         ecc: term.ecc,
         incl: term.incl,
-        raan: term.raan.unwrap_or(0.0),
-        argp: term.argp.unwrap_or(0.0),
-        nu: term.nu.unwrap_or(0.0),
-        arglat: term.arglat.unwrap_or(0.0),
-        truelon: term.truelon.unwrap_or(0.0),
-        lonper: term.lonper.unwrap_or(0.0),
+        // Core uses non-finite angle values as the sentinel for orbital angles
+        // that are undefined for circular and/or equatorial orbit classes.
+        // Preserve Elixir's nil values across every classical-element call so
+        // classical_to_term can map the untouched sentinels back to nil.
+        raan: term.raan.unwrap_or(f64::NAN),
+        argp: term.argp.unwrap_or(f64::NAN),
+        nu: term.nu.unwrap_or(f64::NAN),
+        arglat: term.arglat.unwrap_or(f64::NAN),
+        truelon: term.truelon.unwrap_or(f64::NAN),
+        lonper: term.lonper.unwrap_or(f64::NAN),
         orbit_type,
     })
 }
