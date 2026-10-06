@@ -1,0 +1,157 @@
+# Temporary 3.0.2 publication preparation; remove after the release is published.
+name: Prepare reviewed Hex 3.0.2 artifacts
+
+on:
+  push:
+    tags:
+      - "v3.0.2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-and-docs:
+    name: Build reviewable Hex package and docs
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Require the final immutable release tag
+        shell: bash
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = v3.0.2
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)" = 3.0.2
+          grep -q -- '-v3.0.2-' checksum-Elixir.Sidereon.NIF.exs
+          test "$(grep -c -- '=> "sha256:' checksum-Elixir.Sidereon.NIF.exs)" -eq 9
+          if rg -n '(^|[,{[:space:]])(git|path)[[:space:]]*=' \
+            native/sidereon_nif/Cargo.toml test/generators/core_goldens/Cargo.toml; then
+            echo "release manifests still contain a Git or path dependency" >&2
+            exit 1
+          fi
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+
+      - name: Install pinned Hex and Rebar
+        run: |
+          mix local.hex 2.5.1 --force
+          mix local.rebar --force
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/sidereon_nif
+          shared-key: release-3.0.2-hex-docs
+
+      - name: Fetch dependencies and build documentation
+        env:
+          SIDEREON_BUILD: "1"
+        run: |
+          mix deps.get
+          mix compile --warnings-as-errors
+          mix docs --warnings-as-errors
+          test -s doc/index.html
+
+      - name: Build exact package and documentation archives
+        shell: bash
+        run: |
+          mkdir -p dist
+          mix hex.build --output dist/sidereon-3.0.2.tar
+          mix run --no-start -e '
+          files =
+            "doc/**"
+            |> Path.wildcard()
+            |> Enum.filter(&File.regular?/1)
+            |> Enum.map(fn path ->
+              {path |> Path.relative_to("doc") |> String.to_charlist(), File.read!(path)}
+            end)
+
+          {:ok, archive} = :mix_hex_tarball.create_docs(files)
+          File.write!("dist/sidereon-3.0.2-docs.tar.gz", archive)
+          '
+
+      - name: Verify and inventory the exact review artifacts
+        shell: bash
+        run: |
+          test -s dist/sidereon-3.0.2.tar
+          test -s dist/sidereon-3.0.2-docs.tar.gz
+          test "$(stat -c %s dist/sidereon-3.0.2.tar)" -le 8388608
+          test "$(stat -c %s dist/sidereon-3.0.2-docs.tar.gz)" -le 8388608
+
+          mix run --no-start -e '
+          result = Hex.Tar.unpack!("dist/sidereon-3.0.2.tar", :memory)
+          unless result.inner_checksum && result.outer_checksum && result.contents do
+            raise "Hex package checksum verification failed"
+          end
+
+          name = result.metadata[:name] || result.metadata["name"]
+          version = result.metadata[:version] || result.metadata["version"]
+          unless to_string(name) == "sidereon" && to_string(version) == "3.0.2" do
+            raise "unexpected package identity #{inspect(name)} #{inspect(version)}"
+          end
+
+          names =
+            Enum.map(result.contents, fn entry ->
+              entry |> elem(0) |> to_string()
+            end)
+
+          unpacked_bytes =
+            Enum.reduce(result.contents, 0, fn entry, total ->
+              total + byte_size(elem(entry, 1))
+            end)
+
+          if unpacked_bytes > 67_108_864, do: raise("unpacked package exceeds 64 MiB")
+          File.write!("dist/PACKAGE-CONTENTS.txt", Enum.join(Enum.sort(names), "\n") <> "\n")
+
+          {:ok, docs} =
+            :mix_hex_tarball.unpack_docs(
+              File.read!("dist/sidereon-3.0.2-docs.tar.gz"),
+              :memory
+            )
+
+          docs_bytes = Enum.reduce(docs, 0, fn {_name, body}, total -> total + byte_size(body) end)
+          if docs_bytes > 67_108_864, do: raise("unpacked docs exceed 64 MiB")
+
+          docs_names = Enum.map(docs, fn {name, _body} -> to_string(name) end)
+          File.write!("dist/DOCS-CONTENTS.txt", Enum.join(Enum.sort(docs_names), "\n") <> "\n")
+          '
+          grep -Fxq mix.exs dist/PACKAGE-CONTENTS.txt
+          grep -Fxq checksum-Elixir.Sidereon.NIF.exs dist/PACKAGE-CONTENTS.txt
+          grep -Fxq THIRD-PARTY-NOTICES.md dist/PACKAGE-CONTENTS.txt
+          grep -Fxq native/sidereon_nif/Cargo.lock dist/PACKAGE-CONTENTS.txt
+
+          (
+            cd dist
+            sha256sum sidereon-3.0.2.tar sidereon-3.0.2-docs.tar.gz > SHA256SUMS
+          )
+          grep -Fxq index.html dist/DOCS-CONTENTS.txt
+
+          {
+            echo "tag=$GITHUB_REF_NAME"
+            echo "commit=$GITHUB_SHA"
+            echo "elixir=$(elixir --version | tail -1)"
+            echo "hex=$(mix run --no-start -e 'IO.write(Hex.version())')"
+            wc -c dist/sidereon-3.0.2.tar dist/sidereon-3.0.2-docs.tar.gz
+          } > dist/BUILD-IDENTITY.txt
+
+      - name: Upload reviewed publication inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sidereon-hex-3.0.2-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            dist/sidereon-3.0.2.tar
+            dist/sidereon-3.0.2-docs.tar.gz
+            dist/SHA256SUMS
+            dist/PACKAGE-CONTENTS.txt
+            dist/DOCS-CONTENTS.txt
+            dist/BUILD-IDENTITY.txt

@@ -1,5 +1,5 @@
 {
-  "source": "sidereon-core 47eaf24e39afa71168670664e88361ed41011bc2 positioning::solve_static_reference_station_rinex, carrier mode",
+  "source": "sidereon-core 8694648892d8ab065d94014e2e21d6cd5054818e positioning::solve_static_reference_station_rinex, carrier mode",
   "reference_position_m": [
     "0x414f181e2da372f7",
     "0x412c701c211f4e38",

@@ -1,0 +1,121 @@
+name: Published Hex consumer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact public Sidereon version to verify"
+        required: true
+        default: "3.0.2"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  public-consumer:
+    name: Public Hex ${{ inputs.version }} / precompiled NIF / contracts
+    runs-on: ubuntu-22.04
+    env:
+      SIDEREON_CONSUMER_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Validate the exact version input
+        shell: bash
+        run: |
+          if [[ ! "$SIDEREON_CONSUMER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be an exact stable semantic version" >&2
+            exit 1
+          fi
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+
+      - name: Install pinned Hex and create a clean consumer
+        shell: bash
+        run: |
+          mix local.hex 2.5.1 --force
+          mix local.rebar --force
+          consumer="$RUNNER_TEMP/sidereon-public-consumer"
+          rm -rf "$consumer"
+          mix new "$consumer" --sup
+          cp "$GITHUB_WORKSPACE/.github/scripts/published_hex_consumer_test.exs" \
+            "$consumer/test/published_hex_consumer_test.exs"
+          cat > "$consumer/mix.exs" <<'ELIXIR'
+          defmodule SidereonPublicConsumer.MixProject do
+            use Mix.Project
+
+            def project do
+              [
+                app: :sidereon_public_consumer,
+                version: "0.0.0",
+                elixir: "~> 1.19",
+                start_permanent: false,
+                deps: [{:sidereon, "== #{System.fetch_env!("SIDEREON_CONSUMER_VERSION")}"}]
+              ]
+            end
+
+            def application do
+              [extra_applications: [:logger]]
+            end
+          end
+          ELIXIR
+          echo "CONSUMER=$consumer" >> "$GITHUB_ENV"
+
+      - name: Resolve only the exact public Hex release
+        shell: bash
+        run: |
+          cd "$CONSUMER"
+          unset SIDEREON_BUILD RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
+          test ! -e deps/sidereon
+          mix deps.get
+          test ! -e deps/sidereon/.git
+          test -f deps/sidereon/.hex
+          SIDEREON_EXPECTED_VERSION="$SIDEREON_CONSUMER_VERSION" mix run --no-start -e '
+          lock = Mix.Dep.Lock.read() |> Map.fetch!(:sidereon) |> Hex.Utils.lock()
+          expected = System.fetch_env!("SIDEREON_EXPECTED_VERSION")
+          unless lock.version == expected && lock.repo == "hexpm" do
+            raise "unexpected Sidereon lock: #{inspect(lock)}"
+          end
+          '
+
+      - name: Compile and run bounded public-contract regressions
+        run: |
+          cd "$CONSUMER"
+          unset SIDEREON_BUILD RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
+          mix compile --warnings-as-errors
+          mix test --warnings-as-errors test/published_hex_consumer_test.exs
+
+      - name: Prove the loaded NIF is the exact public precompiled archive
+        shell: bash
+        run: |
+          cd "$CONSUMER"
+          unset SIDEREON_BUILD RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
+          archive="libsidereon_nif-v${SIDEREON_CONSUMER_VERSION}-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz"
+          checksum_file="deps/sidereon/checksum-Elixir.Sidereon.NIF.exs"
+          test -f "$checksum_file"
+
+          expected_archive_sha="$(SIDEREON_ARCHIVE_NAME="$archive" elixir -e '
+          {checksums, _binding} = Code.eval_file("deps/sidereon/checksum-Elixir.Sidereon.NIF.exs")
+          value = Map.fetch!(checksums, System.fetch_env!("SIDEREON_ARCHIVE_NAME"))
+          "sha256:" <> sha = value
+          IO.write(sha)
+          ')"
+
+          curl --proto '=https' --tlsv1.2 -fsSLo "$RUNNER_TEMP/$archive" \
+            "https://github.com/neilberkman/sidereon-ex/releases/download/v${SIDEREON_CONSUMER_VERSION}/$archive"
+          echo "$expected_archive_sha  $RUNNER_TEMP/$archive" | sha256sum -c -
+
+          mkdir -p "$RUNNER_TEMP/sidereon-release-native"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/sidereon-release-native"
+          release_native="$RUNNER_TEMP/sidereon-release-native/${archive%.tar.gz}"
+          installed_native="_build/test/lib/sidereon/priv/native/${archive%.tar.gz}"
+          test -f "$release_native"
+          test -f "$installed_native"
+          test "$(sha256sum "$installed_native" | cut -d ' ' -f 1)" = \
+            "$(sha256sum "$release_native" | cut -d ' ' -f 1)"
+          test ! -d deps/sidereon/target
+          test ! -d deps/sidereon/native/sidereon_nif/target
