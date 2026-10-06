@@ -529,7 +529,7 @@ defmodule Sidereon.GNSS.Observables do
   @spec pseudorange_transmit_geometry(
           SP3.t() | Broadcast.t() | PreciseEphemeris.t() | Interpolant.t() | InterpolantArtifact.t(),
           String.t(),
-          Types.ecef_input(),
+          {number(), number(), number()} | %{x_m: number(), y_m: number(), z_m: number()},
           NaiveDateTime.t(),
           number(),
           keyword()

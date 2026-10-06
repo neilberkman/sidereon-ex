@@ -219,7 +219,7 @@ defmodule Sidereon.Constellation do
 
   Every input satellite receives one outcome; a successful empty arc has a nil
   error, while initialization, propagation, and frame errors retain their typed
-  `Sidereon.Coverage.look_angle_error/0` value.
+  `t:Sidereon.Coverage.look_angle_error/0` value.
   """
   @spec look_angle_arcs_detailed(t(), map(), [DateTime.t()], keyword()) ::
           {:ok, [detailed_look_arc()]} | {:error, batch_error()}

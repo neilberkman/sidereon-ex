@@ -414,7 +414,8 @@ defmodule Sidereon.Terrain.MmapTerrain do
   defmodule TerrainStoreError do
     @moduledoc """
     Terrain store conversion, parse, and checksum error. A `:tile` error keeps
-    its source path, original message, and complete nested `Sidereon.Terrain.tile_error/0`.
+    its source path, original message, and complete nested
+    `t:Sidereon.Terrain.tile_error/0`.
     """
 
     @enforce_keys [:kind]
