@@ -7,6 +7,7 @@ on:
       - release/3.0.2-20261005
     paths:
       - '.github/workflows/release-prepare-3.0.2.yml'
+      - '.github/release-registry.patch'
       - 'test/generators/core_goldens/**'
   workflow_dispatch:
 
@@ -30,9 +31,16 @@ jobs:
           workspaces: test/generators/core_goldens
           shared-key: release-3.0.2-core-goldens
 
+      - name: Apply final registry sources and resolve exact locks
+        run: |
+          git apply --check .github/release-registry.patch
+          git apply .github/release-registry.patch
+          cargo update --workspace --manifest-path Cargo.toml
+          cargo update --workspace --manifest-path test/generators/core_goldens/Cargo.toml
+
       - name: Validate the locked core source and snapshot committed fixtures
         env:
-          SIDEREON_CORE_REV: 47eaf24e39afa71168670664e88361ed41011bc2
+          SIDEREON_CORE_REV: 8694648892d8ab065d94014e2e21d6cd5054818e
         run: |
           cargo metadata \
             --locked \
@@ -44,10 +52,7 @@ jobs:
           import os
 
           revision = os.environ["SIDEREON_CORE_REV"]
-          expected_source = (
-              "git+https://github.com/neilberkman/sidereon"
-              f"?rev={revision}#{revision}"
-          )
+          expected_source = "registry+https://github.com/rust-lang/crates.io-index"
           with open("/tmp/core-goldens-metadata.json", encoding="utf-8") as handle:
               metadata = json.load(handle)
           core = [package for package in metadata["packages"] if package["name"] == "sidereon-core"]
@@ -55,8 +60,40 @@ jobs:
               raise SystemExit(f"expected one locked sidereon-core package, found {len(core)}")
           if core[0]["version"] != "3.0.2" or core[0]["source"] != expected_source:
               raise SystemExit(
-                  "locked sidereon-core does not match the declared 3.0.2 candidate revision"
+                  "locked sidereon-core is not the exact 3.0.2 registry package"
               )
+
+          package_root = os.path.dirname(core[0]["manifest_path"])
+          vcs_path = os.path.join(package_root, ".cargo_vcs_info.json")
+          with open(vcs_path, encoding="utf-8") as handle:
+              vcs = json.load(handle)
+          if vcs.get("git", {}).get("sha1") != revision or vcs.get("path_in_vcs") != "crates/sidereon-core":
+              raise SystemExit("registry sidereon-core archive has the wrong VCS identity")
+          PY
+
+          python3 - <<'PY'
+          import glob
+          import hashlib
+          import os
+          import re
+
+          with open("test/generators/core_goldens/Cargo.lock", encoding="utf-8") as handle:
+              lock = handle.read()
+          match = re.search(
+              r'\[\[package\]\]\nname = "sidereon-core"\nversion = "3\.0\.2"\n'
+              r'source = "registry\+https://github\.com/rust-lang/crates\.io-index"\n'
+              r'checksum = "([0-9a-f]{64})"',
+              lock,
+          )
+          if match is None:
+              raise SystemExit("lockfile lacks the exact registry sidereon-core 3.0.2 checksum")
+          archives = glob.glob(os.path.expanduser("~/.cargo/registry/cache/*/sidereon-core-3.0.2.crate"))
+          if len(archives) != 1:
+              raise SystemExit(f"expected one cached sidereon-core 3.0.2 archive, found {len(archives)}")
+          with open(archives[0], "rb") as handle:
+              actual = hashlib.file_digest(handle, "sha256").hexdigest()
+          if actual != match.group(1):
+              raise SystemExit("registry sidereon-core archive does not match its locked checksum")
           PY
 
           cat > /tmp/core-golden-files.txt <<'EOF'
@@ -73,9 +110,9 @@ jobs:
             cp "$golden" "/tmp/core-goldens-before/$golden"
           done < /tmp/core-golden-files.txt
 
-      - name: Generate fixtures from the locked core candidate
+      - name: Generate fixtures from the locked registry core
         env:
-          SIDEREON_CORE_REV: 47eaf24e39afa71168670664e88361ed41011bc2
+          SIDEREON_CORE_REV: 8694648892d8ab065d94014e2e21d6cd5054818e
         run: |
           cargo run \
             --locked \
@@ -85,7 +122,7 @@ jobs:
 
       - name: Verify producer identity and unchanged numerical content
         env:
-          SIDEREON_CORE_REV: 47eaf24e39afa71168670664e88361ed41011bc2
+          SIDEREON_CORE_REV: 8694648892d8ab065d94014e2e21d6cd5054818e
         run: |
           git diff --binary -- \
             test/fixtures/core_goldens \
@@ -127,6 +164,8 @@ jobs:
         with:
           name: sidereon-elixir-core-goldens-3.0.2-${{ github.sha }}
           path: |
+            Cargo.lock
+            test/generators/core_goldens/Cargo.lock
             test/fixtures/core_goldens/*.json
             test/fixtures/scenario/g01_two_epochs_expected.json
             core-goldens-3.0.2.patch
