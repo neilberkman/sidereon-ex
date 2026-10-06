@@ -197,7 +197,8 @@ jobs:
           grep -Fxq mix.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq checksum-Elixir.Sidereon.NIF.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq THIRD-PARTY-NOTICES.md dist/PACKAGE-CONTENTS.txt
-          grep -Fxq native/sidereon_nif/Cargo.lock dist/PACKAGE-CONTENTS.txt
+          grep -Fxq Cargo.lock dist/PACKAGE-CONTENTS.txt
+          grep -Fxq native/sidereon_nif/Cargo.toml dist/PACKAGE-CONTENTS.txt
           grep -Fxq index.html dist/DOCS-CONTENTS.txt
 
           (
@@ -222,6 +223,7 @@ jobs:
           } > dist/BUILD-IDENTITY.txt
 
       - name: Upload reviewed publication inputs
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sidereon-hex-3.0.2-recovery-${{ github.sha }}
