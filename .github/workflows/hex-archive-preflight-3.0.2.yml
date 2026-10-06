@@ -1,0 +1,172 @@
+# Temporary Hex 2.5.1 archive/API preflight; remove after 3.0.2 publication.
+name: Probe installed Hex 2.5.1 archive APIs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/3.0.2-20261005
+    paths:
+      - .github/workflows/hex-archive-preflight-3.0.2.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Prove no-project docs and package archive APIs
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+
+      - name: Install pinned Hex archive
+        run: mix local.hex 2.5.1 --force
+
+      - name: Write bounded API probe
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/hex_archive_probe.exs" <<'ELIXIR'
+          Hex.start()
+          expected_hex = "2.5.1"
+          actual_hex = Hex.version()
+          unless actual_hex == expected_hex, do: raise("unexpected Hex version #{actual_hex}")
+
+          archive_root = Mix.path_for(:archives)
+          ebin_paths =
+            archive_root
+            |> Path.join("**/ebin")
+            |> Path.wildcard()
+            |> Enum.filter(&File.dir?/1)
+            |> Enum.sort()
+
+          tar_beams =
+            archive_root
+            |> Path.join("**/*tar*.beam")
+            |> Path.wildcard()
+            |> Enum.sort()
+
+          IO.puts("hex_version=#{actual_hex}")
+          IO.puts("archive_root=#{archive_root}")
+          Enum.each(ebin_paths, &IO.puts("archive_ebin=#{&1}"))
+          Enum.each(tar_beams, &IO.puts("tar_beam=#{&1}"))
+          IO.inspect(Hex.Tar.__info__(:functions), label: "Hex.Tar exports")
+          IO.inspect(:code.which(:mix_hex_tarball), label: "mix_hex_tarball code path")
+
+          unless tar_beams != [], do: raise("installed Hex archive has no tar beam")
+
+          tar_modules =
+            Enum.map(tar_beams, fn beam ->
+              beam |> Path.basename(".beam") |> String.to_atom()
+            end)
+
+          Enum.each(tar_modules, fn module ->
+            case Code.ensure_loaded(module) do
+              {:module, ^module} ->
+                exports = module.module_info(:exports) |> Enum.sort()
+                IO.inspect(exports, label: "#{module} exports")
+
+              {:error, reason} ->
+                raise("could not load #{module}: #{inspect(reason)}")
+            end
+          end)
+
+          docs_module =
+            Enum.find(tar_modules, fn module ->
+              function_exported?(module, :create_docs, 1) and
+                function_exported?(module, :unpack_docs, 2)
+            end) || raise("no installed Hex archive module exports docs create/unpack")
+
+          docs_files = [{'index.html', "<h1>Hex archive probe</h1>"}]
+          {:ok, docs_archive} = apply(docs_module, :create_docs, [docs_files])
+          {:ok, unpacked_docs} = apply(docs_module, :unpack_docs, [docs_archive, :memory])
+          unless unpacked_docs == docs_files, do: raise("docs archive round trip changed contents")
+          IO.puts("docs_round_trip_module=#{docs_module}")
+          IO.puts("docs_round_trip_bytes=#{byte_size(docs_archive)}")
+
+          package_path = System.fetch_env!("HEX_PROBE_PACKAGE")
+          package = Hex.Tar.unpack!(package_path, :memory)
+          unless package.inner_checksum && package.outer_checksum && package.contents do
+            raise("Hex.Tar package verification failed")
+          end
+
+          name = package.metadata[:name] || package.metadata["name"]
+          version = package.metadata[:version] || package.metadata["version"]
+          unless to_string(name) == "hex_archive_probe" and to_string(version) == "0.0.1" do
+            raise("unexpected probe package identity")
+          end
+
+          package_names = Enum.map(package.contents, fn entry -> entry |> elem(0) |> to_string() end)
+          unless "mix.exs" in package_names, do: raise("probe package omitted mix.exs")
+          IO.puts("package_memory_unpack=ok")
+          ELIXIR
+
+          cat > "$RUNNER_TEMP/hex_archive_context.exs" <<'ELIXIR'
+          IO.puts("cwd=#{File.cwd!()}")
+          IO.puts("hex_version=#{Hex.version()}")
+          IO.inspect(:code.which(Hex.Tar), label: "Hex.Tar code path")
+          IO.inspect(:code.which(:mix_hex_tarball), label: "mix_hex_tarball code path")
+          IO.inspect(Hex.Tar.__info__(:functions), label: "Hex.Tar exports")
+          ELIXIR
+
+      - name: Compare project and no-project archive loading
+        shell: bash
+        run: |
+          (
+            cd "$RUNNER_TEMP"
+            mix run --no-mix-exs "$RUNNER_TEMP/hex_archive_context.exs"
+          ) | tee "$RUNNER_TEMP/no-project-context.txt"
+
+          set +e
+          mix run --no-start --no-compile --no-deps-check --no-mix-exs \
+            "$RUNNER_TEMP/hex_archive_context.exs" \
+            > "$RUNNER_TEMP/repository-context.txt" 2>&1
+          repository_rc=$?
+          set -e
+          cat "$RUNNER_TEMP/repository-context.txt"
+          echo "repository_context_exit=$repository_rc"
+
+      - name: Build a tiny real Hex package without repository dependencies
+        shell: bash
+        run: |
+          probe="$RUNNER_TEMP/hex-archive-package"
+          mkdir -p "$probe/lib"
+          cat > "$probe/mix.exs" <<'ELIXIR'
+          defmodule HexArchiveProbe.MixProject do
+            use Mix.Project
+
+            def project do
+              [
+                app: :hex_archive_probe,
+                version: "0.0.1",
+                elixir: "~> 1.19",
+                description: "Bounded Hex archive API probe",
+                package: [licenses: ["MIT"], links: %{"Source" => "https://example.invalid"}]
+              ]
+            end
+          end
+          ELIXIR
+          cat > "$probe/lib/hex_archive_probe.ex" <<'ELIXIR'
+          defmodule HexArchiveProbe do
+            @moduledoc false
+          end
+          ELIXIR
+          (
+            cd "$probe"
+            mix hex.build --output "$RUNNER_TEMP/hex_archive_probe-0.0.1.tar"
+          )
+          test -s "$RUNNER_TEMP/hex_archive_probe-0.0.1.tar"
+
+      - name: Prove installed docs and package APIs from no-project directory
+        shell: bash
+        env:
+          HEX_PROBE_PACKAGE: ${{ runner.temp }}/hex_archive_probe-0.0.1.tar
+        run: |
+          cd "$RUNNER_TEMP"
+          mix run --no-mix-exs "$RUNNER_TEMP/hex_archive_probe.exs"
