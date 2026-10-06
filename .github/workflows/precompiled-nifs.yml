@@ -39,6 +39,9 @@ jobs:
   asset-check:
     name: Check release assets
     runs-on: ubuntu-22.04
+    # GitHub exposes draft releases only to tokens with push access.
+    permissions:
+      contents: write
     outputs:
       should-build: ${{ steps.check.outputs.should-build }}
       release-tag: ${{ steps.check.outputs.release-tag }}
@@ -77,8 +80,14 @@ jobs:
             exit 0
           fi
 
-          archive_count="$(gh release view "$release_tag" --repo "$REPOSITORY" --json assets \
-            --jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length' 2>/dev/null || echo 0)"
+          # Draft releases are visible through the authenticated releases
+          # collection, but the tag lookup used by `gh release view` returns
+          # "release not found" until the draft is published.
+          archive_count="$(
+            gh api "repos/$REPOSITORY/releases?per_page=100" |
+              jq -r --arg tag "$release_tag" \
+                '[.[] | select(.tag_name == $tag) | .assets[] | select(.name | endswith(".tar.gz"))] | length'
+          )"
           if [[ "$archive_count" -eq 9 ]]; then
             echo "Release $release_tag already has all 9 archives; skipping rebuild."
             echo "should-build=false" >> "$GITHUB_OUTPUT"
@@ -337,7 +346,9 @@ jobs:
     # install path and dispatch one call through it.
     if: always() && !failure() && !cancelled() && needs.asset-check.outputs.release-tag != ''
     permissions:
-      contents: read
+      # Reading an authenticated draft asset requires push access even though
+      # this job never mutates the release.
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -375,8 +386,16 @@ jobs:
           test -n "$version"
           flavor="${TARGET}${VARIANT:+--$VARIANT}"
           asset="libsidereon_nif-v${version}-nif-2.15-${flavor}.so.tar.gz"
-          gh release download "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$asset" --dir /tmp/asset
+          mkdir -p /tmp/asset
+          asset_api_url="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -er --arg tag "$REF_NAME" --arg asset "$asset" '
+                [.[] | select(.tag_name == $tag) | .assets[] | select(.name == $asset) | .url]
+                | if length == 1 then .[0] else error("expected exactly one matching release asset") end
+              '
+          )"
+          gh api -H "Accept: application/octet-stream" "$asset_api_url" \
+            > "/tmp/asset/$asset"
           sha="$(sha256sum "/tmp/asset/$asset" | cut -d ' ' -f 1)"
           printf '%%{\n  "%s" => "sha256:%s"\n}\n' "$asset" "$sha" \
             > checksum-Elixir.Sidereon.NIF.exs
@@ -447,7 +466,8 @@ jobs:
     if: always() && !failure() && !cancelled() && needs.asset-check.outputs.release-tag != ''
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Draft assets are hidden from a read-only token.
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -469,8 +489,10 @@ jobs:
             exit 0
           fi
 
-          gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[].name' | sort > /tmp/assets.txt
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg tag "$REF_NAME" \
+              '.[] | select(.tag_name == $tag) | .assets[].name' |
+            sort > /tmp/assets.txt
           grep -oE '"[^"]+\.tar\.gz"' checksum-Elixir.Sidereon.NIF.exs \
             | tr -d '"' | sort > /tmp/checksums.txt
 
@@ -500,7 +522,15 @@ jobs:
         run: |
           version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
           grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs
-          is_draft="$(gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          release_id="$(
+            jq -er --arg tag "$REF_NAME" '
+              [.[] | select(.tag_name == $tag)]
+              | if length == 1 then .[0].id else error("expected exactly one matching release") end
+            ' <<<"$release_json"
+          )"
+          is_draft="$(jq -r --argjson id "$release_id" '.[] | select(.id == $id) | .draft' <<<"$release_json")"
           if [[ "$is_draft" == "true" ]]; then
-            gh release edit "$REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false >/dev/null
           fi
