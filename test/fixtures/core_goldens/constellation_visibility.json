@@ -1,5 +1,5 @@
 {
-  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b astro::passes::visible_from_satellites, AFSPC opsmode",
+  "source": "sidereon-core 8694648892d8ab065d94014e2e21d6cd5054818e astro::passes::visible_from_satellites, AFSPC opsmode",
   "instant": "2026-04-05T13:16:46.804800Z",
   "station": {
     "latitude_deg": 51.5074,

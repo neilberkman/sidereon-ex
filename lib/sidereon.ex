@@ -135,7 +135,7 @@ defmodule Sidereon do
 
   See `Sidereon.Angles.sun_angle/2` for details.
   """
-  @spec sun_angle(vec3(), vec3()) :: float()
+  @spec sun_angle(vec3(), vec3()) :: float() | {:error, :invalid_input}
   defdelegate sun_angle(satellite_gcrs_position, sun_position_from_earth),
     to: Sidereon.Angles
 
@@ -144,7 +144,7 @@ defmodule Sidereon do
 
   See `Sidereon.Angles.moon_angle/2` for details.
   """
-  @spec moon_angle(vec3(), vec3()) :: float()
+  @spec moon_angle(vec3(), vec3()) :: float() | {:error, :invalid_input}
   defdelegate moon_angle(satellite_gcrs_position, moon_position_from_earth),
     to: Sidereon.Angles
 
@@ -276,6 +276,7 @@ defmodule Sidereon do
           {:ok, %{sun: [vec3()], moon: [vec3()]}} | {:error, term()}
   def sun_moon_eci(epochs_unix_us) when is_list(epochs_unix_us) do
     case NIF.sun_moon_eci_batch(epochs_unix_us) do
+      {:error, reason} -> {:error, reason}
       {sun, moon} -> {:ok, %{sun: sun, moon: moon}}
     end
   rescue
@@ -289,6 +290,7 @@ defmodule Sidereon do
           {:ok, %{sun: [vec3()], moon: [vec3()]}} | {:error, term()}
   def sun_moon_ecef(epochs_unix_us) when is_list(epochs_unix_us) do
     case NIF.sun_moon_ecef_batch(epochs_unix_us) do
+      {:error, reason} -> {:error, reason}
       {sun, moon} -> {:ok, %{sun: sun, moon: moon}}
     end
   rescue

@@ -23,11 +23,8 @@ defmodule Sidereon.Astro.Relative do
 
   @type frame :: :rsw | :rtn | :ric | :lvlh
 
-  def rotation(frame, %State{} = chief) when frame in [:rsw, :rtn, :ric, :lvlh] do
-    {:ok, NIF.relative_rotation(Atom.to_string(frame), state_map(chief))}
-  rescue
-    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :relative_rotation)
-  end
+  def rotation(frame, %State{} = chief) when frame in [:rsw, :rtn, :ric, :lvlh],
+    do: call_direct(:relative_rotation, [Atom.to_string(frame), state_map(chief)])
 
   def relative_state(%State{} = chief, %State{} = deputy),
     do: call_state(:relative_state, [state_map(chief), state_map(deputy)])
@@ -35,10 +32,11 @@ defmodule Sidereon.Astro.Relative do
   def absolute_from_relative(%State{} = chief, %State{} = rel),
     do: call_state(:relative_absolute_from_relative, [state_map(chief), state_map(rel)])
 
-  def cw_stm(n, dt), do: {:ok, NIF.relative_cw_stm(n / 1.0, dt / 1.0)}
+  def cw_stm(n, dt), do: call_direct(:relative_cw_stm, [n / 1.0, dt / 1.0])
   def cw_propagate(%State{} = rel, n, dt), do: call_state(:relative_cw_propagate, [state_map(rel), n / 1.0, dt / 1.0])
-  def mean_motion_circular(radius_km), do: {:ok, NIF.relative_mean_motion_circular(radius_km / 1.0)}
-  def mean_motion_from_state(%State{} = chief), do: {:ok, NIF.relative_mean_motion_from_state(state_map(chief))}
+  def mean_motion_circular(radius_km), do: call_direct(:relative_mean_motion_circular, [radius_km / 1.0])
+
+  def mean_motion_from_state(%State{} = chief), do: call_direct(:relative_mean_motion_from_state, [state_map(chief)])
 
   def rotation!(frame, chief), do: bang(rotation(frame, chief))
   def relative_state!(chief, deputy), do: bang(relative_state(chief, deputy))
@@ -52,6 +50,15 @@ defmodule Sidereon.Astro.Relative do
     case apply(NIF, fun, args) do
       {:ok, fields} -> {:ok, to_state(fields)}
       {:error, reason} -> {:error, reason}
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, fun)
+  end
+
+  defp call_direct(fun, args) do
+    case apply(NIF, fun, args) do
+      {:error, reason} -> {:error, reason}
+      value -> {:ok, value}
     end
   rescue
     e in ErlangError -> NifCall.error(e, __STACKTRACE__, fun)

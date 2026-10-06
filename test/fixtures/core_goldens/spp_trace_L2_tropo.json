@@ -1,5 +1,5 @@
 {
-  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b positioning::solve_with_policy on the unmodified spp_trace_L2_tropo.json inputs",
+  "source": "sidereon-core 8694648892d8ab065d94014e2e21d6cd5054818e positioning::solve_with_policy on the unmodified spp_trace_L2_tropo.json inputs",
   "epoch": "2020-06-24T12:00:00",
   "t_rx_j2000_s": "0x41c342aa00000000",
   "solves": {

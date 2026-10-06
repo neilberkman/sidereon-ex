@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-10-05
+
+### Fixed
+
+- Classical orbital-element results preserve undefined optional angles as
+  `NaN` instead of replacing them with zero during Kepler propagation and
+  equinoctial conversions.
+- Relative-state helpers return native errors directly, and their bang
+  variants raise those errors, instead of returning or raising nested error
+  tuples.
+- Sun and Moon batch helpers recognize native error tuples before decoding a
+  successful position pair.
+- Direct angle helper documentation and typespecs include the existing
+  `{:error, :invalid_input}` result for degenerate or unsupported geometry.
+
 ## [3.0.1] - 2026-10-04
 
 ### Added

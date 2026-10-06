@@ -6,6 +6,11 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: "Intended release tag for branch asset preparation (for example v3.0.2)"
+        required: false
+        default: ""
+        type: string
       rebuild_existing_assets:
         description: "Rebuild and replace assets even if this tag already has release archives"
         required: false
@@ -34,9 +39,15 @@ jobs:
   asset-check:
     name: Check release assets
     runs-on: ubuntu-22.04
+    # GitHub exposes draft releases only to tokens with push access.
+    permissions:
+      contents: write
     outputs:
       should-build: ${{ steps.check.outputs.should-build }}
+      release-tag: ${{ steps.check.outputs.release-tag }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
       - name: Check whether this tag already has release archives
         id: check
         shell: bash
@@ -44,19 +55,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}
           REBUILD_EXISTING_ASSETS: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_existing_assets || false }}
         run: |
+          release_tag="$RELEASE_TAG_INPUT"
+          if [[ -z "$release_tag" && "$REF_TYPE" == "tag" ]]; then
+            release_tag="$REF_NAME"
+          fi
+          if [[ -z "$release_tag" ]]; then
+            echo "release_tag is required when preparing assets from a branch" >&2
+            exit 1
+          fi
+
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          if [[ "$release_tag" != "v${version}" ]]; then
+            echo "release_tag $release_tag does not match project version $version" >&2
+            exit 1
+          fi
+          echo "release-tag=$release_tag" >> "$GITHUB_OUTPUT"
+
           if [[ "$REBUILD_EXISTING_ASSETS" == "true" ]]; then
             echo "should-build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          asset_count="$(gh release view "$REF_NAME" --repo "$REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
-          if [[ "$asset_count" -gt 0 ]]; then
-            echo "Release $REF_NAME already has $asset_count assets; skipping rebuild."
+          # Draft releases are visible through the authenticated releases
+          # collection, but the tag lookup used by `gh release view` returns
+          # "release not found" until the draft is published.
+          archive_count="$(
+            gh api "repos/$REPOSITORY/releases?per_page=100" |
+              jq -r --arg tag "$release_tag" \
+                '[.[] | select(.tag_name == $tag) | .assets[] | select(.name | endswith(".tar.gz"))] | length'
+          )"
+          if [[ "$archive_count" -eq 9 ]]; then
+            echo "Release $release_tag already has all 9 archives; skipping rebuild."
             echo "should-build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No existing assets found for $REF_NAME; building precompiled NIFs."
+            echo "Release $release_tag has $archive_count of 9 archives; building the complete set."
             echo "should-build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -201,9 +237,9 @@ jobs:
           test -f LICENSES/ISC-libloading.txt
           test -f LICENSES/SciPy-BSD-3-Clause.txt
           test -f THIRD-PARTY-NOTICES.md
-          test -f third_party_source/sidereon-core-3.0.1/tides/mod.rs
-          test -f third_party_source/sidereon-core-3.0.1/tides/ocean.rs
-          test -f third_party_source/sidereon-core-3.0.1/tides/pole.rs
+          test -f third_party_source/sidereon-core-3.0.2/tides/mod.rs
+          test -f third_party_source/sidereon-core-3.0.2/tides/ocean.rs
+          test -f third_party_source/sidereon-core-3.0.2/tides/pole.rs
           rm -f "$final_lib" "$archive"
           cp "$source_lib" "$final_lib"
           tar -czf "$archive" \
@@ -215,9 +251,9 @@ jobs:
             LICENSES/ISC-libloading.txt \
             LICENSES/SciPy-BSD-3-Clause.txt \
             THIRD-PARTY-NOTICES.md \
-            third_party_source/sidereon-core-3.0.1/tides/mod.rs \
-            third_party_source/sidereon-core-3.0.1/tides/ocean.rs \
-            third_party_source/sidereon-core-3.0.1/tides/pole.rs
+            third_party_source/sidereon-core-3.0.2/tides/mod.rs \
+            third_party_source/sidereon-core-3.0.2/tides/ocean.rs \
+            third_party_source/sidereon-core-3.0.2/tides/pole.rs
 
           archive_listing="$(tar -tzf "$archive")"
           grep -Fxq "$final_lib" <<<"$archive_listing"
@@ -228,9 +264,9 @@ jobs:
           grep -Fxq "LICENSES/ISC-libloading.txt" <<<"$archive_listing"
           grep -Fxq "LICENSES/SciPy-BSD-3-Clause.txt" <<<"$archive_listing"
           grep -Fxq "THIRD-PARTY-NOTICES.md" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.1/tides/mod.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.1/tides/ocean.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.1/tides/pole.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.2/tides/mod.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.2/tides/ocean.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.2/tides/pole.rs" <<<"$archive_listing"
           test "$(wc -l <<<"$archive_listing" | tr -d ' ')" -eq 11
 
           if command -v sha256sum >/dev/null 2>&1; then
@@ -252,10 +288,10 @@ jobs:
           path: ${{ steps.package-nif.outputs.file-path }}
 
   publish-release-assets:
-    name: Publish release assets
+    name: Stage draft release assets and checksums
     needs: [asset-check, packaged-source-build, gate, precompile]
     runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/') && needs.asset-check.outputs.should-build == 'true'
+    if: needs.asset-check.outputs.should-build == 'true'
     permissions:
       actions: read
       contents: write
@@ -269,21 +305,50 @@ jobs:
       - name: Attach archives to GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          tag_name: ${{ needs.asset-check.outputs.release-tag }}
+          target_commitish: ${{ github.sha }}
+          draft: true
           files: artifacts/**/*.tar.gz
+
+      - name: Record checksums from the uploaded archives
+        shell: bash
+        run: |
+          mapfile -d '' archives < <(find artifacts -type f -name '*.tar.gz' -print0 | sort -z)
+          if [[ "${#archives[@]}" -ne 9 ]]; then
+            echo "expected 9 precompiled archives, found ${#archives[@]}" >&2
+            exit 1
+          fi
+
+          checksum_file="checksum-Elixir.Sidereon.NIF.exs"
+          printf '%%{\n' > "$checksum_file"
+          for archive in "${archives[@]}"; do
+            name="$(basename "$archive")"
+            sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+            printf '  "%s" => "sha256:%s",\n' "$name" "$sha" >> "$checksum_file"
+          done
+          printf '}\n' >> "$checksum_file"
+
+      - name: Upload checksum file for the release commit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.asset-check.outputs.release-tag }}-checksum
+          path: checksum-Elixir.Sidereon.NIF.exs
 
   load-smoke:
     name: Load smoke / ${{ matrix.target }}${{ matrix.variant && format(' ({0})', matrix.variant) || '' }}
     needs: [asset-check, packaged-source-build, gate, publish-release-assets]
-    # Runs on the initial tag push (after assets publish) AND on the moved
-    # tag after the checksum commit, when builds are skipped: an artifact
+    # Runs while a release branch stages draft assets and again on the final
+    # tag, when builds are skipped: an artifact
     # with the wrong linkage (static crt on musl, too-new glibc floor on the
     # portable variant) builds and checksums fine and only fails at
     # :erlang.load_nif/2, so checksummed assets are not evidence of a
     # loadable NIF. Boot each artifact in a stock image via the consumer
     # install path and dispatch one call through it.
-    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
+    if: always() && !failure() && !cancelled() && needs.asset-check.outputs.release-tag != ''
     permissions:
-      contents: read
+      # Reading an authenticated draft asset requires push access even though
+      # this job never mutates the release.
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -315,14 +380,22 @@ jobs:
           TARGET: ${{ matrix.target }}
           VARIANT: ${{ matrix.variant }}
           MAX_GLIBC: ${{ matrix.max-glibc }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ needs.asset-check.outputs.release-tag }}
         run: |
           version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
           test -n "$version"
           flavor="${TARGET}${VARIANT:+--$VARIANT}"
           asset="libsidereon_nif-v${version}-nif-2.15-${flavor}.so.tar.gz"
-          gh release download "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$asset" --dir /tmp/asset
+          mkdir -p /tmp/asset
+          asset_api_url="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -er --arg tag "$REF_NAME" --arg asset "$asset" '
+                [.[] | select(.tag_name == $tag) | .assets[] | select(.name == $asset) | .url]
+                | if length == 1 then .[0] else error("expected exactly one matching release asset") end
+              '
+          )"
+          gh api -H "Accept: application/octet-stream" "$asset_api_url" \
+            > "/tmp/asset/$asset"
           sha="$(sha256sum "/tmp/asset/$asset" | cut -d ' ' -f 1)"
           printf '%%{\n  "%s" => "sha256:%s"\n}\n' "$asset" "$sha" \
             > checksum-Elixir.Sidereon.NIF.exs
@@ -351,12 +424,19 @@ jobs:
           cat > /tmp/smoke.sh <<'SMOKE'
           set -e
           export HOME=/root MIX_ENV=prod
+          export RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH=/release-nif-cache
           mix local.hex --force
           mix local.rebar --force
           cd /work
           mix deps.get
           mix compile
-          ls _build/prod/lib/sidereon/priv/native/ | grep -F "$FLAVOR"
+          native="libsidereon_nif-v${VERSION}-nif-2.15-${FLAVOR}.so"
+          archive="/release-nif-cache/${native}.tar.gz"
+          installed="_build/prod/lib/sidereon/priv/native/${native}"
+          test -f "$installed"
+          expected_native_sha="$(tar -xOf "$archive" "$native" | sha256sum | cut -d ' ' -f 1)"
+          installed_native_sha="$(sha256sum "$installed" | cut -d ' ' -f 1)"
+          test "$installed_native_sha" = "$expected_native_sha"
           mix run -e '
           case Sidereon.CCSDS.CDM.parse_kvn("") do
             {:error, _} ->
@@ -369,8 +449,10 @@ jobs:
           SMOKE
           docker run --rm \
             -e FLAVOR="${TARGET}${VARIANT:+--$VARIANT}" \
+            -e VERSION="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)" \
             -e SIDEREON_PORTABLE_NIF="${VARIANT:+1}" \
             -v "$PWD":/work -v /tmp/smoke.sh:/smoke.sh \
+            -v /tmp/asset:/release-nif-cache:ro \
             "${{ matrix.image }}" \
             sh /smoke.sh
 
@@ -381,10 +463,11 @@ jobs:
     # compile time with a download error, which is a worse experience than
     # compiling from source. Verify the two sets agree before anyone consumes
     # the tag.
-    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
+    if: always() && !failure() && !cancelled() && needs.asset-check.outputs.release-tag != ''
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Draft assets are hidden from a read-only token.
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -392,23 +475,24 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ needs.asset-check.outputs.release-tag }}
         run: |
-          # Two-stage release: the first tag push builds and publishes the
-          # assets, and the checksum file is only committed afterwards, with the
-          # tag moved onto that commit. So on the first pass the checksum file
-          # still describes the previous version and cannot match - the pairing
-          # is only meaningful once the file names this version.
+          # Branch preparation builds draft assets before the immutable release
+          # tag exists. The branch pass still carries the previous checksum file;
+          # exact pairing is enforced when the final tag points at the commit
+          # that records the freshly measured checksums.
           version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
           if ! grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs; then
             echo "checksum file does not describe ${version} yet; this is the " \
                  "asset-publishing pass of the two-stage release. The pairing " \
-                 "is enforced on the moved tag."
+                 "is enforced on the final immutable tag."
             exit 0
           fi
 
-          gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[].name' | sort > /tmp/assets.txt
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg tag "$REF_NAME" \
+              '.[] | select(.tag_name == $tag) | .assets[].name' |
+            sort > /tmp/assets.txt
           grep -oE '"[^"]+\.tar\.gz"' checksum-Elixir.Sidereon.NIF.exs \
             | tr -d '"' | sort > /tmp/checksums.txt
 
@@ -418,4 +502,35 @@ jobs:
           if ! diff -u /tmp/checksums.txt /tmp/assets.txt; then
             echo "::error::checksum file and published assets disagree" >&2
             exit 1
+          fi
+
+  publish-draft-release:
+    name: Publish verified draft release
+    needs: [asset-check, load-smoke, checksum-asset-parity]
+    if: startsWith(github.ref, 'refs/tags/') && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Publish only the checksum-complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ needs.asset-check.outputs.release-tag }}
+        run: |
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          release_id="$(
+            jq -er --arg tag "$REF_NAME" '
+              [.[] | select(.tag_name == $tag)]
+              | if length == 1 then .[0].id else error("expected exactly one matching release") end
+            ' <<<"$release_json"
+          )"
+          is_draft="$(jq -r --argjson id "$release_id" '.[] | select(.id == $id) | .draft' <<<"$release_json")"
+          if [[ "$is_draft" == "true" ]]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false >/dev/null
           fi

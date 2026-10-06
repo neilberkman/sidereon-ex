@@ -1,5 +1,5 @@
 {
-  "source": "sidereon-core e2fb3dfdc392d23087ed8aa1ee028a0056b4021b simulate_scenario of g01_two_epochs.json",
+  "source": "sidereon-core 8694648892d8ab065d94014e2e21d6cd5054818e simulate_scenario of g01_two_epochs.json",
   "observations": {
     "epoch_offsets": [
       0,
