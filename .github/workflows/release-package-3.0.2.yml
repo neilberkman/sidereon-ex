@@ -1,10 +1,7 @@
-# Temporary 3.0.2 publication preparation; remove after the release is published.
-name: Prepare reviewed Hex 3.0.2 artifacts
+# Temporary 3.0.2 publication recovery; remove after the release is published.
+name: Recover reviewed Hex 3.0.2 artifacts
 
 on:
-  push:
-    tags:
-      - "v3.0.2"
   workflow_dispatch:
 
 permissions:
@@ -12,17 +9,25 @@ permissions:
 
 jobs:
   package-and-docs:
-    name: Build reviewable Hex package and docs
+    name: Build exact-tag package and reviewed docs overlay
     runs-on: ubuntu-22.04
+    env:
+      PACKAGE_TAG: v3.0.2
+      PACKAGE_TAG_COMMIT: 94570c271e44f518e46c7fd05132d760f0e1df04
+      SIDEREON_BUILD: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 94570c271e44f518e46c7fd05132d760f0e1df04
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Require the final immutable release tag
+      - name: Require the exact immutable release tag
         shell: bash
         run: |
-          test "$GITHUB_REF_TYPE" = tag
-          test "$GITHUB_REF_NAME" = v3.0.2
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$(git rev-parse HEAD)" = "$PACKAGE_TAG_COMMIT"
+          test "$(git rev-list -n 1 "$PACKAGE_TAG")" = "$PACKAGE_TAG_COMMIT"
           test "$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)" = 3.0.2
           grep -q -- '-v3.0.2-' checksum-Elixir.Sidereon.NIF.exs
           test "$(grep -c -- '=> "sha256:' checksum-Elixir.Sidereon.NIF.exs)" -eq 9
@@ -31,6 +36,7 @@ jobs:
             echo "release manifests still contain a Git or path dependency" >&2
             exit 1
           fi
+          test -z "$(git status --short)"
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
@@ -51,20 +57,76 @@ jobs:
           workspaces: native/sidereon_nif
           shared-key: release-3.0.2-hex-docs
 
-      - name: Fetch dependencies and build documentation
-        env:
-          SIDEREON_BUILD: "1"
+      - name: Build the package from the clean immutable tag
+        shell: bash
         run: |
           mix deps.get
           mix compile --warnings-as-errors
-          mix docs --warnings-as-errors
-          test -s doc/index.html
-
-      - name: Build exact package and documentation archives
-        shell: bash
-        run: |
+          test -z "$(git status --short --untracked-files=no)"
           mkdir -p dist
           mix hex.build --output dist/sidereon-3.0.2.tar
+          test -s dist/sidereon-3.0.2.tar
+          sha256sum dist/sidereon-3.0.2.tar > dist/PACKAGE-TAG-SHA256
+          test -z "$(git status --short --untracked-files=no)"
+
+      - name: Apply the reviewed documentation-only overlay
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "lib/sidereon/constellation.ex": [
+                  (
+                      "`Sidereon.Coverage.look_angle_error/0` value.",
+                      "`t:Sidereon.Coverage.look_angle_error/0` value.",
+                  )
+              ],
+              "lib/sidereon/gnss/observables.ex": [
+                  (
+                      "          Types.ecef_input(),",
+                      "          {number(), number(), number()} | %{x_m: number(), y_m: number(), z_m: number()},",
+                  )
+              ],
+              "lib/sidereon/terrain/mmap_terrain.ex": [
+                  (
+                      "    its source path, original message, and complete nested `Sidereon.Terrain.tile_error/0`.",
+                      "    its source path, original message, and complete nested\n"
+                      "    `t:Sidereon.Terrain.tile_error/0`.",
+                  )
+              ],
+          }
+
+          for name, edits in replacements.items():
+              path = Path(name)
+              text = path.read_text()
+              for old, new in edits:
+                  if text.count(old) != 1:
+                      raise SystemExit(f"expected exactly one reviewed docs match in {name}")
+                  text = text.replace(old, new)
+              path.write_text(text)
+          PY
+
+          git diff --binary -- \
+            lib/sidereon/constellation.ex \
+            lib/sidereon/gnss/observables.ex \
+            lib/sidereon/terrain/mmap_terrain.ex \
+            > dist/DOCS-ONLY-OVERLAY.patch
+          git diff --name-only | sort > dist/DOCS-OVERLAY-FILES.txt
+          cat > /tmp/expected-docs-overlay-files.txt <<'FILES'
+          lib/sidereon/constellation.ex
+          lib/sidereon/gnss/observables.ex
+          lib/sidereon/terrain/mmap_terrain.ex
+          FILES
+          diff -u /tmp/expected-docs-overlay-files.txt dist/DOCS-OVERLAY-FILES.txt
+          test -s dist/DOCS-ONLY-OVERLAY.patch
+
+      - name: Build warning-clean documentation from the reviewed overlay
+        shell: bash
+        run: |
+          mix docs --warnings-as-errors
+          test -s doc/index.html
+          sha256sum -c dist/PACKAGE-TAG-SHA256
           mix run --no-start -e '
           files =
             "doc/**"
@@ -85,6 +147,7 @@ jobs:
           test -s dist/sidereon-3.0.2-docs.tar.gz
           test "$(stat -c %s dist/sidereon-3.0.2.tar)" -le 8388608
           test "$(stat -c %s dist/sidereon-3.0.2-docs.tar.gz)" -le 8388608
+          sha256sum -c dist/PACKAGE-TAG-SHA256
 
           mix run --no-start -e '
           result = Hex.Tar.unpack!("dist/sidereon-3.0.2.tar", :memory)
@@ -98,16 +161,8 @@ jobs:
             raise "unexpected package identity #{inspect(name)} #{inspect(version)}"
           end
 
-          names =
-            Enum.map(result.contents, fn entry ->
-              entry |> elem(0) |> to_string()
-            end)
-
-          unpacked_bytes =
-            Enum.reduce(result.contents, 0, fn entry, total ->
-              total + byte_size(elem(entry, 1))
-            end)
-
+          names = Enum.map(result.contents, fn entry -> entry |> elem(0) |> to_string() end)
+          unpacked_bytes = Enum.reduce(result.contents, 0, fn entry, total -> total + byte_size(elem(entry, 1)) end)
           if unpacked_bytes > 67_108_864, do: raise("unpacked package exceeds 64 MiB")
           File.write!("dist/PACKAGE-CONTENTS.txt", Enum.join(Enum.sort(names), "\n") <> "\n")
 
@@ -118,25 +173,31 @@ jobs:
             )
 
           docs_bytes = Enum.reduce(docs, 0, fn {_name, body}, total -> total + byte_size(body) end)
-          if docs_bytes > 67_108_864, do: raise("unpacked docs exceed 64 MiB")
-
-          docs_names = Enum.map(docs, fn {name, _body} -> to_string(name) end)
+          if docs_bytes > 67_108_864, do: raise("unpacked docs exceeds 64 MiB")
+          docs_names = Enum.map(docs, fn {entry_name, _body} -> to_string(entry_name) end)
           File.write!("dist/DOCS-CONTENTS.txt", Enum.join(Enum.sort(docs_names), "\n") <> "\n")
           '
           grep -Fxq mix.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq checksum-Elixir.Sidereon.NIF.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq THIRD-PARTY-NOTICES.md dist/PACKAGE-CONTENTS.txt
           grep -Fxq native/sidereon_nif/Cargo.lock dist/PACKAGE-CONTENTS.txt
+          grep -Fxq index.html dist/DOCS-CONTENTS.txt
 
           (
             cd dist
             sha256sum sidereon-3.0.2.tar sidereon-3.0.2-docs.tar.gz > SHA256SUMS
           )
-          grep -Fxq index.html dist/DOCS-CONTENTS.txt
-
+          overlay_sha="$(sha256sum dist/DOCS-ONLY-OVERLAY.patch | cut -d ' ' -f 1)"
+          package_sha="$(sha256sum dist/sidereon-3.0.2.tar | cut -d ' ' -f 1)"
+          docs_sha="$(sha256sum dist/sidereon-3.0.2-docs.tar.gz | cut -d ' ' -f 1)"
           {
-            echo "tag=$GITHUB_REF_NAME"
-            echo "commit=$GITHUB_SHA"
+            echo "package_tag=$PACKAGE_TAG"
+            echo "package_tag_commit=$PACKAGE_TAG_COMMIT"
+            echo "package_sha256=$package_sha"
+            echo "docs_source_base_commit=$PACKAGE_TAG_COMMIT"
+            echo "docs_overlay_patch_sha256=$overlay_sha"
+            echo "docs_sha256=$docs_sha"
+            echo "workflow_source_commit=$GITHUB_SHA"
             echo "elixir=$(elixir --version | tail -1)"
             echo "hex=$(mix run --no-start -e 'IO.write(Hex.version())')"
             wc -c dist/sidereon-3.0.2.tar dist/sidereon-3.0.2-docs.tar.gz
@@ -145,13 +206,16 @@ jobs:
       - name: Upload reviewed publication inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sidereon-hex-3.0.2-${{ github.sha }}
+          name: sidereon-hex-3.0.2-recovery-${{ github.sha }}
           retention-days: 30
           if-no-files-found: error
           path: |
             dist/sidereon-3.0.2.tar
             dist/sidereon-3.0.2-docs.tar.gz
             dist/SHA256SUMS
+            dist/PACKAGE-TAG-SHA256
             dist/PACKAGE-CONTENTS.txt
             dist/DOCS-CONTENTS.txt
+            dist/DOCS-ONLY-OVERLAY.patch
+            dist/DOCS-OVERLAY-FILES.txt
             dist/BUILD-IDENTITY.txt
