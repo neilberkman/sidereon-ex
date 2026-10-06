@@ -34,11 +34,9 @@ defmodule Sidereon.Astro.Relative do
 
   def cw_stm(n, dt), do: call_direct(:relative_cw_stm, [n / 1.0, dt / 1.0])
   def cw_propagate(%State{} = rel, n, dt), do: call_state(:relative_cw_propagate, [state_map(rel), n / 1.0, dt / 1.0])
-  def mean_motion_circular(radius_km),
-    do: call_direct(:relative_mean_motion_circular, [radius_km / 1.0])
+  def mean_motion_circular(radius_km), do: call_direct(:relative_mean_motion_circular, [radius_km / 1.0])
 
-  def mean_motion_from_state(%State{} = chief),
-    do: call_direct(:relative_mean_motion_from_state, [state_map(chief)])
+  def mean_motion_from_state(%State{} = chief), do: call_direct(:relative_mean_motion_from_state, [state_map(chief)])
 
   def rotation!(frame, chief), do: bang(rotation(frame, chief))
   def relative_state!(chief, deputy), do: bang(relative_state(chief, deputy))

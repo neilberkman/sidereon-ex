@@ -15,10 +15,8 @@ defmodule Sidereon.Astro.RelativeErrorContractTest do
     calls = [
       {fn -> Relative.rotation(:rsw, zero) end, fn -> Relative.rotation!(:rsw, zero) end},
       {fn -> Relative.cw_stm(0.0, 1.0) end, fn -> Relative.cw_stm!(0.0, 1.0) end},
-      {fn -> Relative.mean_motion_circular(0.0) end,
-       fn -> Relative.mean_motion_circular!(0.0) end},
-      {fn -> Relative.mean_motion_from_state(zero) end,
-       fn -> Relative.mean_motion_from_state!(zero) end}
+      {fn -> Relative.mean_motion_circular(0.0) end, fn -> Relative.mean_motion_circular!(0.0) end},
+      {fn -> Relative.mean_motion_from_state(zero) end, fn -> Relative.mean_motion_from_state!(zero) end}
     ]
 
     for {call, bang_call} <- calls do
