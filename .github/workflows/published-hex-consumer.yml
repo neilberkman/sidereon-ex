@@ -41,7 +41,7 @@ jobs:
           mix local.rebar --force
           consumer="$RUNNER_TEMP/sidereon-public-consumer"
           rm -rf "$consumer"
-          mix new "$consumer" --sup
+          mix new "$consumer" --app sidereon_public_consumer --sup
           cp "$GITHUB_WORKSPACE/.github/scripts/published_hex_consumer_test.exs" \
             "$consumer/test/published_hex_consumer_test.exs"
           cat > "$consumer/mix.exs" <<'ELIXIR'
