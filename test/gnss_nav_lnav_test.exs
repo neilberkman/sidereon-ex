@@ -206,6 +206,18 @@ defmodule Sidereon.GNSS.Navigation.LNAVTest do
       end
     end
 
+    test "HOW helpers restore full-subframe complementation and preserve standalone words" do
+      {:ok, sfs} = LNAV.encode(params(), tow: 54_321, integrity: 1)
+      sf1 = sfs[1]
+      transmitted_how = Enum.slice(sf1, 30, 30)
+
+      assert Enum.at(sf1, 29) == 1
+      assert LNAV.tow(sf1) == {:ok, 54_321}
+      assert LNAV.subframe_id(sf1) == {:ok, 1}
+      assert LNAV.tow(transmitted_how) == {:ok, Bitwise.bxor(0x1FFFF, 54_321)}
+      assert LNAV.subframe_id(transmitted_how) == {:ok, Bitwise.bxor(0b111, 1)}
+    end
+
     test "each subframe is 300 bits, each word 30 bits" do
       {:ok, sfs} = LNAV.encode(params())
 

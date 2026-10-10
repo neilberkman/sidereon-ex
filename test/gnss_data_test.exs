@@ -124,6 +124,52 @@ defmodule Sidereon.GNSS.DataTest do
     assert File.read!(nav_path) == "product"
   end
 
+  test "legacy CODE .Z fetch uses the exact dated distribution compression", %{root: root} do
+    archive =
+      Path.join(__DIR__, "fixtures/gnss_data/igs22376.sp3.Z.b64")
+      |> File.read!()
+      |> String.replace(~r/\s+/, "")
+      |> Base.decode64!()
+
+    expected = ExactSp3Fixture.build(~D[2022-11-26], agency: "IGS", sample_s: 900)
+    assert {:ok, product} = Data.product(:cod, :sp3, ~D[2020-06-25])
+
+    assert {:ok, "https://www.aiub.unibe.ch/download/CODE_MGEX/CODE/2020/COM21114.EPH.Z" = url} =
+             Data.archive_url(product)
+
+    assert {:ok, path} =
+             Data.fetch(product,
+               cache_dir: root,
+               http_client: fn ^url, _opts -> {:ok, 200, archive} end
+             )
+
+    assert File.read!(path) == expected
+  end
+
+  test "current CODE fetch retains gzip and explicit compression overrides", %{root: root} do
+    assert {:ok, product} = Data.product(:cod, :sp3, ~D[2026-10-10])
+    assert {:ok, url} = Data.archive_url(product)
+    assert String.ends_with?(url, ".gz")
+    body = "current CODE product"
+
+    assert {:ok, path} =
+             Data.fetch(product,
+               cache_dir: root,
+               http_client: fn ^url, _opts -> {:ok, 200, :zlib.gzip(body)} end
+             )
+
+    assert File.read!(path) == body
+    File.rm!(path)
+
+    assert {:ok, ^path} =
+             Data.fetch(%{product | compression: "none"},
+               cache_dir: root,
+               http_client: fn ^url, _opts -> {:ok, 200, body} end
+             )
+
+    assert File.read!(path) == body
+  end
+
   test "legacy fetch bounds the complete gzip member sequence before cache publication", %{root: root} do
     {:ok, product} = Data.mgex_sp3(:esa, ~D[2020-06-24])
     {:ok, filename} = Data.canonical_filename(product)
