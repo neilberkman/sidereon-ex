@@ -16,6 +16,30 @@ defmodule Sidereon.LambertTest do
     assert_relative(arrival, {-3.405994961791248, 5.41198791828363, 0.0}, "arrival")
   end
 
+  test "reports typed Lambert failures instead of successful zero vectors" do
+    cases = [
+      {
+        [{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, 0, 0, 0, 1.0],
+        :zero_vector,
+        "position vector has near-zero magnitude"
+      },
+      {
+        [{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, 0, 0, 0, 0.0],
+        :non_positive_time_of_flight,
+        "time of flight must be strictly positive"
+      },
+      {
+        [{1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, 0, 0, 0, 1.0],
+        :degenerate_geometry,
+        "transfer-plane geometry is degenerate"
+      }
+    ]
+
+    for {args, reason, message} <- cases do
+      assert {:error, {^reason, ^message}} = apply(Sidereon.Lambert, :solve, args)
+    end
+  end
+
   defp assert_relative(actual, expected, label) do
     for axis <- 0..2 do
       got = elem(actual, axis)
