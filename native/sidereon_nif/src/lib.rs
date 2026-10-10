@@ -847,7 +847,8 @@ fn iod_gauss<'a>(
 
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
-fn lambert_battin(
+fn lambert_battin<'a>(
+    env: Env<'a>,
     r1: Vec3,
     r2: Vec3,
     v1: Vec3,
@@ -855,8 +856,8 @@ fn lambert_battin(
     de: i32,
     nrev: i32,
     dtsec: f64,
-) -> NifResult<(Vec3, Vec3)> {
-    lambert::lambert_battin_impl(r1, r2, v1, dm, de, nrev, dtsec)
+) -> Term<'a> {
+    lambert::lambert_battin_impl(env, r1, r2, v1, dm, de, nrev, dtsec)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
