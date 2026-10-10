@@ -626,8 +626,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sidereon"
 version = "3.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a424bd9dea809b4cf2b816c27aa129a3e437b95139389ecbc94416aeee27951"
+source = "git+https://github.com/neilberkman/sidereon?rev=2025d853d9cb08cb1367166fa09e594bec6aa7f6#2025d853d9cb08cb1367166fa09e594bec6aa7f6"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -637,8 +636,7 @@ dependencies = [
 [[package]]
 name = "sidereon-core"
 version = "3.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29f682ba7089c512d83cfea712bdc6ce9caac5e46d9acbeca7a1b2151ad8ee5b"
+source = "git+https://github.com/neilberkman/sidereon?rev=2025d853d9cb08cb1367166fa09e594bec6aa7f6#2025d853d9cb08cb1367166fa09e594bec6aa7f6"
 dependencies = [
  "approx",
  "cc",
@@ -747,8 +745,7 @@ dependencies = [
 [[package]]
 name = "trust-region-least-squares"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "362e767929e65ad1599d79014d73a8fcba6c390392572ec44c8e7e49c8e4f1c3"
+source = "git+https://github.com/neilberkman/sidereon?rev=2025d853d9cb08cb1367166fa09e594bec6aa7f6#2025d853d9cb08cb1367166fa09e594bec6aa7f6"
 dependencies = [
  "libloading 0.8.9",
  "nalgebra",
