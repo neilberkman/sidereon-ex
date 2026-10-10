@@ -4,9 +4,7 @@
 //! the core engine; this layer only converts tuples to arrays and enum codes.
 
 use rustler::{Encoder, Env, Term};
-use sidereon_core::astro::lambert::{
-    battin, DirectionOfEnergy, DirectionOfMotion, LambertError,
-};
+use sidereon_core::astro::lambert::{battin, DirectionOfEnergy, DirectionOfMotion, LambertError};
 
 mod atoms {
     rustler::atoms! {
@@ -47,9 +45,7 @@ pub(crate) fn lambert_battin_impl<'a>(
     };
 
     match battin(&r1a, &r2a, &v1a, dm, de, nrev, dtsec) {
-        Ok((v1t, v2t)) => {
-            ((v1t[0], v1t[1], v1t[2]), (v2t[0], v2t[1], v2t[2])).encode(env)
-        }
+        Ok((v1t, v2t)) => ((v1t[0], v1t[1], v1t[2]), (v2t[0], v2t[1], v2t[2])).encode(env),
         Err(error) => (atoms::error(), (error_atom(error), error.to_string())).encode(env),
     }
 }
