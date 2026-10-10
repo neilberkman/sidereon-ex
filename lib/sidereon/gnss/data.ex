@@ -5669,8 +5669,14 @@ defmodule Sidereon.GNSS.Data do
   defp product_archive_compression(%Product{compression: compression}) when is_binary(compression),
     do: {:ok, compression}
 
-  defp product_archive_compression(%Product{} = product),
-    do: core(NIF.data_archive_compression(product.center, product.product_type))
+  defp product_archive_compression(%Product{} = product) do
+    # Resolve the same dated identity and distributor as archive_url/1. The
+    # date-free convention cannot describe historical .Z products.
+    with {:ok, identity} <- Distribution.identity(product),
+         {:ok, location} <- Distribution.location(identity, :direct) do
+      {:ok, Atom.to_string(location.compression)}
+    end
+  end
 
   defp absent_center(center, filename, pattern, candidate_url, reason) do
     {reason_text, detail} = absence_reason(reason)

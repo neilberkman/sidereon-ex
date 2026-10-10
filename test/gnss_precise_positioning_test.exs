@@ -412,6 +412,15 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
 
       assert position_error(sol.position, @truth) < 1.0e-3
     end
+
+    test "enabled SPP troposphere rejects invalid seed meteorology", ctx do
+      assert {:error, {:code_seed_failed, 0, "invalid SPP input met.pressure_hpa: not positive"}} =
+               PrecisePositioning.solve_ppp_auto_init_float(ctx.sp3, ctx.epoch_observations,
+                 spp_initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, 0.0},
+                 spp_troposphere: true,
+                 spp_met: %{pressure_hpa: 0.0, temperature_k: 288.15, relative_humidity: 0.5}
+               )
+    end
   end
 
   describe "solve_ppp_auto_init_fixed/3 (core auto-init driver delegation)" do
