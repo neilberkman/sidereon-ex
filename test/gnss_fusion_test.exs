@@ -92,6 +92,38 @@ defmodule Sidereon.GNSSFusionTest do
                Fusion.ImuSimulator.sample_increment(simulator, truth)
     end
 
+    test "standalone mechanizer preserves public inertial error variants" do
+      nav_state = Map.delete(initial_state(), :covariance_diagonal)
+      {:ok, mechanizer} = Fusion.StrapdownMechanizer.new(nav_state)
+
+      non_monotonic_sample = %Fusion.ImuSample{
+        t_j2000_s: 0.0,
+        kind: :increment,
+        delta_velocity_mps: {0.0, 0.0, 0.0},
+        delta_theta_rad: {0.0, 0.0, 0.0},
+        dt_s: 0.1
+      }
+
+      assert {:error, :non_monotonic_sample} =
+               Fusion.StrapdownMechanizer.propagate(mechanizer, non_monotonic_sample)
+
+      singular = diagonal3(-1.0)
+
+      assert {:error, :singular_calibration} =
+               Fusion.StrapdownMechanizer.new(nav_state,
+                 imu_model: %{
+                   accel_scale_misalignment: singular,
+                   gyro_scale_misalignment: diagonal3(0.0)
+                 }
+               )
+
+      assert {:error, {:invalid_input, "attitude_body_to_ecef", "matrix is not orthonormal"}} =
+               Fusion.StrapdownMechanizer.new(%{
+                 nav_state
+                 | attitude_body_to_ecef: diagonal3(2.0)
+               })
+    end
+
     test "encodes and decodes state bytes" do
       {:ok, filter} = Fusion.new(initial_state(), config(:ekf))
       assert {:ok, bytes} = Fusion.encode_state(filter)
