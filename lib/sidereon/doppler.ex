@@ -36,7 +36,7 @@ defmodule Sidereon.Doppler do
   ## Returns
 
   A map with:
-    - `:range_rate_km_s` - radial velocity in km/s (positive = approaching)
+    - `:range_rate_km_s` - radial velocity in km/s (positive = receding)
     - `:doppler_hz` - Doppler shift in Hz (positive = frequency increase)
     - `:doppler_ratio` - dimensionless Doppler ratio (-range_rate / c)
 

@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Correct Doppler range-rate documentation to state that positive values mean
+  receding; the calculation is unchanged.
 - Select transport compression from the exact dated product identity during GNSS fetches, so historical CODE `.Z` archives are decoded as Unix compress while current gzip products retain their behavior.
 - Failed Lambert transfers return typed errors instead of successful zero velocity vectors.
 
