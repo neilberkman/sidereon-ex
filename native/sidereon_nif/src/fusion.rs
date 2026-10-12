@@ -40,7 +40,8 @@ use sidereon_core::inertial::{
     simulate_imu_samples_from_increments as core_simulate_imu_samples_from_increments,
     true_imu_increment_between as core_true_imu_increment_between, ConingCorrection, ImuBias,
     ImuCalibration, ImuErrorModel, ImuGrade, ImuRateRandomWalk, ImuSample, ImuSimulationOptions,
-    ImuSimulationOutput, ImuSimulator, ImuSpec, MechanizationConfig, NavState, StrapdownMechanizer,
+    ImuSimulationOutput, ImuSimulator, ImuSpec, InertialError, MechanizationConfig, NavState,
+    StrapdownMechanizer,
 };
 use sidereon_core::GnssSatelliteId;
 
@@ -57,6 +58,9 @@ mod atoms {
         non_positive_semidefinite,
         non_positive_definite,
         nominal_state,
+        non_monotonic_sample,
+        singular_calibration,
+        degenerate_attitude,
         poisoned_resource,
         codec
     }
@@ -135,11 +139,40 @@ fn fusion_strapdown_new<'a>(
     model: ImuModelTerm,
     config: MechanizationTerm,
 ) -> Term<'a> {
-    let state = match decode_nav_state(state) {
-        Ok(state) => state,
+    let position_ecef_m = match vec3(state.position_ecef_m, "position_ecef_m") {
+        Ok(value) => value,
         Err(error) => return fusion_error(env, error),
     };
-    let model = match decode_imu_model(model) {
+    let velocity_ecef_mps = match vec3(state.velocity_ecef_mps, "velocity_ecef_mps") {
+        Ok(value) => value,
+        Err(error) => return fusion_error(env, error),
+    };
+    let attitude_body_to_ecef = match mat3(state.attitude_body_to_ecef, "attitude_body_to_ecef") {
+        Ok(value) => value,
+        Err(error) => return fusion_error(env, error),
+    };
+    let nav_state = match NavState::new(
+        state.t_j2000_s,
+        position_ecef_m,
+        velocity_ecef_mps,
+        attitude_body_to_ecef,
+    ) {
+        Ok(state) => state,
+        Err(error) => return fusion_inertial_error(env, error),
+    };
+    let accel_bias_mps2 = match vec3(state.accel_bias_mps2, "accel_bias_mps2") {
+        Ok(value) => value,
+        Err(error) => return fusion_error(env, error),
+    };
+    let gyro_bias_rps = match vec3(state.gyro_bias_rps, "gyro_bias_rps") {
+        Ok(value) => value,
+        Err(error) => return fusion_error(env, error),
+    };
+    let state = match nav_state.with_biases(accel_bias_mps2, gyro_bias_rps) {
+        Ok(state) => state,
+        Err(error) => return fusion_inertial_error(env, error),
+    };
+    let model = match decode_imu_model_term(model) {
         Ok(model) => model,
         Err(error) => return fusion_error(env, error),
     };
@@ -148,11 +181,10 @@ fn fusion_strapdown_new<'a>(
         Err(error) => return fusion_error(env, error),
     };
     let mechanizer = match StrapdownMechanizer::new(state)
-        .map_err(FusionError::from)
-        .and_then(|mechanizer| mechanizer.with_imu_model(model).map_err(FusionError::from))
+        .and_then(|mechanizer| mechanizer.with_imu_model(model))
     {
         Ok(mechanizer) => mechanizer.with_config(config),
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_error(env, error),
     };
     (
         atoms::ok(),
@@ -190,7 +222,7 @@ fn fusion_strapdown_propagate<'a>(
     };
     match mechanizer.propagate(sample) {
         Ok(state) => (atoms::ok(), encode_nav_state(state)).encode(env),
-        Err(error) => fusion_error(env, FusionError::from(error)),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -1482,7 +1514,14 @@ fn decode_corrected_increment(
 }
 
 fn decode_imu_model(term: ImuModelTerm) -> Result<ImuErrorModel, FusionError> {
-    let model = ImuErrorModel {
+    let model = decode_imu_model_term(term)?;
+    model.bias.validate().map_err(FusionError::from)?;
+    model.calibration.validate().map_err(FusionError::from)?;
+    Ok(model)
+}
+
+fn decode_imu_model_term(term: ImuModelTerm) -> Result<ImuErrorModel, FusionError> {
+    Ok(ImuErrorModel {
         bias: ImuBias {
             accel_mps2: vec3(term.bias.accel_mps2, "imu_model.bias.accel_mps2")?,
             gyro_rps: vec3(term.bias.gyro_rps, "imu_model.bias.gyro_rps")?,
@@ -1497,10 +1536,7 @@ fn decode_imu_model(term: ImuModelTerm) -> Result<ImuErrorModel, FusionError> {
                 "imu_model.calibration.gyro_scale_misalignment",
             )?,
         },
-    };
-    model.bias.validate().map_err(FusionError::from)?;
-    model.calibration.validate().map_err(FusionError::from)?;
-    Ok(model)
+    })
 }
 
 fn decode_mechanization(term: MechanizationTerm) -> Result<MechanizationConfig, FusionError> {
@@ -2004,6 +2040,18 @@ fn fusion_error<'a>(env: Env<'a>, error: FusionError) -> Term<'a> {
         FusionError::Ut1OutsideCoverage(reason) => {
             crate::errors::ut1_outside_coverage_term(env, reason)
         }
+    };
+    (atoms::error(), reason).encode(env)
+}
+
+fn fusion_inertial_error<'a>(env: Env<'a>, error: InertialError) -> Term<'a> {
+    let reason = match error {
+        InertialError::InvalidInput { field, reason } => {
+            (atoms::invalid_input(), field, reason).encode(env)
+        }
+        InertialError::NonMonotonicSample => atoms::non_monotonic_sample().encode(env),
+        InertialError::SingularCalibration => atoms::singular_calibration().encode(env),
+        InertialError::DegenerateAttitude => atoms::degenerate_attitude().encode(env),
     };
     (atoms::error(), reason).encode(env)
 }
