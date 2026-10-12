@@ -268,6 +268,8 @@ defmodule SidereonBuild012BindingsTest do
     assert {:ok, result} = ARAIM.araim(geometry, ism, ARAIM.IntegrityAllocation.lpv_200())
     refute result.available
     refute result.availability
+    assert result.hpl_m == :infinity
+    assert result.vpl_m == :infinity
   end
 
   test "ARAIM bad LOS list returns a typed error" do

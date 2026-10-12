@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- ARAIM preserves unbounded HPL and VPL as `:infinity`, instead of changing
+  them to the largest finite float.
 - Standalone inertial mechanization, simulation, and truth helpers preserve
   specific failures instead of reporting them as nominal-state errors.
 - Correct Doppler range-rate documentation to state that positive values mean

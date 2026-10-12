@@ -29,7 +29,8 @@ mod atoms {
         unmonitorable_fault_mass,
         numerical_failure,
         invalid_ism,
-        invalid_allocation
+        invalid_allocation,
+        infinity
     }
 }
 
@@ -45,16 +46,32 @@ struct FaultModeTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+#[rustler(encode)]
 struct AraimResultTerm {
     available: bool,
-    hpl_m: f64,
-    vpl_m: f64,
+    hpl_m: ProtectionLevelTerm,
+    vpl_m: ProtectionLevelTerm,
     sigma_acc_h_m: f64,
     sigma_acc_v_m: f64,
     emt_m: f64,
     fault_modes: Vec<FaultModeTerm>,
     p_unmonitored: f64,
     availability: bool,
+}
+
+#[derive(Debug, Clone)]
+enum ProtectionLevelTerm {
+    Finite(f64),
+    Infinity,
+}
+
+impl Encoder for ProtectionLevelTerm {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        match self {
+            Self::Finite(value) => value.encode(env),
+            Self::Infinity => atoms::infinity().encode(env),
+        }
+    }
 }
 
 pub(crate) fn sat_id(token: &str) -> NifResult<GnssSatelliteId> {
@@ -235,11 +252,19 @@ fn nif_float(value: f64) -> f64 {
     }
 }
 
+fn protection_level_term(value: f64) -> ProtectionLevelTerm {
+    if value == f64::INFINITY {
+        ProtectionLevelTerm::Infinity
+    } else {
+        ProtectionLevelTerm::Finite(value)
+    }
+}
+
 fn result_term(result: sidereon_core::araim::AraimResult) -> AraimResultTerm {
     AraimResultTerm {
         available: result.available,
-        hpl_m: nif_float(result.hpl_m),
-        vpl_m: nif_float(result.vpl_m),
+        hpl_m: protection_level_term(result.hpl_m),
+        vpl_m: protection_level_term(result.vpl_m),
         sigma_acc_h_m: nif_float(result.sigma_acc_h_m),
         sigma_acc_v_m: nif_float(result.sigma_acc_v_m),
         emt_m: nif_float(result.emt_m),
