@@ -551,9 +551,11 @@ defmodule Sidereon.GNSS.ARAIM do
     @moduledoc """
     ARAIM protection-level result.
 
-    `:hpl_m`, `:vpl_m`, `:emt_m`, and sigma fields are meters. `:available`
-    is true when the protection-level solve met the supplied allocation.
-    `:availability` is kept as an alias.
+    `:hpl_m`, `:vpl_m`, `:emt_m`, and sigma fields are meters. Positive-infinite
+    HPL and VPL bounds are represented as `:infinity`; an unavailable result can
+    contain finite or unbounded bounds. `:available` is true when the
+    protection-level solve met the supplied allocation. `:availability` is kept
+    as an alias.
     """
 
     alias Sidereon.GNSS.ARAIM.FaultMode
@@ -582,8 +584,8 @@ defmodule Sidereon.GNSS.ARAIM do
     ]
 
     @type t :: %__MODULE__{
-            hpl_m: float(),
-            vpl_m: float(),
+            hpl_m: float() | :infinity,
+            vpl_m: float() | :infinity,
             sigma_acc_h_m: float(),
             sigma_acc_v_m: float(),
             emt_m: float(),
@@ -605,7 +607,9 @@ defmodule Sidereon.GNSS.ARAIM do
   @doc """
   Run ARAIM for a geometry snapshot, ISM input, and integrity allocation.
 
-  Returned HPL, VPL, EMT, and accuracy sigma values are meters.
+  Returned HPL, VPL, EMT, and accuracy sigma values are meters. Positive-infinite
+  HPL and VPL bounds are represented as `:infinity`; unavailable results can
+  also contain finite bounds.
   """
   @spec araim(Geometry.t(), Ism.t(), IntegrityAllocation.t()) :: {:ok, Result.t()} | {:error, araim_error()}
   def araim(%Geometry{} = geometry, %Ism{} = ism, %IntegrityAllocation{} = allocation) do
