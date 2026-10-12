@@ -124,6 +124,41 @@ defmodule Sidereon.GNSSFusionTest do
                })
     end
 
+    test "standalone IMU simulation preserves public inertial failure details" do
+      invalid_spec = %{zero_imu_spec() | accel_vrw_mps_sqrt_s: -1.0}
+
+      assert {:error, {:invalid_input, "accel_vrw_mps_sqrt_s", "must be non-negative"}} =
+               Fusion.ImuSimulator.new(invalid_spec)
+
+      assert {:error, :singular_calibration} =
+               Fusion.ImuSimulator.new(:navigation,
+                 calibration: %{accel_scale_misalignment: diagonal3(-1.0)}
+               )
+
+      {:ok, simulator} = Fusion.ImuSimulator.new(:navigation)
+
+      invalid_increment = %{
+        t_j2000_s: 0.0,
+        delta_velocity_mps: {0.0, 0.0, 0.0},
+        delta_theta_rad: {0.0, 0.0, 0.0},
+        dt_s: 0.0
+      }
+
+      assert {:error, {:invalid_input, "increment.dt_s", "must be positive"}} =
+               Fusion.ImuSimulator.sample_increment(simulator, invalid_increment)
+
+      assert {:error, {:invalid_input, "increment.dt_s", "must be positive"}} =
+               Fusion.simulate_imu_samples_from_increments([invalid_increment], :navigation)
+
+      nav_state = Map.delete(initial_state(), :covariance_diagonal)
+
+      assert {:error, {:invalid_input, "dt_s", "must be positive"}} =
+               Fusion.true_imu_increment_between(nav_state, nav_state)
+
+      assert {:error, {:invalid_input, "trajectory", "must contain at least two states"}} =
+               Fusion.simulate_imu_samples([], :navigation)
+    end
+
     test "encodes and decodes state bytes" do
       {:ok, filter} = Fusion.new(initial_state(), config(:ekf))
       assert {:ok, bytes} = Fusion.encode_state(filter)

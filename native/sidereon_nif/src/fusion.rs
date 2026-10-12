@@ -139,38 +139,9 @@ fn fusion_strapdown_new<'a>(
     model: ImuModelTerm,
     config: MechanizationTerm,
 ) -> Term<'a> {
-    let position_ecef_m = match vec3(state.position_ecef_m, "position_ecef_m") {
-        Ok(value) => value,
-        Err(error) => return fusion_error(env, error),
-    };
-    let velocity_ecef_mps = match vec3(state.velocity_ecef_mps, "velocity_ecef_mps") {
-        Ok(value) => value,
-        Err(error) => return fusion_error(env, error),
-    };
-    let attitude_body_to_ecef = match mat3(state.attitude_body_to_ecef, "attitude_body_to_ecef") {
-        Ok(value) => value,
-        Err(error) => return fusion_error(env, error),
-    };
-    let nav_state = match NavState::new(
-        state.t_j2000_s,
-        position_ecef_m,
-        velocity_ecef_mps,
-        attitude_body_to_ecef,
-    ) {
+    let state = match decode_nav_state_inertial(state) {
         Ok(state) => state,
-        Err(error) => return fusion_inertial_error(env, error),
-    };
-    let accel_bias_mps2 = match vec3(state.accel_bias_mps2, "accel_bias_mps2") {
-        Ok(value) => value,
-        Err(error) => return fusion_error(env, error),
-    };
-    let gyro_bias_rps = match vec3(state.gyro_bias_rps, "gyro_bias_rps") {
-        Ok(value) => value,
-        Err(error) => return fusion_error(env, error),
-    };
-    let state = match nav_state.with_biases(accel_bias_mps2, gyro_bias_rps) {
-        Ok(state) => state,
-        Err(error) => return fusion_inertial_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
     let model = match decode_imu_model_term(model) {
         Ok(model) => model,
@@ -232,15 +203,15 @@ fn fusion_imu_simulator_new<'a>(
     spec: ImuSpecTerm,
     options: ImuSimulationOptionsTerm,
 ) -> Term<'a> {
-    let spec = match decode_imu_spec(spec) {
+    let spec = match decode_imu_spec_inertial(spec) {
         Ok(spec) => spec,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_error(env, error),
     };
-    let options = match decode_imu_simulation_options(options) {
+    let options = match decode_imu_simulation_options_inertial(options) {
         Ok(options) => options,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
-    match ImuSimulator::new(spec, options).map_err(FusionError::from) {
+    match ImuSimulator::new(spec, options) {
         Ok(simulator) => (
             atoms::ok(),
             ResourceArc::new(ImuSimulatorResource {
@@ -248,7 +219,7 @@ fn fusion_imu_simulator_new<'a>(
             }),
         )
             .encode(env),
-        Err(error) => fusion_error(env, error),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -268,7 +239,7 @@ fn fusion_imu_simulator_sample_increment<'a>(
     };
     match simulator.sample_increment(&truth) {
         Ok(sample) => (atoms::ok(), encode_imu_sample(sample)).encode(env),
-        Err(error) => fusion_error(env, FusionError::from(error)),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -300,13 +271,13 @@ fn fusion_true_imu_increment_between<'a>(
     start: NavStateTerm,
     end: NavStateTerm,
 ) -> Term<'a> {
-    let start = match decode_nav_state(start) {
+    let start = match decode_nav_state_inertial(start) {
         Ok(state) => state,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
-    let end = match decode_nav_state(end) {
+    let end = match decode_nav_state_inertial(end) {
         Ok(state) => state,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
     match core_true_imu_increment_between(&start, &end) {
         Ok(increment) => (
@@ -319,7 +290,7 @@ fn fusion_true_imu_increment_between<'a>(
             },
         )
             .encode(env),
-        Err(error) => fusion_error(env, FusionError::from(error)),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -339,19 +310,19 @@ fn fusion_simulate_imu_samples<'a>(
 ) -> Term<'a> {
     let trajectory = match trajectory
         .into_iter()
-        .map(decode_nav_state)
+        .map(decode_nav_state_inertial)
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(trajectory) => trajectory,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
-    let spec = match decode_imu_spec(spec) {
+    let spec = match decode_imu_spec_inertial(spec) {
         Ok(spec) => spec,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_error(env, error),
     };
-    let options = match decode_imu_simulation_options(options) {
+    let options = match decode_imu_simulation_options_inertial(options) {
         Ok(options) => options,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
     match core_simulate_imu_samples(&trajectory, spec, options) {
         Ok(sequence) => (
@@ -375,7 +346,7 @@ fn fusion_simulate_imu_samples<'a>(
             },
         )
             .encode(env),
-        Err(error) => fusion_error(env, FusionError::from(error)),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -394,13 +365,13 @@ fn fusion_simulate_imu_samples_from_increments<'a>(
         Ok(increments) => increments,
         Err(error) => return fusion_error(env, error),
     };
-    let spec = match decode_imu_spec(spec) {
+    let spec = match decode_imu_spec_inertial(spec) {
         Ok(spec) => spec,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_error(env, error),
     };
-    let options = match decode_imu_simulation_options(options) {
+    let options = match decode_imu_simulation_options_inertial(options) {
         Ok(options) => options,
-        Err(error) => return fusion_error(env, error),
+        Err(error) => return fusion_inertial_decode_error(env, error),
     };
     match core_simulate_imu_samples_from_increments(&increments, spec, options) {
         Ok(sequence) => (
@@ -424,7 +395,7 @@ fn fusion_simulate_imu_samples_from_increments<'a>(
             },
         )
             .encode(env),
-        Err(error) => fusion_error(env, FusionError::from(error)),
+        Err(error) => fusion_inertial_error(env, error),
     }
 }
 
@@ -1407,6 +1378,36 @@ fn decode_nav_state(term: NavStateTerm) -> Result<NavState, FusionError> {
         .map_err(FusionError::from)
 }
 
+enum InertialDecodeError {
+    Fusion(FusionError),
+    Inertial(InertialError),
+}
+
+impl From<FusionError> for InertialDecodeError {
+    fn from(error: FusionError) -> Self {
+        Self::Fusion(error)
+    }
+}
+
+impl From<InertialError> for InertialDecodeError {
+    fn from(error: InertialError) -> Self {
+        Self::Inertial(error)
+    }
+}
+
+fn decode_nav_state_inertial(term: NavStateTerm) -> Result<NavState, InertialDecodeError> {
+    let state = NavState::new(
+        term.t_j2000_s,
+        vec3(term.position_ecef_m, "position_ecef_m")?,
+        vec3(term.velocity_ecef_mps, "velocity_ecef_mps")?,
+        mat3(term.attitude_body_to_ecef, "attitude_body_to_ecef")?,
+    )?;
+    Ok(state.with_biases(
+        vec3(term.accel_bias_mps2, "accel_bias_mps2")?,
+        vec3(term.gyro_bias_rps, "gyro_bias_rps")?,
+    )?)
+}
+
 fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionError> {
     let mut config = InertialFilterConfig::new(decode_imu_spec(term.imu_spec)?)?;
     config.filter_kind = decode_filter_kind(&term.filter_kind)?;
@@ -1445,7 +1446,19 @@ fn decode_config(term: FilterConfigTerm) -> Result<InertialFilterConfig, FusionE
 }
 
 fn decode_imu_spec(term: ImuSpecTerm) -> Result<ImuSpec, FusionError> {
-    let spec = ImuSpec::datasheet(
+    let spec = decode_imu_spec_term(term);
+    spec.validate().map_err(FusionError::from)?;
+    Ok(spec)
+}
+
+fn decode_imu_spec_inertial(term: ImuSpecTerm) -> Result<ImuSpec, InertialError> {
+    let spec = decode_imu_spec_term(term);
+    spec.validate()?;
+    Ok(spec)
+}
+
+fn decode_imu_spec_term(term: ImuSpecTerm) -> ImuSpec {
+    ImuSpec::datasheet(
         term.accel_vrw_mps_sqrt_s,
         term.gyro_arw_rad_sqrt_s,
         term.accel_bias_instab_mps2,
@@ -1454,12 +1467,18 @@ fn decode_imu_spec(term: ImuSpecTerm) -> Result<ImuSpec, FusionError> {
         term.gyro_bias_tau_s.unwrap_or(f64::INFINITY),
         term.accel_scale_instab_ppm,
         term.gyro_scale_instab_ppm,
-    );
-    spec.validate().map_err(FusionError::from)?;
-    Ok(spec)
+    )
 }
 
-fn decode_imu_simulation_options(
+fn decode_imu_simulation_options_inertial(
+    term: ImuSimulationOptionsTerm,
+) -> Result<ImuSimulationOptions, InertialDecodeError> {
+    let options = decode_imu_simulation_options_term(term)?;
+    options.validate()?;
+    Ok(options)
+}
+
+fn decode_imu_simulation_options_term(
     term: ImuSimulationOptionsTerm,
 ) -> Result<ImuSimulationOptions, FusionError> {
     let output = match term.output.as_str() {
@@ -1498,7 +1517,6 @@ fn decode_imu_simulation_options(
     options.initial_bias = initial_bias;
     options.calibration = calibration;
     options.rate_random_walk = rate_random_walk;
-    options.validate().map_err(FusionError::from)?;
     Ok(options)
 }
 
@@ -2054,6 +2072,13 @@ fn fusion_inertial_error<'a>(env: Env<'a>, error: InertialError) -> Term<'a> {
         InertialError::DegenerateAttitude => atoms::degenerate_attitude().encode(env),
     };
     (atoms::error(), reason).encode(env)
+}
+
+fn fusion_inertial_decode_error<'a>(env: Env<'a>, error: InertialDecodeError) -> Term<'a> {
+    match error {
+        InertialDecodeError::Fusion(error) => fusion_error(env, error),
+        InertialDecodeError::Inertial(error) => fusion_inertial_error(env, error),
+    }
 }
 
 fn codec_error<'a>(
