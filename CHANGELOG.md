@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Declare carried RTK arc ambiguity and information state as flat float lists,
+  matching the values returned by the solver.
+
 ## [3.0.3] - 2026-10-12
 
 ### Fixed
