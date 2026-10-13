@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.3] - 2026-10-12
+
 ### Fixed
 
 - ARAIM preserves unbounded HPL and VPL as `:infinity`, instead of changing
@@ -16,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   receding; the calculation is unchanged.
 - Select transport compression from the exact dated product identity during GNSS fetches, so historical CODE `.Z` archives are decoded as Unix compress while current gzip products retain their behavior.
 - Failed Lambert transfers return typed errors instead of successful zero velocity vectors.
+- Decode GPS LNAV HOW fields correctly when the preceding word's D30* parity bit is set.
+- Apply requested PPP seed meteorology and report invalid meteorology instead of silently using defaults.
+- Emit an unterminated NTRIP sourcetable exactly once when the stream finishes at `ENDSOURCETABLE`.
 
 ## [3.0.2] - 2026-10-05
 
