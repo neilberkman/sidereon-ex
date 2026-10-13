@@ -1086,8 +1086,8 @@ defmodule Sidereon.GNSS.RTK do
             ambiguity_prior_sigma_m: float(),
             epoch_count: non_neg_integer(),
             baseline_m: vec3(),
-            sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
-            information: [[float()]],
+            sd_ambiguities_m: [float()],
+            information: [float()],
             fixed_cycles: %{String.t() => integer()},
             fixed_m: %{String.t() => float()}
           }

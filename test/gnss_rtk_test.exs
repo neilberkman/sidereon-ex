@@ -219,6 +219,24 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   describe "solve_arc/2" do
+    test "declares carried state ambiguity and information vectors as flat float lists" do
+      assert {:ok, types} = Code.Typespec.fetch_types(ArcState)
+
+      assert {:type, {:t, {:type, _, :map, fields}, []}} =
+               Enum.find(types, fn
+                 {:type, {:t, _, []}} -> true
+                 _ -> false
+               end)
+
+      for field <- [:sd_ambiguities_m, :information] do
+        assert {:type, _, :map_field_exact, [{:atom, _, ^field}, {:type, _, :list, [{:type, _, :float, []}]}]} =
+                 Enum.find(fields, fn
+                   {:type, _, :map_field_exact, [{:atom, _, ^field}, _]} -> true
+                   _ -> false
+                 end)
+      end
+    end
+
     test "delegates raw arc epochs to the core sequential arc solver" do
       assert {:ok, solution} = RTK.solve_arc(arc_epochs(), arc_config())
 
