@@ -21,6 +21,8 @@ jobs:
     name: Build reviewable Hex package and docs
     needs: gate
     runs-on: ubuntu-22.04
+    env:
+      SIDEREON_BUILD: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -62,8 +64,6 @@ jobs:
           shared-key: release-3.0.3-hex-docs
 
       - name: Fetch dependencies and build documentation
-        env:
-          SIDEREON_BUILD: "1"
         run: |
           mix deps.get
           mix compile --warnings-as-errors
