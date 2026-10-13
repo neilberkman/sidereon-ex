@@ -127,7 +127,8 @@ jobs:
           grep -Fxq mix.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq checksum-Elixir.Sidereon.NIF.exs dist/PACKAGE-CONTENTS.txt
           grep -Fxq THIRD-PARTY-NOTICES.md dist/PACKAGE-CONTENTS.txt
-          grep -Fxq native/sidereon_nif/Cargo.lock dist/PACKAGE-CONTENTS.txt
+          grep -Fxq Cargo.toml dist/PACKAGE-CONTENTS.txt
+          grep -Fxq Cargo.lock dist/PACKAGE-CONTENTS.txt
           grep -Fxq index.html dist/DOCS-CONTENTS.txt
 
           (
