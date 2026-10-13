@@ -119,7 +119,7 @@ jobs:
       - name: Validate the published-consumer contract against the candidate NIF
         if: matrix.os == 'ubuntu-latest' && matrix.elixir == '1.19'
         env:
-          SIDEREON_CONSUMER_VERSION: "3.0.2"
+          SIDEREON_CONSUMER_VERSION: "3.0.3"
         run: mix test .github/scripts/published_hex_consumer_test.exs
 
       - name: Independent Skyfield parity
