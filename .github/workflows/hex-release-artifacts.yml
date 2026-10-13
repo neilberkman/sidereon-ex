@@ -75,7 +75,11 @@ jobs:
         run: |
           mkdir -p dist
           mix hex.build --output dist/sidereon-3.0.3.tar
-          mix run --no-start -e '
+          hex_ebin="$(find "${MIX_HOME:-$HOME/.mix}/archives/hex-2.5.1" \
+            -type d -name ebin -print -quit)"
+          test -f "$hex_ebin/mix_hex_tarball.beam"
+          elixir -pa "$hex_ebin" -e '
+          Code.ensure_loaded!(:mix_hex_tarball)
           files =
             "doc/**"
             |> Path.wildcard()
