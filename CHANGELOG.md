@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Declare every GPS LNAV ephemeris struct field and its numeric contract in the
+  public `Ephemeris.t()` type.
 - Declare carried RTK arc ambiguity and information state as flat float lists,
   matching the values returned by the solver.
 

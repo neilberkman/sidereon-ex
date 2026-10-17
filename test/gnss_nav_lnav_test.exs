@@ -46,6 +46,37 @@ defmodule Sidereon.GNSS.Navigation.LNAVTest do
 
   defp params, do: Ephemeris.example()
 
+  test "declares every public ephemeris field in its compiled type" do
+    assert {:ok, types} = Code.Typespec.fetch_types(Ephemeris)
+
+    assert {:type, {:t, {:type, _, :map, fields}, []}} =
+             Enum.find(types, fn
+               {:type, {:t, _, []}} -> true
+               _ -> false
+             end)
+
+    declared_fields =
+      MapSet.new(fields, fn
+        {:type, _, :map_field_exact, [{:atom, _, field}, _]} -> field
+      end)
+      |> MapSet.delete(:__struct__)
+
+    assert declared_fields == MapSet.new(Map.keys(%Ephemeris{}) -- [:__struct__])
+
+    assert {:type, _, :map_field_exact,
+            [{:atom, _, :week_number}, {:type, _, :non_neg_integer, []}]} =
+             Enum.find(fields, fn
+               {:type, _, :map_field_exact, [{:atom, _, :week_number}, _]} -> true
+               _ -> false
+             end)
+
+    assert {:type, _, :map_field_exact, [{:atom, _, :tgd}, {:type, _, :number, []}]} =
+             Enum.find(fields, fn
+               {:type, _, :map_field_exact, [{:atom, _, :tgd}, _]} -> true
+               _ -> false
+             end)
+  end
+
   describe "round-trip encode/decode" do
     test "recovers every scaled field within its LSB" do
       p = params()
