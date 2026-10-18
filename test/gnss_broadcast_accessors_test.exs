@@ -5,7 +5,10 @@ defmodule Sidereon.GNSS.BroadcastAccessorsTest do
 
   alias Sidereon.GNSS.Broadcast.{
     ClockPolynomial,
+    CnavCorrections,
+    CnavParameters,
     GlonassRecord,
+    GroupDelays,
     IonoCorrections,
     KeplerianElements,
     KlobucharAlphaBeta,
@@ -16,6 +19,31 @@ defmodule Sidereon.GNSS.BroadcastAccessorsTest do
   @glonass_nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_RN.rnx")
   @beidou_iono_path Path.join(__DIR__, "fixtures/nav/BRDC00WRD_R_20261200800_06H_MN.rnx")
   @broadcast_golden_path Path.join(__DIR__, "fixtures/core/broadcast_golden.json")
+
+  test "declares every public group-delay and CNAV field in compiled types" do
+    group_delay_fields = typespec_fields(GroupDelays)
+    cnav_fields = typespec_fields(CnavParameters)
+    correction_fields = typespec_fields(CnavCorrections)
+
+    assert MapSet.new(Map.keys(group_delay_fields)) ==
+             MapSet.new(Map.keys(%GroupDelays{}) -- [:__struct__])
+
+    assert Enum.all?(Map.values(group_delay_fields), &optional_float_type?/1)
+
+    assert MapSet.new(Map.keys(cnav_fields)) ==
+             MapSet.new(Map.keys(%CnavParameters{}) -- [:__struct__])
+
+    assert {:type, _, :float, []} = cnav_fields.adot_m_s
+    assert {:type, _, :integer, []} = cnav_fields.ura_ed_index
+    assert {:type, _, :non_neg_integer, []} = cnav_fields.ura_ned1_index
+    assert optional_float_type?(cnav_fields.ura_ned0_nominal_m)
+    assert optional_non_neg_integer_type?(cnav_fields.flags)
+
+    assert MapSet.new(Map.keys(correction_fields)) ==
+             MapSet.new(Map.keys(%CnavCorrections{}) -- [:__struct__])
+
+    assert Enum.all?(Map.values(correction_fields), &optional_float_type?/1)
+  end
 
   describe "RINEX NAV record accessors" do
     test "exposes default broadcast records and matches the core golden bits" do
@@ -133,6 +161,35 @@ defmodule Sidereon.GNSS.BroadcastAccessorsTest do
     |> Map.fetch!("cases")
     |> Enum.find(&(&1["name"] == name))
   end
+
+  defp typespec_fields(module) do
+    assert {:ok, types} = Code.Typespec.fetch_types(module)
+
+    assert {:type, {:t, {:type, _, :map, fields}, []}} =
+             Enum.find(types, fn
+               {:type, {:t, _, []}} -> true
+               _ -> false
+             end)
+
+    Map.new(fields, fn
+      {:type, _, :map_field_exact, [{:atom, _, field}, type]} -> {field, type}
+    end)
+    |> Map.delete(:__struct__)
+  end
+
+  defp optional_float_type?({:type, _, :union, members}) do
+    Enum.any?(members, &match?({:type, _, :float, []}, &1)) and
+      Enum.any?(members, &match?({:atom, _, nil}, &1))
+  end
+
+  defp optional_float_type?(_), do: false
+
+  defp optional_non_neg_integer_type?({:type, _, :union, members}) do
+    Enum.any?(members, &match?({:type, _, :non_neg_integer, []}, &1)) and
+      Enum.any?(members, &match?({:atom, _, nil}, &1))
+  end
+
+  defp optional_non_neg_integer_type?(_), do: false
 
   defp matching_record(records, case_data) do
     matches =
