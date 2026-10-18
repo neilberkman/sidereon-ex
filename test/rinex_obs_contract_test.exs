@@ -111,6 +111,40 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
     ])
   end
 
+  test "raw observation and cycle-slip rows keep their public types" do
+    assert {:ok, types} = Code.Typespec.fetch_types(Observations)
+
+    fields = typespec_fields(types, :observation_value)
+
+    assert MapSet.new(Map.keys(fields)) == MapSet.new([:code, :kind, :units, :value, :lli, :ssi])
+    assert string_type?(fields.code)
+    assert user_type?(fields.kind, :observation_kind)
+    assert user_type?(fields.units, :observation_units)
+    assert type_members(typespec_body(types, :observation_kind)) ==
+             MapSet.new([:pseudorange, :carrier_phase, :doppler, :signal_strength, :unknown])
+
+    assert type_members(typespec_body(types, :observation_units)) ==
+             MapSet.new([:meters, :cycles, :hz, :db_hz, :unknown])
+
+    assert type_members(fields.value) == MapSet.new([:float, nil])
+    assert type_members(fields.lli) == MapSet.new([:non_neg_integer, nil])
+    assert type_members(fields.ssi) == MapSet.new([:non_neg_integer, nil])
+
+    assert {:type, _, :map, [{:type, _, :map_field_assoc, [satellite_type, rows_type]}]} =
+             typespec_body(types, :observation_value_map)
+
+    assert string_type?(satellite_type)
+    assert {:type, _, :list, [row_type]} = rows_type
+    assert user_type?(row_type, :observation_value)
+
+    assert {:ok, specs} = Code.Typespec.fetch_specs(Observations)
+
+    for function <- [:values, :cycle_slips] do
+      assert {{^function, 3}, function_specs} = List.keyfind(specs, {function, 3}, 0)
+      assert Enum.any?(function_specs, &contains_user_type?(&1, :observation_value_map))
+    end
+  end
+
   describe "untimed event epochs" do
     test "an event with blank epoch fields keeps its place with no time made up" do
       obs = untimed_event_product()
@@ -736,4 +770,46 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
       assert Observations.skipped_records(obs) == 0
     end
   end
+
+  defp typespec_fields(types, name) do
+    assert {:type, _, :map, fields} = typespec_body(types, name)
+
+    Map.new(fields, fn
+      {:type, _, :map_field_exact, [{:atom, _, field}, type]} -> {field, type}
+    end)
+  end
+
+  defp typespec_body(types, name) do
+    assert {:type, {^name, body, []}} =
+             Enum.find(types, fn
+               {:type, {^name, _, []}} -> true
+               _ -> false
+             end)
+
+    body
+  end
+
+  defp string_type?({:remote_type, _, [{:atom, _, String}, {:atom, _, :t}, []]}), do: true
+  defp string_type?(_), do: false
+
+  defp user_type?({:user_type, _, name, []}, name), do: true
+  defp user_type?(_type, _name), do: false
+
+  defp type_members({:type, _, :union, members}) do
+    MapSet.new(members, fn
+      {:atom, _, value} -> value
+      {:type, _, name, []} -> name
+    end)
+  end
+
+  defp contains_user_type?({:user_type, _, name, []}, name), do: true
+
+  defp contains_user_type?(term, name) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.any?(&contains_user_type?(&1, name))
+  end
+
+  defp contains_user_type?(term, name) when is_list(term), do: Enum.any?(term, &contains_user_type?(&1, name))
+  defp contains_user_type?(_term, _name), do: false
 end
