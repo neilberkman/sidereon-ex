@@ -110,7 +110,7 @@ The full official notice is reproduced in
 `LICENSES/IERS-Conventions-Software-License.txt` from the official
 [`DEHANTTIDEINEL.F`](https://iers-conventions.obspm.fr/content/chapter7/software/dehanttideinel/DEHANTTIDEINEL.F)
 source (accessed 2026-07-20). The exact public non-test tide sources from
-[sidereon-core 3.0.4](https://github.com/neilberkman/sidereon/tree/a100da16bd1c7a683a5b47dcbe1e2472402d3d60/crates/sidereon-core/src/tides)
+[sidereon-core 3.0.4](https://github.com/neilberkman/sidereon/tree/5cfcdf929b57a5998e304df786735b171ba8afaf/crates/sidereon-core/src/tides)
 are distributed under `third_party_source/sidereon-core-3.0.4/tides/`.
 Published results obtained with these routines should acknowledge use of the
 IERS Conventions software.
