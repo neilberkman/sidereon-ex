@@ -9,7 +9,7 @@ description = "Writes the core-derived expected values the Elixir tests compare 
 [workspace]
 
 [dependencies]
-# The same exact registry requirement as native/sidereon_nif, so the goldens
-# come from the core the published binding builds with.
-sidereon-core = { version = "=3.0.3" }
+# The same exact core requirement as native/sidereon_nif, so the goldens come
+# from the core the binding candidate builds with.
+sidereon-core = { version = "=3.0.4", git = "https://github.com/neilberkman/sidereon", rev = "a100da16bd1c7a683a5b47dcbe1e2472402d3d60" }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }

@@ -6,8 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.4] - 2026-10-18
+
 ### Fixed
 
+- Reject RINEX 2 observation and cycle-slip epochs before observable types are
+  declared, including empty `>` epoch records, while continuing to accept a
+  declaration supplied by the file header or a preceding header event.
 - Declare every GPS LNAV ephemeris struct field and its numeric contract in the
   public `Ephemeris.t()` type.
 - Declare carried RTK arc ambiguity and information state as flat float lists,
