@@ -63,8 +63,7 @@ defmodule Sidereon.GNSS.Navigation.LNAVTest do
 
     assert declared_fields == MapSet.new(Map.keys(%Ephemeris{}) -- [:__struct__])
 
-    assert {:type, _, :map_field_exact,
-            [{:atom, _, :week_number}, {:type, _, :non_neg_integer, []}]} =
+    assert {:type, _, :map_field_exact, [{:atom, _, :week_number}, {:type, _, :non_neg_integer, []}]} =
              Enum.find(fields, fn
                {:type, _, :map_field_exact, [{:atom, _, :week_number}, _]} -> true
                _ -> false
