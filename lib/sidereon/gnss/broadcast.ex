@@ -260,7 +260,19 @@ defmodule Sidereon.GNSS.Broadcast do
       :cnav_isc_l1cp_s
     ]
 
-    @type t :: %__MODULE__{}
+    @type t :: %__MODULE__{
+            gps_tgd_s: float() | nil,
+            galileo_bgd_e5a_e1_s: float() | nil,
+            galileo_bgd_e5b_e1_s: float() | nil,
+            beidou_tgd1_s: float() | nil,
+            beidou_tgd2_s: float() | nil,
+            cnav_isc_l1ca_s: float() | nil,
+            cnav_isc_l2c_s: float() | nil,
+            cnav_isc_l5i5_s: float() | nil,
+            cnav_isc_l5q5_s: float() | nil,
+            cnav_isc_l1cd_s: float() | nil,
+            cnav_isc_l1cp_s: float() | nil
+          }
   end
 
   defmodule StatedNavFields do
@@ -329,7 +341,19 @@ defmodule Sidereon.GNSS.Broadcast do
       :flags
     ]
 
-    @type t :: %__MODULE__{top: WeekTow.t()}
+    @type t :: %__MODULE__{
+            adot_m_s: float(),
+            delta_n0_dot_rad_s2: float(),
+            top: WeekTow.t(),
+            ura_ed_index: integer(),
+            ura_ed_nominal_m: float() | nil,
+            ura_ned0_index: integer(),
+            ura_ned0_nominal_m: float() | nil,
+            ura_ned1_index: non_neg_integer(),
+            ura_ned2_index: non_neg_integer(),
+            transmission_time_sow: float(),
+            flags: non_neg_integer() | nil
+          }
   end
 
   defmodule CnavCorrections do
@@ -338,7 +362,14 @@ defmodule Sidereon.GNSS.Broadcast do
     """
     defstruct [:l1ca_s, :l2c_s, :l5i5_s, :l5q5_s, :l1cp_s, :l1cd_s]
 
-    @type t :: %__MODULE__{}
+    @type t :: %__MODULE__{
+            l1ca_s: float() | nil,
+            l2c_s: float() | nil,
+            l5i5_s: float() | nil,
+            l5q5_s: float() | nil,
+            l1cp_s: float() | nil,
+            l1cd_s: float() | nil
+          }
   end
 
   defmodule DetailedRecord do

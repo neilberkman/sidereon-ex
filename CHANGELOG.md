@@ -17,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Normalize extreme-scale quaternions robustly while preserving ordinary quaternion rounding.
 - Reject zero probability values where probability inputs must be strictly between zero and one.
+- Declare every broadcast group-delay, CNAV parameter and evaluated CNAV
+  correction struct field and its numeric contract in the public types.
 
 ## [3.0.4] - 2026-10-18
 
