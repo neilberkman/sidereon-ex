@@ -51,7 +51,38 @@ defmodule Sidereon.GNSS.Navigation.LNAV.Ephemeris do
 
   """
 
-  @type t :: %__MODULE__{}
+  @type t :: %__MODULE__{
+          week_number: non_neg_integer(),
+          l2_code: non_neg_integer() | nil,
+          l2_p_data_flag: 0 | 1 | nil,
+          ura_index: non_neg_integer(),
+          sv_health: non_neg_integer(),
+          iodc: non_neg_integer() | nil,
+          tgd: number(),
+          toc: number(),
+          af0: number(),
+          af1: number(),
+          af2: number(),
+          iode: non_neg_integer(),
+          crs: number(),
+          delta_n: number(),
+          m0: number(),
+          cuc: number(),
+          eccentricity: number(),
+          cus: number(),
+          sqrt_a: number(),
+          toe: number(),
+          fit_interval_flag: 0 | 1 | nil,
+          aodo: non_neg_integer() | nil,
+          cic: number(),
+          omega0: number(),
+          cis: number(),
+          i0: number(),
+          crc: number(),
+          omega: number(),
+          omega_dot: number(),
+          idot: number()
+        }
 
   defstruct [
     # Subframe 1
