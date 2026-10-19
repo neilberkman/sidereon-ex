@@ -31,7 +31,7 @@ defmodule Sidereon.GNSS.BroadcastAccessorsTest do
     assert Enum.all?(Map.values(group_delay_fields), &optional_float_type?/1)
 
     assert MapSet.new(Map.keys(cnav_fields)) ==
-             MapSet.new(Map.keys(%CnavParameters{}) -- [:__struct__])
+             MapSet.new(Map.keys(CnavParameters.__struct__()) -- [:__struct__])
 
     assert {:type, _, :float, []} = cnav_fields.adot_m_s
     assert {:type, _, :integer, []} = cnav_fields.ura_ed_index
