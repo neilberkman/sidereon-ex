@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Declare the exact public row shape returned by RINEX observation-value and
+  cycle-slip accessors instead of reducing each row to an untyped map.
+- Declare every broadcast group-delay, CNAV parameter and evaluated CNAV
+  correction struct field and its numeric contract in the public types.
+
 ## [3.0.4] - 2026-10-18
 
 ### Fixed

@@ -98,6 +98,25 @@ defmodule Sidereon.GNSS.RINEX.Observations do
   @typedoc "A pseudorange observation `{satellite_id, range_m}`."
   @type observation :: {String.t(), float()}
 
+  @typedoc "The physical kind of a raw RINEX observation value."
+  @type observation_kind :: :pseudorange | :carrier_phase | :doppler | :signal_strength | :unknown
+
+  @typedoc "The units of a raw RINEX observation value."
+  @type observation_units :: :meters | :cycles | :hz | :db_hz | :unknown
+
+  @typedoc "A labelled raw observation or cycle-slip value."
+  @type observation_value :: %{
+          code: String.t(),
+          kind: observation_kind(),
+          units: observation_units(),
+          value: float() | nil,
+          lli: non_neg_integer() | nil,
+          ssi: non_neg_integer() | nil
+        }
+
+  @typedoc "Raw observation or cycle-slip values keyed by satellite id."
+  @type observation_value_map :: %{String.t() => [observation_value()]}
+
   @typedoc "An epoch descriptor as returned by `epochs/1`."
   @type epoch_entry :: Epoch.t()
 
@@ -540,7 +559,7 @@ defmodule Sidereon.GNSS.RINEX.Observations do
       all of that system's codes; e.g. `%{"G" => []}` is GPS-only, all codes.
   """
   @spec values(t(), non_neg_integer() | tuple(), keyword()) ::
-          {:ok, %{String.t() => [map()]}} | {:error, term()}
+          {:ok, observation_value_map()} | {:error, term()}
   def values(obs, epoch, opts \\ [])
 
   def values(%__MODULE__{handle: handle}, index, opts) when is_epoch_index(index) do
@@ -575,7 +594,7 @@ defmodule Sidereon.GNSS.RINEX.Observations do
   errors.
   """
   @spec cycle_slips(t(), non_neg_integer() | tuple(), keyword()) ::
-          {:ok, %{String.t() => [map()]}} | {:error, term()}
+          {:ok, observation_value_map()} | {:error, term()}
   def cycle_slips(obs, epoch, opts \\ [])
 
   def cycle_slips(%__MODULE__{handle: handle}, index, opts) when is_epoch_index(index) do
