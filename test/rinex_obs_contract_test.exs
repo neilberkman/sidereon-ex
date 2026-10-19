@@ -120,6 +120,7 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
     assert string_type?(fields.code)
     assert user_type?(fields.kind, :observation_kind)
     assert user_type?(fields.units, :observation_units)
+
     assert type_members(typespec_body(types, :observation_kind)) ==
              MapSet.new([:pseudorange, :carrier_phase, :doppler, :signal_strength, :unknown])
 
