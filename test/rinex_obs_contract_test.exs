@@ -130,7 +130,7 @@ defmodule Sidereon.GNSS.RINEX.ObservationsContractTest do
     assert type_members(fields.lli) == MapSet.new([:non_neg_integer, nil])
     assert type_members(fields.ssi) == MapSet.new([:non_neg_integer, nil])
 
-    assert {:type, _, :map, [{:type, _, :map_field_assoc, [satellite_type, rows_type]}]} =
+    assert {:type, _, :map, [{:type, _, :map_field_exact, [satellite_type, rows_type]}]} =
              typespec_body(types, :observation_value_map)
 
     assert string_type?(satellite_type)
