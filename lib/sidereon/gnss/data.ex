@@ -1000,6 +1000,11 @@ defmodule Sidereon.GNSS.Data do
   contributor also passes through `SP3.merge/2`, so filters, target cadence, and
   validation behave consistently; its report has `single_product: true` and
   `merged: true`.
+
+  Merges from column-grid contributors keep records on the SP3 grid, including
+  means, medians, and clock-datum adjustments. Higher-precision input records
+  can still require the opt-in rounding writer. Agreement metrics use combined
+  values before final column quantization.
   """
   def fetch_merged_sp3(target, centers, opts \\ [])
 

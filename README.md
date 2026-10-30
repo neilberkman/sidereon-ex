@@ -104,13 +104,6 @@ case Sidereon.GNSS.SP3.to_sp3_string(sp3) do
 end
 ```
 
-For a product that needs record-field rounding, use
-`Sidereon.GNSS.SP3.to_sp3_string_with_rounding/2`. It returns
-`{:ok, text, report}`; the report maps the eight position, velocity and clock
-fields to maximum absolute changes in SI units. Header fields and epochs retain
-the strict checks. `Sidereon.GNSS.Data.write_sp3_with_rounding/3` writes that
-text atomically and returns `{:ok, path, report}`.
-
 The same change applies to `to_iodata/2`. Before 3.0, a call site could pass
 its result straight to an iodata consumer:
 
@@ -134,6 +127,21 @@ the field, satellite, and epoch. The strict writer refuses that value rather
 than rounding it. Callers can preserve the named error and its fields as above,
 or match the tag and fields to handle a particular refusal. See the
 [complete 3.0 release notes](CHANGELOG.md#300---2026-10-04).
+
+### Explicit rounding in 3.0.5
+
+For a product that needs record-field rounding, use
+`Sidereon.GNSS.SP3.to_sp3_string_with_rounding/2`. It returns
+`{:ok, text, report}`; the report maps the eight position, velocity and clock
+fields to maximum absolute changes in SI units. Header fields and epochs retain
+the strict checks. `Sidereon.GNSS.Data.write_sp3_with_rounding/3` writes that
+text atomically and returns `{:ok, path, report}`.
+
+Merges from column-grid inputs keep derived records on the SP3 grid, including
+mean and median combinations, so the strict writer can serialize them.
+Higher-precision inputs can still require the opt-in rounding writer.
+Agreement and dispersion metrics use combined values before final column
+quantization.
 
 ## Example: track a satellite
 

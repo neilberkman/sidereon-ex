@@ -1357,6 +1357,12 @@ defmodule Sidereon.GNSS.SP3 do
   integer, cells_selected: integer, first_epoch: epoch | nil, last_epoch: epoch
   | nil, cells_absent: integer}`.
 
+  Products derived from column-grid inputs remain on the SP3 record grid,
+  including mean and median combinations, so the strict writer can serialize
+  them. Higher-precision inputs can still require the opt-in rounding writer.
+  Agreement and dispersion metrics use combined values before final column
+  quantization.
+
   ## Options
 
     * `:position_tolerance_m`: position agreement tolerance, meters (default `0.5`)
