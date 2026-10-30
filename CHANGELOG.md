@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.6] - 2026-10-30
+
+### Fixed
+
+- Reconcile SP3 accuracy bases after merging when retained uncertainty codes can
+  be represented exactly. Unspecified bases in an earlier input no longer make
+  a later input's known accuracy unwritable. Decoded uncertainties and unknown
+  metadata are preserved; incompatible metadata still receives a strict refusal.
+
+### Added
+
+- Add `SP3.to_iodata_with_accuracy_rounding/3`,
+  `SP3.to_sp3_string_with_accuracy_rounding/3` and atomic
+  `Data.write_sp3_with_accuracy_rounding/4`. Their required `:conservative`
+  policy rounds known standard deviations upward to the smallest finite
+  representable value, with separate SI reports for record values and accuracy.
+  Values beyond the finite output range remain errors.
+- Exercise the accuracy regression fixtures in both package CI and the clean
+  published Hex consumer, alongside the 3.0.5 record-rounding regressions.
+
 ## [3.0.5] - 2026-10-30
 
 ### Added

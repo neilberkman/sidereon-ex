@@ -898,6 +898,8 @@ defmodule Sidereon.NIF do
   def sp3_to_iodata(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def sp3_to_iodata_with_rounding(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_to_iodata_with_accuracy_rounding(_handle, _policy), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_precise_ephemeris_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def sp3_precise_ephemeris_accuracy_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
 

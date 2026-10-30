@@ -1207,6 +1207,25 @@ defmodule Sidereon.GNSS.Data do
   end
 
   @doc """
+  Write an SP3 product atomically with an explicit accuracy conversion policy.
+
+  The required policy is :conservative. Returns {:ok, path, report}, with separate
+  record-value and accuracy standard-deviation deltas. Pass gzip: true to compress
+  the output. A writer refusal leaves an existing destination unchanged.
+  """
+  @spec write_sp3_with_accuracy_rounding(SP3.t(), String.t(), SP3.accuracy_rounding_policy(), keyword()) ::
+          {:ok, String.t(), SP3.detailed_rounding_report()} | {:error, term()}
+  def write_sp3_with_accuracy_rounding(%SP3{} = sp3, path, policy, opts \\ []) when is_binary(path) do
+    with {:ok, text, report} <- SP3.to_sp3_string_with_accuracy_rounding(sp3, policy),
+         data = if(truthy?(Keyword.get(opts, :gzip)), do: :zlib.gzip(text), else: text),
+         :ok <- ensure_dir(Path.dirname(Path.expand(path))),
+         {:ok, tmp} <- write_temp(Path.dirname(Path.expand(path)), data),
+         :ok <- rename_file(tmp, path) do
+      {:ok, path, report}
+    end
+  end
+
+  @doc """
   Fetch the DTED tile covering `lat_deg`, `lon_deg`.
   """
   def fetch_dted(lat_deg, lon_deg, opts \\ []) when is_number(lat_deg) and is_number(lon_deg) do
