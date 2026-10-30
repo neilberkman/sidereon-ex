@@ -14,9 +14,9 @@ exact-cache-test-failpoints = ["sidereon-core/exact-cache-test-failpoints"]
 rustler = "0.37.3"
 chrono = "0.4"
 serde_json = "1"
-sidereon-core = { git = "https://github.com/neilberkman/sidereon", rev = "1b66c9431b02084f39aa5ac010cd41c0cae988cd", features = ["mmap"] }
-sidereon = { git = "https://github.com/neilberkman/sidereon", rev = "1b66c9431b02084f39aa5ac010cd41c0cae988cd" }
-trust-region-least-squares = { git = "https://github.com/neilberkman/sidereon", rev = "1b66c9431b02084f39aa5ac010cd41c0cae988cd" }
+sidereon-core = { git = "https://github.com/neilberkman/sidereon", rev = "38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f", features = ["mmap"] }
+sidereon = { git = "https://github.com/neilberkman/sidereon", rev = "38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f" }
+trust-region-least-squares = { git = "https://github.com/neilberkman/sidereon", rev = "38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f" }
 # Same major.minor as sidereon-core so the shared `DMatrix`/`DVector` types
 # unify across crates for the covariance/least-squares marshalling.
 nalgebra = "0.33"

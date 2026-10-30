@@ -408,7 +408,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sidereon-core"
 version = "3.0.6"
-source = "git+https://github.com/neilberkman/sidereon?rev=1b66c9431b02084f39aa5ac010cd41c0cae988cd#1b66c9431b02084f39aa5ac010cd41c0cae988cd"
+source = "git+https://github.com/neilberkman/sidereon?rev=38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f#38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f"
 dependencies = [
  "approx",
  "cc",
@@ -499,7 +499,7 @@ dependencies = [
 [[package]]
 name = "trust-region-least-squares"
 version = "0.11.0"
-source = "git+https://github.com/neilberkman/sidereon?rev=1b66c9431b02084f39aa5ac010cd41c0cae988cd#1b66c9431b02084f39aa5ac010cd41c0cae988cd"
+source = "git+https://github.com/neilberkman/sidereon?rev=38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f#38d2c92ba00ca4acd9f5eec17d6215f3cf1aec5f"
 dependencies = [
  "libloading",
  "nalgebra",

@@ -228,19 +228,24 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
              SP3.to_sp3_string_with_accuracy_rounding(high, :conservative)
   end
 
-  test "all eight report fields measure the corresponding decoded standard-deviation change" do
+  test "velocity products preserve all eight sigmas and merged reports follow retained fields" do
     a = parse!(fixture("A-velocity.sp3"))
     b = parse!(fixture("B-velocity.sp3"))
     assert_source_round_trips(a, "G01")
     assert_source_round_trips(b, "G12")
+
+    for {source, satellite} <- [{a, "G01"}, {b, "G12"}] do
+      assert {:ok, direct, direct_report} = SP3.to_sp3_string_with_accuracy_rounding(source, :conservative)
+      assert_zero_report(direct_report)
+      assert_same_accuracy(source, parse!(direct), satellite)
+    end
+
     merged = merge!([a, b])
     assert {:error, {:accuracy_not_representable, _}} = SP3.to_sp3_string(merged)
     assert {:ok, text, report} = SP3.to_sp3_string_with_accuracy_rounding(merged, :conservative)
     reread = parse!(text)
     expected_position = 32.0 * 1.0e-3
-    expected_velocity = 32.0 * 1.0e-7
     expected_clock = 2.0 * (299_792_458.0 * 1.0e-12)
-    expected_clock_rate = 2.0 * (299_792_458.0 * 1.0e-16)
 
     for epoch <- 0..1 do
       before = accuracy(b, "G12", epoch)
@@ -249,15 +254,15 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
       assert after_write.p.position_sigma_m ==
                {{:known, expected_position}, {:known, expected_position}, {:known, expected_position}}
 
-      assert after_write.v.velocity_sigma_m_s ==
-               {{:known, expected_velocity}, {:known, expected_velocity}, {:known, expected_velocity}}
+      # Merge deliberately emits position/clock products; it drops V records.
+      assert after_write.v == nil
 
       assert after_write.p.clock_sigma_m == {:known, expected_clock}
-      assert after_write.v.clock_rate_sigma_m_s == {:known, expected_clock_rate}
       assert {:known, source_position} = elem(before.p.position_sigma_m, 0)
       assert {:known, source_velocity} = elem(before.v.velocity_sigma_m_s, 0)
       assert {:known, source_clock} = before.p.clock_sigma_m
       assert {:known, source_clock_rate} = before.v.clock_rate_sigma_m_s
+      assert source_clock_rate > 0.0
       assert source_position == @sigma_x
       assert source_velocity == 1_220_703_125.0 / 67_108_864.0 * 1.0e-7
 
@@ -265,14 +270,15 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
                position_sigma_x_m: expected_position - source_position,
                position_sigma_y_m: expected_position - source_position,
                position_sigma_z_m: expected_position - source_position,
-               velocity_sigma_x_m_s: expected_velocity - source_velocity,
-               velocity_sigma_y_m_s: expected_velocity - source_velocity,
-               velocity_sigma_z_m_s: expected_velocity - source_velocity,
+               velocity_sigma_x_m_s: 0.0,
+               velocity_sigma_y_m_s: 0.0,
+               velocity_sigma_z_m_s: 0.0,
                clock_sigma_m: expected_clock - source_clock,
-               clock_rate_sigma_m_s: expected_clock_rate - source_clock_rate
+               clock_rate_sigma_m_s: 0.0
              }
 
-      assert accuracy(merged, "G12", epoch) == before
+      assert accuracy(merged, "G12", epoch).p == before.p
+      assert accuracy(merged, "G12", epoch).v == nil
     end
 
     assert Enum.all?(Map.values(report.record_values), &(&1 == 0.0))
