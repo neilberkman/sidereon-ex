@@ -3852,8 +3852,7 @@ defmodule Sidereon.GNSS.Data do
          _quarantined,
          _position_outliers,
          _clock_outliers
-       ),
-       do: :ok
+       ), do: :ok
 
   defp verify_accepted_cell_flags(cells, single, position_outliers, clock_outliers, source_count, policy) do
     Enum.reduce_while(cells, :ok, fn {key, cell}, :ok ->
@@ -4047,8 +4046,7 @@ defmodule Sidereon.GNSS.Data do
   defp effective_agreement_tolerances(%{
          combine: "precedence",
          outlier_reject: %{position_tolerance_m: position, clock_tolerance_s: clock}
-       }),
-       do: {position, clock}
+       }), do: {position, clock}
 
   defp effective_agreement_tolerances(policy), do: {policy.position_tolerance_m, policy.clock_tolerance_s}
 

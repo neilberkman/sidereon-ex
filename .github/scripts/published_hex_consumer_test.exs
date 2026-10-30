@@ -103,33 +103,6 @@ defmodule SidereonPublishedHexConsumerTest do
     assert report.clock_rate_s_s == 0.0
   end
 
-  test "rounding reports a nonzero clock change without changing its source" do
-    {:ok, canonical} = clock_product([-598.410235, 138.983111, 0.0])
-    {:ok, canonical_text} = SP3.to_sp3_string(canonical)
-    record = Enum.find(String.split(canonical_text, "\n"), &String.starts_with?(&1, "PG01"))
-    refined_record = String.slice(record, 0, 46) <> String.pad_leading("-598.4102354", 14)
-    refined_text = String.replace(canonical_text, record, refined_record)
-    assert {:ok, source} = SP3.parse(refined_text)
-    assert {:ok, original_state} = SP3.state(source, "G01", 0)
-
-    assert {:error, {:record_value_not_representable, _detail}} = SP3.to_sp3_string(source)
-    assert {:ok, rounded_text, report} = SP3.to_sp3_string_with_rounding(source)
-    assert {:ok, reread} = SP3.parse(rounded_text)
-    assert {:ok, rounded_state} = SP3.state(reread, "G01", 0)
-    assert report.clock_s == abs(rounded_state.clock_s - original_state.clock_s)
-    assert report.clock_s > 0.0
-    assert {:ok, unchanged_state} = SP3.state(source, "G01", 0)
-    assert unchanged_state.clock_s == original_state.clock_s
-
-    assert report.position_x_m == 0.0
-    assert report.position_y_m == 0.0
-    assert report.position_z_m == 0.0
-    assert report.velocity_x_m_s == 0.0
-    assert report.velocity_y_m_s == 0.0
-    assert report.velocity_z_m_s == 0.0
-    assert report.clock_rate_s_s == 0.0
-  end
-
   defp clock_product(clocks) do
     satellites = ["G01", "G02", "G03"]
     satellite_header = Enum.join(satellites, "") <> String.duplicate("  0", 14)

@@ -346,7 +346,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert {:ok, state} = SP3.state(merged, "G02", 0)
 
       assert {state.x_m, state.y_m, state.z_m} ==
-               {14999.999992 * 1000.0, -19999.999993 * 1000.0, 5000.0 * 1000.0}
+               {14_999.999992 * 1000.0, -19_999.999993 * 1000.0, 5000.0 * 1000.0}
 
       analytic = [14_999_999.992_3, -19_999_999.993_048_087, 5_000_000.000_396_175]
       columns = [state.x_m, state.y_m, state.z_m]
