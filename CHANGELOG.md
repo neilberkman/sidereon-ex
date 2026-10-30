@@ -6,10 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.5] - 2026-10-30
+
 ### Added
 
 - Add opt-in SP3 column rounding writers that report maximum absolute SI changes; strict writers remain unchanged.
 - Preserve strictly writable SP3 columns for grid-aligned merge and alignment products.
+
+### Fixed
+
+- Normalize extreme-scale quaternions robustly while preserving ordinary quaternion rounding.
+- Reject zero probability values where probability inputs must be strictly between zero and one.
 
 ## [3.0.4] - 2026-10-18
 
