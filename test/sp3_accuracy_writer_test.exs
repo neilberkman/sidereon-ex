@@ -203,6 +203,29 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
              SP3.to_sp3_string_with_accuracy_rounding(reread, :conservative)
 
     assert_zero_report(second_report)
+
+    reverse = merge!([b, a])
+    assert {:error, {:accuracy_not_representable, _}} = SP3.to_sp3_string(reverse)
+
+    assert {:ok, reverse_text, reverse_report} =
+             SP3.to_sp3_string_with_accuracy_rounding(reverse, :conservative)
+
+    reverse_output = parse!(reverse_text)
+    assert_same_accuracy(b, reverse_output, "G12")
+
+    for epoch <- 0..1 do
+      assert {:ok, %{p: %{axis_exponents: {4, nil, nil}, clock_exponent: 29}}} =
+               SP3.record_accuracy_codes(reverse_output, "G01", epoch)
+
+      assert elem(accuracy(reverse_output, "G01", epoch).p.position_sigma_m, 0) ==
+               {:known, 0.00244140625}
+
+      assert {:known, original_clock} = accuracy(a, "G01", epoch).p.clock_sigma_m
+      assert {:known, converted_clock} = accuracy(reverse_output, "G01", epoch).p.clock_sigma_m
+      assert converted_clock >= original_clock
+      assert reverse_report.accuracy_sigmas.position_sigma_x_m == 0.00244140625 - 0.002
+      assert reverse_report.accuracy_sigmas.clock_sigma_m == converted_clock - original_clock
+    end
   end
 
   test "the lower exponent boundary rounds up but exceeding the largest finite exponent is refused" do
@@ -286,6 +309,68 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
     assert_zero_report(second_report)
   end
 
+  test "clock accuracy obeys the three-column finite exponent boundaries" do
+    a = with_accuracy("A-anchor.sp3", "G01", 1.25, 2.0, nil, -99)
+    b = with_accuracy("B-anchor.sp3", "G12", 1.25, 4.0, nil, -50)
+    assert_source_round_trips(a, "G01")
+    assert_source_round_trips(b, "G12")
+    merged = merge!([a, b])
+    assert {:error, {:accuracy_not_representable, %{component: "clock"}}} = SP3.to_sp3_string(merged)
+    assert {:ok, text, report} = SP3.to_sp3_string_with_accuracy_rounding(merged, :conservative)
+    reread = parse!(text)
+    scale = 299_792_458.0 * 1.0e-12
+    source_sigma = 1.0 / Integer.pow(2, 100) * scale
+    output_sigma = 1.0 / Integer.pow(2, 99) * scale
+
+    for epoch <- 0..1 do
+      assert accuracy(b, "G12", epoch).p.clock_sigma_m == {:known, source_sigma}
+      assert accuracy(reread, "G12", epoch).p.clock_sigma_m == {:known, output_sigma}
+      assert accuracy(merged, "G12", epoch).p.clock_sigma_m == {:known, source_sigma}
+      assert {:ok, %{p: %{clock_exponent: -99}}} = SP3.record_accuracy_codes(reread, "G12", epoch)
+    end
+
+    assert report.accuracy_sigmas.clock_sigma_m == output_sigma - source_sigma
+    high_a = with_accuracy("A-anchor.sp3", "G01", 1.25, 1.025, nil, 1)
+    high_b = with_accuracy("B-anchor.sp3", "G12", 1.25, 2.0, nil, 998)
+    assert_source_round_trips(high_a, "G01")
+    assert_source_round_trips(high_b, "G12")
+    high = merge!([high_a, high_b])
+
+    assert {:error, {:accuracy_not_representable, %{component: "clock", exponent: 998}}} =
+             SP3.to_sp3_string(high)
+
+    assert {:error, {:accuracy_not_representable, %{component: "clock", exponent: 998}}} =
+             SP3.to_sp3_string_with_accuracy_rounding(high, :conservative)
+
+    assert_same_accuracy(high_b, high, "G12")
+  end
+
+  test "strict base conversion also preserves the actual decoded floating-point uncertainty" do
+    a = with_accuracy("A-anchor.sp3", "G01", 3.375, 1.025, 17, nil)
+    b = with_accuracy("B-anchor.sp3", "G12", 1.5, 1.025, 51, nil)
+    assert_source_round_trips(a, "G01")
+    assert_source_round_trips(b, "G12")
+
+    for sources <- [[a, b], [b, a]] do
+      merged = merge!(sources)
+      assert_same_accuracy(a, merged, "G01")
+      assert_same_accuracy(b, merged, "G12")
+
+      # Equivalent rational powers can decode one floating-point step apart.
+      # A strict success must preserve the actual decoded values on this target.
+      case SP3.to_sp3_string(merged) do
+        {:ok, text} ->
+          output = parse!(text)
+          assert_same_accuracy(a, output, "G01")
+          assert_same_accuracy(b, output, "G12")
+
+        {:error, {:accuracy_not_representable, %{component: "position x"}}} ->
+          assert elem(accuracy(a, "G01", 0).p.position_sigma_m, 0) !=
+                   elem(accuracy(b, "G12", 0).p.position_sigma_m, 0)
+      end
+    end
+  end
+
   test "missing and unknown policies never enable accuracy conversion" do
     product = parse!(fixture("B.sp3"))
     refute function_exported?(SP3, :to_sp3_string_with_accuracy_rounding, 1)
@@ -323,6 +408,12 @@ defmodule Sidereon.GNSS.SP3AccuracyWriterTest do
     invalid_a = with_accuracy("A-anchor.sp3", "G01", 0.0, 0.0, 13, 13)
     b = parse!(fixture("B-anchor.sp3"))
     assert_source_round_trips(invalid_a, "G01")
+
+    assert {:ok, invalid_text, invalid_report} =
+             SP3.to_sp3_string_with_accuracy_rounding(invalid_a, :conservative)
+
+    assert_zero_report(invalid_report)
+    assert_same_accuracy(invalid_a, parse!(invalid_text), "G01")
 
     for sources <- [[invalid_a, b], [b, invalid_a]] do
       merged = merge!(sources)

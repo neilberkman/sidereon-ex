@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   be represented exactly. Unspecified bases in an earlier input no longer make
   a later input's known accuracy unwritable. Decoded uncertainties and unknown
   metadata are preserved; incompatible metadata still receives a strict refusal.
+- Refuse exact-power accuracy conversions when their floating-point decoding
+  changes the source standard deviation. An authorized change requires the
+  explicit accuracy policy and appears in its report.
 
 ### Added
 
