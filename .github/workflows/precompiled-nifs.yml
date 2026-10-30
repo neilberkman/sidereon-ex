@@ -98,7 +98,9 @@ jobs:
 
   precompile:
     name: ${{ matrix.nif }} / ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }}
-    needs: [asset-check, packaged-source-build, gate]
+    # Build in parallel with validation; publishing draft assets below still
+    # requires every CI/source-build gate and all nine successful builds.
+    needs: [asset-check]
     if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
     strategy:
