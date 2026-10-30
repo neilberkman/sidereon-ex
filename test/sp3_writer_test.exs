@@ -108,12 +108,16 @@ defmodule Sidereon.GNSS.SP3WriterTest do
       {:ok, merged, _merge_report} =
         SP3.merge([a, b], min_agree: 1, clock_min_common: 1)
 
+      assert {:ok, first_state} = SP3.state(a, "G01", 0)
+      assert {:ok, second_state} = SP3.state(b, "G01", 0)
       assert {:ok, strict_text} = SP3.to_sp3_string(merged)
       assert {:ok, text, report} = SP3.to_sp3_string_with_rounding(merged)
       assert {:ok, reread} = SP3.parse(text)
       assert text == strict_text
       assert {:ok, state} = SP3.state(reread, "G01", 0)
-      assert_in_delta state.x_m, 15_000_000.0, 0.001
+      assert {:ok, merged_state} = SP3.state(merged, "G01", 0)
+      assert state.x_m == merged_state.x_m
+      assert state.x_m in [first_state.x_m, second_state.x_m]
       assert report.position_x_m == 0.0
       assert report.position_y_m == 0.0
     end

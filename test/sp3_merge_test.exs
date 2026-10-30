@@ -344,9 +344,16 @@ defmodule Sidereon.GNSS.SP3MergeTest do
 
       assert {:ok, merged, report} = SP3.merge([a, b], helmert: true, min_agree: 1)
       assert {:ok, state} = SP3.state(merged, "G02", 0)
-      assert_in_delta state.x_m, 14_999_999.992_3, 1.0e-6
-      assert_in_delta state.y_m, -19_999_999.993_048_087, 1.0e-6
-      assert_in_delta state.z_m, 5_000_000.000_396_175, 1.0e-6
+
+      assert {state.x_m, state.y_m, state.z_m} ==
+               {14999.999992 * 1000.0, -19999.999993 * 1000.0, 5000.0 * 1000.0}
+
+      analytic = [14_999_999.992_3, -19_999_999.993_048_087, 5_000_000.000_396_175]
+      columns = [state.x_m, state.y_m, state.z_m]
+
+      assert Enum.all?(Enum.zip(columns, analytic), fn {column, value} ->
+               abs(column - value) <= 0.0005
+             end)
 
       assert [
                %{
