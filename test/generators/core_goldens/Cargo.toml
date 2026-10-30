@@ -11,5 +11,5 @@ description = "Writes the core-derived expected values the Elixir tests compare 
 [dependencies]
 # The same exact core requirement as native/sidereon_nif, so the goldens come
 # from the core the binding candidate builds with.
-sidereon-core = { version = "=3.0.5", git = "https://github.com/neilberkman/sidereon", rev = "7970b1a3332ceba70088b64b4849b12b6d2b4874" }
+sidereon-core = { version = "=3.0.5" }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
