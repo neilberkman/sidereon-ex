@@ -27,11 +27,11 @@ use sidereon_core::ephemeris::{
     InterpolationNodes, MergeCombine, MergeContinuityCell, MergeContinuityCellRole,
     MergeContinuityReport, MergeContinuityViolation, MergeFlag, MergeOptions, MergePrecedenceScope,
     MergeReport, MergeToleranceError, MergeToleranceField, OrbitClass, OutlierRejectOptions,
-    ProvenanceMode, Sp3, Sp3ArtifactIdentity, Sp3EpochIntervalError, Sp3FrameLabelSet,
-    Sp3FrameReconciliation, Sp3FrameReconciliationMethod, Sp3FrameReconciliationOptions,
-    Sp3InterpolationOptions, Sp3MergeInputIdentity, Sp3MergeInputIdentityError, Sp3State,
-    Sp3WriteError, SpeedBound, StencilExtent, TransitionReason, WindowContinuityDecision,
-    WindowContinuityVerdict,
+    ProvenanceMode, Sp3, Sp3AccuracyRoundingPolicy, Sp3AccuracyRoundingReport, Sp3ArtifactIdentity,
+    Sp3EpochIntervalError, Sp3FrameLabelSet, Sp3FrameReconciliation, Sp3FrameReconciliationMethod,
+    Sp3FrameReconciliationOptions, Sp3InterpolationOptions, Sp3MergeInputIdentity,
+    Sp3MergeInputIdentityError, Sp3RoundingReport, Sp3State, Sp3WriteError, SpeedBound,
+    StencilExtent, TransitionReason, WindowContinuityDecision, WindowContinuityVerdict,
 };
 use sidereon_core::positioning::EphemerisSource;
 use sidereon_core::{Error as CoreError, GnssSatelliteId, GnssSystem};
@@ -92,6 +92,18 @@ mod atoms {
         velocity_z_m_s,
         clock_s,
         clock_rate_s_s,
+        conservative,
+        invalid_accuracy_rounding_policy,
+        record_values,
+        accuracy_sigmas,
+        position_sigma_x_m,
+        position_sigma_y_m,
+        position_sigma_z_m,
+        velocity_sigma_x_m_s,
+        velocity_sigma_y_m_s,
+        velocity_sigma_z_m_s,
+        clock_sigma_m,
+        clock_rate_sigma_m_s,
         unhandled,
         nonfinite,
 
@@ -2540,33 +2552,94 @@ fn sp3_to_iodata<'a>(env: Env<'a>, handle: ResourceArc<Sp3Resource>) -> Term<'a>
 #[rustler::nif(schedule = "DirtyCpu")]
 fn sp3_to_iodata_with_rounding<'a>(env: Env<'a>, handle: ResourceArc<Sp3Resource>) -> Term<'a> {
     match handle.sp3.to_sp3_string_with_rounding() {
+        Ok((text, report)) => (atoms::ok(), text, rounding_report_term(env, report)).encode(env),
+        Err(err) => (atoms::error(), sp3_write_error_term(env, err)).encode(env),
+    }
+}
+
+fn rounding_report_term<'a>(env: Env<'a>, report: Sp3RoundingReport) -> Term<'a> {
+    write_field_map(
+        env,
+        vec![
+            (atoms::position_x_m(), report.position_x_m.encode(env)),
+            (atoms::position_y_m(), report.position_y_m.encode(env)),
+            (atoms::position_z_m(), report.position_z_m.encode(env)),
+            (atoms::velocity_x_m_s(), report.velocity_x_m_s.encode(env)),
+            (atoms::velocity_y_m_s(), report.velocity_y_m_s.encode(env)),
+            (atoms::velocity_z_m_s(), report.velocity_z_m_s.encode(env)),
+            (atoms::clock_s(), report.clock_s.encode(env)),
+            (atoms::clock_rate_s_s(), report.clock_rate_s_s.encode(env)),
+        ],
+    )
+}
+
+fn accuracy_rounding_report_term<'a>(env: Env<'a>, report: Sp3AccuracyRoundingReport) -> Term<'a> {
+    write_field_map(
+        env,
+        vec![
+            (
+                atoms::position_sigma_x_m(),
+                report.position_sigma_x_m.encode(env),
+            ),
+            (
+                atoms::position_sigma_y_m(),
+                report.position_sigma_y_m.encode(env),
+            ),
+            (
+                atoms::position_sigma_z_m(),
+                report.position_sigma_z_m.encode(env),
+            ),
+            (
+                atoms::velocity_sigma_x_m_s(),
+                report.velocity_sigma_x_m_s.encode(env),
+            ),
+            (
+                atoms::velocity_sigma_y_m_s(),
+                report.velocity_sigma_y_m_s.encode(env),
+            ),
+            (
+                atoms::velocity_sigma_z_m_s(),
+                report.velocity_sigma_z_m_s.encode(env),
+            ),
+            (atoms::clock_sigma_m(), report.clock_sigma_m.encode(env)),
+            (
+                atoms::clock_rate_sigma_m_s(),
+                report.clock_rate_sigma_m_s.encode(env),
+            ),
+        ],
+    )
+}
+
+/// Accuracy conversion is separately selected and reported; existing record-only
+/// rounding keeps its original contract. The source resource is never mutated.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_to_iodata_with_accuracy_rounding<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    policy: rustler::Atom,
+) -> Term<'a> {
+    if policy != atoms::conservative() {
+        return (atoms::error(), atoms::invalid_accuracy_rounding_policy()).encode(env);
+    }
+    match handle
+        .sp3
+        .to_sp3_string_with_accuracy_rounding(Sp3AccuracyRoundingPolicy::Conservative)
+    {
         Ok((text, report)) => {
-            let mut map = rustler::types::map::map_new(env);
-            map = map
-                .map_put(atoms::position_x_m(), report.position_x_m)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::position_y_m(), report.position_y_m)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::position_z_m(), report.position_z_m)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::velocity_x_m_s(), report.velocity_x_m_s)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::velocity_y_m_s(), report.velocity_y_m_s)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::velocity_z_m_s(), report.velocity_z_m_s)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::clock_s(), report.clock_s)
-                .expect("rounding report is a map");
-            map = map
-                .map_put(atoms::clock_rate_s_s(), report.clock_rate_s_s)
-                .expect("rounding report is a map");
-            (atoms::ok(), text, map).encode(env)
+            let report = write_field_map(
+                env,
+                vec![
+                    (
+                        atoms::record_values(),
+                        rounding_report_term(env, report.record_values),
+                    ),
+                    (
+                        atoms::accuracy_sigmas(),
+                        accuracy_rounding_report_term(env, report.accuracy_sigmas),
+                    ),
+                ],
+            );
+            (atoms::ok(), text, report).encode(env)
         }
         Err(err) => (atoms::error(), sp3_write_error_term(env, err)).encode(env),
     }

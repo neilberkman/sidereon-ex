@@ -6,7 +6,7 @@ on:
       version:
         description: "Exact public Sidereon version to verify"
         required: true
-        default: "3.0.5"
+        default: "3.0.6"
         type: string
 
 permissions:
@@ -44,6 +44,10 @@ jobs:
           mix new "$consumer" --app sidereon_public_consumer --sup
           cp "$GITHUB_WORKSPACE/.github/scripts/published_hex_consumer_test.exs" \
             "$consumer/test/published_hex_consumer_test.exs"
+          cp "$GITHUB_WORKSPACE/test/sp3_accuracy_writer_test.exs" "$consumer/test/"
+          mkdir -p "$consumer/test/fixtures/sp3/accuracy_merge"
+          cp "$GITHUB_WORKSPACE"/test/fixtures/sp3/accuracy_merge/*.sp3 \
+            "$consumer/test/fixtures/sp3/accuracy_merge/"
           cat > "$consumer/mix.exs" <<'ELIXIR'
           defmodule SidereonPublicConsumer.MixProject do
             use Mix.Project
@@ -87,7 +91,7 @@ jobs:
           cd "$CONSUMER"
           unset SIDEREON_BUILD RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
           mix compile --warnings-as-errors
-          mix test --warnings-as-errors test/published_hex_consumer_test.exs
+          mix test --warnings-as-errors test/published_hex_consumer_test.exs test/sp3_accuracy_writer_test.exs
 
       - name: Prove the loaded NIF is the exact public precompiled archive
         shell: bash

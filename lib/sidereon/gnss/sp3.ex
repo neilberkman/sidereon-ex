@@ -1071,6 +1071,71 @@ defmodule Sidereon.GNSS.SP3 do
     end
   end
 
+  @typedoc "An explicitly selected policy for converting record accuracy standard deviations."
+  @type accuracy_rounding_policy :: :conservative
+
+  @typedoc "Maximum absolute changes in decoded accuracy standard deviations, in SI units."
+  @type accuracy_rounding_report :: %{
+          position_sigma_x_m: float(),
+          position_sigma_y_m: float(),
+          position_sigma_z_m: float(),
+          velocity_sigma_x_m_s: float(),
+          velocity_sigma_y_m_s: float(),
+          velocity_sigma_z_m_s: float(),
+          clock_sigma_m: float(),
+          clock_rate_sigma_m_s: float()
+        }
+
+  @type detailed_rounding_report :: %{
+          record_values: rounding_report(),
+          accuracy_sigmas: accuracy_rounding_report()
+        }
+
+  @doc """
+  Serialize with record-value rounding and an explicit accuracy conversion policy.
+
+  The required policy is :conservative: each finite known standard deviation is
+  converted to the smallest representable value at least as large as the source.
+  Unknown metadata and accuracy sentinels retain their meaning. Values outside
+  the finite representable range are refused instead of being clamped downward.
+
+  Returns {:ok, iodata, report}. The report separates the existing record-value
+  deltas from accuracy standard-deviation deltas. Clock accuracy is measured in
+  metres of range, and clock-rate accuracy in metres per second, matching the
+  record accuracy accessors. The original product is not modified.
+  """
+  @spec to_iodata_with_accuracy_rounding(t(), accuracy_rounding_policy(), keyword()) ::
+          {:ok, iodata(), detailed_rounding_report()}
+          | {:error, writer_error() | :invalid_accuracy_rounding_policy}
+  def to_iodata_with_accuracy_rounding(sp3, policy, opts \\ [])
+
+  def to_iodata_with_accuracy_rounding(%__MODULE__{handle: handle}, :conservative, _opts) do
+    case NIF.sp3_to_iodata_with_accuracy_rounding(handle, :conservative) do
+      {:ok, iodata, report} -> {:ok, iodata, report}
+      {:error, _reason} = error -> error
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_to_iodata_with_accuracy_rounding)
+  end
+
+  def to_iodata_with_accuracy_rounding(%__MODULE__{}, _policy, _opts), do: {:error, :invalid_accuracy_rounding_policy}
+
+  @doc """
+  Serialize to text with an explicit conservative accuracy conversion policy.
+
+  Returns {:ok, text, report}; see to_iodata_with_accuracy_rounding/3 for the
+  conversion policy, uncertainty units, refusal behavior and report fields.
+  """
+  @spec to_sp3_string_with_accuracy_rounding(t(), accuracy_rounding_policy(), keyword()) ::
+          {:ok, binary(), detailed_rounding_report()}
+          | {:error, writer_error() | :invalid_accuracy_rounding_policy}
+  def to_sp3_string_with_accuracy_rounding(%__MODULE__{} = sp3, policy, opts \\ []) do
+    case to_iodata_with_accuracy_rounding(sp3, policy, opts) do
+      {:ok, iodata, report} -> {:ok, IO.iodata_to_binary(iodata), report}
+      {:error, _reason} = error -> error
+    end
+  end
+
   @doc """
   Interpolate one satellite at J2000-second epochs in the product time scale.
 

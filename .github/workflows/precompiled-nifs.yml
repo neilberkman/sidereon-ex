@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Intended release tag for branch asset preparation (for example v3.0.5)"
+        description: "Intended release tag for branch asset preparation (for example v3.0.6)"
         required: false
         default: ""
         type: string
@@ -98,7 +98,9 @@ jobs:
 
   precompile:
     name: ${{ matrix.nif }} / ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }}
-    needs: [asset-check, packaged-source-build, gate]
+    # Build in parallel with validation; publishing draft assets below still
+    # requires every CI/source-build gate and all nine successful builds.
+    needs: [asset-check]
     if: needs.asset-check.outputs.should-build == 'true'
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -237,9 +239,9 @@ jobs:
           test -f LICENSES/ISC-libloading.txt
           test -f LICENSES/SciPy-BSD-3-Clause.txt
           test -f THIRD-PARTY-NOTICES.md
-          test -f third_party_source/sidereon-core-3.0.5/tides/mod.rs
-          test -f third_party_source/sidereon-core-3.0.5/tides/ocean.rs
-          test -f third_party_source/sidereon-core-3.0.5/tides/pole.rs
+          test -f third_party_source/sidereon-core-3.0.6/tides/mod.rs
+          test -f third_party_source/sidereon-core-3.0.6/tides/ocean.rs
+          test -f third_party_source/sidereon-core-3.0.6/tides/pole.rs
           rm -f "$final_lib" "$archive"
           cp "$source_lib" "$final_lib"
           tar -czf "$archive" \
@@ -251,9 +253,9 @@ jobs:
             LICENSES/ISC-libloading.txt \
             LICENSES/SciPy-BSD-3-Clause.txt \
             THIRD-PARTY-NOTICES.md \
-            third_party_source/sidereon-core-3.0.5/tides/mod.rs \
-            third_party_source/sidereon-core-3.0.5/tides/ocean.rs \
-            third_party_source/sidereon-core-3.0.5/tides/pole.rs
+            third_party_source/sidereon-core-3.0.6/tides/mod.rs \
+            third_party_source/sidereon-core-3.0.6/tides/ocean.rs \
+            third_party_source/sidereon-core-3.0.6/tides/pole.rs
 
           archive_listing="$(tar -tzf "$archive")"
           grep -Fxq "$final_lib" <<<"$archive_listing"
@@ -264,9 +266,9 @@ jobs:
           grep -Fxq "LICENSES/ISC-libloading.txt" <<<"$archive_listing"
           grep -Fxq "LICENSES/SciPy-BSD-3-Clause.txt" <<<"$archive_listing"
           grep -Fxq "THIRD-PARTY-NOTICES.md" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.5/tides/mod.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.5/tides/ocean.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-3.0.5/tides/pole.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.6/tides/mod.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.6/tides/ocean.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-3.0.6/tides/pole.rs" <<<"$archive_listing"
           test "$(wc -l <<<"$archive_listing" | tr -d ' ')" -eq 11
 
           if command -v sha256sum >/dev/null 2>&1; then

@@ -137,8 +137,43 @@ fields to maximum absolute changes in SI units. Header fields and epochs retain
 the strict checks. `Sidereon.GNSS.Data.write_sp3_with_rounding/3` writes that
 text atomically and returns `{:ok, path, report}`.
 
-Merges from column-grid inputs keep derived records on the SP3 grid, including
-mean and median combinations, so the strict writer can serialize them.
+Merges from column-grid inputs keep derived record values on the SP3 grid,
+including mean and median combinations. Accuracy metadata has its own
+representability requirements, addressed below.
+
+### Accuracy metadata in 3.0.6
+
+SP3 accuracy exponents depend on the position and clock bases in the header.
+Merging products now selects bases that preserve retained standard deviations
+exactly when possible, including an input with unspecified bases followed by one
+with known accuracy. Strict writers still refuse incompatible accuracy metadata.
+
+An explicit accuracy conversion is available when exact encoding is impossible:
+
+```elixir
+case Sidereon.GNSS.SP3.to_sp3_string_with_accuracy_rounding(sp3, :conservative) do
+  {:ok, text, %{record_values: values, accuracy_sigmas: sigmas}} ->
+    {:ok, :zlib.gzip(text), values, sigmas}
+
+  {:error, {:accuracy_not_representable, fields}} ->
+    {:error, {:accuracy_not_representable, fields}}
+
+  {:error, reason} ->
+    {:error, reason}
+end
+```
+
+The required `:conservative` policy chooses the smallest finite output standard
+deviation at least as large as each source value. `accuracy_sigmas` reports the
+maximum absolute change per field: position and clock range in metres, velocity
+and clock rate in metres per second. Unknown metadata and sentinels retain their
+meaning. Values beyond the finite output range remain errors. The source product
+is unchanged, and the existing eight-field numeric rounding report is unchanged.
+
+For atomic gzip file output, use
+`Sidereon.GNSS.Data.write_sp3_with_accuracy_rounding(sp3, path, :conservative, gzip: true)`.
+It returns `{:ok, path, report}` or a typed error; writer refusal preserves an
+existing destination file.
 Higher-precision inputs can still require the opt-in rounding writer.
 Agreement and dispersion metrics use combined values before final column
 quantization.
