@@ -407,9 +407,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidereon-core"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3634af272103625414a0e63bacbf2b76e181c33f8652690823acdfa0e25c938e"
+checksum = "3ba2c37c8b12bc20827e8e90971d635895e8a45fc715ad81c38d45cc3a4d3591"
 dependencies = [
  "approx",
  "cc",

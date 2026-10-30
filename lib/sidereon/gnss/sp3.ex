@@ -969,9 +969,8 @@ defmodule Sidereon.GNSS.SP3 do
   value its column cannot state bit for bit, a value that would read back as one
   of the format's absence sentinels, an epoch no record restates exactly, or
   text that would not survive the reader's trim is refused by name rather than
-  rounded, shifted or dropped. A mean-combined `merge/2` product commonly holds
-  positions finer than the millimetre columns and is refused for that reason;
-  a precedence merge keeps each contributor's own values.
+  rounded, shifted or dropped. `merge/2` preserves grid-in/grid-out for values
+  derived from on-grid inputs, including mean-combined records.
 
   Returns `{:ok, iodata}` or `{:error, {tag, fields}}`, `tag` naming the refusal
   and `fields` holding every field it carries. The record-field refusals are
@@ -1023,6 +1022,51 @@ defmodule Sidereon.GNSS.SP3 do
   def to_sp3_string(%__MODULE__{} = sp3, opts \\ []) do
     case to_iodata(sp3, opts) do
       {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @typedoc "Maximum absolute SI changes made by the opt-in SP3 rounding writer."
+  @type rounding_report :: %{
+          position_x_m: float(),
+          position_y_m: float(),
+          position_z_m: float(),
+          velocity_x_m_s: float(),
+          velocity_y_m_s: float(),
+          velocity_z_m_s: float(),
+          clock_s: float(),
+          clock_rate_s_s: float()
+        }
+
+  @doc """
+  Serialize the product after rounding record values to their SP3 columns.
+
+  Header fields and epochs retain the exact checks of `to_sp3_string/2`.
+  Returns `{:ok, text, report}` where `report` maps each field to its maximum
+  absolute change in SI units, or the same typed writer refusal.
+  """
+  @spec to_iodata_with_rounding(t(), keyword()) ::
+          {:ok, iodata(), rounding_report()} | {:error, writer_error()}
+  def to_iodata_with_rounding(%__MODULE__{handle: handle}, _opts \\ []) do
+    case NIF.sp3_to_iodata_with_rounding(handle) do
+      {:ok, iodata, report} -> {:ok, iodata, report}
+      {:error, _reason} = error -> error
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :sp3_to_iodata_with_rounding)
+  end
+
+  @doc """
+  Serialize to an SP3 text binary with record-field rounding enabled.
+
+  Returns `{:ok, text, report}`; all report values are maximum absolute changes
+  in SI units. Header and epoch fields are never rounded.
+  """
+  @spec to_sp3_string_with_rounding(t(), keyword()) ::
+          {:ok, binary(), rounding_report()} | {:error, writer_error()}
+  def to_sp3_string_with_rounding(%__MODULE__{} = sp3, opts \\ []) do
+    case to_iodata_with_rounding(sp3, opts) do
+      {:ok, iodata, report} -> {:ok, IO.iodata_to_binary(iodata), report}
       {:error, _reason} = error -> error
     end
   end
@@ -1312,6 +1356,12 @@ defmodule Sidereon.GNSS.SP3 do
   `:consensus_change`; each coverage entry is `%{source: 0, cells_contributed:
   integer, cells_selected: integer, first_epoch: epoch | nil, last_epoch: epoch
   | nil, cells_absent: integer}`.
+
+  Products derived from column-grid inputs remain on the SP3 record grid,
+  including mean and median combinations, so the strict writer can serialize
+  them. Higher-precision inputs can still require the opt-in rounding writer.
+  Agreement and dispersion metrics use combined values before final column
+  quantization.
 
   ## Options
 
@@ -1803,9 +1853,8 @@ defmodule Sidereon.GNSS.SP3 do
 
   # The merged product's coverage is its first and last epoch on the J2000-second
   # axis it interpolates on. It is read from the product rather than from text
-  # written for it, because the writer refuses a product it cannot state
-  # exactly - a mean-combined merge commonly holds positions finer than the
-  # record columns - and a merge the core performed is not refused for that.
+  # written for it; a merge's derived values follow the core's grid-in/grid-out
+  # rule, while other products can still hold values finer than record columns.
   defp attach_coverage({:ok, %__MODULE__{handle: handle} = sp3, report}) do
     case NIF.sp3_epochs_j2000_seconds(handle) do
       [] ->

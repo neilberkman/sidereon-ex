@@ -315,6 +315,53 @@ defmodule Sidereon.RtkDtedBuilderTest do
     end)
   end
 
+  test "RINEX RTK builders and static solves reject explicit empty signal pairs", context do
+    builder_options = [
+      [signal_pairs: []],
+      %{signal_pairs: []},
+      [arc_options: [signal_pairs: []]],
+      %{arc_options: %{signal_pairs: []}}
+    ]
+
+    for opts <- builder_options do
+      assert {:error, :no_signal_pairs} =
+               RTK.build_rinex_rtk_arc(context.sp3, context.base_obs, context.rover_obs, opts)
+
+      assert {:error, :no_signal_pairs} =
+               RTK.build_dual_frequency_rinex_rtk_arc(context.sp3, context.base_obs, context.rover_obs, opts)
+    end
+
+    empty_arc_options = [arc_options: [signal_pairs: []]]
+    base_m = {4_075_580.3111, 931_854.0543, 4_801_568.2808}
+
+    assert {:error, :no_signal_pairs} =
+             RTK.solve_static_rinex_rtk_baseline(
+               context.sp3,
+               context.base_obs,
+               context.rover_obs,
+               base_m,
+               empty_arc_options
+             )
+
+    assert {:error, :no_signal_pairs} =
+             RTK.solve_static_reference_station_rinex(
+               context.sp3,
+               context.base_obs,
+               context.rover_obs,
+               base_m,
+               empty_arc_options
+             )
+
+    assert {:error, :no_signal_pairs} =
+             RTK.solve_wide_lane_fixed_rinex_rtk_baseline(
+               context.sp3,
+               context.base_obs,
+               context.rover_obs,
+               base_m,
+               empty_arc_options
+             )
+  end
+
   test "explicit DTED tile-list builder canonicalizes caller order and writes bytes" do
     entries = [
       DtedTileListEntry.new(

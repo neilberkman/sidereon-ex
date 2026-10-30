@@ -1000,6 +1000,11 @@ defmodule Sidereon.GNSS.Data do
   contributor also passes through `SP3.merge/2`, so filters, target cadence, and
   validation behave consistently; its report has `single_product: true` and
   `merged: true`.
+
+  Merges from column-grid contributors keep records on the SP3 grid, including
+  means, medians, and clock-datum adjustments. Higher-precision input records
+  can still require the opt-in rounding writer. Agreement metrics use combined
+  values before final column quantization.
   """
   def fetch_merged_sp3(target, centers, opts \\ [])
 
@@ -1181,6 +1186,23 @@ defmodule Sidereon.GNSS.Data do
          {:ok, tmp} <- write_temp(Path.dirname(Path.expand(path)), data),
          :ok <- rename_file(tmp, path) do
       {:ok, path}
+    end
+  end
+
+  @doc """
+  Write an SP3 product atomically with record-field rounding enabled.
+
+  Returns `{:ok, path, report}`. The report contains maximum absolute changes
+  in SI units; header fields and epochs retain the strict writer's exact checks.
+  Pass `gzip: true` to compress the output.
+  """
+  def write_sp3_with_rounding(%SP3{} = sp3, path, opts \\ []) when is_binary(path) do
+    with {:ok, text, report} <- SP3.to_sp3_string_with_rounding(sp3),
+         data = if(truthy?(Keyword.get(opts, :gzip)), do: :zlib.gzip(text), else: text),
+         :ok <- ensure_dir(Path.dirname(Path.expand(path))),
+         {:ok, tmp} <- write_temp(Path.dirname(Path.expand(path)), data),
+         :ok <- rename_file(tmp, path) do
+      {:ok, path, report}
     end
   end
 

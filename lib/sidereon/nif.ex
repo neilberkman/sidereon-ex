@@ -896,6 +896,7 @@ defmodule Sidereon.NIF do
   def sp3_states_at(_handle, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_to_iodata(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def sp3_to_iodata_with_rounding(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_precise_ephemeris_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def sp3_precise_ephemeris_accuracy_samples(_handle), do: :erlang.nif_error(:nif_not_loaded)

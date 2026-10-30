@@ -203,11 +203,7 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert epoch.position_rms_m > 0.0
     end
 
-    test "a mean-combined merge finer than the record columns is refused by the writer, by name" do
-      # G01's X differs by 1 mm between the centers, well within tolerance, so
-      # the mean combine holds 15000.0000005 km, which an F14.6 kilometer column
-      # cannot state. The merge itself succeeds; writing it is refused naming
-      # the cell rather than rounded half a millimeter away.
+    test "a mean-combined merge of grid inputs remains writable" do
       a =
         sp3_records([
           {"G01", [15_000.000000, -20_000.0, 5000.0], 100.0},
@@ -223,10 +219,14 @@ defmodule Sidereon.GNSS.SP3MergeTest do
       assert {:ok, merged, _report} = SP3.merge([a, b])
       assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02"]
 
-      assert {:error, {:record_value_not_representable, fields}} = SP3.to_sp3_string(merged)
-      assert %{field: "position x", satellite: "G01", epoch_index: 0} = fields
-      assert_in_delta fields.stored, 15_000_000.0005, 1.0e-6
-      assert {:error, {:record_value_not_representable, ^fields}} = SP3.to_iodata(merged)
+      assert {:ok, strict_text} = SP3.to_sp3_string(merged)
+      assert {:ok, rounded_text, rounding_report} = SP3.to_sp3_string_with_rounding(merged)
+      assert strict_text == rounded_text
+      assert rounding_report.position_x_m == 0.0
+      assert {:ok, reread} = SP3.parse(strict_text)
+      assert {:ok, merged_state} = SP3.state(merged, "G01", 0)
+      assert {:ok, reread_state} = SP3.state(reread, "G01", 0)
+      assert reread_state.x_m == merged_state.x_m
     end
 
     test "quarantines a position all centers disagree on and keeps the clock" do
@@ -344,9 +344,16 @@ defmodule Sidereon.GNSS.SP3MergeTest do
 
       assert {:ok, merged, report} = SP3.merge([a, b], helmert: true, min_agree: 1)
       assert {:ok, state} = SP3.state(merged, "G02", 0)
-      assert_in_delta state.x_m, 14_999_999.992_3, 1.0e-6
-      assert_in_delta state.y_m, -19_999_999.993_048_087, 1.0e-6
-      assert_in_delta state.z_m, 5_000_000.000_396_175, 1.0e-6
+
+      assert {state.x_m, state.y_m, state.z_m} ==
+               {14_999.999992 * 1000.0, -19_999.999993 * 1000.0, 5000.0 * 1000.0}
+
+      analytic = [14_999_999.992_3, -19_999_999.993_048_087, 5_000_000.000_396_175]
+      columns = [state.x_m, state.y_m, state.z_m]
+
+      assert Enum.all?(Enum.zip(columns, analytic), fn {column, value} ->
+               abs(column - value) <= 0.0005
+             end)
 
       assert [
                %{

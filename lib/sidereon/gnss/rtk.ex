@@ -1915,6 +1915,7 @@ defmodule Sidereon.GNSS.RTK do
   defp rinex_builder_options(opts, kind) when kind in [:single, :dual] do
     with {:ok, arc_options} <- rinex_builder_arc_options(opts),
          :ok <- validate_rinex_builder_option_values(opts, arc_options),
+         :ok <- validate_nonempty_rinex_signal_pairs(arc_options),
          {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), kind) do
       {:ok,
        %{
@@ -2078,6 +2079,7 @@ defmodule Sidereon.GNSS.RTK do
   defp rinex_single_arc_options_term(opts) do
     with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
          :ok <- validate_rinex_builder_option_values(opts, arc_options),
+         :ok <- validate_nonempty_rinex_signal_pairs(arc_options),
          {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :single) do
       {:ok,
        %{
@@ -2092,6 +2094,7 @@ defmodule Sidereon.GNSS.RTK do
   defp rinex_dual_arc_options_term(opts) do
     with {:ok, arc_options} <- rinex_nested_options(opts, :arc_options),
          :ok <- validate_rinex_builder_option_values(opts, arc_options),
+         :ok <- validate_nonempty_rinex_signal_pairs(arc_options),
          {:ok, signal_pairs} <- rinex_signal_pair_terms(Map.get(arc_options, :signal_pairs, []), :dual) do
       {:ok,
        %{
@@ -2100,6 +2103,13 @@ defmodule Sidereon.GNSS.RTK do
          min_common_satellites: Map.get(arc_options, :min_common_satellites, 4),
          include_prediction_time: Map.get(arc_options, :include_prediction_time, true)
        }}
+    end
+  end
+
+  defp validate_nonempty_rinex_signal_pairs(options) do
+    case Map.fetch(options, :signal_pairs) do
+      {:ok, []} -> {:error, :no_signal_pairs}
+      _other -> :ok
     end
   end
 

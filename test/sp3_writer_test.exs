@@ -1,7 +1,7 @@
 defmodule Sidereon.GNSS.SP3WriterTest do
   use ExUnit.Case, async: true
 
-  alias Sidereon.GNSS.SP3
+  alias Sidereon.GNSS.{Data, SP3}
 
   # Single-epoch SP3-c from `{satellite, [x,y,z] km, clock_us | nil}` records.
   defp sp3_bytes(records) do
@@ -61,6 +61,65 @@ defmodule Sidereon.GNSS.SP3WriterTest do
       assert {:ok, a} = SP3.to_sp3_string(sp3)
       assert {:ok, b} = SP3.to_sp3_string(sp3)
       assert a == b
+    end
+  end
+
+  describe "SP3 rounding writer" do
+    test "returns text and zero maximum deltas for parsed canonical values" do
+      {:ok, sp3} = parse!([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}])
+
+      assert {:ok, strict} = SP3.to_sp3_string(sp3)
+      assert {:ok, rounded, report} = SP3.to_sp3_string_with_rounding(sp3)
+      assert rounded == strict
+
+      assert report == %{
+               position_x_m: 0.0,
+               position_y_m: 0.0,
+               position_z_m: 0.0,
+               velocity_x_m_s: 0.0,
+               velocity_y_m_s: 0.0,
+               velocity_z_m_s: 0.0,
+               clock_s: 0.0,
+               clock_rate_s_s: 0.0
+             }
+    end
+
+    test "Data writes the rounded text and returns the report" do
+      {:ok, sp3} = parse!([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}])
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "sidereon-rounded-#{System.unique_integer([:positive])}.sp3"
+        )
+
+      on_exit(fn -> File.rm(path) end)
+
+      assert {:ok, ^path, report} = Data.write_sp3_with_rounding(sp3, path)
+      assert {:ok, text, _report} = SP3.to_sp3_string_with_rounding(sp3)
+      assert File.read!(path) == text
+      assert report.position_x_m == 0.0
+    end
+
+    test "preserves grid-in/grid-out through a mean merge" do
+      {:ok, a} = parse!([{"G01", [15_000.0, -20_000.0, 5000.0], 100.0}])
+      {:ok, b} = parse!([{"G01", [15_000.000001, -20_000.0, 5000.0], 100.0}])
+
+      {:ok, merged, _merge_report} =
+        SP3.merge([a, b], min_agree: 1, clock_min_common: 1)
+
+      assert {:ok, first_state} = SP3.state(a, "G01", 0)
+      assert {:ok, second_state} = SP3.state(b, "G01", 0)
+      assert {:ok, strict_text} = SP3.to_sp3_string(merged)
+      assert {:ok, text, report} = SP3.to_sp3_string_with_rounding(merged)
+      assert {:ok, reread} = SP3.parse(text)
+      assert text == strict_text
+      assert {:ok, state} = SP3.state(reread, "G01", 0)
+      assert {:ok, merged_state} = SP3.state(merged, "G01", 0)
+      assert state.x_m == merged_state.x_m
+      assert state.x_m in [first_state.x_m, second_state.x_m]
+      assert report.position_x_m == 0.0
+      assert report.position_y_m == 0.0
     end
   end
 

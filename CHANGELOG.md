@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.5] - 2026-10-30
+
+### Added
+
+- Add opt-in SP3 column rounding writers that report maximum absolute SI changes; strict writers remain unchanged.
+- Preserve strictly writable SP3 columns for grid-aligned merge and alignment products.
+
+### Fixed
+
+- Normalize extreme-scale quaternions robustly while preserving ordinary quaternion rounding.
+- Reject zero probability values where probability inputs must be strictly between zero and one.
+- Declare the exact public fields returned by RINEX observation-value and
+  cycle-slip accessors rather than reducing each row to an untyped map.
+- Declare every broadcast group-delay, CNAV parameter and evaluated CNAV
+  correction struct field and its numeric contract in the public types.
+- Reject explicitly empty RINEX RTK signal-pair lists while preserving the
+  documented defaults when the option is omitted.
+
 ## [3.0.4] - 2026-10-18
 
 ### Fixed

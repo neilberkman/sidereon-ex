@@ -50,6 +50,92 @@ defmodule SidereonPublishedHexConsumerTest do
     assert SP3.satellite_ids(reparsed) == ["G01"]
   end
 
+  test "grid-in SP3 mean merge stays strictly writable and reports zero rounding" do
+    assert {:ok, first} = SP3.parse(@sp3)
+    second_text = String.replace(@sp3, "15000.000000", "15000.000001")
+    assert {:ok, second} = SP3.parse(second_text)
+
+    assert {:ok, first_state} = SP3.state(first, "G01", 0)
+    assert {:ok, second_state} = SP3.state(second, "G01", 0)
+
+    assert {:ok, merged, _merge_report} =
+             SP3.merge([first, second], min_agree: 1, clock_min_common: 1)
+
+    assert {:ok, strict_text} = SP3.to_sp3_string(merged)
+    assert {:ok, reread} = SP3.parse(strict_text)
+    assert {:ok, state} = SP3.state(reread, "G01", 0)
+    assert {:ok, merged_state} = SP3.state(merged, "G01", 0)
+    assert state.x_m == merged_state.x_m
+    assert state.x_m in [first_state.x_m, second_state.x_m]
+
+    assert {:ok, rounded_text, report} = SP3.to_sp3_string_with_rounding(merged)
+    assert rounded_text == strict_text
+    assert report.position_x_m == 0.0
+  end
+
+  test "three-satellite half-grid clock means remain strictly writable" do
+    first_clocks = [-598.410235, 138.983111, 0.0]
+    second_clocks = [-598.410234, 138.983110, 0.0]
+    assert {:ok, first} = clock_product(first_clocks)
+    assert {:ok, second} = clock_product(second_clocks)
+
+    assert {:ok, _first_text} = SP3.to_sp3_string(first)
+    assert {:ok, _second_text} = SP3.to_sp3_string(second)
+
+    assert {:ok, merged, _merge_report} =
+             SP3.merge([first, second], min_agree: 1, clock_min_common: 3)
+
+    assert {:ok, strict_text} = SP3.to_sp3_string(merged)
+    assert {:ok, reread} = SP3.parse(strict_text)
+
+    for sat_id <- ["G01", "G02", "G03"] do
+      assert {:ok, left} = SP3.state(first, sat_id, 0)
+      assert {:ok, right} = SP3.state(second, sat_id, 0)
+      assert {:ok, merged_state} = SP3.state(merged, sat_id, 0)
+      assert {:ok, read_state} = SP3.state(reread, sat_id, 0)
+      assert read_state.clock_s == merged_state.clock_s
+      assert read_state.clock_s in [left.clock_s, right.clock_s]
+    end
+
+    assert {:ok, rounded_text, report} = SP3.to_sp3_string_with_rounding(merged)
+    assert rounded_text == strict_text
+    assert report.clock_s == 0.0
+    assert report.clock_rate_s_s == 0.0
+  end
+
+  defp clock_product(clocks) do
+    satellites = ["G01", "G02", "G03"]
+    satellite_header = Enum.join(satellites, "") <> String.duplicate("  0", 14)
+
+    records =
+      Enum.zip(satellites, clocks)
+      |> Enum.map(fn {satellite, clock_us} ->
+        fmt = fn value -> value |> :erlang.float_to_binary(decimals: 6) |> String.pad_leading(14) end
+        "P" <> satellite <> fmt.(15_000.0) <> fmt.(-20_000.0) <> fmt.(5000.0) <> fmt.(clock_us)
+      end)
+
+    text =
+      Enum.join(
+        [
+          "#cP2020  6 25  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
+          "## 2111 432000.00000000   900.00000000 59025 0.0000000000000",
+          "+    3   " <> satellite_header,
+          "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
+          "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+          "%c cc cc ccc ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
+          "%f  1.2500000  1.025000000  0.00000000000  0.000000000000000",
+          "%f  0.0000000  0.000000000  0.00000000000  0.000000000000000",
+          "%i    0    0    0    0      0      0      0      0         0",
+          "%i    0    0    0    0      0      0      0      0         0",
+          "/* RELEASE CONSUMER SP3 CLOCK FIXTURE",
+          "*  2020  6 25  0  0  0.00000000"
+        ] ++ records ++ ["EOF", ""],
+        "\n"
+      )
+
+    SP3.parse(text)
+  end
+
   test "custom HTTP exception diagnostics redact credentials and exception data" do
     token = "PRIVATE_CONSUMER_BEARER"
     option_secret = "PRIVATE_CONSUMER_OPTION"
@@ -115,6 +201,7 @@ defmodule SidereonPublishedHexConsumerTest do
     }
 
     assert {:error, :invalid_input} = Relative.rotation(:rsw, zero)
+
     assert_raise ArgumentError, "relative-frame calculation failed: :invalid_input", fn ->
       Relative.rotation!(:rsw, zero)
     end
