@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in SP3 column rounding writers that report maximum absolute SI changes; strict writers remain unchanged.
+- Preserve strictly writable SP3 columns for grid-aligned merge and alignment products.
+
 ## [3.0.4] - 2026-10-18
 
 ### Fixed

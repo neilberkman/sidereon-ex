@@ -104,6 +104,13 @@ case Sidereon.GNSS.SP3.to_sp3_string(sp3) do
 end
 ```
 
+For a product that needs record-field rounding, use
+`Sidereon.GNSS.SP3.to_sp3_string_with_rounding/2`. It returns
+`{:ok, text, report}`; the report maps the eight position, velocity and clock
+fields to maximum absolute changes in SI units. Header fields and epochs retain
+the strict checks. `Sidereon.GNSS.Data.write_sp3_with_rounding/3` writes that
+text atomically and returns `{:ok, path, report}`.
+
 The same change applies to `to_iodata/2`. Before 3.0, a call site could pass
 its result straight to an iodata consumer:
 
@@ -121,11 +128,11 @@ case Sidereon.GNSS.SP3.to_iodata(sp3) do
 end
 ```
 
-For example, a merged position finer than the SP3 columns can return
+Other products can still hold a value finer than the SP3 columns and return
 `{:error, {:record_value_not_representable, fields}}`, where `fields` identifies
-the field, satellite, and epoch. The writer refuses that value rather than
-rounding it. Callers can preserve the named error and its fields as above, or
-match the tag and fields to handle a particular refusal. See the
+the field, satellite, and epoch. The strict writer refuses that value rather
+than rounding it. Callers can preserve the named error and its fields as above,
+or match the tag and fields to handle a particular refusal. See the
 [complete 3.0 release notes](CHANGELOG.md#300---2026-10-04).
 
 ## Example: track a satellite

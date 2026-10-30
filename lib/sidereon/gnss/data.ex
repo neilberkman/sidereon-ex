@@ -1185,6 +1185,23 @@ defmodule Sidereon.GNSS.Data do
   end
 
   @doc """
+  Write an SP3 product atomically with record-field rounding enabled.
+
+  Returns `{:ok, path, report}`. The report contains maximum absolute changes
+  in SI units; header fields and epochs retain the strict writer's exact checks.
+  Pass `gzip: true` to compress the output.
+  """
+  def write_sp3_with_rounding(%SP3{} = sp3, path, opts \\ []) when is_binary(path) do
+    with {:ok, text, report} <- SP3.to_sp3_string_with_rounding(sp3),
+         data = if(truthy?(Keyword.get(opts, :gzip)), do: :zlib.gzip(text), else: text),
+         :ok <- ensure_dir(Path.dirname(Path.expand(path))),
+         {:ok, tmp} <- write_temp(Path.dirname(Path.expand(path)), data),
+         :ok <- rename_file(tmp, path) do
+      {:ok, path, report}
+    end
+  end
+
+  @doc """
   Fetch the DTED tile covering `lat_deg`, `lon_deg`.
   """
   def fetch_dted(lat_deg, lon_deg, opts \\ []) when is_number(lat_deg) and is_number(lon_deg) do
@@ -3830,7 +3847,8 @@ defmodule Sidereon.GNSS.Data do
          _quarantined,
          _position_outliers,
          _clock_outliers
-       ), do: :ok
+       ),
+       do: :ok
 
   defp verify_accepted_cell_flags(cells, single, position_outliers, clock_outliers, source_count, policy) do
     Enum.reduce_while(cells, :ok, fn {key, cell}, :ok ->
@@ -4024,7 +4042,8 @@ defmodule Sidereon.GNSS.Data do
   defp effective_agreement_tolerances(%{
          combine: "precedence",
          outlier_reject: %{position_tolerance_m: position, clock_tolerance_s: clock}
-       }), do: {position, clock}
+       }),
+       do: {position, clock}
 
   defp effective_agreement_tolerances(policy), do: {policy.position_tolerance_m, policy.clock_tolerance_s}
 

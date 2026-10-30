@@ -84,6 +84,14 @@ mod atoms {
         record_value_not_representable,
         record_reads_as_absent,
         record_fields_disagree,
+        position_x_m,
+        position_y_m,
+        position_z_m,
+        velocity_x_m_s,
+        velocity_y_m_s,
+        velocity_z_m_s,
+        clock_s,
+        clock_rate_s_s,
         unhandled,
         nonfinite,
 
@@ -2522,6 +2530,44 @@ fn sp3_merge_input_identity(
 fn sp3_to_iodata<'a>(env: Env<'a>, handle: ResourceArc<Sp3Resource>) -> Term<'a> {
     match handle.sp3.to_sp3_string() {
         Ok(text) => (atoms::ok(), text).encode(env),
+        Err(err) => (atoms::error(), sp3_write_error_term(env, err)).encode(env),
+    }
+}
+
+/// Serialize after rounding record values to their SP3 columns and include the
+/// maximum absolute SI change for each field. Header fields and epochs remain
+/// subject to the strict writer's checks.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_to_iodata_with_rounding<'a>(env: Env<'a>, handle: ResourceArc<Sp3Resource>) -> Term<'a> {
+    match handle.sp3.to_sp3_string_with_rounding() {
+        Ok((text, report)) => {
+            let mut map = rustler::types::map::map_new(env);
+            map = map
+                .map_put(atoms::position_x_m(), report.position_x_m)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::position_y_m(), report.position_y_m)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::position_z_m(), report.position_z_m)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::velocity_x_m_s(), report.velocity_x_m_s)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::velocity_y_m_s(), report.velocity_y_m_s)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::velocity_z_m_s(), report.velocity_z_m_s)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::clock_s(), report.clock_s)
+                .expect("rounding report is a map");
+            map = map
+                .map_put(atoms::clock_rate_s_s(), report.clock_rate_s_s)
+                .expect("rounding report is a map");
+            (atoms::ok(), text, map).encode(env)
+        }
         Err(err) => (atoms::error(), sp3_write_error_term(env, err)).encode(env),
     }
 }
