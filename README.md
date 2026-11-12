@@ -235,6 +235,15 @@ end
 `Sidereon.GNSS.RTK` and the PPP and DGNSS solvers follow the same pattern:
 observations and a product in, a typed solution out.
 
+Precise-positioning preprocessing and integrity support is grouped under
+`Sidereon.GNSS.PrecisePositioning`: `TEC` estimates and levels dual-frequency
+TEC arcs, `CycleSlip` maintains Melbourne-Wubbena and geometry-free detector
+state, `Prep` prepares float and wide-lane-fixed epochs, `RAIM` provides global
+tests, protection levels and FDE, and `Kinematic` exposes the kinematic PPP
+predict/correct cycle and ordered-arc solver. Exact epochs use
+`Sidereon.GNSS.Time.ExactEpoch` resources throughout, and failures are typed
+structs carrying stable core variants and display text.
+
 For post-solve integrity checks, use `Sidereon.GNSS.QC.RaimInput.new/2` with
 `Sidereon.GNSS.QC.raim/2` to run residual RAIM from satellite ids and
 post-fit residuals. RAIM weights must come from per-satellite residual

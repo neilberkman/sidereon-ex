@@ -8,6 +8,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.PrecisePositioning
   alias Sidereon.GNSS.PrecisePositioning.FixedSolution
+  alias Sidereon.GNSS.PrecisePositioning.RAIM
   alias Sidereon.GNSS.PrecisePositioning.Solution
   alias Sidereon.GNSS.SP3
   alias Sidereon.GNSS.Troposphere
@@ -223,6 +224,89 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
                sol.ambiguities_m[bad_sat] -
                  (Map.fetch!(true_ambiguities(ctx.sats), bad_sat) + 1.25)
              ) < 1.0e-3
+    end
+  end
+
+  describe "precise-positioning RAIM/FDE" do
+    test "both snapshot drivers return the exact clean solution", ctx do
+      opts = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+      config = %{RAIM.config() | chi_square_threshold: 1.0e12}
+
+      assert {:ok, fde} = RAIM.fde_float_epoch(ctx.sp3, ctx.observations, @epoch, opts, config)
+      assert {:ok, solved} = RAIM.solve_float_epoch_with_raim(ctx.sp3, ctx.observations, @epoch, opts, config)
+      assert fde == solved
+      assert fde.status == :clean
+      assert fde.excluded_sats == []
+      assert fde.raim.status == :passed
+      assert fde.raim.detected == false
+      assert fde.raim.threshold == 1.0e12
+      assert fde.raim.redundancy == 4
+      assert position_error(fde.solution.position, @truth) < 1.0e-3
+    end
+
+    test "both drivers preserve the core invalid RAIM configuration detail", ctx do
+      opts = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+      config = %{RAIM.config() | false_alarm_probability: 0.0}
+
+      for fun <- [&RAIM.fde_float_epoch/5, &RAIM.solve_float_epoch_with_raim/5] do
+        assert {:error, %RAIM.Error{} = error} = fun.(ctx.sp3, ctx.observations, @epoch, opts, config)
+        assert error.kind == :invalid_config
+        assert error.field == "false_alarm_probability"
+        assert error.reason == "must be inside (0, 1)"
+        assert to_string(error) == "invalid RAIM configuration false_alarm_probability: must be inside (0, 1)"
+      end
+    end
+  end
+
+  describe "kinematic precise positioning" do
+    alias Sidereon.GNSS.PrecisePositioning.Kinematic
+
+    test "corrects one predicted state and solves the ordered arc", ctx do
+      config = kinematic_config()
+      first = hd(ctx.epoch_observations)
+      ambiguity_ids = Enum.map(first.observations, & &1.satellite_id)
+
+      assert {:ok, predicted} =
+               Kinematic.predict_kinematic_state(
+                 config.initial_state,
+                 config.initial_covariance_m2,
+                 0.0,
+                 ambiguity_ids,
+                 config
+               )
+
+      assert {:ok, corrected} =
+               Kinematic.correct_kinematic_state(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 0,
+                 predicted.state,
+                 predicted.covariance_m2,
+                 config
+               )
+
+      assert corrected.summary.used_sats == ambiguity_ids
+      assert corrected.summary.innovation_rms_m >= 0.0
+      assert corrected.summary.ssr_bias_exclusions == []
+      assert corrected.summary.unplaced_observations == []
+
+      assert {:ok, solutions} = Kinematic.solve_kinematic_ppp(ctx.sp3, ctx.epoch_observations, config)
+      assert length(solutions) == 3
+      assert Enum.all?(solutions, &(&1.status == :updated))
+      assert List.last(solutions).used_sats == ambiguity_ids
+      assert position_error(List.last(solutions).position_m, @truth) < 10.0
+    end
+
+    test "preserves invalid covariance field, reason, and display text", ctx do
+      config = %{kinematic_config() | initial_covariance_m2: [[1.0]]}
+
+      assert {:error, %Kinematic.Error{} = error} =
+               Kinematic.solve_kinematic_ppp(ctx.sp3, ctx.epoch_observations, config)
+
+      assert error.kind == :invalid_input
+      assert error.field == "kinematic PPP covariance row count"
+      assert is_binary(error.reason)
+      assert to_string(error) =~ "invalid kinematic PPP input kinematic PPP covariance"
     end
   end
 
@@ -1418,6 +1502,18 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
       end)
     end)
   end
+
+  defp kinematic_config do
+    config = Sidereon.GNSS.PrecisePositioning.Kinematic.config()
+
+    %{
+      config
+      | initial_state: %{config.initial_state | position_m: @truth},
+        initial_covariance_m2: Enum.map(0..4, fn i -> Enum.map(0..4, fn j -> if i == j, do: 100.0, else: 0.0 end) end)
+    }
+  end
+
+  defp position_error({x, y, z}, {tx, ty, tz}), do: :math.sqrt((x - tx) ** 2 + (y - ty) ** 2 + (z - tz) ** 2)
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
     :math.sqrt((x - tx) * (x - tx) + (y - ty) * (y - ty) + (z - tz) * (z - tz))

@@ -833,6 +833,86 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   def solve_float(%SP3{}, observations, %NaiveDateTime{}, _opts) when not is_list(observations),
     do: {:error, :no_observations}
 
+  @doc false
+  def __raim_float_epoch__(kind, %SP3{} = sp3, observations, %NaiveDateTime{} = epoch, opts, raim)
+      when kind in [:fde_float_epoch, :solve_float_epoch_with_raim] and is_list(observations) do
+    with :ok <- ensure_nonempty(observations),
+         {:ok, obs} <- normalize_observations(observations),
+         :ok <- ensure_enough(obs),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options(opts),
+         {:ok, tropo} <- troposphere_options(opts),
+         :ok <- ensure_single_epoch_troposphere(tropo),
+         {:ok, state} <- initial_state(sp3, obs, epoch, opts) do
+      [epoch_term] = core_epoch_terms([%{epoch: epoch, observations: obs}], tropo)
+
+      arguments = [
+        sp3.handle,
+        epoch_term,
+        core_single_initial_state_term(state),
+        {weights.code, weights.phase, weights.elevation_weighting?},
+        {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
+         solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+         solve_opts.estimate_residual_ionosphere?},
+        core_tropo_term(tropo),
+        core_corrections_term(tropo),
+        raim
+      ]
+
+      result =
+        case kind do
+          :fde_float_epoch -> apply(NIF, :precise_positioning_fde_float_epoch, arguments)
+          :solve_float_epoch_with_raim -> apply(NIF, :precise_positioning_solve_float_epoch_with_raim, arguments)
+        end
+
+      case result do
+        {:ok, {payload, raim_result, excluded, status}} ->
+          {:ok,
+           %{
+             solution: core_single_solution(payload, obs, tropo),
+             raim: raim_result,
+             excluded_sats: excluded,
+             status: status
+           }}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  @doc false
+  def __kinematic_ppp__(kind, %SP3{} = sp3, epoch_observations, epoch_index, state, covariance, base, opts)
+      when kind in [:correct, :solve] do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, tropo} <- troposphere_options(opts) do
+      terms = core_epoch_terms(epochs, tropo)
+
+      case kind do
+        :correct ->
+          NIF.precise_positioning_correct_kinematic_state(
+            sp3.handle,
+            terms,
+            epoch_index,
+            state,
+            covariance,
+            base,
+            core_tropo_term(tropo),
+            core_corrections_term(tropo)
+          )
+
+        :solve ->
+          NIF.precise_positioning_solve_kinematic_ppp(
+            sp3.handle,
+            terms,
+            base,
+            core_tropo_term(tropo),
+            core_corrections_term(tropo)
+          )
+      end
+    end
+  end
+
   @doc """
   Solve a static multi-epoch float-ambiguity carrier-phase position.
 
