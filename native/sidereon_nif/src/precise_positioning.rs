@@ -180,7 +180,20 @@ mod atoms {
         ssr_correction_exceeds_limit,
         unrecognized_reason,
         too_few_observations,
-        singular_velocity_geometry
+        singular_velocity_geometry,
+        clean,
+        restored,
+        cannot_exclude,
+        integrity_not_restored,
+        passed,
+        fault_detected,
+        not_enough_redundancy,
+        raim,
+        invalid_config,
+        invalid_residual,
+        invalid_geometry,
+        dop,
+        singular_raim_geometry
     }
 }
 
@@ -196,6 +209,17 @@ type VelocityObservationTerm = (String, Vec3, Vec3, f64, f64, f64);
 type VelocityRobustConfigTerm = (f64, f64, u64, f64);
 type VelocityConfigTerm = (u64, Option<VelocityRobustConfigTerm>);
 type ReceiverVelocityStateTerm = (Vec3, Vec3, f64);
+type KinematicStateTerm = (Vec3, f64, f64, Vec<(String, f64)>);
+type KinematicNoiseTerm = (String, f64, f64, f64, f64);
+type KinematicMotionTerm = (String, Vec3);
+type KinematicBaseConfigTerm = (
+    KinematicStateTerm,
+    Vec<Vec<f64>>,
+    KinematicMotionTerm,
+    KinematicNoiseTerm,
+    f64,
+    WeightsTerm,
+);
 
 #[rustler::nif]
 pub fn precise_positioning_vmf_site_max_samples() -> u64 {
@@ -406,6 +430,402 @@ pub fn precise_positioning_solve_float<'a>(
         ),
     );
     Ok(encode_result(env, result))
+}
+
+fn encode_raim_status(status: core::RaimStatus) -> rustler::Atom {
+    match status {
+        core::RaimStatus::Passed => atoms::passed(),
+        core::RaimStatus::FaultDetected => atoms::fault_detected(),
+        core::RaimStatus::NotEnoughRedundancy => atoms::not_enough_redundancy(),
+    }
+}
+
+fn encode_fde_status(status: core::RaimFdeStatus) -> rustler::Atom {
+    match status {
+        core::RaimFdeStatus::Clean => atoms::clean(),
+        core::RaimFdeStatus::Restored => atoms::restored(),
+        core::RaimFdeStatus::CannotExclude => atoms::cannot_exclude(),
+        core::RaimFdeStatus::IntegrityNotRestored => atoms::integrity_not_restored(),
+    }
+}
+
+fn encode_raim_fde_result<'a>(
+    env: Env<'a>,
+    result: Result<core::RaimFdeResult, core::RaimFdeError>,
+) -> Term<'a> {
+    match result {
+        Ok(value) => {
+            let statistics = value
+                .raim
+                .satellite_statistics
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.satellite_id,
+                        s.code,
+                        s.phase,
+                        s.statistic,
+                        s.code_testable,
+                        s.phase_testable,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let raim = (
+                encode_raim_status(value.raim.status),
+                value.raim.detected,
+                value.raim.test_statistic,
+                value.raim.threshold,
+                value.raim.redundancy as i64,
+                statistics,
+                (
+                    value.raim.most_likely_fault,
+                    value.raim.hpl_m,
+                    value.raim.vpl_m,
+                ),
+            );
+            (
+                atoms::ok(),
+                (
+                    encode_float_payload(env, value.solution),
+                    raim,
+                    value.excluded_sats,
+                    encode_fde_status(value.status),
+                ),
+            )
+                .encode(env)
+        }
+        Err(core::RaimFdeError::Solve(error)) => encode_float_error_detailed(env, error),
+        Err(core::RaimFdeError::Raim(error)) => encode_raim_error(env, error),
+    }
+}
+
+fn encode_raim_error<'a>(env: Env<'a>, error: core::RaimError) -> Term<'a> {
+    let message = error.to_string();
+    let detail = match error {
+        core::RaimError::InvalidConfig { field, reason } => {
+            (atoms::invalid_config(), field, Some(reason), message).encode(env)
+        }
+        core::RaimError::InvalidResidual { field } => (
+            atoms::invalid_residual(),
+            field,
+            Option::<&str>::None,
+            message,
+        )
+            .encode(env),
+        core::RaimError::InvalidGeometry { field, reason } => {
+            (atoms::invalid_geometry(), field, Some(reason), message).encode(env)
+        }
+        core::RaimError::Dop(_) => (atoms::dop(), "dop", Option::<&str>::None, message).encode(env),
+        core::RaimError::SingularGeometry => (
+            atoms::singular_raim_geometry(),
+            "geometry",
+            Option::<&str>::None,
+            message,
+        )
+            .encode(env),
+    };
+    (atoms::error(), (atoms::raim(), detail)).encode(env)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_fde_float_epoch<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epoch: EpochTerm,
+    initial: InitialStateTerm,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    raim: (f64, f64, f64, Option<f64>),
+) -> NifResult<Term<'a>> {
+    let epoch = decode_epoch(epoch)?;
+    let initial = decode_initial(initial);
+    let corrections = decode_corrections(corrections)?;
+    let solve = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        core::RangeCorrections {
+            receiver_antenna: corrections.receiver_antenna,
+            sat_clock_relativity: corrections.sat_clock_relativity,
+            satellite_clock: corrections.satellite_clock,
+            ppp: core::PppCorrectionLookup::default(),
+        },
+        decode_solve_options(solve_options),
+        solve_options.5,
+        false,
+        solve_options.6,
+    );
+    let mut rc = core::RaimConfig::default();
+    rc.false_alarm_probability = raim.0;
+    rc.missed_detection_probability = raim.1;
+    rc.measurement_sigma_m = raim.2;
+    rc.chi_square_threshold = raim.3;
+    Ok(encode_raim_fde_result(
+        env,
+        core::raim::fde_float_epoch(&handle.sp3, epoch, initial, solve, rc),
+    ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_solve_float_epoch_with_raim<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epoch: EpochTerm,
+    initial: InitialStateTerm,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    raim: (f64, f64, f64, Option<f64>),
+) -> NifResult<Term<'a>> {
+    let epoch = decode_epoch(epoch)?;
+    let initial = decode_initial(initial);
+    let corrections = decode_corrections(corrections)?;
+    let solve = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        core::RangeCorrections {
+            receiver_antenna: corrections.receiver_antenna,
+            sat_clock_relativity: corrections.sat_clock_relativity,
+            satellite_clock: corrections.satellite_clock,
+            ppp: core::PppCorrectionLookup::default(),
+        },
+        decode_solve_options(solve_options),
+        solve_options.5,
+        false,
+        solve_options.6,
+    );
+    let mut rc = core::RaimConfig::default();
+    rc.false_alarm_probability = raim.0;
+    rc.missed_detection_probability = raim.1;
+    rc.measurement_sigma_m = raim.2;
+    rc.chi_square_threshold = raim.3;
+    Ok(encode_raim_fde_result(
+        env,
+        core::solve_float_epoch_with_raim(&handle.sp3, epoch, initial, solve, rc),
+    ))
+}
+
+fn decode_kinematic_state(term: KinematicStateTerm) -> core::KinematicState {
+    core::KinematicState {
+        position_m: vec3_to_array(term.0),
+        clock_m: term.1,
+        ztd_residual_m: term.2,
+        ambiguities_m: term.3.into_iter().collect(),
+    }
+}
+
+fn encode_kinematic_state(state: core::KinematicState) -> KinematicStateTerm {
+    (
+        array_to_vec3(state.position_m),
+        state.clock_m,
+        state.ztd_residual_m,
+        state.ambiguities_m.into_iter().collect(),
+    )
+}
+
+fn decode_kinematic_config(
+    term: KinematicBaseConfigTerm,
+    tropo: core::TroposphereOptions,
+    corrections: core::RangeCorrections,
+) -> core::KinematicConfig {
+    let mut config = core::KinematicConfig::default();
+    config.initial_state = decode_kinematic_state(term.0);
+    config.initial_covariance_m2 = term.1;
+    config.motion = match term.2 .0.as_str() {
+        "hold" => core::KinematicMotionModel::Hold,
+        _ => core::KinematicMotionModel::ConstantVelocity {
+            velocity_m_s: vec3_to_array(term.2 .1),
+        },
+    };
+    config.process_noise = core::KinematicProcessNoise {
+        position: match term.3 .0.as_str() {
+            "random_walk" => core::KinematicPositionProcessNoise::RandomWalk {
+                spectral_density_m2_s: term.3 .1,
+            },
+            _ => core::KinematicPositionProcessNoise::WhiteNoiseAcceleration {
+                spectral_density_m2_s3: term.3 .1,
+            },
+        },
+        clock_white_m2_s: term.3 .2,
+        ztd_random_walk_m2_s: term.3 .3,
+        ambiguity_hold_m2_s: term.3 .4,
+    };
+    config.new_ambiguity_variance_m2 = term.4;
+    config.weights = decode_weights(term.5);
+    config.tropo = tropo;
+    config.corrections = corrections;
+    config
+}
+
+fn encode_kinematic_error<'a>(env: Env<'a>, error: core::KinematicSolveError) -> Term<'a> {
+    let message = error.to_string();
+    let detail = match error {
+        core::KinematicSolveError::NoEphemeris {
+            satellite_id,
+            reason,
+        } => (
+            "no_ephemeris",
+            Some(satellite_id),
+            None::<String>,
+            Some(reason.to_string()),
+            message,
+        )
+            .encode(env),
+        core::KinematicSolveError::SingularGeometry => (
+            "singular_geometry",
+            None::<String>,
+            None::<String>,
+            None::<String>,
+            message,
+        )
+            .encode(env),
+        core::KinematicSolveError::InvalidSolveOption { field, reason } => (
+            "invalid_solve_option",
+            None::<String>,
+            Some(field.to_string()),
+            Some(reason.to_string()),
+            message,
+        )
+            .encode(env),
+        core::KinematicSolveError::InvalidInput { field, reason } => (
+            "invalid_input",
+            None::<String>,
+            Some(field.to_string()),
+            Some(reason.to_string()),
+            message,
+        )
+            .encode(env),
+        core::KinematicSolveError::MissingCorrection {
+            satellite_id,
+            correction,
+        } => (
+            "missing_correction",
+            Some(satellite_id),
+            None::<String>,
+            Some(correction.to_string()),
+            message,
+        )
+            .encode(env),
+        core::KinematicSolveError::Ut1OutsideCoverage(reason) => (
+            "ut1_outside_coverage",
+            None::<String>,
+            None::<String>,
+            Some(reason.to_string()),
+            message,
+        )
+            .encode(env),
+    };
+    (atoms::error(), detail).encode(env)
+}
+
+fn encode_kinematic_summary<'a>(env: Env<'a>, value: core::KinematicUpdateSummary) -> Term<'a> {
+    (
+        value.innovation_rms_m,
+        value.used_sats,
+        encode_ssr_bias_exclusions(&value.ssr_bias_exclusions),
+        encode_unplaced_observations(env, &value.unplaced_observations),
+    )
+        .encode(env)
+}
+
+fn encode_kinematic_solution<'a>(env: Env<'a>, value: core::KinematicEpochSolution) -> Term<'a> {
+    let status = match value.status {
+        core::KinematicEpochStatus::Updated => "updated",
+        core::KinematicEpochStatus::PredictedOnly => "predicted_only",
+    };
+    (
+        encode_kinematic_state(core::KinematicState {
+            position_m: value.position_m,
+            clock_m: value.clock_m,
+            ztd_residual_m: value.ztd_residual_m,
+            ambiguities_m: value.ambiguities_m,
+        }),
+        matrix3_to_lists(value.position_covariance_m2),
+        value.used_sats,
+        value.innovation_rms_m,
+        encode_ssr_bias_exclusions(&value.ssr_bias_exclusions),
+        encode_unplaced_observations(env, &value.unplaced_observations),
+        status,
+    )
+        .encode(env)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_correct_kinematic_state<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    correction_epochs: Vec<EpochTerm>,
+    epoch_index: u64,
+    state: KinematicStateTerm,
+    covariance: Vec<Vec<f64>>,
+    base: KinematicBaseConfigTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(correction_epochs)?;
+    let Some(epoch) = epochs.get(epoch_index as usize).cloned() else {
+        let error = core::KinematicSolveError::InvalidInput {
+            field: "epoch_index",
+            reason: "outside correction epochs",
+        };
+        return Ok(encode_kinematic_error(env, error));
+    };
+    let mut state = decode_kinematic_state(state);
+    let mut covariance = covariance;
+    let decoded = decode_corrections(corrections)?;
+    let range = direct_range_corrections(&handle, &epochs, state.position_m, &decoded)?;
+    let config = decode_kinematic_config(base, decode_tropo(&tropo)?, range);
+    match core::correct_kinematic_state(
+        &handle.sp3,
+        epoch_index as usize,
+        &epoch,
+        &mut state,
+        &mut covariance,
+        &config,
+    ) {
+        Ok(summary) => Ok((
+            atoms::ok(),
+            (
+                encode_kinematic_state(state),
+                covariance,
+                encode_kinematic_summary(env, summary),
+            ),
+        )
+            .encode(env)),
+        Err(error) => Ok(encode_kinematic_error(env, error)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_positioning_solve_kinematic_ppp<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epochs: Vec<EpochTerm>,
+    base: KinematicBaseConfigTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(epochs)?;
+    let initial_position = decode_kinematic_state(base.0.clone()).position_m;
+    let decoded = decode_corrections(corrections)?;
+    let range = direct_range_corrections(&handle, &epochs, initial_position, &decoded)?;
+    let config = decode_kinematic_config(base, decode_tropo(&tropo)?, range);
+    match core::solve_kinematic_ppp(&handle.sp3, &epochs, config) {
+        Ok(values) => Ok((
+            atoms::ok(),
+            values
+                .into_iter()
+                .map(|value| encode_kinematic_solution(env, value))
+                .collect::<Vec<_>>(),
+        )
+            .encode(env)),
+        Err(error) => Ok(encode_kinematic_error(env, error)),
+    }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]

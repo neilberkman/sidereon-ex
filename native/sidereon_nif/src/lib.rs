@@ -59,6 +59,7 @@ mod orbit_determination;
 mod passes;
 mod ppp_corrections;
 mod precise_positioning;
+mod precise_positioning_surfaces;
 mod precise_samples;
 mod primitive_estimation;
 mod propagation;

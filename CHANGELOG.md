@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add the precise-positioning `TEC`, `CycleSlip`, `Prep`, `RAIM`, and
+  `Kinematic` modules, including lossless exact-epoch state, typed core errors,
+  TEC arc leveling, dual-frequency preparation, snapshot FDE, and sequential
+  kinematic PPP prediction and correction.
 - Add reference/canonical PPP auto-init strategy entry points and the
   precise-positioning precomputed-state velocity least-squares API, including
   core-backed default configuration factories, direct range-rate prediction,

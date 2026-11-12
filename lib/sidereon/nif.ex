@@ -706,8 +706,79 @@ defmodule Sidereon.NIF do
   def precise_positioning_solve_float(_handle, _epoch, _initial_state, _weights, _solve_options, _tropo, _corrections),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def precise_positioning_fde_float_epoch(
+        _handle,
+        _epoch,
+        _initial_state,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _raim
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_float_epoch_with_raim(
+        _handle,
+        _epoch,
+        _initial_state,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _raim
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_correct_kinematic_state(
+        _handle,
+        _correction_epochs,
+        _epoch_index,
+        _state,
+        _covariance,
+        _config,
+        _tropo,
+        _corrections
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_kinematic_ppp(_handle, _epochs, _config, _tropo, _corrections),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def precise_positioning_solve_velocity_least_squares(_observations, _receiver_position_m, _config),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def pp_tec_constants, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_code_geometry_free(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_phase_geometry_free(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_slant_from_code(_value, _f1_hz, _f2_hz), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_slant_from_phase(_value, _f1_hz, _f2_hz), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_estimate_code(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_estimate_phase(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_mapping(_elevation_rad, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_vertical(_slant_tec_tecu, _elevation_rad, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_tec_level(_samples, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def pp_tec_pierce_point(_latitude_rad, _longitude_rad, _elevation_rad, _azimuth_rad, _config),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def pp_tec_estimate(_epochs, _config), do: :erlang.nif_error(:nif_not_loaded)
+
+  def pp_cycle_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_state_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_mw(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_gf(_observation), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_update_mw(_state, _observation, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_update_gf(_state, _observation, _time_s, _epoch, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_cycle_detect(_epochs, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_prep_cycle_slip_options_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_prepare_widelane(_epochs, _wide_lane, _policy, _cycle_slip), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_split_float_slips(_epochs, _cycle_slip), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_global(_residuals, _n_states, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_global_geometry(_residuals, _geometry, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_statistics(_residuals, _geometry, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_protection(_geometry, _receiver, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_kinematic_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def pp_kinematic_predict(_state, _covariance, _dt_s, _ambiguity_ids, _config), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_positioning_vmf_site_max_samples, do: :erlang.nif_error(:nif_not_loaded)
   def precise_positioning_vmf_site_single_sample_clamp_days, do: :erlang.nif_error(:nif_not_loaded)
