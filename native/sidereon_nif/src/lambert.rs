@@ -19,6 +19,8 @@ mod atoms {
 
 type Vec3 = (f64, f64, f64);
 
+/// The positional arity preserves the established Elixir NIF call contract.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lambert_battin_impl<'a>(
     env: Env<'a>,
     r1: Vec3,
