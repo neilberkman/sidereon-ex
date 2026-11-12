@@ -15,6 +15,8 @@ defmodule Sidereon.CCSDS.TDM.Metadata do
   precedes.
 
   `range_units` is `"km"` when the block states no `RANGE_UNITS`.
+
+  Metadata is plain Elixir data and compares structurally with `==`.
   """
 
   alias Sidereon.CCSDS.TDM
@@ -43,6 +45,20 @@ defmodule Sidereon.CCSDS.TDM.Metadata do
           time_system: String.t() | nil,
           range_units: String.t()
         }
+
+  @doc """
+  Returns the last non-empty value assigned to `key`, or `nil` when none exists.
+
+  Repeated fields retain their original order; lookup and empty-value semantics
+  come from the core TDM metadata implementation.
+  """
+  @spec get_last(t(), String.t()) :: String.t() | nil
+  def get_last(%__MODULE__{} = metadata, key) when is_binary(key) do
+    case TDM.metadata_to_nif(metadata) do
+      {:ok, term} -> NIF.tdm_metadata_get_last(term, key)
+      {:error, reason} -> raise ArgumentError, "invalid TDM metadata: #{inspect(reason)}"
+    end
+  end
 
   @doc """
   Build a metadata block from its ordered raw fields and positioned comments

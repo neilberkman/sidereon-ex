@@ -20,9 +20,13 @@ defmodule Sidereon.CCSDS.TDM.WritePolicy do
 
   The refusals for options that do not read are those
   `Sidereon.CCSDS.TDM.Policy` lists.
+
+  Policies are plain Elixir structs and compare structurally with `==`.
   """
 
+  alias Sidereon.CCSDS.TDM.Policy
   alias Sidereon.CCSDS.TDM.PolicyOptions
+  alias Sidereon.NIF
 
   @keys [
     :non_printable,
@@ -59,6 +63,19 @@ defmodule Sidereon.CCSDS.TDM.WritePolicy do
   @doc "The policy that emits every departure the mirror allows."
   @spec lenient() :: t()
   def lenient, do: struct(__MODULE__, Enum.map(@keys, &{&1, :forgive}))
+
+  @doc """
+  Converts a write policy to the matching reader policy.
+
+  The writer-only `:repeated_keywords` axis has no reader counterpart and is
+  omitted. Invalid policy values are refused as by `new/1`.
+  """
+  @spec as_read(t() | keyword() | map()) :: {:ok, Policy.t()} | {:error, term()}
+  def as_read(opts) do
+    with {:ok, policy} <- to_nif_map(opts) do
+      {:ok, struct!(Policy, NIF.tdm_write_policy_as_read(policy))}
+    end
+  end
 
   @doc """
   Builds a policy from a keyword list or map of axes, or checks a policy

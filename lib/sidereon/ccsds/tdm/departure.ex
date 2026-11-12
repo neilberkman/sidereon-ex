@@ -23,6 +23,8 @@ defmodule Sidereon.CCSDS.TDM.Departure do
 
   `segment` is one-based and `section` is `:header`, `:metadata` or `:data`.
   `message` is the core's text for the departure.
+
+  Departures are plain Elixir structs and compare structurally with `==`.
   """
 
   @enforce_keys [:tag, :message]

@@ -25,6 +25,8 @@ defmodule Sidereon.CCSDS.TDM.Warning do
   `line` is the one-based input line, `segment` one-based, `section` `:header`,
   `:metadata` or `:data`, and `character` a one-character string. `message` is
   the core's text for the departure, carried beside the fields.
+
+  Warnings are plain Elixir structs and compare structurally with `==`.
   """
 
   @enforce_keys [:tag, :message]

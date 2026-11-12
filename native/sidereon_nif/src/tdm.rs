@@ -23,8 +23,8 @@
 use rustler::{Atom, Encoder, Env, NifResult, Term};
 use sidereon_core::astro::tdm::{
     self as core_tdm, Tdm, TdmComment, TdmDataRecord, TdmDataSection, TdmDeparture, TdmError,
-    TdmField, TdmLeniency, TdmMetadata, TdmObservable, TdmParticipant, TdmPath, TdmPolicy,
-    TdmScalar, TdmSegment, TdmUnit, TdmWarning, TdmWritePolicy,
+    TdmField, TdmInputErrorKind, TdmLeniency, TdmMetadata, TdmObservable, TdmParticipant, TdmPath,
+    TdmPolicy, TdmScalar, TdmSegment, TdmUnit, TdmWarning, TdmWritePolicy,
 };
 
 mod atoms {
@@ -574,6 +574,41 @@ fn write_policy(term: TdmWritePolicyTerm) -> NifResult<TdmWritePolicy> {
         .with_keyword_order(leniency(term.keyword_order, "keyword_order")?)
         .with_final_terminator(leniency(term.final_terminator, "final_terminator")?)
         .with_repeated_keywords(leniency(term.repeated_keywords, "repeated_keywords")?))
+}
+
+fn input_error_kind(value: Atom) -> NifResult<TdmInputErrorKind> {
+    if value == atoms::missing() {
+        Ok(TdmInputErrorKind::Missing)
+    } else if value == atoms::float_parse() {
+        Ok(TdmInputErrorKind::FloatParse)
+    } else if value == atoms::non_finite() {
+        Ok(TdmInputErrorKind::NonFinite)
+    } else if value == atoms::not_positive() {
+        Ok(TdmInputErrorKind::NotPositive)
+    } else if value == atoms::out_of_range() {
+        Ok(TdmInputErrorKind::OutOfRange)
+    } else if value == atoms::invalid_index() {
+        Ok(TdmInputErrorKind::InvalidIndex)
+    } else if value == atoms::unknown_keyword() {
+        Ok(TdmInputErrorKind::UnknownKeyword)
+    } else if value == atoms::unexpected_unit() {
+        Ok(TdmInputErrorKind::UnexpectedUnit)
+    } else if value == atoms::non_integer() {
+        Ok(TdmInputErrorKind::NonInteger)
+    } else if value == atoms::negative() {
+        Ok(TdmInputErrorKind::Negative)
+    } else if value == atoms::negative_zero() {
+        Ok(TdmInputErrorKind::NegativeZero)
+    } else if value == atoms::unit_mismatch() {
+        Ok(TdmInputErrorKind::UnitMismatch)
+    } else if value == atoms::decimal_mismatch() {
+        Ok(TdmInputErrorKind::DecimalMismatch)
+    } else {
+        Err(rustler::Error::Term(Box::new((
+            "invalid_tdm_input_error_kind",
+            value,
+        ))))
+    }
 }
 
 /// `:header`, `:metadata` or `:data` for the section names the core uses, and
@@ -1313,6 +1348,43 @@ fn raw_parts(
         fields.into_iter().map(field).collect(),
         comments.into_iter().map(comment).collect(),
     )
+}
+
+/// Return the last non-empty value for a metadata keyword through the core.
+#[rustler::nif]
+fn tdm_metadata_get_last(metadata: TdmMetadataTerm, key: String) -> Option<String> {
+    metadata_as_given(metadata)
+        .get_last(&key)
+        .map(str::to_owned)
+}
+
+fn leniency_atom(value: TdmLeniency) -> Atom {
+    match value {
+        TdmLeniency::Strict => atoms::strict(),
+        TdmLeniency::Forgive => atoms::forgive(),
+    }
+}
+
+/// Convert a writer policy to the core's matching reader policy.
+#[rustler::nif]
+fn tdm_write_policy_as_read(policy: TdmWritePolicyTerm) -> NifResult<TdmPolicyTerm> {
+    let policy = write_policy(policy)?.as_read();
+    Ok(TdmPolicyTerm {
+        non_printable: leniency_atom(policy.non_printable),
+        missing_keywords: leniency_atom(policy.missing_keywords),
+        long_lines: leniency_atom(policy.long_lines),
+        empty_data_sections: leniency_atom(policy.empty_data_sections),
+        record_order: leniency_atom(policy.record_order),
+        duplicate_records: leniency_atom(policy.duplicate_records),
+        keyword_order: leniency_atom(policy.keyword_order),
+        final_terminator: leniency_atom(policy.final_terminator),
+    })
+}
+
+/// Format an input-error kind with the core's `Display` implementation.
+#[rustler::nif]
+fn tdm_input_error_kind_display(kind: Atom) -> NifResult<String> {
+    Ok(input_error_kind(kind)?.to_string())
 }
 
 /// Build a metadata block from ordered raw fields and positioned comments under

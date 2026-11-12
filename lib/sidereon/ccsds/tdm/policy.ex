@@ -24,6 +24,8 @@ defmodule Sidereon.CCSDS.TDM.Policy do
   every policy. A message read under a lenient policy is written back unchanged
   or refused by name; the writer does not repair it.
 
+  Policies are plain Elixir structs and compare structurally with `==`.
+
   ## What is refused
 
     * `{:invalid_policy_value, axis, value}` - a choice that is neither

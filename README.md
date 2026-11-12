@@ -388,6 +388,8 @@ The configured policy propagates across the pipeline:
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
   CCSDS OPM / OEM / CDM / TDM, and the GNSS products above. See `Sidereon.Format.TLE`,
   `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`, `Sidereon.CCSDS.TDM`.
+  TDM also exposes ordered metadata lookup, matching read/write policies, and
+  typed input-error kinds with core diagnostic text.
 
 Every result is what the engine computes, returned as plain Elixir structs and
 maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
