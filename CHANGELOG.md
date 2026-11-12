@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `Metadata.get_last/2`, `WritePolicy.as_read/1`, and the
+  `InputErrorKind` `t()` type with `display/1`.
+- Document and test that TDM values are plain structs, maps, atoms and strings
+  and compare structurally with `==`.
+
 ## [3.0.6] - 2026-10-30
 
 ### Fixed

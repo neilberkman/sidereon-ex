@@ -14,6 +14,7 @@ defmodule Sidereon.CCSDS.TDMContractTest do
   alias Sidereon.CCSDS.TDM.Comment
   alias Sidereon.CCSDS.TDM.Departure
   alias Sidereon.CCSDS.TDM.Field
+  alias Sidereon.CCSDS.TDM.InputErrorKind
   alias Sidereon.CCSDS.TDM.Metadata
   alias Sidereon.CCSDS.TDM.Participant
   alias Sidereon.CCSDS.TDM.Policy
@@ -93,6 +94,20 @@ defmodule Sidereon.CCSDS.TDMContractTest do
   end
 
   describe "policies" do
+    test "a write policy converts through the core to its matching read policy" do
+      write = %WritePolicy{
+        non_printable: :forgive,
+        record_order: :forgive,
+        repeated_keywords: :forgive
+      }
+
+      assert WritePolicy.as_read(write) ==
+               {:ok, %{Policy.strict() | non_printable: :forgive, record_order: :forgive}}
+
+      assert {:error, {:invalid_policy_value, :record_order, :sometimes}} =
+               WritePolicy.as_read(record_order: :sometimes)
+    end
+
     test "unknown, duplicate and invalid policy options are refused by name" do
       assert {:error, {:unknown_policy_key, :bogus}} = TDM.parse_kvn_with_policy(@conforming, bogus: :forgive)
 
@@ -130,6 +145,15 @@ defmodule Sidereon.CCSDS.TDMContractTest do
   end
 
   describe "metadata from raw fields" do
+    test "get_last/2 returns the last repeated value and nil when absent" do
+      metadata = %Metadata{
+        fields: [field("EPHEMERIS_NAME", "first"), field("EPHEMERIS_NAME", "second")]
+      }
+
+      assert Metadata.get_last(metadata, "EPHEMERIS_NAME") == "second"
+      assert Metadata.get_last(metadata, "MODE") == nil
+    end
+
     test "from_raw/2 derives every property from the ordered fields" do
       fields = [
         field("TIME_SYSTEM", "UTC"),
@@ -255,6 +279,140 @@ defmodule Sidereon.CCSDS.TDMContractTest do
   end
 
   describe "refusals" do
+    test "every input-error kind round-trips as an atom with exact core display text" do
+      cases = [
+        missing: "missing",
+        float_parse: "invalid float",
+        non_finite: "not finite",
+        not_positive: "not positive",
+        out_of_range: "out of range",
+        invalid_index: "invalid index",
+        unknown_keyword: "unknown keyword",
+        unexpected_unit: "unexpected unit",
+        non_integer: "not an integer",
+        negative: "negative",
+        negative_zero: "negative zero",
+        unit_mismatch: "unit mismatch",
+        decimal_mismatch: "decimal mismatch"
+      ]
+
+      for {kind, text} <- cases do
+        assert InputErrorKind.display(kind) == text
+      end
+
+      assert_raise ArgumentError, "invalid TDM input-error kind: :future_kind", fn ->
+        InputErrorKind.display(:future_kind)
+      end
+    end
+
+    test "all PartialEq-backed TDM values use structural Elixir equality" do
+      assert {:ok, left} = TDM.parse(@conforming)
+      assert {:ok, right} = TDM.parse(@conforming)
+      assert left == right
+      refute left == %{right | version: "1.0"}
+
+      [left_segment] = left.segments
+      [right_segment] = right.segments
+      left_record = hd(left_segment.data.records)
+      right_record = hd(right_segment.data.records)
+      assert left_segment == right_segment
+
+      changed_record = %{right_record | value: %{right_record.value | text: "1.00"}}
+
+      refute left_segment == %{
+               right_segment
+               | data: %{right_segment.data | records: [changed_record]}
+             }
+
+      assert left_segment.metadata == right_segment.metadata
+
+      refute left_segment.metadata == %{
+               right_segment.metadata
+               | fields: right_segment.metadata.fields ++ [field("MODE", "SEQUENTIAL")]
+             }
+
+      assert left_segment.data == right_segment.data
+      refute left_segment.data == %{right_segment.data | records: [changed_record]}
+      assert left_record == right_record
+      refute left_record == changed_record
+      assert left_record.value == right_record.value
+      assert left_record.observable == right_record.observable
+      refute left_record.observable == %TDM.Observable{kind: :angle_1}
+      assert left_record.unit == right_record.unit
+      refute left_record.unit == "s"
+      refute left_record.value == %{right_record.value | text: "1.00"}
+
+      participant = %Participant{index: 1, name: "DSS-25"}
+      path = %TDM.Path{key: "PATH", index: nil, participants: [1]}
+      assert participant == %Participant{index: 1, name: "DSS-25"}
+      refute participant == %Participant{index: 2, name: "DSS-25"}
+      assert path == %TDM.Path{key: "PATH", index: nil, participants: [1]}
+      refute path == %TDM.Path{key: "PATH", index: nil, participants: [2]}
+
+      assert Policy.strict() == Policy.strict()
+      refute Policy.strict() == Policy.lenient()
+
+      assert {:ok, %{value: first_tdm, warnings: first_warnings}} =
+               TDM.parse_kvn_with_policy(@late_data_comment, keyword_order: :forgive)
+
+      assert {:ok, %{value: second_tdm, warnings: second_warnings}} =
+               TDM.parse_kvn_with_policy(@late_data_comment, keyword_order: :forgive)
+
+      assert first_warnings == second_warnings
+      [warning] = first_warnings
+
+      assert warning == %Warning{
+               tag: :keyword_out_of_order,
+               line: 10,
+               keyword: "COMMENT",
+               column: nil,
+               character: nil,
+               length: nil,
+               section: :data,
+               segment: nil,
+               epoch: nil,
+               message:
+                 "TDM data comment at line 10 sat after a record; a comment belongs at the beginning of its section per 4.5.2"
+             }
+
+      refute warning == %{warning | keyword: "ORIGINATOR"}
+
+      assert {:ok, %{departures: first_departures}} =
+               TDM.encode_kvn_with_policy(first_tdm, keyword_order: :forgive)
+
+      assert {:ok, %{departures: second_departures}} =
+               TDM.encode_kvn_with_policy(second_tdm, keyword_order: :forgive)
+
+      assert first_departures == second_departures
+      [departure] = first_departures
+
+      assert departure == %Departure{
+               tag: :keyword_out_of_order,
+               keyword: "COMMENT",
+               character: nil,
+               length: nil,
+               segment: nil,
+               epoch: nil,
+               section: :data,
+               message:
+                 "TDM data writes a comment after a record; a comment belongs at the beginning of its section per 4.5.2"
+             }
+
+      refute departure == %{departure | keyword: "ORIGINATOR"}
+
+      invalid_float = String.replace(@conforming, "1.0", "not-a-float")
+      assert {:error, {:invalid_field, %{kind: first_kind}}} = TDM.parse(invalid_float)
+      assert {:error, {:invalid_field, %{kind: second_kind}}} = TDM.parse(invalid_float)
+
+      assert {:error, {:invalid_field, %{kind: different_kind}}} =
+               Metadata.from_raw([field("TIME_SYSTEM", "UTC"), field("PARTICIPANT_9", "DSS-14")], [])
+
+      assert first_kind == second_kind
+      assert first_kind == :float_parse
+      refute first_kind == different_kind
+      assert different_kind == :invalid_index
+    end
+
     test "each refusal carries the fields of its variant" do
       no_creation_date = String.replace(@conforming, "CREATION_DATE = 2005-160T20:15:00Z\n", "")
       assert {:error, {:missing_keyword, %{keyword: "CREATION_DATE", segment: nil}}} = TDM.parse(no_creation_date)

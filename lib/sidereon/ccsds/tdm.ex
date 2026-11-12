@@ -8,6 +8,10 @@ defmodule Sidereon.CCSDS.TDM do
   records they sit between (`Sidereon.CCSDS.TDM.Comment`) and are written back
   there.
 
+  TDM values are plain Elixir data: messages, segments, participants, paths,
+  data sections, records, scalars and observables compare structurally with
+  `==`; units are strings and compare by value the same way.
+
   ## Strict and policy entries
 
   `parse_kvn/1` and `encode_kvn/1` hold a message to CCSDS 503.0-B-2 and refuse

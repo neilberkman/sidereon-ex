@@ -349,6 +349,12 @@ defmodule Sidereon.NIF do
   def tdm_metadata_replace_raw_with_policy(_current, _fields, _comments, _policy),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def tdm_metadata_get_last(_metadata, _key), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_write_policy_as_read(_policy), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tdm_input_error_kind_display(_kind), do: :erlang.nif_error(:nif_not_loaded)
+
   def geodesic_inverse(_lat1_deg, _lon1_deg, _lat2_deg, _lon2_deg), do: :erlang.nif_error(:nif_not_loaded)
 
   def geodesic_direct(_lat1_deg, _lon1_deg, _azi1_deg, _s12_m), do: :erlang.nif_error(:nif_not_loaded)
