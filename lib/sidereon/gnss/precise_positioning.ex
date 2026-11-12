@@ -47,6 +47,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   alias Sidereon.GNSS.Core.Constants
   alias Sidereon.GNSS.Core.Epoch
   alias Sidereon.GNSS.Core.Observations, as: CoreObservations
+  alias Sidereon.GNSS.Core.Types, as: CoreTypes
   alias Sidereon.GNSS.IonosphereFree
   alias Sidereon.GNSS.Positioning
   alias Sidereon.GNSS.RINEX.Clock
@@ -67,6 +68,186 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 200_000
+
+  @doc "Maximum number of six-hourly VMF site samples carried for one arc."
+  @spec vmf_site_max_samples() :: 8
+  def vmf_site_max_samples, do: NIF.precise_positioning_vmf_site_max_samples()
+
+  @doc "Clamp window in days on each side of a single-sample VMF series."
+  @spec vmf_site_single_sample_clamp_days() :: float()
+  def vmf_site_single_sample_clamp_days, do: NIF.precise_positioning_vmf_site_single_sample_clamp_days()
+
+  @doc "Return the core default PPP auto-init strategy (`:reference`)."
+  @spec ppp_auto_init_strategy() :: :reference
+  def ppp_auto_init_strategy do
+    NIF.precise_positioning_ppp_auto_init_strategy_default()
+    |> String.to_existing_atom()
+  end
+
+  @typedoc "Precomputed satellite-state input to the leaf range-rate velocity solve."
+  @type velocity_observation :: %{
+          satellite_id: String.t(),
+          satellite_position_m: {float(), float(), float()},
+          satellite_velocity_m_s: {float(), float(), float()},
+          measured_range_rate_m_s: float(),
+          sigma_m_s: float(),
+          satellite_clock_drift_m_s: float()
+        }
+
+  @typedoc "Huber/MAD options for the leaf range-rate velocity solve."
+  @type velocity_robust_config :: %{
+          huber_k: float(),
+          scale_floor_m_s: float(),
+          max_outer: pos_integer(),
+          outer_tol_m_s: float()
+        }
+
+  @typedoc "Configuration for the leaf range-rate velocity solve."
+  @type velocity_config :: %{
+          minimum_observations: non_neg_integer(),
+          robust: velocity_robust_config() | nil
+        }
+
+  @typedoc "Result of the leaf range-rate velocity solve."
+  @type velocity_solution :: %{
+          velocity_m_s: {float(), float(), float()},
+          clock_drift_m_s: float(),
+          residual_rms_m_s: float(),
+          used_sats: [String.t()],
+          downweighted_sats: [String.t()],
+          robust_iterations: non_neg_integer(),
+          robust_scale_m_s: float() | nil
+        }
+
+  defmodule VelocitySolveError do
+    @moduledoc """
+    A precise-positioning velocity-solve failure.
+
+    Values compare structurally with `==`; `to_string/1` returns the core
+    `Display` text without reconstructing it in Elixir.
+    """
+
+    @enforce_keys [:kind, :message]
+    defstruct [:kind, :required, :actual, :field, :reason, :message]
+
+    @type t :: %__MODULE__{
+            kind: :too_few_observations | :invalid_input | :singular_geometry,
+            required: non_neg_integer() | nil,
+            actual: non_neg_integer() | nil,
+            field: String.t() | nil,
+            reason: String.t() | nil,
+            message: String.t()
+          }
+
+    defimpl String.Chars, for: __MODULE__ do
+      def to_string(error), do: error.message
+    end
+  end
+
+  @doc """
+  Return the core default velocity configuration.
+
+  The returned map and all velocity input/result maps use Elixir value equality.
+  """
+  @spec velocity_config() :: velocity_config()
+  def velocity_config do
+    {minimum_observations, robust} = NIF.precise_positioning_velocity_config_default()
+    %{minimum_observations: minimum_observations, robust: decode_velocity_robust_config(robust)}
+  end
+
+  @doc "Return the core default robust velocity configuration."
+  @spec velocity_robust_config() :: velocity_robust_config()
+  def velocity_robust_config do
+    NIF.precise_positioning_velocity_robust_config_default()
+    |> decode_velocity_robust_config()
+  end
+
+  @doc "Construct a stationary receiver velocity state at an ECEF position."
+  @spec stationary_velocity_state({number(), number(), number()}) :: map()
+  def stationary_velocity_state({x, y, z}) when is_number(x) and is_number(y) and is_number(z) do
+    {position_m, velocity_m_s, clock_drift_m_s} =
+      NIF.precise_positioning_stationary_velocity_state({x / 1.0, y / 1.0, z / 1.0})
+
+    %{position_m: position_m, velocity_m_s: velocity_m_s, clock_drift_m_s: clock_drift_m_s}
+  end
+
+  @doc """
+  Predict one observation's range rate through the core geometry model.
+
+  The result is a plain map and therefore compares structurally with `==`.
+  """
+  @spec predict_range_rate_m_s(velocity_observation(), map()) :: {:ok, map()} | {:error, term()}
+  def predict_range_rate_m_s(observation, receiver_state) when is_map(receiver_state) do
+    with {:ok, observation} <- velocity_observation_term(observation),
+         {:ok, receiver} <- receiver_velocity_state_term(receiver_state) do
+      case NIF.precise_positioning_predict_range_rate_m_s(observation, receiver) do
+        {:ok, {los_unit, range_rate_m_s}} ->
+          {:ok, %{los_unit: los_unit, range_rate_m_s: range_rate_m_s}}
+
+        {:error, {:invalid_input, field}} ->
+          {:error, {:invalid_input, String.to_existing_atom(field)}}
+      end
+    end
+  end
+
+  def predict_range_rate_m_s(_observation, _receiver_state), do: {:error, {:invalid_input, :receiver_state}}
+
+  @doc """
+  Solve receiver velocity and range-equivalent clock drift from precomputed
+  satellite position, velocity, and pseudorange-rate observations.
+
+  This delegates directly to the precise-positioning least-squares kernel. The
+  optional configuration is a map returned by `velocity_config/0`; set
+  `:robust` to a map returned by `velocity_robust_config/0` to enable Huber/MAD
+  reweighting.
+  """
+  @spec solve_velocity_least_squares([velocity_observation()], {number(), number(), number()}, velocity_config()) ::
+          {:ok, velocity_solution()} | {:error, term()}
+  def solve_velocity_least_squares(observations, receiver_position_m, config \\ velocity_config())
+
+  def solve_velocity_least_squares(observations, {x, y, z}, config)
+      when is_list(observations) and is_number(x) and is_number(y) and is_number(z) and is_map(config) do
+    with {:ok, observation_terms} <- velocity_observation_terms(observations),
+         {:ok, config_term} <- velocity_config_term(config) do
+      case NIF.precise_positioning_solve_velocity_least_squares(
+             observation_terms,
+             {x / 1.0, y / 1.0, z / 1.0},
+             config_term
+           ) do
+        {:ok, {velocity, clock_drift, rms, used, downweighted, iterations, scale}} ->
+          {:ok,
+           %{
+             velocity_m_s: velocity,
+             clock_drift_m_s: clock_drift,
+             residual_rms_m_s: rms,
+             used_sats: used,
+             downweighted_sats: downweighted,
+             robust_iterations: iterations,
+             robust_scale_m_s: scale
+           }}
+
+        {:error, {:too_few_observations, required, actual, message}} ->
+          {:error,
+           %VelocitySolveError{
+             kind: :too_few_observations,
+             required: required,
+             actual: actual,
+             message: message
+           }}
+
+        {:error, {:invalid_input, field, reason, message}} ->
+          {:error, %VelocitySolveError{kind: :invalid_input, field: field, reason: reason, message: message}}
+
+        {:error, {:singular_velocity_geometry, message}} ->
+          {:error, %VelocitySolveError{kind: :singular_geometry, message: message}}
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :precise_positioning_solve_velocity_least_squares)
+  end
+
+  def solve_velocity_least_squares(_observations, _receiver_position_m, _config),
+    do: {:error, {:invalid_input, :arguments}}
 
   defmodule Solution do
     @moduledoc """
@@ -1406,6 +1587,32 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   def solve_ppp_float(%SP3{}, _epoch_observations, _initial_state, _opts), do: {:error, :no_epochs}
 
   @doc """
+  Detailed form of `solve_ppp_float/4`.
+
+  Success values are identical. Core `InvalidSolveOption` and `InvalidInput`
+  failures retain their field, reason, and core display message; the released
+  `solve_ppp_float/4` error shapes are unchanged.
+  """
+  @spec solve_ppp_float_detailed(SP3.t(), list(), map(), keyword()) ::
+          {:ok, MultiEpochSolution.t()} | {:error, term()}
+  def solve_ppp_float_detailed(source, epoch_observations, initial_state, opts \\ [])
+
+  def solve_ppp_float_detailed(%SP3{} = sp3, epoch_observations, initial_state, opts)
+      when is_list(epoch_observations) and is_map(initial_state) do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, initial} <- explicit_initial_state_term(initial_state),
+         {:ok, tropo} <- troposphere_options(opts),
+         :ok <- ensure_multi_enough(epochs, tropo),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options_detailed(opts),
+         {:ok, screen?} <- residual_screen_option(opts) do
+      solve_ppp_float_detailed_core(sp3, epochs, initial, weights, tropo, solve_opts, screen?)
+    end
+  end
+
+  def solve_ppp_float_detailed(%SP3{}, _epoch_observations, _initial_state, _opts), do: {:error, :no_epochs}
+
+  @doc """
   Solve a static multi-epoch integer-fixed PPP arc from an existing float solution.
   """
   @spec solve_ppp_fixed(SP3.t(), list(), MultiEpochSolution.t(), keyword()) ::
@@ -1439,6 +1646,42 @@ defmodule Sidereon.GNSS.PrecisePositioning do
   end
 
   def solve_ppp_fixed(%SP3{}, _epoch_observations, _float_solution, _opts), do: {:error, :no_epochs}
+
+  @doc """
+  Detailed form of `solve_ppp_fixed/4`, preserving complete nested float-solve
+  input and solve-option failures without changing the legacy function.
+  """
+  @spec solve_ppp_fixed_detailed(SP3.t(), list(), MultiEpochSolution.t(), keyword()) ::
+          {:ok, FixedSolution.t()} | {:error, term()}
+  def solve_ppp_fixed_detailed(source, epoch_observations, float_solution, opts \\ [])
+
+  def solve_ppp_fixed_detailed(%SP3{} = sp3, epoch_observations, %MultiEpochSolution{} = float_solution, opts)
+      when is_list(epoch_observations) do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, tropo} <- troposphere_options(opts),
+         :ok <- ensure_multi_enough(epochs, tropo),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options_detailed(opts),
+         {:ok, integer_opts} <- integer_options(opts),
+         sat_ids = multi_satellite_ids(epochs),
+         {:ok, wavelengths} <- ambiguity_wavelengths(sat_ids, opts),
+         {:ok, offsets} <- ambiguity_offsets(sat_ids, opts),
+         {:ok, float_payload} <- float_solution_payload(float_solution, epochs) do
+      solve_ppp_fixed_detailed_core(
+        sp3,
+        epochs,
+        float_payload,
+        weights,
+        tropo,
+        solve_opts,
+        integer_opts,
+        wavelengths,
+        offsets
+      )
+    end
+  end
+
+  def solve_ppp_fixed_detailed(%SP3{}, _epoch_observations, _float_solution, _opts), do: {:error, :no_epochs}
 
   @doc false
   # Carries `float_solution` through the native float-solution payload the fixed
@@ -1568,8 +1811,105 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   def solve_ppp_auto_init_fixed(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
 
+  @doc """
+  Solve an auto-initialized float PPP arc with the selected core strategy.
+
+  `strategy` is `:reference` (the default strategy used by
+  `solve_ppp_auto_init_float/3`) or `:canonical`. Strategy atoms are ordinary
+  Elixir values, so equality and hashing use Elixir's value semantics.
+  """
+  @spec solve_ppp_auto_init_float_with_strategy(SP3.t(), list(), :reference | :canonical, keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def solve_ppp_auto_init_float_with_strategy(source, epoch_observations, strategy, opts \\ [])
+
+  def solve_ppp_auto_init_float_with_strategy(%SP3{} = sp3, epoch_observations, strategy, opts)
+      when is_list(epoch_observations) do
+    with {:ok, strategy} <- auto_init_strategy(strategy),
+         {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, tropo} <- troposphere_options(opts),
+         :ok <- ensure_multi_enough(epochs, tropo),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options(opts),
+         {:ok, auto_init} <- auto_init_term(opts),
+         {:ok, screen?} <- residual_screen_option(opts) do
+      solve_ppp_auto_init_float_with_strategy_core(
+        sp3,
+        epochs,
+        auto_init,
+        weights,
+        tropo,
+        solve_opts,
+        screen?,
+        strategy
+      )
+    end
+  end
+
+  def solve_ppp_auto_init_float_with_strategy(%SP3{}, _epochs, _strategy, _opts), do: {:error, :no_epochs}
+
+  @doc """
+  Solve an auto-initialized integer-fixed PPP arc with the selected core strategy.
+
+  The accepted strategies and all solve options match
+  `solve_ppp_auto_init_float_with_strategy/4` and
+  `solve_ppp_auto_init_fixed/3`.
+  """
+  @spec solve_ppp_auto_init_fixed_with_strategy(SP3.t(), list(), :reference | :canonical, keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def solve_ppp_auto_init_fixed_with_strategy(source, epoch_observations, strategy, opts \\ [])
+
+  def solve_ppp_auto_init_fixed_with_strategy(%SP3{} = sp3, epoch_observations, strategy, opts)
+      when is_list(epoch_observations) do
+    with {:ok, strategy} <- auto_init_strategy(strategy),
+         {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, tropo} <- troposphere_options(opts),
+         :ok <- ensure_multi_enough(epochs, tropo),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options(opts),
+         {:ok, integer_opts} <- integer_options(opts),
+         {:ok, auto_init} <- auto_init_term(opts),
+         {:ok, screen?} <- residual_screen_option(opts),
+         sat_ids = multi_satellite_ids(epochs),
+         {:ok, wavelengths} <- ambiguity_wavelengths(sat_ids, opts),
+         {:ok, offsets} <- ambiguity_offsets(sat_ids, opts) do
+      solve_ppp_auto_init_fixed_with_strategy_core(
+        sp3,
+        epochs,
+        auto_init,
+        weights,
+        tropo,
+        solve_opts,
+        screen?,
+        integer_opts,
+        wavelengths,
+        offsets,
+        strategy
+      )
+    end
+  end
+
+  def solve_ppp_auto_init_fixed_with_strategy(%SP3{}, _epochs, _strategy, _opts), do: {:error, :no_epochs}
+
   defp solve_ppp_float_core(%SP3{handle: handle}, epochs, initial, weights, tropo, solve_opts, screen?) do
     case NIF.precise_positioning_solve_ppp_float(
+           handle,
+           core_epoch_terms(epochs, tropo),
+           initial,
+           {weights.code, weights.phase, weights.elevation_weighting?},
+           {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
+           core_tropo_term(tropo),
+           core_corrections_term(tropo),
+           screen?
+         ) do
+      {:ok, payload} -> {:ok, core_multi_solution(payload, epochs, tropo)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp solve_ppp_float_detailed_core(%SP3{handle: handle}, epochs, initial, weights, tropo, solve_opts, screen?) do
+    case NIF.precise_positioning_solve_ppp_float_detailed(
            handle,
            core_epoch_terms(epochs, tropo),
            initial,
@@ -1598,6 +1938,34 @@ defmodule Sidereon.GNSS.PrecisePositioning do
          offsets
        ) do
     case NIF.precise_positioning_solve_ppp_fixed(
+           handle,
+           core_epoch_terms(epochs, tropo),
+           float_payload,
+           {weights.code, weights.phase, weights.elevation_weighting?},
+           {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
+           core_tropo_term(tropo),
+           core_corrections_term(tropo),
+           {Map.to_list(wavelengths), Map.to_list(offsets), integer_opts.ratio_threshold}
+         ) do
+      {:ok, payload} -> {:ok, core_fixed_solution(payload, epochs, tropo)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp solve_ppp_fixed_detailed_core(
+         %SP3{handle: handle},
+         epochs,
+         float_payload,
+         weights,
+         tropo,
+         solve_opts,
+         integer_opts,
+         wavelengths,
+         offsets
+       ) do
+    case NIF.precise_positioning_solve_ppp_fixed_detailed(
            handle,
            core_epoch_terms(epochs, tropo),
            float_payload,
@@ -1660,6 +2028,158 @@ defmodule Sidereon.GNSS.PrecisePositioning do
       {:ok, payload} -> {:ok, core_fixed_solution(payload, epochs, tropo)}
       {:error, _reason} = err -> err
     end
+  end
+
+  defp solve_ppp_auto_init_float_with_strategy_core(
+         %SP3{handle: handle},
+         epochs,
+         auto_init,
+         weights,
+         tropo,
+         solve_opts,
+         screen?,
+         strategy
+       ) do
+    case NIF.precise_positioning_solve_ppp_auto_init_float_with_strategy(
+           handle,
+           core_epoch_terms(epochs, tropo),
+           auto_init,
+           {weights.code, weights.phase, weights.elevation_weighting?},
+           {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
+           core_tropo_term(tropo),
+           core_corrections_term(tropo),
+           screen?,
+           Atom.to_string(strategy)
+         ) do
+      {:ok, payload} -> {:ok, core_multi_solution(payload, epochs, tropo)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp solve_ppp_auto_init_fixed_with_strategy_core(
+         %SP3{handle: handle},
+         epochs,
+         auto_init,
+         weights,
+         tropo,
+         solve_opts,
+         screen?,
+         integer_opts,
+         wavelengths,
+         offsets,
+         strategy
+       ) do
+    case NIF.precise_positioning_solve_ppp_auto_init_fixed_with_strategy(
+           handle,
+           core_epoch_terms(epochs, tropo),
+           auto_init,
+           {weights.code, weights.phase, weights.elevation_weighting?},
+           {solve_opts.max_iterations, solve_opts.position_tolerance_m, solve_opts.clock_tolerance_m,
+            solve_opts.ambiguity_tolerance_m, solve_opts.ztd_tolerance_m, solve_opts.elevation_cutoff_deg,
+            solve_opts.estimate_residual_ionosphere?},
+           core_tropo_term(tropo),
+           core_corrections_term(tropo),
+           screen?,
+           {Map.to_list(wavelengths), Map.to_list(offsets), integer_opts.ratio_threshold},
+           Atom.to_string(strategy)
+         ) do
+      {:ok, payload} -> {:ok, core_fixed_solution(payload, epochs, tropo)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp auto_init_strategy(:reference), do: {:ok, :reference}
+  defp auto_init_strategy(:canonical), do: {:ok, :canonical}
+  defp auto_init_strategy(_strategy), do: {:error, {:invalid_option, :strategy}}
+
+  defp velocity_observation_terms(observations) do
+    Enum.reduce_while(observations, {:ok, []}, fn observation, {:ok, terms} ->
+      case velocity_observation_term(observation) do
+        {:ok, term} -> {:cont, {:ok, [term | terms]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, terms} -> {:ok, Enum.reverse(terms)}
+      error -> error
+    end
+  end
+
+  defp velocity_observation_term(%{
+         satellite_id: satellite_id,
+         satellite_position_m: position,
+         satellite_velocity_m_s: velocity,
+         measured_range_rate_m_s: measured,
+         sigma_m_s: sigma,
+         satellite_clock_drift_m_s: clock_drift
+       })
+       when is_binary(satellite_id) and is_number(measured) and is_number(sigma) and is_number(clock_drift) do
+    with :ok <- validate_velocity_satellite_id(satellite_id),
+         {:ok, position} <- velocity_vec3(position, :satellite_position_m),
+         {:ok, velocity} <- velocity_vec3(velocity, :satellite_velocity_m_s) do
+      {:ok, {satellite_id, position, velocity, measured / 1.0, sigma / 1.0, clock_drift / 1.0}}
+    end
+  end
+
+  defp velocity_observation_term(_observation), do: {:error, {:invalid_input, :velocity_observation}}
+
+  defp validate_velocity_satellite_id(satellite_id) do
+    case CoreTypes.parse_sat_id(satellite_id) do
+      {:ok, _system, _prn} -> :ok
+      {:error, _reason} -> {:error, {:invalid_input, :satellite_id}}
+    end
+  end
+
+  defp receiver_velocity_state_term(%{position_m: position, velocity_m_s: velocity, clock_drift_m_s: clock_drift})
+       when is_number(clock_drift) do
+    with {:ok, position} <- velocity_vec3(position, :position_m),
+         {:ok, velocity} <- velocity_vec3(velocity, :velocity_m_s) do
+      {:ok, {position, velocity, clock_drift / 1.0}}
+    end
+  end
+
+  defp receiver_velocity_state_term(_state), do: {:error, {:invalid_input, :receiver_state}}
+
+  defp velocity_vec3({x, y, z}, _field) when is_number(x) and is_number(y) and is_number(z),
+    do: {:ok, {x / 1.0, y / 1.0, z / 1.0}}
+
+  defp velocity_vec3(_value, field), do: {:error, {:invalid_input, field}}
+
+  defp velocity_config_term(%{minimum_observations: minimum, robust: robust})
+       when is_integer(minimum) and minimum >= 0 do
+    with {:ok, robust} <- velocity_robust_config_term(robust) do
+      {:ok, {minimum, robust}}
+    end
+  end
+
+  defp velocity_config_term(_config), do: {:error, {:invalid_input, :velocity_config}}
+
+  defp velocity_robust_config_term(nil), do: {:ok, nil}
+
+  defp velocity_robust_config_term(%{
+         huber_k: huber_k,
+         scale_floor_m_s: scale_floor,
+         max_outer: max_outer,
+         outer_tol_m_s: outer_tol
+       })
+       when is_number(huber_k) and is_number(scale_floor) and is_integer(max_outer) and max_outer >= 0 and
+              is_number(outer_tol) do
+    {:ok, {huber_k / 1.0, scale_floor / 1.0, max_outer, outer_tol / 1.0}}
+  end
+
+  defp velocity_robust_config_term(_config), do: {:error, {:invalid_input, :velocity_robust_config}}
+
+  defp decode_velocity_robust_config(nil), do: nil
+
+  defp decode_velocity_robust_config({huber_k, scale_floor_m_s, max_outer, outer_tol_m_s}) do
+    %{
+      huber_k: huber_k,
+      scale_floor_m_s: scale_floor_m_s,
+      max_outer: max_outer,
+      outer_tol_m_s: outer_tol_m_s
+    }
   end
 
   defp auto_init_term(opts, spp_troposphere_default \\ false) do
@@ -1848,6 +2368,37 @@ defmodule Sidereon.GNSS.PrecisePositioning do
            elevation_cutoff_deg: normalize_elevation_cutoff(elevation_cutoff),
            estimate_residual_ionosphere?: estimate_residual_ionosphere
          }}
+    end
+  end
+
+  # Detailed calls leave semantic range validation to the core so its stable
+  # field/reason pair can cross the boundary. Shape/type failures remain host
+  # boundary errors and never reach the NIF.
+  defp solve_options_detailed(opts) do
+    max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
+    pos_tol = Keyword.get(opts, :position_tolerance_m, @default_position_tolerance_m)
+    clock_tol = Keyword.get(opts, :clock_tolerance_m, @default_clock_tolerance_m)
+    ambiguity_tol = Keyword.get(opts, :ambiguity_tolerance_m, @default_position_tolerance_m)
+    ztd_tol = Keyword.get(opts, :ztd_tolerance_m, @default_ztd_tolerance_m)
+    elevation_cutoff = Keyword.get(opts, :elevation_cutoff_deg)
+    estimate_residual_ionosphere = Keyword.get(opts, :estimate_residual_ionosphere, false)
+
+    if is_integer(max_iterations) and max_iterations >= 0 and is_number(pos_tol) and is_number(clock_tol) and
+         is_number(ambiguity_tol) and is_number(ztd_tol) and
+         (is_nil(elevation_cutoff) or is_number(elevation_cutoff)) and
+         estimate_residual_ionosphere in [true, false] do
+      {:ok,
+       %{
+         max_iterations: max_iterations,
+         position_tolerance_m: pos_tol / 1.0,
+         clock_tolerance_m: clock_tol / 1.0,
+         ambiguity_tolerance_m: ambiguity_tol / 1.0,
+         ztd_tolerance_m: ztd_tol / 1.0,
+         elevation_cutoff_deg: normalize_elevation_cutoff(elevation_cutoff),
+         estimate_residual_ionosphere?: estimate_residual_ionosphere
+       }}
+    else
+      {:error, {:invalid_option, :solve_options}}
     end
   end
 

@@ -297,6 +297,9 @@ The configured policy propagates across the pipeline:
   RTK (float, integer-fixed, fix-and-hold) with typed arc/static/wide-lane
   configs, PPP with temporal-correlation covariance using calibrated day-length
   bounds, optional elevation cutoff, optional tropospheric-gradient estimation,
+  reference/canonical PPP auto-init strategy selection, and a low-level
+  precomputed-state range-rate prediction and velocity least-squares entry
+  point, with additive detailed PPP solve errors,
   DGNSS, Huber-reweighted solves, RAIM with fault detection and exclusion,
   RAIM over existing SPP solutions, SBAS and RTCM SSR / Galileo HAS corrections,
   dilution of precision, and receiver velocity from Doppler. See

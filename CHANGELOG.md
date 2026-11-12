@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add reference/canonical PPP auto-init strategy entry points and the
+  precise-positioning precomputed-state velocity least-squares API, including
+  core-backed default configuration factories, direct range-rate prediction,
+  additive detailed float/fixed PPP errors, and lossless result/error maps.
 - Add `Metadata.get_last/2`, `WritePolicy.as_read/1`, and the
   `InputErrorKind` `t()` type with `display/1`.
 - Document and test that TDM values are plain structs, maps, atoms and strings

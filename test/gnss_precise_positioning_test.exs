@@ -459,6 +459,99 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
     end
   end
 
+  describe "strategy-selecting PPP auto-init drivers" do
+    test "reference strategy recovers the independently synthesized float truth", ctx do
+      assert {:ok, solution} =
+               PrecisePositioning.solve_ppp_auto_init_float_with_strategy(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 :reference,
+                 initial_guess: %{position: @truth, clock_m: @clock_m}
+               )
+
+      assert position_error(solution.position, @truth) < 1.0e-3
+      assert solution.metadata.status == :state_tolerance
+      assert Enum.uniq([:reference, :reference]) == [:reference]
+      assert MapSet.size(MapSet.new([:reference, :canonical])) == 2
+    end
+
+    test "canonical strategy reaches the core fixed driver", ctx do
+      assert {:ok, solution} =
+               PrecisePositioning.solve_ppp_auto_init_fixed_with_strategy(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 :canonical,
+                 initial_guess: %{position: @truth, clock_m: @clock_m},
+                 ambiguity_wavelength_m: @l1_wavelength_m
+               )
+
+      assert position_error(solution.position, @truth) < 1.0e-3
+      assert solution.metadata.integer_status == :fixed
+    end
+
+    test "refuses an unknown strategy before entering native code", ctx do
+      assert {:error, {:invalid_option, :strategy}} =
+               PrecisePositioning.solve_ppp_auto_init_float_with_strategy(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 :other
+               )
+
+      assert {:error, {:invalid_option, :strategy}} =
+               PrecisePositioning.solve_ppp_auto_init_fixed_with_strategy(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 :other
+               )
+    end
+  end
+
+  describe "detailed PPP solve errors" do
+    test "float and fixed paths retain the core field and reason additively", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+      assert {:ok, seed} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.fixed_epoch_observations, base)
+
+      initial_state = %{
+        position_m: position_tuple(seed.position),
+        clocks_m: Enum.map(seed.epoch_clocks, & &1.rx_clock_m),
+        ambiguities_m: seed.ambiguities_m
+      }
+
+      expected =
+        {:error,
+         {:invalid_solve_option, "max_iterations", "must be positive",
+          "invalid PPP solve option max_iterations: must be positive"}}
+
+      assert ^expected =
+               PrecisePositioning.solve_ppp_float_detailed(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 initial_state,
+                 max_iterations: 0
+               )
+
+      assert {:ok, float} =
+               PrecisePositioning.solve_ppp_float(ctx.sp3, ctx.fixed_epoch_observations, initial_state)
+
+      assert ^expected =
+               PrecisePositioning.solve_ppp_fixed_detailed(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 float,
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 max_iterations: 0
+               )
+
+      assert {:error, {:invalid_option, :max_iterations}} =
+               PrecisePositioning.solve_ppp_float(
+                 ctx.sp3,
+                 ctx.fixed_epoch_observations,
+                 initial_state,
+                 max_iterations: 0
+               )
+    end
+  end
+
   describe "solve_ppp_float/4 and solve_ppp_fixed/4 direct core delegations" do
     test "fixes integers from an existing float PPP solution", ctx do
       base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
