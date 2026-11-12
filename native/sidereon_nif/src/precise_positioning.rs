@@ -12,8 +12,9 @@ use sidereon_core::positioning::SurfaceMet;
 use sidereon_core::ppp_corrections as ppp;
 use sidereon_core::precise_positioning as core;
 use sidereon_core::precise_positioning::auto_init::{
-    solve_ppp_auto_init_fixed, solve_ppp_auto_init_float, PppAutoInitError, PppAutoInitOptions,
-    PppInitialGuess,
+    solve_ppp_auto_init_fixed, solve_ppp_auto_init_fixed_with_strategy, solve_ppp_auto_init_float,
+    solve_ppp_auto_init_float_with_strategy, PppAutoInitError, PppAutoInitOptions,
+    PppAutoInitStrategy, PppInitialGuess,
 };
 use sidereon_core::{GnssSatelliteId, GnssSystem};
 use std::collections::BTreeMap;
@@ -177,7 +178,9 @@ mod atoms {
         code_seed_failed,
         code_not_positive,
         ssr_correction_exceeds_limit,
-        unrecognized_reason
+        unrecognized_reason,
+        too_few_observations,
+        singular_velocity_geometry
     }
 }
 
@@ -189,6 +192,184 @@ type PppAutoInitTerm = (
     bool,
     (f64, f64, f64),
 );
+type VelocityObservationTerm = (String, Vec3, Vec3, f64, f64, f64);
+type VelocityRobustConfigTerm = (f64, f64, u64, f64);
+type VelocityConfigTerm = (u64, Option<VelocityRobustConfigTerm>);
+type ReceiverVelocityStateTerm = (Vec3, Vec3, f64);
+
+#[rustler::nif]
+pub fn precise_positioning_vmf_site_max_samples() -> u64 {
+    core::VMF_SITE_MAX_SAMPLES as u64
+}
+
+#[rustler::nif]
+pub fn precise_positioning_vmf_site_single_sample_clamp_days() -> f64 {
+    core::VMF_SITE_SINGLE_SAMPLE_CLAMP_DAYS
+}
+
+#[rustler::nif]
+pub fn precise_positioning_ppp_auto_init_strategy_default() -> String {
+    match PppAutoInitStrategy::default() {
+        PppAutoInitStrategy::Reference => "reference",
+        PppAutoInitStrategy::Canonical => "canonical",
+    }
+    .to_string()
+}
+
+#[rustler::nif]
+pub fn precise_positioning_velocity_config_default() -> VelocityConfigTerm {
+    let config = core::VelocityConfig::default();
+    (
+        config.minimum_observations as u64,
+        config.robust.map(encode_velocity_robust_config),
+    )
+}
+
+#[rustler::nif]
+pub fn precise_positioning_velocity_robust_config_default() -> VelocityRobustConfigTerm {
+    encode_velocity_robust_config(core::VelocityRobustConfig::default())
+}
+
+fn encode_velocity_robust_config(config: core::VelocityRobustConfig) -> VelocityRobustConfigTerm {
+    (
+        config.huber_k,
+        config.scale_floor_m_s,
+        config.max_outer as u64,
+        config.outer_tol_m_s,
+    )
+}
+
+#[rustler::nif]
+pub fn precise_positioning_stationary_velocity_state(
+    position_m: Vec3,
+) -> ReceiverVelocityStateTerm {
+    let state = core::ReceiverVelocityState::stationary_at(vec3_to_array(position_m));
+    (
+        array_to_vec3(state.position_m),
+        array_to_vec3(state.velocity_m_s),
+        state.clock_drift_m_s,
+    )
+}
+
+#[rustler::nif]
+pub fn precise_positioning_predict_range_rate_m_s<'a>(
+    env: Env<'a>,
+    observation: VelocityObservationTerm,
+    receiver: ReceiverVelocityStateTerm,
+) -> Term<'a> {
+    let observation = match decode_velocity_observation(observation) {
+        Ok(observation) => observation,
+        Err(field) => return (atoms::error(), (atoms::invalid_input(), field)).encode(env),
+    };
+    let receiver = core::ReceiverVelocityState {
+        position_m: vec3_to_array(receiver.0),
+        velocity_m_s: vec3_to_array(receiver.1),
+        clock_drift_m_s: receiver.2,
+    };
+    match core::predict_range_rate_m_s(&observation, receiver) {
+        Some(prediction) => (
+            atoms::ok(),
+            (
+                array_to_vec3(prediction.los_unit),
+                prediction.range_rate_m_s,
+            ),
+        )
+            .encode(env),
+        None => (atoms::error(), (atoms::invalid_input(), "geometry")).encode(env),
+    }
+}
+
+/// Solve the precise-positioning leaf velocity model from precomputed states.
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn precise_positioning_solve_velocity_least_squares<'a>(
+    env: Env<'a>,
+    observations: Vec<VelocityObservationTerm>,
+    receiver_position_m: Vec3,
+    config: VelocityConfigTerm,
+) -> Term<'a> {
+    let observations = match observations
+        .into_iter()
+        .map(decode_velocity_observation)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(observations) => observations,
+        Err(field) => return (atoms::error(), (atoms::invalid_input(), field)).encode(env),
+    };
+    let robust = config
+        .1
+        .map(|(huber_k, scale_floor_m_s, max_outer, outer_tol_m_s)| {
+            let mut robust = core::VelocityRobustConfig::default();
+            robust.huber_k = huber_k;
+            robust.scale_floor_m_s = scale_floor_m_s;
+            robust.max_outer = max_outer as usize;
+            robust.outer_tol_m_s = outer_tol_m_s;
+            robust
+        });
+    let mut config_value = core::VelocityConfig::default();
+    config_value.minimum_observations = config.0 as usize;
+    config_value.robust = robust;
+    match core::velocity::solve_velocity_least_squares(
+        &observations,
+        vec3_to_array(receiver_position_m),
+        config_value,
+    ) {
+        Ok(solution) => (
+            atoms::ok(),
+            (
+                array_to_vec3(solution.velocity_m_s),
+                solution.clock_drift_m_s,
+                solution.residual_rms_m_s,
+                solution
+                    .used_sats
+                    .into_iter()
+                    .map(|sat| sat.to_string())
+                    .collect::<Vec<_>>(),
+                solution
+                    .downweighted_sats
+                    .into_iter()
+                    .map(|sat| sat.to_string())
+                    .collect::<Vec<_>>(),
+                solution.robust_iterations as u64,
+                solution.robust_scale_m_s,
+            ),
+        )
+            .encode(env),
+        Err(error @ core::VelocitySolveError::TooFewObservations { required, actual }) => (
+            atoms::error(),
+            (
+                atoms::too_few_observations(),
+                required as u64,
+                actual as u64,
+                error.to_string(),
+            ),
+        )
+            .encode(env),
+        Err(error @ core::VelocitySolveError::InvalidInput { field, reason }) => (
+            atoms::error(),
+            (atoms::invalid_input(), field, reason, error.to_string()),
+        )
+            .encode(env),
+        Err(error @ core::VelocitySolveError::SingularGeometry) => (
+            atoms::error(),
+            (atoms::singular_velocity_geometry(), error.to_string()),
+        )
+            .encode(env),
+    }
+}
+
+fn decode_velocity_observation(
+    term: VelocityObservationTerm,
+) -> Result<core::VelocityObservation, &'static str> {
+    let (sat, position, velocity, measured_range_rate_m_s, sigma_m_s, clock_drift) = term;
+    Ok(core::VelocityObservation {
+        sat: sat_from_token(&sat).map_err(|_| "satellite_id")?,
+        satellite_position_m: vec3_to_array(position),
+        satellite_velocity_m_s: vec3_to_array(velocity),
+        measured_range_rate_m_s,
+        sigma_m_s,
+        satellite_clock_drift_m_s: clock_drift,
+    })
+}
 
 #[rustler::nif(schedule = "DirtyCpu")]
 #[allow(clippy::too_many_arguments)]
@@ -258,6 +439,37 @@ pub fn precise_positioning_solve_ppp_float<'a>(
     ))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_solve_ppp_float_detailed<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epochs: Vec<EpochTerm>,
+    initial: InitialStateTerm,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    residual_screen: bool,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(epochs)?;
+    let initial = decode_initial(initial);
+    let corrections = decode_corrections(corrections)?;
+    let config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        direct_range_corrections(&handle, &epochs, initial.position_m, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        residual_screen,
+        solve_options.6,
+    );
+    Ok(encode_result_detailed(
+        env,
+        core::solve_float_epochs(&handle.sp3, &epochs, initial, config),
+    ))
+}
+
 /// Decode a float-solution payload into the core solution, as the fixed solve
 /// does, and encode it back, as the float solve does. Returns the payload, or
 /// `{:error, reason}` for one the decoder refuses.
@@ -298,6 +510,37 @@ pub fn precise_positioning_solve_ppp_fixed<'a>(
         solve_options.6,
     );
     Ok(encode_fixed_result(
+        env,
+        core::solve_fixed_from_float(&handle.sp3, &epochs, float_solution, config),
+    ))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_solve_ppp_fixed_detailed<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epochs: Vec<EpochTerm>,
+    float_solution: FloatPayloadTerm<'a>,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    ambiguity: FixedAmbiguityTerm,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(epochs)?;
+    let float_solution = decode_float_payload(float_solution)?;
+    let corrections = decode_corrections(corrections)?;
+    let config = core::FixedSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        direct_range_corrections(&handle, &epochs, float_solution.position_m, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        decode_fixed_ambiguity(ambiguity),
+        solve_options.6,
+    );
+    Ok(encode_fixed_result_detailed(
         env,
         core::solve_fixed_from_float(&handle.sp3, &epochs, float_solution, config),
     ))
@@ -395,6 +638,106 @@ pub fn precise_positioning_solve_ppp_auto_init_fixed<'a>(
         Err(PppAutoInitError::Fixed(error)) => encode_fixed_result(env, Err(error)),
         Err(error) => encode_auto_init_seed_error(env, error),
     })
+}
+
+/// Auto-initialized static float PPP with an explicit core strategy.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_solve_ppp_auto_init_float_with_strategy<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epochs: Vec<EpochTerm>,
+    auto_init: PppAutoInitTerm,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    residual_screen: bool,
+    strategy: String,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(epochs)?;
+    let corrections = decode_corrections(corrections)?;
+    let options = decode_auto_init(auto_init);
+    let strategy = decode_auto_init_strategy(&strategy)?;
+    let config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        residual_screen,
+        solve_options.6,
+    );
+    let result =
+        solve_ppp_auto_init_float_with_strategy(&handle.sp3, &epochs, options, config, strategy);
+    Ok(match result {
+        Ok(solution) => encode_result(env, Ok(solution)),
+        Err(error) => encode_auto_init_float_error(env, error),
+    })
+}
+
+/// Auto-initialized static integer-fixed PPP with an explicit core strategy.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn precise_positioning_solve_ppp_auto_init_fixed_with_strategy<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    epochs: Vec<EpochTerm>,
+    auto_init: PppAutoInitTerm,
+    weights: WeightsTerm,
+    solve_options: SolveOptionsTerm,
+    tropo: TropoTerm,
+    corrections: CorrectionsTerm,
+    residual_screen: bool,
+    ambiguity: FixedAmbiguityTerm,
+    strategy: String,
+) -> NifResult<Term<'a>> {
+    let epochs = decode_epochs(epochs)?;
+    let corrections = decode_corrections(corrections)?;
+    let options = decode_auto_init(auto_init);
+    let strategy = decode_auto_init_strategy(&strategy)?;
+    let float_config = core::FloatSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        residual_screen,
+        solve_options.6,
+    );
+    let fixed_config = core::FixedSolveConfig::new(
+        decode_weights(weights),
+        decode_tropo(&tropo)?,
+        auto_init_range_corrections(&handle, &epochs, &options, &corrections)?,
+        decode_solve_options(solve_options),
+        solve_options.5,
+        decode_fixed_ambiguity(ambiguity),
+        solve_options.6,
+    );
+    let result = solve_ppp_auto_init_fixed_with_strategy(
+        &handle.sp3,
+        &epochs,
+        options,
+        float_config,
+        fixed_config,
+        strategy,
+    );
+    Ok(match result {
+        Ok(solution) => encode_fixed_result(env, Ok(solution)),
+        Err(PppAutoInitError::Float(error)) => {
+            encode_fixed_result(env, Err(core::FixedSolveError::Float(error)))
+        }
+        Err(PppAutoInitError::Fixed(error)) => encode_fixed_result(env, Err(error)),
+        Err(error) => encode_auto_init_seed_error(env, error),
+    })
+}
+
+fn decode_auto_init_strategy(strategy: &str) -> NifResult<PppAutoInitStrategy> {
+    match strategy {
+        "reference" => Ok(PppAutoInitStrategy::Reference),
+        "canonical" => Ok(PppAutoInitStrategy::Canonical),
+        _ => Err(Error::Term(Box::new("invalid PPP auto-init strategy"))),
+    }
 }
 
 /// Decode the auto-init policy term into [`PppAutoInitOptions`].
@@ -1099,6 +1442,19 @@ fn array_to_vec3(array: [f64; 3]) -> Vec3 {
     (array[0], array[1], array[2])
 }
 
+fn encode_result_detailed<'a>(
+    env: Env<'a>,
+    result: Result<core::FloatSolution, core::FloatSolveError>,
+) -> Term<'a> {
+    match result {
+        Err(error @ core::FloatSolveError::InvalidSolveOption { .. })
+        | Err(error @ core::FloatSolveError::InvalidInput { .. }) => {
+            encode_float_error_detailed(env, error)
+        }
+        other => encode_result(env, other),
+    }
+}
+
 fn encode_result<'a>(
     env: Env<'a>,
     result: Result<core::FloatSolution, core::FloatSolveError>,
@@ -1236,6 +1592,21 @@ fn encode_temporal_correlation(
     )
 }
 
+fn encode_fixed_result_detailed<'a>(
+    env: Env<'a>,
+    result: Result<core::FixedSolution, core::FixedSolveError>,
+) -> Term<'a> {
+    match result {
+        Err(core::FixedSolveError::Float(
+            error @ core::FloatSolveError::InvalidSolveOption { .. },
+        ))
+        | Err(core::FixedSolveError::Float(error @ core::FloatSolveError::InvalidInput { .. })) => {
+            encode_float_error_detailed(env, error)
+        }
+        other => encode_fixed_result(env, other),
+    }
+}
+
 fn encode_fixed_result<'a>(
     env: Env<'a>,
     result: Result<core::FixedSolution, core::FixedSolveError>,
@@ -1356,6 +1727,27 @@ fn encode_float_status(status: core::FloatStatus) -> rustler::Atom {
     }
 }
 
+fn encode_float_error_detailed<'a>(env: Env<'a>, err: core::FloatSolveError) -> Term<'a> {
+    match err {
+        error @ core::FloatSolveError::InvalidSolveOption { field, reason } => (
+            atoms::error(),
+            (
+                atoms::invalid_solve_option(),
+                field,
+                reason,
+                error.to_string(),
+            ),
+        )
+            .encode(env),
+        error @ core::FloatSolveError::InvalidInput { field, reason } => (
+            atoms::error(),
+            (atoms::invalid_input(), field, reason, error.to_string()),
+        )
+            .encode(env),
+        other => encode_float_error(env, other),
+    }
+}
+
 fn encode_float_error<'a>(env: Env<'a>, err: core::FloatSolveError) -> Term<'a> {
     match err {
         core::FloatSolveError::NoEphemeris {
@@ -1433,7 +1825,7 @@ fn encode_float_error<'a>(env: Env<'a>, err: core::FloatSolveError) -> Term<'a> 
             (
                 atoms::missing_correction(),
                 satellite_id,
-                format!("{correction:?}"),
+                correction.to_string(),
             ),
         )
             .encode(env),

@@ -706,7 +706,29 @@ defmodule Sidereon.NIF do
   def precise_positioning_solve_float(_handle, _epoch, _initial_state, _weights, _solve_options, _tropo, _corrections),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def precise_positioning_solve_velocity_least_squares(_observations, _receiver_position_m, _config),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_vmf_site_max_samples, do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_vmf_site_single_sample_clamp_days, do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_ppp_auto_init_strategy_default, do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_velocity_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_velocity_robust_config_default, do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_stationary_velocity_state(_position_m), do: :erlang.nif_error(:nif_not_loaded)
+  def precise_positioning_predict_range_rate_m_s(_observation, _receiver), do: :erlang.nif_error(:nif_not_loaded)
+
   def precise_positioning_solve_ppp_float(
+        _handle,
+        _epochs,
+        _initial_state,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _residual_screen
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_ppp_float_detailed(
         _handle,
         _epochs,
         _initial_state,
@@ -720,6 +742,17 @@ defmodule Sidereon.NIF do
   def precise_positioning_float_solution_round_trip(_float_solution), do: :erlang.nif_error(:nif_not_loaded)
 
   def precise_positioning_solve_ppp_fixed(
+        _handle,
+        _epochs,
+        _float_solution,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _ambiguity
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_ppp_fixed_detailed(
         _handle,
         _epochs,
         _float_solution,
@@ -751,6 +784,31 @@ defmodule Sidereon.NIF do
         _corrections,
         _residual_screen,
         _ambiguity
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_ppp_auto_init_float_with_strategy(
+        _handle,
+        _epochs,
+        _auto_init,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _residual_screen,
+        _strategy
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def precise_positioning_solve_ppp_auto_init_fixed_with_strategy(
+        _handle,
+        _epochs,
+        _auto_init,
+        _weights,
+        _solve_options,
+        _tropo,
+        _corrections,
+        _residual_screen,
+        _ambiguity,
+        _strategy
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def iod_gibbs(_r1, _r2, _r3), do: :erlang.nif_error(:nif_not_loaded)
