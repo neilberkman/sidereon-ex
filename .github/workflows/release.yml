@@ -34,17 +34,12 @@ permissions:
   contents: read
 
 jobs:
-  gate:
-    uses: ./.github/workflows/ci.yml
-    with:
-      candidate: false
-
   publish:
     name: Publish package and docs
-    needs: gate
     runs-on: ubuntu-22.04
     environment: release
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -73,6 +68,31 @@ jobs:
             echo "release manifests still contain a Git or path dependency" >&2
             exit 1
           fi
+
+      # The commit was pushed to main before it was tagged, so CI has already
+      # run on it. Require that run's success instead of running the suite a
+      # second time.
+      - name: Require a successful CI run for this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 90); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=20")"
+            if jq -e '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length > 0' <<<"$runs" >/dev/null; then
+              echo "CI succeeded on main for ${GITHUB_SHA}"
+              exit 0
+            fi
+            if jq -e '[.workflow_runs[] | select(.head_branch == "main" and .status != "completed")] | length > 0' <<<"$runs" >/dev/null; then
+              echo "attempt ${attempt}: CI is still running for ${GITHUB_SHA}"
+              sleep 30
+              continue
+            fi
+            echo "no successful CI run on main for ${GITHUB_SHA}" >&2
+            exit 1
+          done
+          echo "CI did not finish for ${GITHUB_SHA}" >&2
+          exit 1
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
