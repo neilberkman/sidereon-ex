@@ -21,6 +21,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Tight EKF joint innovation gates now reject outliers without changing the
+  state or covariance and report diagnostics for accepted and rejected updates.
+- Rejected loose updates preserve tight GNSS cross-covariance.
+- Loose updates with every row removed by IGG III coast; per-row gate reports
+  count the rejected rows, while joint gate reports are absent.
+- Filter options for the other filter kind, invalid gate probabilities, and
+  simultaneous per-row and joint gates are refused.
 - PPP protection levels now use Brown fault-mode protection and require positive redundancy.
 
 
