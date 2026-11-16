@@ -2,8 +2,3 @@
 resolver = "2"
 
 members = ["native/sidereon_nif"]
-
-# The next core release replaces these path overrides with version pins.
-[patch.crates-io]
-sidereon-core = { path = "/Volumes/ExternalSSD/sidereon-oracle-20261114/sidereon-merged/crates/sidereon-core" }
-trust-region-least-squares = { path = "/Volumes/ExternalSSD/sidereon-oracle-20261114/sidereon-merged/crates/trust-region-least-squares" }

@@ -25,7 +25,7 @@ Add `:sidereon` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:sidereon, "~> 3.0"}]
+  [{:sidereon, "~> 4.0"}]
 end
 ```
 
@@ -43,7 +43,7 @@ optional Rustler dependency in the consuming application:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 3.0"},
+    {:sidereon, "~> 4.0"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
@@ -71,7 +71,7 @@ source on a host matching the target:
 ```elixir
 def deps do
   [
-    {:sidereon, "~> 3.0"},
+    {:sidereon, "~> 4.0"},
     {:rustler, ">= 0.0.0", optional: true}
   ]
 end
@@ -239,7 +239,9 @@ Precise-positioning preprocessing and integrity support is grouped under
 `Sidereon.GNSS.PrecisePositioning`: `TEC` estimates and levels dual-frequency
 TEC arcs, `CycleSlip` maintains Melbourne-Wubbena and geometry-free detector
 state, `Prep` prepares float and wide-lane-fixed epochs, `RAIM` provides global
-tests, protection levels and FDE, and `Kinematic` exposes the kinematic PPP
+tests, Brown snapshot-RAIM fault protection levels and FDE; protection levels
+require positive redundancy, while `fault_free_accuracy_bounds` returns
+fault-free accuracy bounds. `Kinematic` exposes the kinematic PPP
 predict/correct cycle and ordered-arc solver. Exact epochs use
 `Sidereon.GNSS.Time.ExactEpoch` resources throughout, and failures are typed
 structs carrying stable core variants and display text.
@@ -388,7 +390,10 @@ The configured policy propagates across the pipeline:
   updates, an RTS smoother, encoded-state restore helpers, a serializable filter
   state, and field mode: zero-velocity and zero-angular-rate updates,
   non-holonomic constraints, per-fix-status weighting, and the IMU-to-body
-  mounting matrix, all off by default. See `Sidereon.GNSS.Fusion`.
+  mounting matrix, all off by default. Per-row and joint innovation gates are
+  mutually exclusive; EKF gates belong to the loose/tight update options and
+  UKF gates to `ukf_update_options`. Rejected updates coast and retain their
+  covariance. See `Sidereon.GNSS.Fusion`.
 - **Reference-station static solve** rover and reference observations in, one
   station coordinate with covariance and typed per-mode errors out. See
   `Sidereon.GNSS.RTK`.

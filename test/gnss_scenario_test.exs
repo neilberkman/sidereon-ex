@@ -13,10 +13,8 @@ defmodule Sidereon.GNSSScenarioTest do
       assert {:ok, bytes2, fingerprint2} = Scenario.simulate_bytes(scenario())
 
       assert bytes1 == bytes2
-      # The fingerprint stamps the engine version by design (the determinism
-      # contract is scenario + seed + version), so it changes every release;
-      # determinism is the invariant, the observable values below are the pins.
       assert fingerprint1 == fingerprint2
+      assert fingerprint1 == String.to_integer(expected_simulation()["determinism_fingerprint"])
 
       decoded = Jason.decode!(bytes1)
       observations = decoded["observations"]
@@ -24,7 +22,7 @@ defmodule Sidereon.GNSSScenarioTest do
       receiver = decoded["receiver_truth"]
 
       assert decoded["schema_version"] == 1
-      assert decoded["engine_version"] =~ ~r/^\d+\.\d+\.\d+:scenario-observables-v1$/
+      assert decoded["engine_version"] == expected_simulation()["engine_version"]
       assert observations["epoch_offsets"] == [0, 1, 2]
       assert observations["epoch_index"] == [0, 1]
 
