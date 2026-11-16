@@ -20,7 +20,7 @@ defmodule Sidereon.GNSS.Ionosphere.Numeric do
   # own field under its own tag.
 
   # The largest finite double, as the integer it is.
-  @float_max_integer trunc(1.7976931348623157e308)
+  @float_max_integer trunc(1.797_693_134_862_315_7e308)
 
   @i32_min -2_147_483_648
   @i32_max 2_147_483_647

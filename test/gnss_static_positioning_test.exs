@@ -33,6 +33,20 @@ defmodule Sidereon.GNSS.StaticPositioningTest do
     {:ok, sp3: SP3.load!(@sp3_path), golden: golden, requests: requests}
   end
 
+  test "static positioning retains non-positive observation rejections", ctx do
+    requests =
+      Enum.map(ctx.requests, fn {[{id, _} | _] = observations, epoch} ->
+        {[{id, 0.0} | observations], epoch}
+      end)
+
+    initial = CoreGolden.tuple3(ctx.golden["initial_position_m"])
+    assert {:ok, solution} = StaticPositioning.solve(ctx.sp3, requests, initial_position: initial)
+
+    for {{[{id, 0.0} | _], _}, rejections} <- Enum.zip(requests, solution.rejected_sats) do
+      assert {id, :non_positive_pseudorange} in rejections
+    end
+  end
+
   test "the golden's satellites are the visible GPS satellites the solve would select", ctx do
     receiver = CoreGolden.tuple3(ctx.golden["receiver_truth_m"])
 

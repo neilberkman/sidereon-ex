@@ -1104,6 +1104,7 @@ defmodule Sidereon.GNSS.SBAS do
 
   The `:qzss_clock` (`:gps` or `:separate`) and `:troposphere_model`
   (`:rtklib` or `:saastamoinen_niell`) options select the core solve models.
+  `:max_gdop` optionally sets the shared-clock geometry ceiling.
   """
   def solve_broadcast(
         %Broadcast{handle: broadcast},
@@ -1113,7 +1114,8 @@ defmodule Sidereon.GNSS.SBAS do
         epoch,
         opts \\ []
       ) do
-    with {:ok, qzss_clock, troposphere_model} <- Positioning.model_options(opts),
+    with :ok <- sbas_validate_max_gdop(Keyword.get(opts, :max_gdop)),
+         {:ok, qzss_clock, troposphere_model} <- Positioning.model_options(opts),
          {:ok, t_rx_j2000_s} <- Time.epoch_to_j2000_seconds_fractional(epoch),
          {:ok, second_of_day} <- Time.second_of_day(epoch),
          {:ok, day_of_year} <- Time.day_of_year(epoch) do
@@ -1139,7 +1141,7 @@ defmodule Sidereon.GNSS.SBAS do
         Keyword.get(opts, :temperature_k, @default_temperature_k) / 1.0,
         Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
         Keyword.get(opts, :with_geodetic, true),
-        Keyword.get(opts, :max_pdop),
+        {optional_float(Keyword.get(opts, :max_pdop)), optional_float(Keyword.get(opts, :max_gdop))},
         Keyword.get(opts, :coarse_search),
         glonass_channels,
         qzss_clock,
@@ -1154,7 +1156,7 @@ defmodule Sidereon.GNSS.SBAS do
   def solve_broadcast!(broadcast, store, geo_id, observations, epoch, opts \\ []),
     do: bang(solve_broadcast(broadcast, store, geo_id, observations, epoch, opts))
 
-  @doc "Run SPP at an exact receive epoch against an SBAS-corrected broadcast source."
+  @doc "Run SBAS SPP at an exact receive epoch, with optional `:max_gdop` validation."
   @spec solve_broadcast_at_exact_epoch(
           Broadcast.t(),
           t(),
@@ -1180,6 +1182,7 @@ defmodule Sidereon.GNSS.SBAS do
          {:ok, second_of_day} <- Time.second_of_day(civil_epoch),
          {:ok, day_of_year} <- Time.day_of_year(civil_epoch),
          :ok <- sbas_validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         :ok <- sbas_validate_max_gdop(Keyword.get(opts, :max_gdop)),
          {:ok, coarse_search_seeds} <- sbas_coarse_search_count(Keyword.get(opts, :coarse_search)),
          {:ok, qzss_clock, troposphere_model} <- Positioning.model_options(opts) do
       glonass_channels = Keyword.get(opts, :glonass_channels, %{}) |> Enum.to_list()
@@ -1204,7 +1207,7 @@ defmodule Sidereon.GNSS.SBAS do
         Keyword.get(opts, :temperature_k, @default_temperature_k) / 1.0,
         Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
         Keyword.get(opts, :with_geodetic, true),
-        optional_float(Keyword.get(opts, :max_pdop)),
+        {optional_float(Keyword.get(opts, :max_pdop)), optional_float(Keyword.get(opts, :max_gdop))},
         coarse_search_seeds,
         glonass_channels,
         qzss_clock,
@@ -1239,6 +1242,10 @@ defmodule Sidereon.GNSS.SBAS do
   end
 
   defp sbas_exact_civil_epoch(_epoch), do: {:error, :invalid_epoch}
+
+  defp sbas_validate_max_gdop(nil), do: :ok
+  defp sbas_validate_max_gdop(value) when is_number(value) and value > 0, do: :ok
+  defp sbas_validate_max_gdop(_value), do: {:error, {:invalid_option, :max_gdop}}
 
   defp sbas_validate_max_pdop(nil), do: :ok
   defp sbas_validate_max_pdop(value) when is_number(value) and value > 0, do: :ok

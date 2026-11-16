@@ -132,7 +132,7 @@ defmodule Sidereon.GNSS.RINEX.Observations do
   @max_epoch_index 0xFFFF_FFFF_FFFF_FFFF
 
   # The largest finite double, as the integer it is.
-  @float_max_integer trunc(1.7976931348623157e308)
+  @float_max_integer trunc(1.797_693_134_862_315_7e308)
 
   defguardp is_epoch_index(index) when is_integer(index) and index >= 0 and index <= @max_epoch_index
 

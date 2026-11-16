@@ -56,6 +56,20 @@ defmodule Sidereon.Coverage do
     NIF.coverage_look_angles_detailed(tle_maps(elements), station_terms(stations), to_nif_datetime(datetime))
   end
 
+  @doc "Return a checked visibility mask; failed look-angle cells are not visible."
+  @spec try_visible_mask([[look_cell() | detailed_look_cell()]], number()) ::
+          {:ok, [[boolean()]]} | {:error, look_angle_error()}
+  def try_visible_mask(grid, min_elevation_deg) when is_list(grid) and is_number(min_elevation_deg) do
+    NIF.coverage_try_visible_mask(grid, min_elevation_deg / 1.0)
+  end
+
+  @doc "Count visible satellites per station; ragged grids return an invalid-input error."
+  @spec try_access_counts([[look_cell() | detailed_look_cell()]], number()) ::
+          {:ok, [non_neg_integer()]} | {:error, look_angle_error()}
+  def try_access_counts(grid, min_elevation_deg) when is_list(grid) and is_number(min_elevation_deg) do
+    NIF.coverage_try_access_counts(grid, min_elevation_deg / 1.0)
+  end
+
   defp tle_maps(elements) do
     Enum.map(elements, fn
       %Elements{} = elements ->

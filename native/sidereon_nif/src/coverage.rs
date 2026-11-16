@@ -2,7 +2,7 @@ use crate::passes::instant_from_datetime_tuple;
 use crate::propagation::elements_from_map;
 use rustler::{Atom, Encoder, Env, NifResult, Term};
 use sidereon_core::astro::coverage as core_coverage;
-use sidereon_core::astro::passes::{GroundStation, LookAngleError};
+use sidereon_core::astro::passes::{GroundStation, LookAngle, LookAngleError};
 use sidereon_core::astro::sgp4::{Error as Sgp4Error, OpsMode, Satellite, Sgp4InputErrorKind};
 
 mod atoms {
@@ -160,6 +160,66 @@ fn ground_stations(stations: Vec<StationTerm>) -> Vec<GroundStation> {
             altitude_m,
         })
         .collect()
+}
+
+fn decode_grid(grid: Vec<Vec<Term<'_>>>) -> NifResult<core_coverage::LookAngleGrid> {
+    grid.into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| {
+                    if let Ok((tag, (azimuth_deg, elevation_deg, range_km))) =
+                        cell.decode::<(Atom, (f64, f64, f64))>()
+                    {
+                        if tag == atoms::ok() {
+                            return Ok(Ok(LookAngle {
+                                azimuth_deg,
+                                elevation_deg,
+                                range_km,
+                            }));
+                        }
+                    }
+                    if cell.decode::<Atom>().ok() == Some(atoms::error())
+                        || cell
+                            .decode::<(Atom, Term)>()
+                            .ok()
+                            .is_some_and(|(tag, _)| tag == atoms::error())
+                    {
+                        return Ok(Err(LookAngleError::InvalidInput {
+                            field: "cell",
+                            reason: "input cell is an error",
+                        }));
+                    }
+                    Err(rustler::Error::BadArg)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[rustler::nif]
+fn coverage_try_visible_mask<'a>(
+    env: Env<'a>,
+    grid: Vec<Vec<Term<'a>>>,
+    threshold: f64,
+) -> NifResult<Term<'a>> {
+    let grid = decode_grid(grid)?;
+    Ok(match core_coverage::try_visible_mask(&grid, threshold) {
+        Ok(value) => (atoms::ok(), value).encode(env),
+        Err(error) => (atoms::error(), look_angle_error_term(env, &error)).encode(env),
+    })
+}
+
+#[rustler::nif]
+fn coverage_try_access_counts<'a>(
+    env: Env<'a>,
+    grid: Vec<Vec<Term<'a>>>,
+    threshold: f64,
+) -> NifResult<Term<'a>> {
+    let grid = decode_grid(grid)?;
+    Ok(match core_coverage::try_access_counts(&grid, threshold) {
+        Ok(value) => (atoms::ok(), value).encode(env),
+        Err(error) => (atoms::error(), look_angle_error_term(env, &error)).encode(env),
+    })
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]

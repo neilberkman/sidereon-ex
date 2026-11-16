@@ -1653,26 +1653,7 @@ fn sbas_spp_solve_broadcast<'a>(
     );
     inputs.sbas_iono = source.iono_grid().cloned();
     inputs.glonass_channels = spp::decode_glonass_channels(glonass_channels)?;
-    let mut validation = sidereon_core::quality::SolutionValidationOptions::default();
-    validation.max_pdop = if spp::is_nil(max_pdop) {
-        None
-    } else {
-        Some(max_pdop.decode::<f64>()?)
-    };
-    let policy = sidereon_core::positioning::SolvePolicy {
-        validation,
-        coarse_search_seeds: if spp::is_nil(coarse_search_seeds) {
-            None
-        } else {
-            let value = coarse_search_seeds.decode::<i64>()?;
-            if value < 0 {
-                return Err(Error::Term(Box::new(
-                    "coarse_search_seeds must be nil or non-negative",
-                )));
-            }
-            Some(value as usize)
-        },
-    };
+    let policy = spp::decode_policy(max_pdop, coarse_search_seeds)?;
     Ok(spp::solve_to_term(
         env,
         &source,

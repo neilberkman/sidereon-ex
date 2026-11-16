@@ -243,6 +243,68 @@ defmodule Sidereon.GNSSFusionTest do
       assert_close_list(ukf_state.nominal.position_ecef_m, [6_378_137.05, -0.1, 0.15], 1.0e-12)
     end
 
+    test "loose innovation and covariance match a literal linear model" do
+      # H = [I3 0], P = I15, R = 4 I3 and v = [0.25, -0.5, 0.75].
+      # Therefore S = H P H^T + R = 5 I3, NIS = 0.875 / 5,
+      # and K v = v / 5. All inputs and expected values are independent
+      # literals, not values recovered from the filter.
+      state = %{
+        t_j2000_s: 0.0,
+        position_ecef_m: {6_378_137.0, 0.0, 0.0},
+        velocity_ecef_mps: {0.0, 0.0, 0.0},
+        attitude_body_to_ecef: diagonal3(1.0),
+        covariance_diagonal: List.duplicate(1.0, 15)
+      }
+
+      options =
+        Fusion.filter_config(zero_imu_spec(),
+          filter_kind: :ekf,
+          loose: %{update_options: %{innovation_gate: %{threshold_sigma: 4.0, min_rows: 1}}}
+        )
+
+      assert {:ok, filter} = Fusion.new(state, options)
+
+      measurement = %{
+        t_j2000_s: 0.0,
+        position_ecef_m: {6_378_137.25, -0.5, 0.75},
+        covariance: diagonal3(4.0),
+        satellites_used: 8
+      }
+
+      assert {:ok, update} = Fusion.update_loose(filter, measurement)
+      assert update.ekf.innovation_covariance == [[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]]
+      assert update.nis == (0.25 * 0.25 + 0.5 * 0.5 + 0.75 * 0.75) / 5.0
+      assert update.ekf.innovation_gate.max_abs_normalized_innovation == 0.75 / :math.sqrt(5.0)
+      assert {:ok, result} = Fusion.state(filter)
+      # Cholesky solves use two rounded divisions by sqrt(5), rather than
+      # one division by 5; reproduce that arithmetic from the literal S.
+      gain = 1.0 / :math.sqrt(5.0) * (1.0 / :math.sqrt(5.0))
+      assert result.nominal.position_ecef_m == [6_378_137.0 + 0.25 * gain, -0.5 * gain, 0.75 * gain]
+    end
+
+    test "joint chi-square gates expose their report for EKF and UKF" do
+      measurement = loose_measurement(0.0, {@wgs84_a_m + 0.25, -0.5, 0.75})
+
+      for kind <- [:ekf, :ukf] do
+        config =
+          Fusion.filter_config(zero_imu_spec(),
+            filter_kind: kind,
+            loose: %{update_options: %{joint_innovation_gate_probability: 0.01}},
+            ukf_update_options: %{joint_innovation_gate_probability: 0.01}
+          )
+
+        assert {:ok, filter} = Fusion.new(initial_state(), config)
+        assert {:ok, update} = Fusion.update_loose(filter, measurement)
+        gate = update.ekf.joint_innovation_gate
+        assert gate.accepted
+        assert gate.degrees_of_freedom == 3
+        assert gate.false_alarm_probability == 0.01
+        # 0.25² + 0.5² + 0.75² over innovation variance 5.
+        assert_in_delta gate.statistic, 0.175, 1.0e-12
+        assert_in_delta gate.threshold, 11.344866730144373, 1.0e-12
+      end
+    end
+
     test "marshals loose position-velocity fixes with 6x6 covariance" do
       measurement =
         0.0
@@ -590,16 +652,18 @@ defmodule Sidereon.GNSSFusionTest do
       assert {:ok, update} = Fusion.update_loose_recorded(filter, measurement, history_builder)
       assert update.applied
       assert {update.rows, update.accepted_rows, update.rejected_rows} == {3, 3, 0}
-      assert bits(update.nis) == 0x400A42AD3B07976F
-      assert bits(update.ekf.innovation_gate.max_abs_normalized_innovation) == 0x3FFCF4BA7AE7BCC0
+      # No independent fixture covers this propagated robust case. These exact
+      # pins changed when the core moved row gating to raw covariance and made
+      # Yang adaptation operate on each observation group separately.
+      assert bits(update.nis) == 0x4006EDD9DB69905B
+      assert bits(update.ekf.innovation_gate.max_abs_normalized_innovation) == 0x4009469126FAF1B3
       assert update.ekf.innovation_gate.max_rejected_abs_normalized_innovation == nil
-
       assert {:ok, state} = Fusion.state(filter)
 
       assert Enum.map(state.nominal.position_ecef_m, &bits/1) == [
-               0x415854A602757FB6,
-               0x3FC7B6B11D7FA0D8,
-               0xBFB7B6B11D5C2B22
+               0x415854A60D1A513E,
+               0x3FC80027CCBBCC8D,
+               0xBFB80027CC9D5EAC
              ]
 
       assert {:ok, recorded} = FusionRtsHistoryBuilder.finish(history_builder)
@@ -633,36 +697,38 @@ defmodule Sidereon.GNSSFusionTest do
       assert smoothed0.rts_gain_to_next |> hd() |> length() == 17
       assert smoothed1.rts_gain_to_next == nil
 
+      # No core fixture covers this exact propagated RTS scenario. These pins
+      # change because core now gates on raw covariance before IGG inflation
+      # and adapts prediction separately by observation group.
       assert Enum.map(smoothed0.snapshot.state.nominal.position_ecef_m, &bits/1) == [
-               0x415854A6AFB47DAB,
-               0x3FB5122C16E56642,
-               0xBFA5122C1780E0A5
+               0x415854A6B46F12BB,
+               0x3FB55372F3A0394B,
+               0xBFA55372F4426F40
              ]
 
       assert Enum.map(smoothed1.snapshot.state.nominal.position_ecef_m, &bits/1) == [
-               0x415854A602757FB6,
-               0x3FC7B6B11D7FA0D8,
-               0xBFB7B6B11D5C2B22
+               0x415854A60D1A513E,
+               0x3FC80027CCBBCC8D,
+               0xBFB80027CC9D5EAC
              ]
 
       assert smoothed0.error_state_correction |> Enum.take(6) |> Enum.map(&bits/1) == [
-               0xBFFBED1F6AC3E068,
-               0xBFB5122C16E56642,
-               0x3FA5122C1780E0A5,
-               0xBFFBED164E925C0A,
-               0xBFB51A847AAA1978,
-               0x3FA5122D270AB803
+               0xBFFD1BC4AEC407B7,
+               0xBFB55372F3A0394B,
+               0x3FA55372F4426F40,
+               0xBFFD1BBB609AED25,
+               0xBFB55C25BFEEE608,
+               0x3FA5537407157CDA
              ]
 
-      assert [
-               bits(Enum.at(Enum.at(smoothed0.covariance, 0), 0)),
-               bits(Enum.at(Enum.at(smoothed0.covariance, 1), 1)),
-               bits(Enum.at(Enum.at(smoothed0.covariance, 2), 2))
-             ] == [
-               0x3FFDC64F219100F6,
-               0x3FFA44D611536A90,
-               0x3FFA44D6119F127C
+      assert Enum.map(0..2, fn i -> bits(Enum.at(Enum.at(smoothed0.covariance, i), i)) end) == [
+               0x400164C3EDA0B8B5,
+               0x3FFF16BF0C48C520,
+               0x3FFF16BF0C9F3F2B
              ]
+
+      assert length(smoothed0.error_state_correction) == 17
+      assert Enum.all?(0..2, fn i -> Enum.at(Enum.at(smoothed0.covariance, i), i) > 0.0 end)
     end
   end
 

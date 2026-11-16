@@ -244,8 +244,80 @@ defmodule Sidereon.GNSS.RTKTest do
       assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert Map.has_key?(solution.references, "G")
       assert length(solution.epochs) == 3
+
+      for epoch <- solution.epochs do
+        assert epoch.reference_satellite_ids == ["G01"]
+        assert epoch.elevation_masked_satellite_ids == []
+        assert epoch.elevation_mask_converged
+        assert epoch.released_holds == []
+      end
+
       assert List.last(solution.epochs).integer_fixed
       assert norm(sub3(List.last(solution.epochs).reported_baseline_m, @truth_baseline)) < 1.0e-3
+    end
+
+    test "carried filter state refuses a missing held integer" do
+      assert {:ok, solution} = RTK.solve_arc(arc_epochs(), arc_config())
+      state = solution.final_state
+      assert map_size(state.fixed_m) > 0
+      broken = %{state | fixed_cycles: %{}}
+
+      assert {:error, {:invalid_input, "state.fixed_cycles", "missing"}} =
+               RTK.update_epoch(broken, hd(prepared_epochs()), arc_config())
+    end
+
+    test "an absent held reference column is refused before ambiguity search" do
+      assert {:ok, solution} = RTK.solve_arc(arc_epochs(), arc_config())
+      state = solution.final_state
+
+      broken = %{
+        state
+        | references: Map.put(state.references, "E", "E01"),
+          fixed_cycles: Map.put(state.fixed_cycles, "E02", 2),
+          fixed_m: Map.put(state.fixed_m, "E02", 0.4)
+      }
+
+      # Observed epoch columns are inserted before the update. A held column
+      # absent from this epoch reaches the core's singular hold-block refusal.
+      assert {:error, :singular_geometry} = RTK.update_epoch(broken, hd(prepared_epochs()), arc_config())
+    end
+
+    test "reference changes report released holds from the core fixture" do
+      fixture = File.read!(Path.join(__DIR__, "fixtures/rtk/rtk_hold_transport.json")) |> Jason.decode!()
+
+      for {case_data, reason} <- [
+            {fixture["fdma_scenario"], :incompatible_wavelengths},
+            {hd(fixture["scenarios"]), :unheld_reference}
+          ] do
+        {epochs, config} = hold_transport_case(fixture, case_data)
+
+        epochs =
+          if reason == :unheld_reference do
+            new_reference = get_in(case_data, ["epochs", Access.at(1), "reference"])
+
+            List.update_at(epochs, 0, fn epoch ->
+              %{
+                epoch
+                | base: Enum.reject(epoch.base, &(&1.satellite_id == new_reference)),
+                  rover: Enum.reject(epoch.rover, &(&1.satellite_id == new_reference))
+              }
+            end)
+          else
+            epochs
+          end
+
+        assert {:ok, first} = RTK.solve_arc(Enum.take(epochs, 1), config)
+        assert {:ok, changed} = RTK.solve_arc(Enum.take(epochs, 2), config)
+        expected_ids = first.final_state.fixed_cycles |> Map.keys() |> Enum.sort()
+        refute expected_ids == []
+        released = Enum.at(changed.epochs, 1).released_holds
+        assert Enum.sort(Enum.map(released, & &1.ambiguity_id)) == expected_ids
+        assert Enum.all?(released, &(&1.reason == reason))
+
+        assert Enum.at(changed.epochs, 1).reference_satellite_ids == [
+                 get_in(case_data, ["epochs", Access.at(1), "reference"])
+               ]
+      end
     end
 
     test "accepts typed arc config structs on the real sequential solver path" do
@@ -301,7 +373,7 @@ defmodule Sidereon.GNSS.RTKTest do
                  |> Map.put(:offsets_m, {"none", 0.0, []})
                )
 
-      assert %StaticArcSolution{} = solution
+      assert %StaticArcSolution{elevation_mask_converged: true} = solution
       assert Enum.all?(solution.split_cycle_slip_arcs, &match?(%ArcCycleSlipSplit{}, &1))
       assert solution.references == %{"G" => "G01"}
       assert solution.ambiguity_ids == @ambiguity_ids
@@ -330,6 +402,69 @@ defmodule Sidereon.GNSS.RTKTest do
   end
 
   describe "fix_wide_lane_rtk_arc/2" do
+    test "combined sequential wide-lane driver accepts GPS and Galileo fixture observations" do
+      fixture = File.read!(Path.join(__DIR__, "fixtures/rtk/rtk_hold_transport.json")) |> Jason.decode!()
+      case_data = hd(fixture["scenarios"])
+      row = hd(case_data["epochs"])
+      {_, arc} = hold_transport_case(fixture, case_data)
+      reference = {:per_system, %{"G" => "G01", "E" => "E01"}}
+
+      observations =
+        for system <- ["G", "E"], {obs, n} <- Enum.with_index(row["observations"], 1) do
+          id = system <> String.pad_leading(Integer.to_string(n), 2, "0")
+
+          make = fn side ->
+            %{
+              satellite_id: id,
+              ambiguity_id: id,
+              p1_m: obs[side <> "_code"],
+              p2_m: obs[side <> "_code"],
+              phi1_cyc: obs[side <> "_phi1"],
+              phi2_cyc: obs[side <> "_phi2"],
+              f1_hz: @f_l1,
+              f2_hz: @f_l2
+            }
+          end
+
+          {make.("base"), make.("rover")}
+        end
+
+      positions =
+        for system <- ["G", "E"], {pos, n} <- Enum.with_index(row["positions"], 1), into: %{} do
+          {system <> String.pad_leading(Integer.to_string(n), 2, "0"), List.to_tuple(pos)}
+        end
+
+      epochs =
+        for idx <- 0..1,
+            do: %{
+              epoch: idx,
+              base_observations: Enum.map(observations, &elem(&1, 0)),
+              rover_observations: Enum.map(observations, &elem(&1, 1)),
+              satellite_positions_m: positions
+            }
+
+      wide = wide_lane_config() |> Map.merge(%{base_m: arc.base_m, reference: reference})
+
+      ionosphere = %{
+        base_m: arc.base_m,
+        reference: reference,
+        initial_baseline_m: arc.initial_baseline_m,
+        apply_troposphere: false
+      }
+
+      arc =
+        arc
+        |> Map.put(:reference, reference)
+        |> Map.put(:preprocessing, %{})
+        |> put_in([:update_opts, :dynamics_model], :constant_position)
+
+      assert {:ok, result} = RTK.solve_wide_lane_fixed_arc(epochs, wide, ionosphere, arc)
+      assert result.wide_lane.references == %{"G" => "G01", "E" => "E01"}
+      assert result.ionosphere_free.references == %{"G" => "G01", "E" => "E01"}
+      assert result.solution.references == %{"G" => "G01", "E" => "E01"}
+      assert result.metadata.integer_method == :wide_lane_narrow_lane_sequential
+    end
+
     test "uses exact gap epochs while preserving the legacy float fallback" do
       {:ok, first_exact} = ExactEpoch.new(9_007_199_254_741_392, 0)
       {:ok, second_exact} = ExactEpoch.new(9_007_199_254_741_393, 0)
@@ -401,8 +536,8 @@ defmodule Sidereon.GNSS.RTKTest do
 
       assert Map.has_key?(if_solution.references, "G")
       assert length(if_solution.epochs) == 3
-      assert map_size(if_solution.wavelengths_m) == 3
-      assert map_size(if_solution.offsets_m) == 3
+      assert map_size(if_solution.wavelengths_m) == 4
+      assert map_size(if_solution.offsets_m) == 4
     end
   end
 
@@ -726,6 +861,67 @@ defmodule Sidereon.GNSS.RTKTest do
       residual_options: struct!(ResidualValidationOptions, residual_opts()),
       float_only_systems: []
     }
+  end
+
+  defp hold_transport_case(fixture, case_data) do
+    base = List.to_tuple(fixture["base_m"])
+
+    epochs =
+      case_data["epochs"]
+      |> Enum.with_index()
+      |> Enum.map(fn {row, index} ->
+        observations = Enum.with_index(row["observations"], 1)
+
+        make = fn side ->
+          Enum.map(observations, fn {obs, n} ->
+            id = "G" <> String.pad_leading(Integer.to_string(n), 2, "0")
+            %{satellite_id: id, ambiguity_id: id, code_m: obs[side <> "_code"], phase_m: obs[side <> "_phase"]}
+          end)
+        end
+
+        positions =
+          row["positions"]
+          |> Enum.with_index(1)
+          |> Map.new(fn {position, n} ->
+            {"G" <> String.pad_leading(Integer.to_string(n), 2, "0"), List.to_tuple(position)}
+          end)
+
+        previous = if index == 0, do: row["rover"], else: Enum.at(case_data["epochs"], index - 1)["rover"]
+        velocity = Enum.zip_with(row["rover"], previous, &((&1 - &2) / 30.0)) |> List.to_tuple()
+
+        %{
+          base: make.("base"),
+          rover: make.("rover"),
+          satellite_positions_m: positions,
+          velocity_mps: velocity,
+          prediction_time_s: index * 30.0
+        }
+      end)
+
+    baseline = Enum.zip_with(hd(case_data["epochs"])["rover"], fixture["base_m"], &(&1 - &2)) |> List.to_tuple()
+    ids = for n <- 2..6, do: "G0#{n}"
+    wavelengths = Map.get(case_data, "wavelengths_m", Map.new(ids, &{&1, case_data["wavelength_m"]}))
+
+    config =
+      arc_config()
+      |> Map.merge(%{
+        base_m: base,
+        reference: {:per_system, %{"G" => "G01"}},
+        initial_baseline_m: baseline,
+        ambiguity_prior_sigma_m: 1000.0,
+        wavelengths_m: wavelengths,
+        offsets_m: Map.new(ids, &{&1, case_data["offset_m"]}),
+        model: %{
+          code_sigma_m: 1.0,
+          phase_sigma_m: 0.01,
+          stochastic_model: :simple,
+          elevation_weighting?: false,
+          sagnac?: false
+        },
+        preprocessing: %{elevation_mask_deg: fixture["mask_deg"]}
+      })
+
+    {epochs, put_in(config, [:update_opts, :dynamics_model], :velocity_propagated)}
   end
 
   defp dual_frequency_epochs do

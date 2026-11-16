@@ -506,6 +506,8 @@ defmodule Sidereon.NIF do
   def orbit_fit_precise_ephemeris_sample_orbit(_samples, _system_letter, _prn, _options),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def araim_add_v3_0(_system, _elevation, _ura, _ure, _bias, _p_sat), do: :erlang.nif_error(:nif_not_loaded)
+
   def araim_lpv_200_allocation, do: :erlang.nif_error(:nif_not_loaded)
 
   def araim_line_of_sight_from_az_el_deg(_azimuth_deg, _elevation_deg, _receiver),
@@ -569,6 +571,9 @@ defmodule Sidereon.NIF do
   def encounter_plane_covariance(_x_hat, _z_hat, _cov), do: :erlang.nif_error(:nif_not_loaded)
 
   def collision_probability(_r1, _v1, _cov1, _r2, _v2, _cov2, _hbr, _method), do: :erlang.nif_error(:nif_not_loaded)
+
+  def coverage_try_visible_mask(_grid, _threshold), do: :erlang.nif_error(:nif_not_loaded)
+  def coverage_try_access_counts(_grid, _threshold), do: :erlang.nif_error(:nif_not_loaded)
 
   def coverage_look_angles(_tle_maps, _stations, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -792,6 +797,8 @@ defmodule Sidereon.NIF do
   def pp_raim_global(_residuals, _n_states, _config), do: :erlang.nif_error(:nif_not_loaded)
   def pp_raim_global_geometry(_residuals, _geometry, _config), do: :erlang.nif_error(:nif_not_loaded)
   def pp_raim_statistics(_residuals, _geometry, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_protection_weighted(_geometry, _weights, _receiver, _config), do: :erlang.nif_error(:nif_not_loaded)
+  def pp_raim_fault_free_accuracy(_geometry, _weights, _receiver, _config), do: :erlang.nif_error(:nif_not_loaded)
   def pp_raim_protection(_geometry, _receiver, _config), do: :erlang.nif_error(:nif_not_loaded)
   def pp_kinematic_config_default, do: :erlang.nif_error(:nif_not_loaded)
   def pp_kinematic_predict(_state, _covariance, _dt_s, _ambiguity_ids, _config), do: :erlang.nif_error(:nif_not_loaded)
@@ -2012,6 +2019,8 @@ defmodule Sidereon.NIF do
 
   def rtk_solve_static_arc(_epochs, _config), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rtk_solve_wide_lane_fixed_arc(_epochs, _wide, _ionosphere, _arc), do: :erlang.nif_error(:nif_not_loaded)
+
   def rtk_fix_wide_lane_arc(_epochs, _config), do: :erlang.nif_error(:nif_not_loaded)
 
   def rtk_prepare_ionosphere_free_arc(_epochs, _wide_lane_cycles, _config), do: :erlang.nif_error(:nif_not_loaded)
@@ -2272,6 +2281,7 @@ defmodule Sidereon.NIF do
 
   def qc_weight_vector(_entries, _a_m, _b_m, _model, _cn0, _cn0_scale_m2), do: :erlang.nif_error(:nif_not_loaded)
 
+  def qc_chi2_isf(_p, _dof), do: :erlang.nif_error(:nif_not_loaded)
   def qc_chi2_inv(_p, _dof), do: :erlang.nif_error(:nif_not_loaded)
 
   def qc_raim(_used_sats, _residuals_m, _variances_m2, _p_fa, _weights_mode, _weights, _n_systems),

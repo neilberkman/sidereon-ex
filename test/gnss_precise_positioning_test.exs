@@ -8,6 +8,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
   alias Sidereon.GNSS.Observables
   alias Sidereon.GNSS.PrecisePositioning
   alias Sidereon.GNSS.PrecisePositioning.FixedSolution
+  alias Sidereon.GNSS.PrecisePositioning.Kinematic
   alias Sidereon.GNSS.PrecisePositioning.RAIM
   alias Sidereon.GNSS.PrecisePositioning.Solution
   alias Sidereon.GNSS.SP3
@@ -93,6 +94,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}
                )
 
+      assert sol.metadata.posterior_variance_factor_estimated == true
       assert position_error(sol.position, @truth) < 1.0e-3
       assert abs(sol.rx_clock_m - @clock_m) < 1.0e-4
       assert abs(sol.rx_clock_s - @clock_m / @c) < 1.0e-13
@@ -228,20 +230,23 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
   end
 
   describe "precise-positioning RAIM/FDE" do
-    test "both snapshot drivers return the exact clean solution", ctx do
+    test "both snapshot drivers preserve the noncentrality limit refusal", ctx do
       opts = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
       config = %{RAIM.config() | chi_square_threshold: 1.0e12}
 
-      assert {:ok, fde} = RAIM.fde_float_epoch(ctx.sp3, ctx.observations, @epoch, opts, config)
-      assert {:ok, solved} = RAIM.solve_float_epoch_with_raim(ctx.sp3, ctx.observations, @epoch, opts, config)
-      assert fde == solved
-      assert fde.status == :clean
-      assert fde.excluded_sats == []
-      assert fde.raim.status == :passed
-      assert fde.raim.detected == false
-      assert fde.raim.threshold == 1.0e12
-      assert fde.raim.redundancy == 4
-      assert position_error(fde.solution.position, @truth) < 1.0e-3
+      for fun <- [&RAIM.fde_float_epoch/5, &RAIM.solve_float_epoch_with_raim/5] do
+        assert {:error, %RAIM.Error{kind: :unsupported_noncentrality}} =
+                 fun.(ctx.sp3, ctx.observations, @epoch, opts, config)
+      end
+    end
+
+    test "zero redundancy FDE reports untested", ctx do
+      opts = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+      assert {:ok, result} = RAIM.fde_float_epoch(ctx.sp3, Enum.take(ctx.observations, 4), @epoch, opts)
+      assert result.status == :untested
+      assert result.raim.status == :not_enough_redundancy
+      assert result.raim.redundancy == 0
+      assert result.solution.metadata.posterior_variance_factor_estimated == false
     end
 
     test "both drivers preserve the core invalid RAIM configuration detail", ctx do
@@ -657,6 +662,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
                  estimate_residual_ionosphere: true
                )
 
+      assert float_direct.metadata.posterior_variance_factor_estimated == true
       assert position_error(float_direct.position, @truth) < 1.0e-3
       assert map_size(float_direct.residual_ionosphere_m) == length(float_direct.used_sats)
       assert square_matrix?(float_direct.temporal_position_covariance.ecef_m2, 3)
@@ -671,6 +677,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
                )
 
       assert fixed_direct.metadata.integer_status == :fixed
+      assert fixed_direct.metadata.posterior_variance_factor_estimated == true
       assert fixed_direct.float_solution == float_direct
       assert fixed_direct.solved_epoch_indices == [0, 1, 2]
       assert fixed_direct.ssr_bias_exclusions == []
@@ -1504,7 +1511,7 @@ defmodule Sidereon.GNSS.PrecisePositioningTest do
   end
 
   defp kinematic_config do
-    config = Sidereon.GNSS.PrecisePositioning.Kinematic.config()
+    config = Kinematic.config()
 
     %{
       config

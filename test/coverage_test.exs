@@ -81,4 +81,15 @@ defmodule Sidereon.CoverageTest do
 
     assert error.original == {:satellite_initialization, 1, {:invalid_input, :"element.epoch", :out_of_range}}
   end
+
+  test "checked mask and counts use inclusive elevations and reject ragged counts" do
+    grid = [[{:ok, {10.0, 5.0, 100.0}}, :error], [{:ok, {20.0, 4.0, 200.0}}, {:ok, {30.0, 6.0, 300.0}}]]
+    assert {:ok, [[true, false], [false, true]]} = Sidereon.Coverage.try_visible_mask(grid, 5.0)
+    assert {:ok, [1, 1]} = Sidereon.Coverage.try_access_counts(grid, 5.0)
+
+    assert {:error, {:invalid_input, "grid", "rows must have equal length"}} =
+             Sidereon.Coverage.try_access_counts([hd(grid), []], 5.0)
+
+    assert {:ok, [[true, false], []]} = Sidereon.Coverage.try_visible_mask([hd(grid), []], 5.0)
+  end
 end

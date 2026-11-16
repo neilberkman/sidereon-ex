@@ -462,6 +462,7 @@ struct InnovationGateTerm {
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct EkfOptionsTerm {
+    joint_innovation_gate_probability: Option<f64>,
     innovation_gate: Option<InnovationGateTerm>,
 }
 
@@ -543,6 +544,7 @@ struct TightConfigTerm {
 
 #[derive(Debug, Clone, rustler::NifMap)]
 struct UkfOptionsTerm {
+    joint_innovation_gate_probability: Option<f64>,
     alpha: f64,
     beta: f64,
     kappa: f64,
@@ -707,7 +709,17 @@ struct GateReportOut {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
+struct JointGateReportOut {
+    statistic: f64,
+    degrees_of_freedom: u64,
+    threshold: f64,
+    false_alarm_probability: f64,
+    accepted: bool,
+}
+
+#[derive(Debug, Clone, rustler::NifMap)]
 struct EkfReportOut {
+    joint_innovation_gate: Option<JointGateReportOut>,
     applied: bool,
     normalized_innovation_squared: f64,
     accepted_rows: u64,
@@ -1573,6 +1585,7 @@ fn decode_mechanization(term: MechanizationTerm) -> Result<MechanizationConfig, 
 
 fn decode_ekf_options(term: EkfOptionsTerm) -> Result<EkfUpdateOptions, FusionError> {
     let mut options = EkfUpdateOptions::default();
+    options.joint_innovation_gate_probability = term.joint_innovation_gate_probability;
     options.innovation_gate = term.innovation_gate.map(|gate| InnovationGate {
         threshold_sigma: gate.threshold_sigma,
         min_rows: gate.min_rows as usize,
@@ -1636,6 +1649,7 @@ fn decode_ukf_options(term: UkfOptionsTerm) -> Result<UkfUpdateOptions, FusionEr
 
     let mut options = UkfUpdateOptions::default();
     options.transform = transform;
+    options.joint_innovation_gate_probability = term.joint_innovation_gate_probability;
     options.innovation_gate = term.innovation_gate.map(|gate| InnovationGate {
         threshold_sigma: gate.threshold_sigma,
         min_rows: gate.min_rows as usize,
@@ -1958,6 +1972,13 @@ fn encode_update(update: FusionUpdate) -> FusionUpdateOut {
 
 fn encode_ekf_report(report: EkfCorrectionReport) -> EkfReportOut {
     EkfReportOut {
+        joint_innovation_gate: report.joint_innovation_gate.map(|gate| JointGateReportOut {
+            statistic: gate.statistic,
+            degrees_of_freedom: gate.degrees_of_freedom as u64,
+            threshold: gate.threshold,
+            false_alarm_probability: gate.false_alarm_probability,
+            accepted: gate.accepted,
+        }),
         applied: report.applied,
         normalized_innovation_squared: report.normalized_innovation_squared,
         accepted_rows: report.accepted_rows as u64,

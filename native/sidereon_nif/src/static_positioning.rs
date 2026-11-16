@@ -357,6 +357,12 @@ fn rejection_reason_atom<'a>(
     reason: sidereon_core::positioning::RejectionReason,
 ) -> Term<'a> {
     match reason {
+        sidereon_core::positioning::RejectionReason::NonFinitePseudorange => {
+            atom_from(env, "non_finite_pseudorange")
+        }
+        sidereon_core::positioning::RejectionReason::NonPositivePseudorange => {
+            atom_from(env, "non_positive_pseudorange")
+        }
         sidereon_core::positioning::RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris"),
         sidereon_core::positioning::RejectionReason::SsrCorrectionExceedsLimit(size) => (
             atom_from(env, "ssr_correction_exceeds_limit"),

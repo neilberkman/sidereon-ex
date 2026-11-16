@@ -23,7 +23,7 @@ defmodule Sidereon.GNSS.PrecisePositioningSurfacesTest do
     assert TEC.constants() == %{
              default_ionospheric_shell_height_m: 350_000.0,
              electrons_per_tecu_m2: 1.0e16,
-             tec_group_delay_coefficient: 4.0308e17
+             tec_group_delay_coefficient: 4.030_8e17
            }
 
     assert TEC.config() == %{shell_height_m: 350_000.0, earth_radius_m: 6_371_000.0}
@@ -200,15 +200,19 @@ defmodule Sidereon.GNSS.PrecisePositioningSurfacesTest do
     assert result.status == :passed
     assert result.test_statistic == 0.0
     assert result.redundancy == 1
-    assert result.most_likely_fault == "G01"
+    assert result.most_likely_fault == nil
     assert Enum.map(result.satellite_statistics, & &1.statistic) == [0.0, 0.0, 0.0, 0.0, 0.0]
 
     assert {:ok, statistics} = RAIM.per_satellite_statistics(residuals, geometry, config)
-    assert statistics.most_likely_fault == "G01"
+    assert statistics.most_likely_fault == nil
     assert Enum.all?(statistics.statistics, &(&1.code_testable and not &1.phase_testable))
 
-    assert RAIM.protection_levels(geometry, {0.7, -1.2, 0.0}, config) ==
-             {:ok, %{hpl_m: 4.684799866357605, vpl_m: 3.2295555725090805}}
+    assert {:ok, accuracy} = RAIM.fault_free_accuracy_bounds(geometry, List.duplicate(1.0, 5), {0.7, -1.2, 0.0}, config)
+    # Unit weights leave the DOP normal matrix and cofactor unchanged. Core now
+    # inverts the chi-square upper tail directly instead of bisecting a rounded
+    # CDF; sqrt(chi2_inv(0.999, 1)) changes the final product by under 3e-14.
+    assert_in_delta accuracy.hpl_m, 4.684799866357605, 3.0e-14
+    assert_in_delta accuracy.vpl_m, 3.2295555725090805, 3.0e-14
 
     assert {:error, %RAIM.Error{kind: :invalid_geometry, field: "geometry"}} =
              RAIM.global_test_with_geometry(residuals, tl(geometry), config)
@@ -216,14 +220,48 @@ defmodule Sidereon.GNSS.PrecisePositioningSurfacesTest do
     assert {:error, %RAIM.Error{kind: :invalid_geometry}} =
              RAIM.per_satellite_statistics(residuals, tl(geometry), config)
 
-    assert {:error, %RAIM.Error{} = protection_error} =
+    assert {:error, %RAIM.Error{kind: :invalid_geometry}} =
              RAIM.protection_levels(Enum.take(geometry, 2), {0.7, -1.2, 0.0}, config)
+  end
 
-    assert protection_error.kind == :dop
-    assert protection_error.reason == "fewer satellites than parameters: geometry is rank-deficient"
+  test "weighted Brown protection and fault-free bounds match the core fixture" do
+    lines = [
+      {0.6344032590235116, 0.46455589189480495, 0.6178351950529927},
+      {-0.768437944530727, 0.4248832010764284, 0.4785158208966958},
+      {0.39884251403596477, -0.7774239880720021, 0.48635027682493903},
+      {-0.6862316055536619, -0.5303441482709921, 0.49781650026285734},
+      {0.6848692875740128, -0.4734637628313619, 0.5538827711920927},
+      {-0.5179745434021694, 0.7419074039750468, 0.42576493081784084}
+    ]
 
-    assert to_string(protection_error) ==
-             "RAIM DOP failed: fewer satellites than parameters: geometry is rank-deficient"
+    geometry = Enum.with_index(lines, 1) |> Enum.map(fn {line, i} -> %{satellite_id: "G0#{i}", line_of_sight: line} end)
+    weights = [0.1, 0.2, 0.15, 0.3, 0.12, 0.25]
+    receiver = {0.9729221285256829, 0.21862976222017672, 0.0}
+    # The fixture uses uniform inverse-sigma 0.1; unit weights divide both
+    # Brown levels by ten, by the core fixture's stated effective sigma.
+    assert {:ok, unweighted} = RAIM.protection_levels(geometry, receiver)
+    assert_in_delta unweighted.hpl_m, 57.88791796217799, 1.0e-9
+    assert_in_delta unweighted.vpl_m, 73.37084828641182, 1.0e-9
+    assert {:ok, protection} = RAIM.protection_levels_with_weights(geometry, weights, receiver)
+    assert_in_delta protection.hpl_m, 314.13078984613486, 1.0e-8
+    assert_in_delta protection.vpl_m, 466.26302292463527, 1.0e-8
+    assert {:ok, accuracy} = RAIM.fault_free_accuracy_bounds(geometry, weights, receiver)
+    assert_in_delta accuracy.hpl_m, 120.18361276551951, 1.0e-8
+    assert_in_delta accuracy.vpl_m, 163.34553880706616, 1.0e-8
+  end
+
+  test "RAIM reports residual degrees of freedom beyond the core limit" do
+    rows = [
+      %{satellite_id: "G01", line_of_sight: {1.0, 0.0, 0.0}},
+      %{satellite_id: "G02", line_of_sight: {0.0, 1.0, 0.0}},
+      %{satellite_id: "G03", line_of_sight: {0.0, 0.0, 1.0}},
+      %{satellite_id: "G04", line_of_sight: {-1.0, -1.0, -1.0}}
+    ]
+
+    geometry = List.duplicate(rows, 25_002) |> List.flatten() |> Enum.take(100_005)
+
+    assert {:error, %RAIM.Error{kind: :unsupported_dof, dof: 100_001, max: 100_000}} =
+             RAIM.protection_levels(geometry, {0.0, 0.0, 0.0})
   end
 
   test "kinematic defaults and prediction exact values" do

@@ -28,8 +28,20 @@ defmodule Sidereon.GNSS.Positioning.Decode do
 
   def decode(
         {:ok,
+         {position, clock, geodetic, dop, residuals, used, rejected, metadata, clocks, tdops, drift, covariance,
+          variances, weights}}
+      ) do
+    decode(
+      {:ok,
+       {position, clock, geodetic, dop, residuals, used, rejected, metadata, clocks, tdops, drift, covariance,
+        variances, weights, nil}}
+    )
+  end
+
+  def decode(
+        {:ok,
          {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata, system_clocks, system_tdops,
-          rx_clock_drift_s_s, position_covariance, pseudorange_variances_m2, weights}}
+          rx_clock_drift_s_s, position_covariance, pseudorange_variances_m2, weights, single_clock_dop}}
       ) do
     {:ok,
      %Solution{
@@ -41,6 +53,7 @@ defmodule Sidereon.GNSS.Positioning.Decode do
        system_tdops: Map.new(system_tdops),
        position_covariance: covariance_map(position_covariance),
        dop: dop_map(dop),
+       rtklib_single_clock_dop: dop_map(single_clock_dop),
        residuals_m: residuals,
        pseudorange_variances_m2: pseudorange_variances_m2,
        weights: weights,

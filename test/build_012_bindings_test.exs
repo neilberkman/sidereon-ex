@@ -3,6 +3,7 @@ defmodule SidereonBuild012BindingsTest do
 
   alias Sidereon.ClockStability
   alias Sidereon.GNSS.{ARAIM, Ionosphere, SBAS}
+  alias Sidereon.GNSS.ARAIM.SatelliteIsmModel
   alias Sidereon.GNSS.Ionosphere.{TecGridSamples, TecSample}
   alias Sidereon.GNSS.RINEX.Observations
   alias Sidereon.Terrain
@@ -311,4 +312,13 @@ defmodule SidereonBuild012BindingsTest do
 
   defp orthometric_result_to_scalar({:ok, %OrthometricHeightM{value_m: value_m}}), do: {:ok, value_m}
   defp orthometric_result_to_scalar({:error, reason}), do: {:error, reason}
+
+  test "ADD v3.0 satellite model matches Appendix A and refuses unsupported systems" do
+    assert {:ok, model} = SatelliteIsmModel.add_v3_0(:gps, 5.0 * :math.pi() / 180.0, 0.75, 0.5, 0.5, 1.0e-5)
+    # Core araim_oracles.json, independently generated ADD v3.0 local variance.
+    assert_in_delta model.effective_sigma_int_m * model.effective_sigma_int_m - 0.75 * 0.75, 3.7291534150145766, 2.0e-15
+
+    assert {:error, {:unsupported_constellation, "C"}} =
+             SatelliteIsmModel.add_v3_0(:beidou, 30.0 * :math.pi() / 180.0, 0.75, 0.5, 0.5, 1.0e-5)
+  end
 end

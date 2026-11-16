@@ -15,12 +15,12 @@ defmodule Sidereon.GNSS.StaticPositioningNestedErrorTest do
              StaticPositioning.solve(sp3, [{observations, epoch}], initial_position: {6_378_137.0, 0.0, 0.0})
   end
 
-  test "an epoch input refusal retains its SPP field and stable kind" do
+  test "an invalid pseudorange is removed before static positioning" do
     sp3 = SP3.load!(@degenerate_sp3)
     observations = [{"G01", 0.0}]
     epoch = ~N[2020-06-24 00:03:20]
 
-    assert {:error, {:epoch_input, 0, {:invalid_input, "observation.pseudorange_m", "not_positive"}}} =
+    assert {:error, {:too_few_measurements, 0, 3}} =
              StaticPositioning.solve(sp3, [{observations, epoch}])
   end
 end

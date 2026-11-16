@@ -949,7 +949,10 @@ defmodule Sidereon.GNSS.Fusion do
   `:loose`, `:tight`, `:imu_model`, `:imu_to_body_dcm`, and
   `:ukf_update_options`. Loose config may include `:fix_status_weighting`,
   `:measurement_reweighting`, `:prediction_adaptation`, `:stationary_updates`,
-  and `:non_holonomic`.
+  and `:non_holonomic`. EKF and UKF update options accept
+  `:joint_innovation_gate_probability`, a false-alarm probability. When set,
+  correction reports include `:joint_innovation_gate` with the statistic,
+  degrees of freedom, threshold, probability and acceptance verdict.
   """
   @spec filter_config(imu_spec(), keyword() | map()) :: filter_config()
   def filter_config(spec \\ :mems, opts \\ []) do
@@ -1445,6 +1448,7 @@ defmodule Sidereon.GNSS.Fusion do
 
   defp normalize_ekf_options(options) do
     %{
+      joint_innovation_gate_probability: field(options, :joint_innovation_gate_probability, nil),
       innovation_gate:
         case field(options, :innovation_gate, nil) do
           nil -> nil
@@ -1458,6 +1462,7 @@ defmodule Sidereon.GNSS.Fusion do
       alpha: field(options, :alpha, 0.5) / 1.0,
       beta: field(options, :beta, 2.0) / 1.0,
       kappa: field(options, :kappa, 0.0) / 1.0,
+      joint_innovation_gate_probability: field(options, :joint_innovation_gate_probability, nil),
       innovation_gate: normalize_ekf_options(options).innovation_gate
     }
   end
@@ -1488,7 +1493,10 @@ defmodule Sidereon.GNSS.Fusion do
   end
 
   defp ekf_options_term(options) do
-    %{innovation_gate: options.innovation_gate}
+    %{
+      innovation_gate: options.innovation_gate,
+      joint_innovation_gate_probability: options.joint_innovation_gate_probability
+    }
   end
 
   defp ukf_options_term(options) do
@@ -1496,7 +1504,8 @@ defmodule Sidereon.GNSS.Fusion do
       alpha: options.alpha / 1.0,
       beta: options.beta / 1.0,
       kappa: options.kappa / 1.0,
-      innovation_gate: options.innovation_gate
+      innovation_gate: options.innovation_gate,
+      joint_innovation_gate_probability: options.joint_innovation_gate_probability
     }
   end
 
