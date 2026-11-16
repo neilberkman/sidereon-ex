@@ -18,6 +18,7 @@ type Vec3 = (f64, f64, f64);
 
 mod atoms {
     rustler::atoms! {
+        unsupported_constellation,
         ok,
         error,
         invalid_elevation,
@@ -114,6 +115,13 @@ fn quality_error_atom(error: QualityError) -> rustler::Atom {
 
 fn araim_error_term<'a>(env: Env<'a>, error: AraimError) -> Term<'a> {
     let atom = match error {
+        AraimError::UnsupportedConstellation(system) => {
+            return (
+                atoms::unsupported_constellation(),
+                system.letter().to_string(),
+            )
+                .encode(env)
+        }
         AraimError::InsufficientGeometry => atoms::insufficient_geometry(),
         AraimError::UnmonitorableFaultMass => atoms::unmonitorable_fault_mass(),
         AraimError::NumericalFailure => atoms::numerical_failure(),

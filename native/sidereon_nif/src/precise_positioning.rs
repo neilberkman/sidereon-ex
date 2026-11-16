@@ -55,7 +55,7 @@ type TemporalCorrelationTerm = (f64, f64, Option<f64>, u64, f64, f64, u64);
 type FloatCovarianceTerm = (
     CovarianceMatrixTerm,
     CovarianceMatrixTerm,
-    (f64, f64),
+    (f64, f64, bool),
     CovarianceMatrixTerm,
     (f64, TemporalCorrelationTerm),
     OptionalMatrixTerm,
@@ -182,6 +182,10 @@ mod atoms {
         too_few_observations,
         singular_velocity_geometry,
         clean,
+        untested,
+        numerical_protection_level,
+        unsupported_noncentrality,
+        unsupported_dof,
         restored,
         cannot_exclude,
         integrity_not_restored,
@@ -442,6 +446,7 @@ fn encode_raim_status(status: core::RaimStatus) -> rustler::Atom {
 
 fn encode_fde_status(status: core::RaimFdeStatus) -> rustler::Atom {
     match status {
+        core::RaimFdeStatus::Untested => atoms::untested(),
         core::RaimFdeStatus::Clean => atoms::clean(),
         core::RaimFdeStatus::Restored => atoms::restored(),
         core::RaimFdeStatus::CannotExclude => atoms::cannot_exclude(),
@@ -516,6 +521,28 @@ fn encode_raim_error<'a>(env: Env<'a>, error: core::RaimError) -> Term<'a> {
             (atoms::invalid_geometry(), field, Some(reason), message).encode(env)
         }
         core::RaimError::Dop(_) => (atoms::dop(), "dop", Option::<&str>::None, message).encode(env),
+        core::RaimError::NumericalProtectionLevel => (
+            atoms::numerical_protection_level(),
+            "",
+            None::<&str>,
+            message,
+        )
+            .encode(env),
+        core::RaimError::UnsupportedNoncentrality => (
+            atoms::unsupported_noncentrality(),
+            "",
+            None::<&str>,
+            message,
+        )
+            .encode(env),
+        core::RaimError::UnsupportedDof { dof, max } => (
+            atoms::unsupported_dof(),
+            "",
+            None::<&str>,
+            message,
+            (dof as u64, max as u64),
+        )
+            .encode(env),
         core::RaimError::SingularGeometry => (
             atoms::singular_raim_geometry(),
             "geometry",
@@ -1393,7 +1420,11 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
             (
                 (position_cov_ecef, position_cov_enu),
                 (formal_cov_ecef, formal_cov_enu),
-                (posterior_variance_factor, position_covariance_scale_factor),
+                (
+                    posterior_variance_factor,
+                    position_covariance_scale_factor,
+                    posterior_variance_factor_estimated,
+                ),
                 (temporal_cov_ecef, temporal_cov_enu),
                 (temporal_position_covariance_scale_factor, temporal_correlation),
                 tropo_gradient_covariance_m2,
@@ -1468,6 +1499,7 @@ fn decode_float_payload<'a>(term: FloatPayloadTerm<'a>) -> NifResult<core::Float
             enu_m2: lists_to_matrix3(&formal_cov_enu)?,
         },
         posterior_variance_factor,
+        posterior_variance_factor_estimated,
         position_covariance_scale_factor,
         temporal_position_covariance: core::PositionCovariance {
             ecef_m2: lists_to_matrix3(&temporal_cov_ecef)?,
@@ -1953,6 +1985,7 @@ fn encode_float_covariance_bundle(solution: &core::FloatSolution) -> FloatCovari
         (
             solution.posterior_variance_factor,
             solution.position_covariance_scale_factor,
+            solution.posterior_variance_factor_estimated,
         ),
         (
             matrix3_to_lists(solution.temporal_position_covariance.ecef_m2),
@@ -1982,6 +2015,7 @@ fn encode_fixed_covariance_bundle(solution: &core::FixedSolution) -> FloatCovari
         (
             solution.posterior_variance_factor,
             solution.position_covariance_scale_factor,
+            solution.posterior_variance_factor_estimated,
         ),
         (
             matrix3_to_lists(solution.temporal_position_covariance.ecef_m2),

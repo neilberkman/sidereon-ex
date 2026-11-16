@@ -111,6 +111,28 @@ defmodule Sidereon.GNSS.QCTest do
     end
   end
 
+  test "chi2_isf returns a published upper-tail quantile" do
+    assert_in_delta QC.chi2_isf(0.001, 2), 13.815510557964274, 1.0e-12
+  end
+
+  test "SPP reports non-positive pseudoranges", ctx do
+    [{satellite, _} | tail] = ctx.clean_obs
+    assert {:ok, solution} = Positioning.solve(ctx.sp3, [{satellite, 0.0} | tail], @epoch, @solve_opts)
+    assert {satellite, :non_positive_pseudorange} in solution.rejected_sats
+  end
+
+  test "GDOP ceiling and RTKLIB single-clock DOP are surfaced", ctx do
+    assert {:ok, solution} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+    assert %{gdop: gdop, pdop: pdop, hdop: hdop, vdop: vdop, tdop: tdop} = solution.rtklib_single_clock_dop
+    # DOP is a norm of rows of the inverse normal matrix, so each component is positive.
+    assert Enum.all?([gdop, pdop, hdop, vdop, tdop], &(&1 > 0.0))
+
+    assert {:error, {:degenerate_geometry_gdop, value}} =
+             Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_gdop: 0.1])
+
+    assert value > 0.1
+  end
+
   describe "chi2_inv/2 (chi-square threshold)" do
     test "matches published 99.9th-percentile critical values for dof 1..5" do
       # Standard chi-square distribution critical values at the 0.999 quantile.
@@ -306,15 +328,27 @@ defmodule Sidereon.GNSS.QCTest do
     end
   end
 
+  test "FDE and robust FDE forward the GDOP ceiling", ctx do
+    for fun <- [&QC.fde/4, &QC.robust_fde/4] do
+      assert {:error, {:invalid_option, :max_gdop}} =
+               fun.(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_gdop: 0.0])
+
+      assert {:error, {:degenerate_geometry_gdop, gdop}} =
+               fun.(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [max_gdop: 0.1])
+
+      assert gdop > 0.1
+    end
+  end
+
   describe "fde/4 option validation" do
     test "malformed p_fa, weights, exclusion budgets, and RMS caps return tagged errors", ctx do
       assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [p_fa: 0.0]) ==
                {:error, {:invalid_option, :p_fa}}
 
-      assert {:error, %QC.QualityError{kind: :invalid_probability} = quality_error} =
+      assert {:ok, %{raim: %{testable: true, threshold: threshold}}} =
                QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [p_fa: 1.0e-20])
 
-      assert quality_error.message == "invalid probability"
+      assert threshold > 90.0
 
       assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [weights: :bad]) ==
                {:error, {:invalid_option, :weights}}
@@ -457,19 +491,16 @@ defmodule Sidereon.GNSS.QCTest do
       assert_raise ArgumentError, fn -> QC.raim(sol, weights: bad_weights) end
     end
 
-    test "tiny positive p_fa reaches the core and is only refused when a quantile is needed" do
+    test "tiny positive p_fa remains valid when a quantile is needed" do
       four = QC.RaimInput.new(["G01", "G02", "G03", "G04"], [0.1, -0.2, 0.3, -0.1])
       untestable = QC.raim(four, p_fa: 1.0e-20, weights: :unit, n_systems: 1)
       refute untestable.testable
 
       five = QC.RaimInput.new(["G01", "G02", "G03", "G04", "G05"], [0.1, -0.2, 0.3, -0.1, 0.2])
 
-      error =
-        assert_raise QC.QualityError, fn ->
-          QC.raim(five, p_fa: 1.0e-20, weights: :unit, n_systems: 1)
-        end
-
-      assert error.kind == :invalid_probability
+      result = QC.raim(five, p_fa: 1.0e-20, weights: :unit, n_systems: 1)
+      assert result.testable
+      assert result.threshold > 80.0
     end
   end
 

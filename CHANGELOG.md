@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Preserve RAIM degree-of-freedom limits and unsupported ARAIM constellation
+  identifiers in structured errors; forward GDOP ceilings across FDE, RINEX
+  SPP and SBAS positioning entry points.
+
+- Add checked coverage visibility masks and access counts, and carried RTK filter updates.
+- Add ADD v3.0 satellite models, RTKLIB single-clock DOP, a GDOP ceiling,
+  joint innovation gates, and a multi-constellation combined sequential RTK driver.
+- Add `QC.chi2_isf/2`, weighted Brown snapshot-RAIM protection levels,
+  and explicitly named fault-free accuracy bounds.
+- Report PPP posterior variance estimation and RTK arc mask and hold diagnostics.
+
+### Changed
+
+- PPP protection levels now use Brown fault-mode protection and require positive redundancy.
+
+
 - Add `OMM.encode_kvn_lenient/1` and `OMM.encode_xml_lenient/1` for partial messages.
 - Add CelesTrak GP and NAVCEN source metadata, URL builders, GP response
   parsing, and cache-first fetching. GP records retain native fields, source

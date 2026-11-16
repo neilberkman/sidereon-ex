@@ -121,8 +121,9 @@ defmodule Sidereon.Build016BindingsTest do
   test "W-test returns core delta0 and lambda0 components" do
     assert {:ok, %{delta0: delta0, lambda0: lambda0}} = Reliability.wtest_noncentrality(0.001, 0.80)
 
-    assert float_bits(delta0) == 0x40108751CBD0BEC7
-    assert float_bits(lambda0) == 0x4031131C0D9309E7
+    # Core araim_oracles.json: independently generated normal-tail reference.
+    assert_in_delta delta0, 4.132147965064808, 4.0e-15
+    assert_in_delta lambda0, 17.074646805189236, 2.0e-14
   end
 
   test "small wave-2 options are marshaled through the public surfaces" do

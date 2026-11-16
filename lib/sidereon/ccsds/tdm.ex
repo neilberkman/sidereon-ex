@@ -280,7 +280,7 @@ defmodule Sidereon.CCSDS.TDM do
   @max_u64 0xFFFF_FFFF_FFFF_FFFF
 
   # The largest finite double, as the integer it is.
-  @float_max_integer trunc(1.7976931348623157e308)
+  @float_max_integer trunc(1.797_693_134_862_315_7e308)
 
   @doc """
   Parse a TDM KVN document under the strict policy.

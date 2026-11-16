@@ -182,6 +182,8 @@ defmodule Sidereon.Format.OMM do
           quantize_tle_derived_fields: boolean()
         }
 
+  # CCSDS OMM has a prescribed set of fields.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct ccsds_omm_vers: nil,
             classification: nil,
             creation_date: nil,

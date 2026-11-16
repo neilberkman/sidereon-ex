@@ -253,6 +253,28 @@ defmodule Sidereon.GNSS.ARAIM do
       }
     end
 
+    @doc """
+    Construct the ADD v3.0 dual-frequency model at an elevation in radians.
+    Unsupported systems return `{:error, {:unsupported_constellation, letter}}`.
+    """
+    @spec add_v3_0(atom() | String.t(), number(), number(), number(), number(), number()) ::
+            {:ok, t()} | {:error, term()}
+    def add_v3_0(system, elevation_rad, ura, ure, bias, p_sat) do
+      with {:ok, system} <- ARAIM.system_letter(system),
+           {:ok, {ura, ure, int, acc, bias, p_sat}} <-
+             Sidereon.NIF.araim_add_v3_0(system, elevation_rad / 1.0, ura / 1.0, ure / 1.0, bias / 1.0, p_sat / 1.0) do
+        {:ok,
+         %__MODULE__{
+           sigma_ura_m: ura,
+           sigma_ure_m: ure,
+           effective_sigma_int_m: int,
+           effective_sigma_acc_m: acc,
+           b_nom_m: bias,
+           p_sat: p_sat
+         }}
+      end
+    end
+
     @doc false
     @spec to_nif_tuple(t()) :: tuple()
     def to_nif_tuple(%__MODULE__{} = model) do

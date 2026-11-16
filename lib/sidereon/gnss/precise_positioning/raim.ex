@@ -4,9 +4,15 @@ defmodule Sidereon.GNSS.PrecisePositioning.RAIM do
   alias Sidereon.NIF
 
   defmodule Error do
-    @moduledoc "A PPP RAIM refusal with stable variant and complete core detail."
+    @moduledoc """
+    A PPP RAIM refusal. `:unsupported_noncentrality` means the required bias
+    exceeds the core limit; `:unsupported_dof` means residual degrees of freedom
+    exceed its supported limit, with `:dof` and `:max` holding those values;
+    `:numerical_protection_level` means the
+    noncentral CDF could not be evaluated numerically.
+    """
     @enforce_keys [:kind, :message]
-    defstruct [:kind, :field, :reason, :message]
+    defstruct [:kind, :field, :reason, :message, :dof, :max]
 
     defimpl String.Chars, for: __MODULE__ do
       def to_string(error), do: error.message
@@ -41,7 +47,7 @@ defmodule Sidereon.GNSS.PrecisePositioning.RAIM do
     end
   end
 
-  @doc "Compute horizontal and vertical protection levels."
+  @doc "Compute Brown snapshot-RAIM fault protection levels; positive redundancy is required."
   def protection_levels(geometry, receiver, config \\ config()) do
     case NIF.pp_raim_protection(geometry_terms(geometry), receiver, config_term(config)) do
       {:ok, {hpl, vpl}} -> {:ok, %{hpl_m: hpl, vpl_m: vpl}}
@@ -49,7 +55,24 @@ defmodule Sidereon.GNSS.PrecisePositioning.RAIM do
     end
   end
 
-  @doc "Run precise-positioning fault detection and exclusion for one SP3-backed float epoch."
+  @doc "Compute weighted Brown snapshot-RAIM fault protection levels. Weights are inverse standard deviations."
+  def protection_levels_with_weights(geometry, weights, receiver, config \\ config()) do
+    protection_call(&NIF.pp_raim_protection_weighted/4, geometry, weights, receiver, config)
+  end
+
+  @doc "Compute weighted fault-free accuracy bounds; these are not fault protection levels."
+  def fault_free_accuracy_bounds(geometry, weights, receiver, config \\ config()) do
+    protection_call(&NIF.pp_raim_fault_free_accuracy/4, geometry, weights, receiver, config)
+  end
+
+  defp protection_call(fun, geometry, weights, receiver, config) do
+    case fun.(geometry_terms(geometry), weights, receiver, config_term(config)) do
+      {:ok, {hpl, vpl}} -> {:ok, %{hpl_m: hpl, vpl_m: vpl}}
+      {:error, detail} -> {:error, decode_error(detail)}
+    end
+  end
+
+  @doc "Run PPP FDE for one SP3-backed float epoch; `:untested` means there is no residual redundancy."
   def fde_float_epoch(sp3, observations, epoch, opts \\ [], config \\ config()) do
     solve_epoch(:fde_float_epoch, sp3, observations, epoch, opts, config)
   end
@@ -116,6 +139,11 @@ defmodule Sidereon.GNSS.PrecisePositioning.RAIM do
   defp status_atom("not_enough_redundancy"), do: :not_enough_redundancy
   defp status_atom(status) when is_atom(status), do: status
 
+  defp decode_error({kind, field, reason, message, limits}) do
+    {dof, max} = limits || {nil, nil}
+    %Error{kind: raim_kind(kind), field: field, reason: reason, message: message, dof: dof, max: max}
+  end
+
   defp decode_error({kind, field, reason, message}),
     do: %Error{kind: raim_kind(kind), field: field, reason: reason, message: message}
 
@@ -125,5 +153,8 @@ defmodule Sidereon.GNSS.PrecisePositioning.RAIM do
   defp raim_kind("invalid_residual"), do: :invalid_residual
   defp raim_kind("invalid_geometry"), do: :invalid_geometry
   defp raim_kind("dop"), do: :dop
+  defp raim_kind("numerical_protection_level"), do: :numerical_protection_level
+  defp raim_kind("unsupported_noncentrality"), do: :unsupported_noncentrality
+  defp raim_kind("unsupported_dof"), do: :unsupported_dof
   defp raim_kind("singular_geometry"), do: :singular_geometry
 end

@@ -108,6 +108,7 @@ defmodule Sidereon.GNSS.SPP do
           rinex_option()
           | {:with_geodetic, boolean()}
           | {:max_pdop, number()}
+          | {:max_gdop, number()}
           | {:coarse_search_seeds, pos_integer()}
 
   @doc """
@@ -162,6 +163,7 @@ defmodule Sidereon.GNSS.SPP do
     * `:with_geodetic` - include geodetic output in successful solutions,
       default `true`.
     * `:max_pdop` - optional positive PDOP ceiling.
+    * `:max_gdop` - optional positive GDOP ceiling.
     * `:coarse_search_seeds` - optional positive cold-start search seed count.
   """
   @spec solve_spp_from_rinex_obs(Broadcast.t(), Observations.t(), [solve_option()]) ::
@@ -171,9 +173,12 @@ defmodule Sidereon.GNSS.SPP do
   def solve_spp_from_rinex_obs(%Broadcast{handle: source}, %Observations{handle: obs}, opts) when is_list(opts) do
     with {:ok, _qzss_clock, _troposphere_model} <- Positioning.model_options(opts),
          {:ok, max_pdop} <- optional_positive_float(Keyword.get(opts, :max_pdop), :max_pdop),
+         {:ok, max_gdop} <- optional_positive_float(Keyword.get(opts, :max_gdop), :max_gdop),
          {:ok, coarse_search_seeds} <-
            optional_positive_integer(Keyword.get(opts, :coarse_search_seeds), :coarse_search_seeds) do
-      args = rinex_args(source, obs, opts) ++ [Keyword.get(opts, :with_geodetic, true), max_pdop, coarse_search_seeds]
+      args =
+        rinex_args(source, obs, opts) ++
+          [Keyword.get(opts, :with_geodetic, true), {max_pdop, max_gdop}, coarse_search_seeds]
 
       case apply(NIF, :solve_spp_from_rinex_obs, args) do
         {:ok, epochs} -> {:ok, Enum.map(epochs, &decode_epoch_solution/1)}

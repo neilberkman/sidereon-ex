@@ -251,6 +251,10 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defmodule Solution do
     @moduledoc """
+    `metadata.posterior_variance_factor_estimated` is false for an exactly
+    determined solve, whose unit covariance scale is a priori rather than a
+    residual variance estimate.
+
     Float-ambiguity phase positioning solution for one epoch.
     """
 
@@ -626,6 +630,9 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defmodule FixedSolution do
     @moduledoc """
+    `metadata.posterior_variance_factor_estimated` indicates whether the
+    posterior variance factor was estimated from residual redundancy.
+
     Static multi-epoch integer-fixed carrier-phase solution.
     """
 
@@ -1173,7 +1180,8 @@ defmodule Sidereon.GNSS.PrecisePositioning do
              {solution.formal_position_covariance.ecef_m2, solution.formal_position_covariance.enu_m2},
              {
                Map.fetch!(solution.metadata, :posterior_variance_factor),
-               Map.fetch!(solution.metadata, :position_covariance_scale_factor)
+               Map.fetch!(solution.metadata, :position_covariance_scale_factor),
+               Map.fetch!(solution.metadata, :posterior_variance_factor_estimated)
              },
              {solution.temporal_position_covariance.ecef_m2, solution.temporal_position_covariance.enu_m2},
              {
@@ -1441,6 +1449,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
         posterior_variance_factor: covariance.posterior_variance_factor,
+        posterior_variance_factor_estimated: covariance.posterior_variance_factor_estimated,
         position_covariance_scale_factor: covariance.position_covariance_scale_factor,
         temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
         temporal_correlation: covariance.temporal_correlation,
@@ -1488,6 +1497,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         weighted_rms_m: weighted_rms_m,
         troposphere_applied: tropo.enabled?,
         posterior_variance_factor: covariance.posterior_variance_factor,
+        posterior_variance_factor_estimated: covariance.posterior_variance_factor_estimated,
         position_covariance_scale_factor: covariance.position_covariance_scale_factor,
         temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
         temporal_correlation: covariance.temporal_correlation,
@@ -1498,15 +1508,16 @@ defmodule Sidereon.GNSS.PrecisePositioning do
 
   defp covariance_fields(
          {{position_cov_ecef, position_cov_enu}, {formal_cov_ecef, formal_cov_enu},
-          {posterior_variance_factor, position_covariance_scale_factor}, {temporal_cov_ecef, temporal_cov_enu},
-          {temporal_position_covariance_scale_factor, temporal_correlation}, tropo_gradient_covariance_m2,
-          formal_tropo_gradient_covariance_m2}
+          {posterior_variance_factor, position_covariance_scale_factor, posterior_variance_factor_estimated},
+          {temporal_cov_ecef, temporal_cov_enu}, {temporal_position_covariance_scale_factor, temporal_correlation},
+          tropo_gradient_covariance_m2, formal_tropo_gradient_covariance_m2}
        ) do
     %{
       position_covariance: %{ecef_m2: position_cov_ecef, enu_m2: position_cov_enu},
       formal_position_covariance: %{ecef_m2: formal_cov_ecef, enu_m2: formal_cov_enu},
       temporal_position_covariance: %{ecef_m2: temporal_cov_ecef, enu_m2: temporal_cov_enu},
       posterior_variance_factor: posterior_variance_factor,
+      posterior_variance_factor_estimated: posterior_variance_factor_estimated,
       position_covariance_scale_factor: position_covariance_scale_factor,
       temporal_position_covariance_scale_factor: temporal_position_covariance_scale_factor,
       temporal_correlation: temporal_correlation_map(temporal_correlation),
@@ -1580,6 +1591,7 @@ defmodule Sidereon.GNSS.PrecisePositioning do
         phase_rms_m: phase_rms_m,
         weighted_rms_m: weighted_rms_m,
         posterior_variance_factor: covariance.posterior_variance_factor,
+        posterior_variance_factor_estimated: covariance.posterior_variance_factor_estimated,
         position_covariance_scale_factor: covariance.position_covariance_scale_factor,
         temporal_position_covariance_scale_factor: covariance.temporal_position_covariance_scale_factor,
         temporal_correlation: covariance.temporal_correlation,

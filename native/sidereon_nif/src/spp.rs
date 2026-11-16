@@ -267,6 +267,11 @@ fn validation_error_term<'a>(env: Env<'a>, error: SolutionValidationError) -> Te
             ),
         )
             .encode(env),
+        SolutionValidationError::DegenerateGeometryGdop(gdop) => (
+            atom::error(),
+            (atom_from(env, "degenerate_geometry_gdop"), gdop),
+        )
+            .encode(env),
         SolutionValidationError::DegenerateGeometryPdop(pdop) => {
             (atom::error(), (atom_from(env, "degenerate_geometry"), pdop)).encode(env)
         }
@@ -349,6 +354,10 @@ pub(crate) fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<
     (atom::ok(), encode_solution_body(env, sol)).encode(env)
 }
 
+fn non_finite_pseudorange_name() -> &'static str {
+    "non_finite_pseudorange"
+}
+
 /// The fixed-arity solution body tuple, WITHOUT the `{:ok, _}` wrapper. Shared by
 /// [`encode_solution`] (the SP3/broadcast SPP entry points) and the
 /// precise-to-broadcast fallback's [`SourcedSolution`] encoder, which pairs this
@@ -391,6 +400,12 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
         .iter()
         .map(|r| {
             let reason = match r.reason {
+                RejectionReason::NonFinitePseudorange => {
+                    atom_from(env, non_finite_pseudorange_name()).encode(env)
+                }
+                RejectionReason::NonPositivePseudorange => {
+                    atom_from(env, "non_positive_pseudorange").encode(env)
+                }
                 RejectionReason::NoEphemeris => atom_from(env, "no_ephemeris").encode(env),
                 RejectionReason::SsrCorrectionExceedsLimit(size) => (
                     atom_from(env, "ssr_correction_exceeds_limit"),
@@ -472,6 +487,10 @@ pub(crate) fn encode_solution_body<'a>(env: Env<'a>, sol: &ReceiverSolution) -> 
             position_covariance.encode(env),
             sol.pseudorange_variances_m2.encode(env),
             sol.weights.encode(env),
+            sol.rtklib_single_clock_dop
+                .as_ref()
+                .map(|d| (d.gdop, d.pdop, d.hdop, d.vdop, d.tdop))
+                .encode(env),
         ],
     )
 }
@@ -676,7 +695,12 @@ pub(crate) fn decode_policy(
     coarse_search_seeds: Term<'_>,
 ) -> NifResult<SolvePolicy> {
     let mut validation = SolutionValidationOptions::default();
-    validation.max_pdop = decode_optional_f64(max_pdop, "max_pdop")?;
+    if let Ok((pdop, gdop)) = max_pdop.decode::<(Term, Term)>() {
+        validation.max_pdop = decode_optional_f64(pdop, "max_pdop")?;
+        validation.max_gdop = decode_optional_f64(gdop, "max_gdop")?;
+    } else {
+        validation.max_pdop = decode_optional_f64(max_pdop, "max_pdop")?;
+    }
     Ok(SolvePolicy {
         validation,
         coarse_search_seeds: decode_optional_usize(coarse_search_seeds, "coarse_search_seeds")?,
@@ -1895,6 +1919,79 @@ mod mapping_tests {
     //! stay correct without depending on a physics fixture to trigger them.
     use super::*;
     use sidereon_core::astro::math::least_squares::{SolveError, Status};
+
+    #[test]
+    fn nonfinite_pseudoranges_reach_the_public_rejection_mapping() {
+        use sidereon_core::ephemeris::BroadcastEphemeris;
+        use sidereon_core::positioning::{spp_inputs_from_rinex_obs, Corrections, RinexSppOptions};
+        use sidereon_core::rinex::observations::{ObservationFile, SignalPolicy};
+        use sidereon_core::{GnssSatelliteId, GnssSystem};
+        use std::collections::BTreeSet;
+        let obs = ObservationFile::parse(include_str!(
+            "../../../test/fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.rnx"
+        ))
+        .unwrap();
+        let source = BroadcastEphemeris::from_nav(include_str!(
+            "../../../test/fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx"
+        ))
+        .unwrap();
+        let oracle: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test/fixtures/rtk/rtklib_spp_nonfinite.json"
+        ))
+        .unwrap();
+        let guess = &oracle["guess"];
+        let policy = SignalPolicy {
+            codes: [
+                (GnssSystem::Gps, vec!["C1C".into()]),
+                (GnssSystem::Glonass, vec!["C1C".into()]),
+                (GnssSystem::Galileo, vec!["C1C".into()]),
+                (GnssSystem::BeiDou, vec!["C2I".into()]),
+            ]
+            .into(),
+        };
+        let options = RinexSppOptions::new(policy)
+            .with_corrections(Corrections::IONO_TROPO)
+            .with_initial_guess([
+                guess[0].as_f64().unwrap(),
+                guess[1].as_f64().unwrap(),
+                guess[2].as_f64().unwrap(),
+                0.0,
+            ]);
+        let all = spp_inputs_from_rinex_obs(&obs, &source, &options).unwrap()[0]
+            .inputs
+            .clone();
+        for case in oracle["cases"].as_array().unwrap() {
+            let selected: BTreeSet<GnssSatelliteId> = case["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["sat"].as_str().unwrap().parse().unwrap())
+                .collect();
+            let mut input = all.clone();
+            input
+                .observations
+                .retain(|row| selected.contains(&row.satellite_id));
+            let invalid = case["invalid_observations"][0]["sat"].as_str().unwrap();
+            let row = input
+                .observations
+                .iter_mut()
+                .find(|row| row.satellite_id.to_string() == invalid)
+                .unwrap();
+            row.pseudorange_m = if case["mode"] == "nan_pseudorange" {
+                f64::NAN
+            } else {
+                f64::INFINITY
+            };
+            let solution = sidereon_core::positioning::solve(&source, &input, false).unwrap();
+            let rejection = solution
+                .rejected_sats
+                .iter()
+                .find(|row| row.satellite_id.to_string() == invalid)
+                .unwrap();
+            assert_eq!(rejection.reason, RejectionReason::NonFinitePseudorange);
+            assert_eq!(non_finite_pseudorange_name(), "non_finite_pseudorange");
+        }
+    }
 
     #[test]
     fn rinex_spp_observation_errors_keep_the_core_error_kind() {

@@ -857,7 +857,21 @@ fn encode_update<'a>(env: Env<'a>, update: sidereon_core::rtk_filter::EpochUpdat
 fn encode_update_error<'a>(env: Env<'a>, err: UpdateError) -> Term<'a> {
     match err {
         UpdateError::InvalidState { .. } => atoms::invalid_state().encode(env),
-        UpdateError::InvalidInput { .. } => atoms::invalid_input().encode(env),
+        UpdateError::InvalidInput { field, kind } => {
+            use sidereon_core::rtk_filter::RtkInputErrorKind;
+            let kind = match kind {
+                RtkInputErrorKind::NonFinite => "non_finite",
+                RtkInputErrorKind::NotPositive => "not_positive",
+                RtkInputErrorKind::Negative => "negative",
+                RtkInputErrorKind::OutOfRange => "out_of_range",
+                RtkInputErrorKind::Missing => "missing",
+                RtkInputErrorKind::FloatParse => "float_parse",
+                RtkInputErrorKind::IntParse => "int_parse",
+                RtkInputErrorKind::InvalidCivilDate => "invalid_civil_date",
+                RtkInputErrorKind::InvalidCivilTime => "invalid_civil_time",
+            };
+            (atoms::invalid_input(), field, kind).encode(env)
+        }
         UpdateError::ReceiverAntenna(_) => atoms::receiver_antenna().encode(env),
         UpdateError::ReferenceChanged {
             system,
@@ -1564,6 +1578,52 @@ pub fn rtk_fix_wide_lane_arc<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+pub fn rtk_solve_wide_lane_fixed_arc<'a>(
+    env: Env<'a>,
+    epochs: Vec<RtkDualFrequencyArcEpochTerm>,
+    wide: RtkWideLaneArcConfigTerm,
+    ionosphere: RtkIonosphereFreeArcConfigTerm,
+    arc: RtkArcConfigTerm,
+) -> NifResult<Term<'a>> {
+    let epochs: Vec<RtkDualFrequencyArcEpoch> = epochs
+        .into_iter()
+        .map(decode_dual_frequency_arc_epoch)
+        .collect();
+    let Some(wide) = decode_wide_lane_arc_config(wide) else {
+        return Ok((atoms::error(), atoms::invalid_option()).encode(env));
+    };
+    let Some(ionosphere) = decode_ionosphere_free_arc_config(ionosphere) else {
+        return Ok((atoms::error(), atoms::invalid_option()).encode(env));
+    };
+    let arc = decode_arc_config(arc)?;
+    let config = RtkWideLaneFixedArcConfig::new(
+        wide,
+        ionosphere,
+        RtkWideLaneFixedArcSolveConfig::Sequential(arc),
+    );
+    Ok(match solve_wide_lane_fixed_rtk_arc(&epochs, &config) {
+        Ok(RtkWideLaneFixedArcSolution::Sequential(value)) => (
+            atoms::ok(),
+            (
+                encode_wide_lane_arc_solution(env, value.wide_lane),
+                encode_ionosphere_free_arc_solution(env, value.ionosphere_free),
+                encode_arc_solution(env, value.solution),
+                encode_wide_lane_fixed_metadata(env, value.metadata),
+            ),
+        )
+            .encode(env),
+        Ok(RtkWideLaneFixedArcSolution::Static(_)) => {
+            (atoms::error(), atoms::invalid_option()).encode(env)
+        }
+        Err(error) => (
+            atoms::error(),
+            encode_wide_lane_fixed_arc_error(env, error, &epochs),
+        )
+            .encode(env),
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 pub fn rtk_prepare_ionosphere_free_arc<'a>(
     env: Env<'a>,
     epochs: Vec<RtkDualFrequencyArcEpochTerm>,
@@ -2190,6 +2250,7 @@ fn encode_static_arc_solution<'a>(env: Env<'a>, solution: RtkStaticArcSolution) 
             solution.dropped_sats.encode(env),
             encode_arc_split_cycle_slip_arcs(solution.split_cycle_slip_arcs).encode(env),
             solution.elevation_masked_sats.encode(env),
+            solution.elevation_mask_converged.encode(env),
             geometry_quality_to_term(env, solution.geometry_quality),
         ],
     )
@@ -3455,6 +3516,16 @@ fn encode_arc_epoch_solution<'a>(env: Env<'a>, epoch: RtkArcEpochSolution) -> Te
             epoch.sd_ambiguities_m.encode(env),
             epoch.fixed_double_difference_ids.encode(env),
             epoch.used_satellite_ids.encode(env),
+            epoch.reference_satellite_ids.encode(env),
+            epoch.elevation_masked_satellite_ids.encode(env),
+            epoch.elevation_mask_converged.encode(env),
+            epoch.released_holds.into_iter().map(|hold| {
+                let reason = match hold.reason {
+                    sidereon_core::rtk_filter::RtkHoldReleaseReason::UnheldReference => "unheld_reference",
+                    sidereon_core::rtk_filter::RtkHoldReleaseReason::IncompatibleWavelengths => "incompatible_wavelengths",
+                };
+                (hold.ambiguity_id, reason)
+            }).collect::<Vec<_>>().encode(env),
             epoch
                 .search
                 .map(|meta| encode_integer_search_meta(env, meta))

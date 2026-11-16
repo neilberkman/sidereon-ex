@@ -269,7 +269,7 @@ defmodule Sidereon.Tides do
 
   defp finite_number(value, _field) when is_number(value) do
     normalized = value / 1.0
-    if is_finite(normalized), do: {:ok, normalized}, else: {:error, :non_finite}
+    if finite?(normalized), do: {:ok, normalized}, else: {:error, :non_finite}
   rescue
     ArithmeticError -> {:error, :out_of_range}
   end
@@ -278,9 +278,9 @@ defmodule Sidereon.Tides do
 
   defp number!(value) when is_number(value) do
     normalized = value / 1.0
-    if is_finite(normalized), do: normalized, else: raise(ArgumentError, "number must be finite")
+    if finite?(normalized), do: normalized, else: raise(ArgumentError, "number must be finite")
   rescue
-    ArithmeticError -> raise ArgumentError, "number is outside binary64 range"
+    ArithmeticError -> reraise ArgumentError, [message: "number is outside binary64 range"], __STACKTRACE__
   end
 
   defp number!(_), do: raise(ArgumentError, "expected a number")
@@ -294,5 +294,5 @@ defmodule Sidereon.Tides do
   defp field(map, key, default) when is_map(map), do: Map.get(map, key, default)
   defp field(list, key, default) when is_list(list), do: Keyword.get(list, key, default)
 
-  defp is_finite(value), do: value == value and value not in [:infinity, :neg_infinity]
+  defp finite?(value), do: value == value and value not in [:infinity, :neg_infinity]
 end

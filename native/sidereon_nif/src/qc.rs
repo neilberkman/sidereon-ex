@@ -133,6 +133,7 @@ impl RaimResultFields {
 
 mod atoms {
     rustler::atoms! {
+        degenerate_geometry_gdop,
         ok,
         error,
         nil,
@@ -224,6 +225,14 @@ fn qc_chi2_inv<'a>(env: Env<'a>, p: f64, dof: i64) -> Term<'a> {
         quality::chi2_inv(p, 0)
     };
     encode_quality_float(env, result)
+}
+
+#[rustler::nif]
+fn qc_chi2_isf<'a>(env: Env<'a>, p: f64, dof: i64) -> Term<'a> {
+    encode_quality_float(
+        env,
+        quality::chi2_isf(p, if dof >= 1 { dof as usize } else { 0 }),
+    )
 }
 
 /// Keeps the established Elixir positional call contract intact.
@@ -599,7 +608,12 @@ fn encode_fde_result<'a>(
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let mut validation = SolutionValidationOptions::default();
-    validation.max_pdop = decode_optional_f64(max_pdop)?;
+    if let Ok((pdop, gdop)) = max_pdop.decode::<(Term, Term)>() {
+        validation.max_pdop = decode_optional_f64(pdop)?;
+        validation.max_gdop = decode_optional_f64(gdop)?;
+    } else {
+        validation.max_pdop = decode_optional_f64(max_pdop)?;
+    }
 
     let mut raim = RaimOptions::default();
     raim.p_fa = p_fa;
@@ -631,7 +645,12 @@ fn encode_robust_fde_result<'a>(
     max_pdop: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let mut validation = SolutionValidationOptions::default();
-    validation.max_pdop = decode_optional_f64(max_pdop)?;
+    if let Ok((pdop, gdop)) = max_pdop.decode::<(Term, Term)>() {
+        validation.max_pdop = decode_optional_f64(pdop)?;
+        validation.max_gdop = decode_optional_f64(gdop)?;
+    } else {
+        validation.max_pdop = decode_optional_f64(max_pdop)?;
+    }
 
     let mut raim = RaimOptions::default();
     raim.p_fa = p_fa;
@@ -899,6 +918,9 @@ fn encode_validation_public_error<'a>(env: Env<'a>, error: SolutionValidationErr
             (atoms::degenerate_geometry(), atoms::rank_deficient()),
         )
             .encode(env),
+        SolutionValidationError::DegenerateGeometryGdop(gdop) => {
+            (atoms::error(), (atoms::degenerate_geometry_gdop(), gdop)).encode(env)
+        }
         SolutionValidationError::DegenerateGeometryPdop(pdop) => {
             (atoms::error(), (atoms::degenerate_geometry(), pdop)).encode(env)
         }

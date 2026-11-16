@@ -706,7 +706,8 @@ defmodule Sidereon.GNSS.QC do
   and `{:invalid_option, :pseudorange_code}`. Weighting defaults to the solution's
   actual per-satellite variances; `weights: :unit` and a positive satellite map
   remain explicit alternatives. `max_exclusions` defaults to one and the RMS cap
-  defaults to 100 metres; use `:infinity` to remove the cap.
+  defaults to 100 metres; use `:infinity` to remove the cap. The optional
+  `:max_gdop` applies the core shared-clock geometry ceiling.
   The removed `:max_iterations` option is explicitly rejected, including when
   supplied together with `:max_exclusions`.
   Core quality refusals return `{:error, %Sidereon.GNSS.QC.QualityError{}}`;
@@ -746,6 +747,7 @@ defmodule Sidereon.GNSS.QC do
   The successful result carries the accepted solution, ordered exclusions,
   exclusion count and that solution's `:raim` test. An unresolved fault carries
   the core stop reason, last solution, exclusions and faulted RAIM result.
+  The optional `:max_gdop` applies the shared-clock geometry ceiling.
   """
   @spec robust_fde(term(), [Positioning.observation()], Positioning.epoch(), keyword()) ::
           {:ok,
@@ -959,6 +961,27 @@ defmodule Sidereon.GNSS.QC do
 
   def chi2_inv(p, k), do: raise_chi2_error!(p, k)
 
+  @doc """
+  Chi-square inverse survival function (upper-tail quantile).
+  """
+  @spec chi2_isf(number(), integer()) :: float()
+  def chi2_isf(p, k)
+      when is_number(p) and is_integer(k) and k >= -9_223_372_036_854_775_808 and k <= 9_223_372_036_854_775_807 do
+    case chi2_probability_float(p) do
+      {:ok, probability} ->
+        case NIF.qc_chi2_isf(probability, k) do
+          {:ok, value} -> value
+          {:error, kind} when kind in @quality_error_kinds -> raise quality_error(kind)
+          {:error, _reason} -> raise_chi2_error!(p, k, "chi2_isf")
+        end
+
+      :unrepresentable ->
+        raise_chi2_error!(p, k, "chi2_isf")
+    end
+  end
+
+  def chi2_isf(p, k), do: raise_chi2_error!(p, k, "chi2_isf")
+
   defp chi2_probability_float(p) do
     {:ok, p / 1.0}
   rescue
@@ -1146,7 +1169,7 @@ defmodule Sidereon.GNSS.QC do
 
   defp finite_number?(value) when is_number(value) do
     converted = value / 1.0
-    converted == converted and abs(converted) <= 1.7976931348623157e308
+    converted == converted and abs(converted) <= 1.797_693_134_862_315_7e308
   rescue
     ArithmeticError -> false
   end
@@ -1185,9 +1208,9 @@ defmodule Sidereon.GNSS.QC do
     |> Keyword.update(:model, :elevation, & &1)
   end
 
-  defp raise_chi2_error!(p, k) do
+  defp raise_chi2_error!(p, k, name \\ "chi2_inv") do
     raise ArgumentError,
-          "chi2_inv probability must be strictly between 0 and 1 and dof must be a positive integer, got p=#{inspect(p)}, dof=#{inspect(k)}"
+          "#{name} probability must be strictly between 0 and 1 and dof must be a positive integer, got p=#{inspect(p)}, dof=#{inspect(k)}"
   end
 
   defp string_weight_pairs(weights) do
@@ -1237,6 +1260,7 @@ defmodule Sidereon.GNSS.QC do
     with :ok <- validate_p_fa(p_fa),
          :ok <- validate_weights(weights_opt),
          :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         :ok <- validate_max_gdop(Keyword.get(opts, :max_gdop)),
          {:ok, max_exclusions} <- max_exclusions_arg(max_exclusions),
          {:ok, max_exclusion_rms_m} <- exclusion_rms_cap_arg(max_exclusion_rms_m),
          {:ok, pseudorange_code} <- Positioning.pseudorange_code_option(opts),
@@ -1266,7 +1290,7 @@ defmodule Sidereon.GNSS.QC do
               n_systems,
               max_exclusions,
               max_exclusion_rms_m,
-              max_pdop,
+              {optional_float(max_pdop), optional_float(Keyword.get(opts, :max_gdop))},
               pseudorange_code,
               qzss_clock,
               troposphere_model
@@ -1278,6 +1302,13 @@ defmodule Sidereon.GNSS.QC do
   rescue
     e in ErlangError -> NifCall.error(e, __STACKTRACE__, :qc_fde)
   end
+
+  defp optional_float(nil), do: nil
+  defp optional_float(value), do: value / 1.0
+
+  defp validate_max_gdop(nil), do: :ok
+  defp validate_max_gdop(value) when is_number(value) and value > 0.0, do: :ok
+  defp validate_max_gdop(_value), do: {:error, {:invalid_option, :max_gdop}}
 
   defp validate_max_pdop(nil), do: :ok
   defp validate_max_pdop(value) when is_number(value) and value > 0.0, do: :ok

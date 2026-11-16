@@ -997,7 +997,11 @@ defmodule Sidereon.GNSS.RTK do
 
   defmodule ArcEpochSolution do
     @moduledoc """
-    One epoch of a sequential RTK arc solution.
+    One epoch of a sequential RTK arc solution. `reference_satellite_ids` and
+    `elevation_masked_satellite_ids` report the completed rover mask. A false
+    `elevation_mask_converged` denotes a capped iteration. Each released hold
+    identifies its ambiguity and either `:unheld_reference` or
+    `:incompatible_wavelengths`.
     """
 
     alias Sidereon.GeometryQuality
@@ -1012,6 +1016,10 @@ defmodule Sidereon.GNSS.RTK do
       :sd_ambiguities_m,
       :fixed_double_difference_ids,
       :used_satellite_ids,
+      :reference_satellite_ids,
+      :elevation_masked_satellite_ids,
+      :elevation_mask_converged,
+      :released_holds,
       :search,
       :residuals,
       :geometry_quality
@@ -1026,6 +1034,10 @@ defmodule Sidereon.GNSS.RTK do
       :sd_ambiguities_m,
       :fixed_double_difference_ids,
       :used_satellite_ids,
+      :reference_satellite_ids,
+      :elevation_masked_satellite_ids,
+      :elevation_mask_converged,
+      :released_holds,
       :search,
       :residuals,
       :geometry_quality
@@ -1042,6 +1054,10 @@ defmodule Sidereon.GNSS.RTK do
             sd_ambiguities_m: %{String.t() => float()} | [{String.t(), float()}],
             fixed_double_difference_ids: [String.t()],
             used_satellite_ids: [String.t()],
+            reference_satellite_ids: [String.t()],
+            elevation_masked_satellite_ids: [String.t()],
+            elevation_mask_converged: boolean(),
+            released_holds: [%{ambiguity_id: String.t(), reason: :unheld_reference | :incompatible_wavelengths}],
             search: map() | nil,
             residuals: [map()],
             geometry_quality: GeometryQuality.t()
@@ -1132,7 +1148,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defmodule StaticArcSolution do
     @moduledoc """
-    Solved static RTK arc.
+    Solved static RTK arc. `elevation_mask_converged` reports whether the mask stabilized.
 
     `:float_term` and `:fixed_term` are the decoded native static float/fixed
     terms retained for the RINEX baseline convenience wrappers.
@@ -1150,6 +1166,7 @@ defmodule Sidereon.GNSS.RTK do
       :dropped_sats,
       :split_cycle_slip_arcs,
       :elevation_masked_sats,
+      :elevation_mask_converged,
       :geometry_quality
     ]
     defstruct [
@@ -1161,6 +1178,7 @@ defmodule Sidereon.GNSS.RTK do
       :dropped_sats,
       :split_cycle_slip_arcs,
       :elevation_masked_sats,
+      :elevation_mask_converged,
       :geometry_quality
     ]
 
@@ -1173,6 +1191,7 @@ defmodule Sidereon.GNSS.RTK do
             dropped_sats: [String.t()],
             split_cycle_slip_arcs: [ArcCycleSlipSplit.t()],
             elevation_masked_sats: [String.t()],
+            elevation_mask_converged: boolean(),
             geometry_quality: GeometryQuality.t()
           }
   end
@@ -1547,6 +1566,51 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   @doc """
+  Update a carried sequential RTK state with one prepared double-difference
+  epoch. `config` uses the model, wavelength, offset and update options of
+  `solve_arc/2`. Missing held cycles return
+  `{:invalid_input, "state.fixed_cycles", "missing"}`; a missing gauge column
+  returns `{:missing_ambiguity_column, id}`.
+  """
+  @spec update_epoch(ArcState.t(), map(), map()) :: {:ok, map()} | {:error, term()}
+  def update_epoch(%ArcState{} = state, epoch, config) when is_map(epoch) and is_map(config) do
+    term =
+      {{state.version, Map.to_list(state.references), state.sd_ambiguity_ids, state.ambiguity_prior_sigma_m,
+        state.epoch_count}, state.baseline_m, state.sd_ambiguities_m, state.information,
+       Map.to_list(state.fixed_cycles), Map.to_list(state.fixed_m)}
+
+    case NIF.rtk_filter_update_epoch(
+           term,
+           rtk_epoch_term(epoch),
+           arc_vec3(Map.fetch!(config, :base_m)),
+           arc_model_term(Map.fetch!(config, :model)),
+           arc_float_pairs(Map.fetch!(config, :wavelengths_m)),
+           arc_float_pairs(Map.fetch!(config, :offsets_m)),
+           arc_update_opts_term(Map.fetch!(config, :update_opts)),
+           rust_receiver_antenna_corrections_term(Map.get(config, :receiver_antenna_corrections))
+         ) do
+      {:ok, {state, baseline, ambiguities, ratio, fixed, newly_fixed, fixed_ids, search, residuals}} ->
+        {:ok,
+         %{
+           state: decode_arc_state(state),
+           reported_baseline_m: baseline,
+           reported_sd_ambiguities_m: ambiguities,
+           integer_ratio: ratio,
+           integer_fixed: fixed,
+           newly_fixed: newly_fixed,
+           fixed_ids: fixed_ids,
+           search: search,
+           residuals: residuals
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_filter_update_epoch)
+  end
+
+  @doc """
   Fix wide-lane RTK arc ambiguities by delegating to the core arc helper.
 
   The returned struct includes `:geometry_quality` for the wide-lane ambiguity
@@ -1576,6 +1640,47 @@ defmodule Sidereon.GNSS.RTK do
   end
 
   def fix_wide_lane_rtk_arc(_epochs, _config), do: {:error, :invalid_epochs}
+
+  @doc """
+  Solve a dual-frequency arc through the core combined wide-lane, ionosphere-free,
+  and sequential RTK driver. The three configs control each stage. Multiple
+  constellations use their own reference satellites.
+  """
+  @spec solve_wide_lane_fixed_arc([dual_frequency_baseline_epoch()], map(), map(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def solve_wide_lane_fixed_arc(epochs, wide, ionosphere, arc)
+      when is_list(epochs) and is_map(wide) and is_map(ionosphere) and is_map(arc) do
+    with :ok <- ensure_nonempty_epochs(epochs),
+         {:ok, normalized} <- normalize_dual_baseline_epochs(epochs) do
+      case NIF.rtk_solve_wide_lane_fixed_arc(
+             dual_frequency_arc_epoch_terms(normalized, Map.get(ionosphere, :apply_troposphere, false)),
+             wide_lane_arc_config_term(wide),
+             ionosphere_free_arc_config_term(ionosphere),
+             arc_config_term(arc)
+           ) do
+        {:ok, {wide_result, if_result, solution, metadata}} ->
+          {if_epochs, wavelengths, offsets, references} = decode_ionosphere_free_arc_solution(if_result, normalized)
+
+          {:ok,
+           %{
+             wide_lane: decode_wide_lane_arc_solution(wide_result, normalized),
+             ionosphere_free: %IonosphereFreeArcSolution{
+               references: references,
+               epochs: if_epochs,
+               wavelengths_m: wavelengths,
+               offsets_m: offsets
+             },
+             solution: decode_arc_solution(solution),
+             metadata: decode_wide_lane_fixed_metadata(metadata)
+           }}
+
+        {:error, reason} ->
+          decode_wide_lane_arc_error(reason, normalized)
+      end
+    end
+  rescue
+    e in ErlangError -> NifCall.error(e, __STACKTRACE__, :rtk_solve_wide_lane_fixed_arc)
+  end
 
   @doc """
   Build ionosphere-free RTK arc epochs from dual-frequency epochs and fixed wide-lane integers.
@@ -1881,7 +1986,7 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_static_arc_solution(
          {references, ambiguity_ids, ambiguity_satellite_terms, float_term, fixed_term, dropped_sats, split_terms,
-          elevation_masked_sats, geometry_quality}
+          elevation_masked_sats, elevation_mask_converged, geometry_quality}
        ) do
     %StaticArcSolution{
       references: Map.new(references),
@@ -1892,6 +1997,7 @@ defmodule Sidereon.GNSS.RTK do
       dropped_sats: dropped_sats,
       split_cycle_slip_arcs: Enum.map(split_terms, &decode_arc_split_cycle_slip_arc/1),
       elevation_masked_sats: elevation_masked_sats,
+      elevation_mask_converged: elevation_mask_converged,
       geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
@@ -2844,7 +2950,8 @@ defmodule Sidereon.GNSS.RTK do
 
   defp decode_arc_epoch_solution(
          {reported_baseline_m, float_baseline_m, integer_fixed, integer_ratio, newly_fixed, fixed_ids, sd_ambiguities_m,
-          fixed_double_difference_ids, used_satellite_ids, search, residuals, geometry_quality}
+          fixed_double_difference_ids, used_satellite_ids, reference_satellite_ids, elevation_masked_satellite_ids,
+          elevation_mask_converged, released_holds, search, residuals, geometry_quality}
        ) do
     %ArcEpochSolution{
       reported_baseline_m: reported_baseline_m,
@@ -2856,11 +2963,19 @@ defmodule Sidereon.GNSS.RTK do
       sd_ambiguities_m: sd_ambiguities_m,
       fixed_double_difference_ids: fixed_double_difference_ids,
       used_satellite_ids: used_satellite_ids,
+      reference_satellite_ids: reference_satellite_ids,
+      elevation_masked_satellite_ids: elevation_masked_satellite_ids,
+      elevation_mask_converged: elevation_mask_converged,
+      released_holds:
+        Enum.map(released_holds, fn {id, reason} -> %{ambiguity_id: id, reason: hold_release_reason(reason)} end),
       search: search,
       residuals: residuals,
       geometry_quality: GeometryQuality.from_nif(geometry_quality)
     }
   end
+
+  defp hold_release_reason("unheld_reference"), do: :unheld_reference
+  defp hold_release_reason("incompatible_wavelengths"), do: :incompatible_wavelengths
 
   defp decode_arc_state(
          {{version, references, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count}, baseline_m, sd_ambiguities_m,

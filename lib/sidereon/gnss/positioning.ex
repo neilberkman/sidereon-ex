@@ -92,7 +92,10 @@ defmodule Sidereon.GNSS.Positioning do
     while the latter are inverse variances and include final Huber factors when
     robust reweighting is enabled. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
-    excluded satellite id with its reason. Strict SSR size refusals retain
+    excluded satellite id with its reason. `:non_finite_pseudorange` and
+    `:non_positive_pseudorange` identify invalid measurements.
+    `rtklib_single_clock_dop` contains RTKLIB shared-clock DOP, independently
+    of the multi-clock `dop`. Strict SSR size refusals retain
     `{:ssr_correction_exceeds_limit, %{orbit_m: value, clock_m: value}}`.
     (the ionosphere correction was requested and the satellite has no resolvable
     carrier, such as a GLONASS satellite with no channel or a channel outside
@@ -118,6 +121,7 @@ defmodule Sidereon.GNSS.Positioning do
       :system_tdops,
       :position_covariance,
       :dop,
+      :rtklib_single_clock_dop,
       :residuals_m,
       :pseudorange_variances_m2,
       :weights,
@@ -134,6 +138,7 @@ defmodule Sidereon.GNSS.Positioning do
       :system_tdops,
       :position_covariance,
       :dop,
+      :rtklib_single_clock_dop,
       :residuals_m,
       :pseudorange_variances_m2,
       :weights,
@@ -165,7 +170,9 @@ defmodule Sidereon.GNSS.Positioning do
 
     @typedoc "Why a satellite was left out of the solve, the first reason that applies in this order."
     @type rejection_reason ::
-            :no_ephemeris
+            :non_finite_pseudorange
+            | :non_positive_pseudorange
+            | :no_ephemeris
             | :low_elevation
             | :sbas_withdrawn
             | :sbas_iono_uncovered
@@ -223,6 +230,7 @@ defmodule Sidereon.GNSS.Positioning do
             system_tdops: %{String.t() => float()},
             position_covariance: position_covariance(),
             dop: dop() | nil,
+            rtklib_single_clock_dop: dop() | nil,
             residuals_m: [float()],
             pseudorange_variances_m2: [float()] | nil,
             weights: [float()] | nil,
@@ -417,6 +425,7 @@ defmodule Sidereon.GNSS.Positioning do
       value returns `{:error, {:invalid_option, :pseudorange_code}}`.
     * `:qzss_clock` - `:gps` (default) or `:separate` receiver-clock grouping.
     * `:troposphere_model` - `:rtklib` (default) or `:saastamoinen_niell`.
+    * `:max_gdop` - optional positive shared-clock GDOP ceiling (unset by default); rejection is `{:degenerate_geometry_gdop, gdop}`.
     * `:max_pdop` - optional positive PDOP ceiling. When set, a fix whose
       geometry is rank-deficient or whose PDOP exceeds the ceiling is refused
       with `{:error, {:degenerate_geometry, pdop}}` (a non-positive value is
@@ -841,6 +850,7 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp run_batch(handle, requests, opts, coarse, parallel?) do
     with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         :ok <- validate_max_gdop(Keyword.get(opts, :max_gdop)),
          {:ok, epochs} <- build_batch_epochs(requests, opts) do
       nif = if parallel?, do: :spp_solve_batch_parallel, else: :spp_solve_batch_serial
 
@@ -849,7 +859,7 @@ defmodule Sidereon.GNSS.Positioning do
         epochs,
         Keyword.get(opts, :with_geodetic, true),
         huber_arg(opts),
-        optional_float(Keyword.get(opts, :max_pdop)),
+        {optional_float(Keyword.get(opts, :max_pdop)), optional_float(Keyword.get(opts, :max_gdop))},
         optional_count(coarse)
       ]
 
@@ -1160,6 +1170,7 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp run_solve(source, handle, observations, epoch, opts, coarse_search_seeds) do
     with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         :ok <- validate_max_gdop(Keyword.get(opts, :max_gdop)),
          {:ok, pseudorange_code} <- pseudorange_code_option(opts),
          {:ok, qzss_clock, troposphere_model} <- model_options(opts),
          {:ok, glonass_channels} <-
@@ -1196,7 +1207,7 @@ defmodule Sidereon.GNSS.Positioning do
         humidity / 1.0,
         with_geodetic,
         huber_arg(opts),
-        optional_float(max_pdop),
+        {optional_float(max_pdop), optional_float(Keyword.get(opts, :max_gdop))},
         optional_count(coarse_search_seeds),
         glonass_channels,
         pseudorange_code,
@@ -1218,6 +1229,7 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp run_exact_solve(source, observations, civil_epoch, exact_epoch, exact_handle, opts, coarse_search_seeds) do
     with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         :ok <- validate_max_gdop(Keyword.get(opts, :max_gdop)),
          {:ok, pseudorange_code} <- pseudorange_code_option(opts),
          {:ok, qzss_clock, troposphere_model} <- model_options(opts),
          {:ok, glonass_channels} <-
@@ -1244,7 +1256,7 @@ defmodule Sidereon.GNSS.Positioning do
         Keyword.get(opts, :relative_humidity, @default_relative_humidity) / 1.0,
         Keyword.get(opts, :with_geodetic, true),
         huber_arg(opts),
-        optional_float(Keyword.get(opts, :max_pdop)),
+        {optional_float(Keyword.get(opts, :max_pdop)), optional_float(Keyword.get(opts, :max_gdop))},
         optional_count(coarse_search_seeds),
         glonass_channels,
         pseudorange_code,
@@ -1332,6 +1344,10 @@ defmodule Sidereon.GNSS.Positioning do
 
   defp optional_count(nil), do: nil
   defp optional_count(value), do: value
+
+  defp validate_max_gdop(nil), do: :ok
+  defp validate_max_gdop(value) when is_number(value) and value > 0.0, do: :ok
+  defp validate_max_gdop(_value), do: {:error, {:invalid_option, :max_gdop}}
 
   defp validate_max_pdop(nil), do: :ok
   defp validate_max_pdop(value) when is_number(value) and value > 0.0, do: :ok

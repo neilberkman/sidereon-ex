@@ -23,6 +23,7 @@ type AllocationTerm = (f64, f64, f64, f64, f64, f64, (f64, usize));
 
 mod atoms {
     rustler::atoms! {
+        unsupported_constellation,
         ok,
         error,
         insufficient_geometry,
@@ -109,6 +110,36 @@ pub(crate) fn decode_receiver(
     (lat_rad, lon_rad, height_m): ReceiverTerm,
 ) -> NifResult<Wgs84Geodetic> {
     Wgs84Geodetic::new(lat_rad, lon_rad, height_m).map_err(crate::errors::invalid_input)
+}
+
+#[rustler::nif]
+fn araim_add_v3_0<'a>(
+    env: Env<'a>,
+    system: String,
+    elevation: f64,
+    ura: f64,
+    ure: f64,
+    bias: f64,
+    p_sat: f64,
+) -> NifResult<Term<'a>> {
+    let system = system_from_term(&system)?;
+    Ok(
+        match SatelliteIsmModel::add_v3_0(system, elevation, ura, ure, bias, p_sat) {
+            Ok(m) => (
+                atoms::ok(),
+                (
+                    m.sigma_ura_m,
+                    m.sigma_ure_m,
+                    m.effective_sigma_int_m,
+                    m.effective_sigma_acc_m,
+                    m.b_nom_m,
+                    m.p_sat,
+                ),
+            )
+                .encode(env),
+            Err(e) => (atoms::error(), error_term(env, e)).encode(env),
+        },
+    )
 }
 
 fn decode_model(
@@ -224,6 +255,13 @@ fn allocation_term(allocation: IntegrityAllocation) -> AllocationTerm {
 
 fn error_term<'a>(env: Env<'a>, err: AraimError) -> Term<'a> {
     let atom = match err {
+        AraimError::UnsupportedConstellation(system) => {
+            return (
+                atoms::unsupported_constellation(),
+                system.letter().to_string(),
+            )
+                .encode(env)
+        }
         AraimError::InsufficientGeometry => atoms::insufficient_geometry(),
         AraimError::UnmonitorableFaultMass => atoms::unmonitorable_fault_mass(),
         AraimError::NumericalFailure => atoms::numerical_failure(),

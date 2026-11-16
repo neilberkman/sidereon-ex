@@ -205,7 +205,19 @@ fn cycle_error(error: core::CycleSlipError) -> ErrorTerm {
     (kind.to_string(), field, reason, error.to_string())
 }
 
-fn raim_error(error: core::RaimError) -> ErrorTerm {
+type RaimErrorTerm = (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<(u64, u64)>,
+);
+
+fn raim_error(error: core::RaimError) -> RaimErrorTerm {
+    let limits = match error {
+        core::RaimError::UnsupportedDof { dof, max } => Some((dof as u64, max as u64)),
+        _ => None,
+    };
     let (kind, field, reason) = match error {
         core::RaimError::InvalidConfig { field, reason } => (
             "invalid_config",
@@ -221,9 +233,12 @@ fn raim_error(error: core::RaimError) -> ErrorTerm {
             Some(reason.to_string()),
         ),
         core::RaimError::Dop(inner) => ("dop", None, Some(inner.to_string())),
+        core::RaimError::NumericalProtectionLevel => ("numerical_protection_level", None, None),
+        core::RaimError::UnsupportedNoncentrality => ("unsupported_noncentrality", None, None),
+        core::RaimError::UnsupportedDof { .. } => ("unsupported_dof", None, None),
         core::RaimError::SingularGeometry => ("singular_geometry", None, None),
     };
-    (kind.to_string(), field, reason, error.to_string())
+    (kind.to_string(), field, reason, error.to_string(), limits)
 }
 
 #[rustler::nif]
@@ -913,6 +928,50 @@ pub fn pp_raim_protection<'a>(
     result(
         env,
         core::raim::protection_levels(&lines, receiver, raim_config(config))
+            .map(|v| (v.hpl_m, v.vpl_m))
+            .map_err(raim_error),
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn pp_raim_protection_weighted<'a>(
+    env: Env<'a>,
+    lines: Vec<RaimGeometry>,
+    weights: Vec<f64>,
+    receiver: (f64, f64, f64),
+    config: RaimConfig,
+) -> Term<'a> {
+    let lines = lines.into_iter().map(geometry).collect::<Vec<_>>();
+    let receiver = sidereon_core::geometry::Wgs84Geodetic {
+        lat_rad: receiver.0,
+        lon_rad: receiver.1,
+        height_m: receiver.2,
+    };
+    result(
+        env,
+        core::raim::protection_levels_with_weights(&lines, &weights, receiver, raim_config(config))
+            .map(|v| (v.hpl_m, v.vpl_m))
+            .map_err(raim_error),
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn pp_raim_fault_free_accuracy<'a>(
+    env: Env<'a>,
+    lines: Vec<RaimGeometry>,
+    weights: Vec<f64>,
+    receiver: (f64, f64, f64),
+    config: RaimConfig,
+) -> Term<'a> {
+    let lines = lines.into_iter().map(geometry).collect::<Vec<_>>();
+    let receiver = sidereon_core::geometry::Wgs84Geodetic {
+        lat_rad: receiver.0,
+        lon_rad: receiver.1,
+        height_m: receiver.2,
+    };
+    result(
+        env,
+        core::raim::fault_free_accuracy_bounds(&lines, &weights, receiver, raim_config(config))
             .map(|v| (v.hpl_m, v.vpl_m))
             .map_err(raim_error),
     )
