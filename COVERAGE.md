@@ -1,22 +1,20 @@
 # Core API coverage
 
-Public module-level items of `sidereon-core` and `sidereon` at core revision `e2fb3dfdc392d23087ed8aa1ee028a0056b4021b`,
-and the native source files of this binding that use each. Written by
-`test/generators/coverage/api_coverage.py`; its docstring states how an item is
-found and when it counts as bound.
+Public module-level items of `sidereon-core` and `sidereon` at core revision `3132eeac13ebf30f63766fc608aa9aae9258dd3d`,
+and the native source files that expose each item.
 
-- Items: 2818
-- Bound (used by the native code): 1648
-- MISSING: 1170
+- Items: 2854
+- Bound (used by the native code): 1749
+- MISSING: 1105
 
 ## `sidereon`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `PppFixedConfig` | struct | MISSING |
 | `PppFloatConfig` | struct | MISSING |
-| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
+| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
 | `RtkFixedConfig` | struct | MISSING |
 | `RtkFloatConfig` | struct | MISSING |
 | `SsrIngestRefusal` | struct | MISSING |
@@ -77,7 +75,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `CycleSlipPolicy` | enum | `rtk_filter.rs` |
+| `CycleSlipPolicy` | enum | `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 
 ## `sidereon_core::antex`
 
@@ -286,7 +284,7 @@ found and when it counts as bound.
 | `Equatorial` | struct | `astro_observe_almanac.rs` |
 | `Horizontal` | struct | `astro_observe_almanac.rs` |
 | `MoonIllumination` | struct | MISSING |
-| `Observation` | struct | `astro_observe_almanac.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
+| `Observation` | struct | `astro_observe_almanac.rs`, `precise_positioning_surfaces.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
 | `ObserveError` | enum | MISSING |
 | `ObserveOptions` | struct | `astro_observe_almanac.rs` |
 | `Refraction` | struct | `astro_observe_almanac.rs` |
@@ -347,7 +345,7 @@ found and when it counts as bound.
 | `CdmKvn` | struct | `cdm.rs` |
 | `CdmObject` | struct | `cdm.rs` |
 | `CdmOdParameters` | struct | `cdm.rs` |
-| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs`, `tle_fit.rs` |
+| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `encode_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
 | `parse_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `parse_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
@@ -399,11 +397,13 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `LookAngleGrid` | type | MISSING |
+| `LookAngleGrid` | type | `coverage.rs` |
 | `access_counts` | fn | MISSING |
 | `look_angles_batch` | fn | `coverage.rs` |
 | `look_angles_batch_with_validity` | fn | MISSING |
 | `max_elevation` | fn | MISSING |
+| `try_access_counts` | fn | `coverage.rs` |
+| `try_visible_mask` | fn | `coverage.rs` |
 | `visible_mask` | fn | MISSING |
 
 ## `sidereon_core::astro::data::iau2000a`
@@ -484,7 +484,7 @@ found and when it counts as bound.
 | `WGS84_FLATTENING` | const | MISSING |
 | `shadow_fraction` | fn | `eclipse.rs` |
 | `shadow_fraction_with_model` | fn | `eclipse.rs` |
-| `status` | fn | `astro_phase_b.rs`, `bias.rs`, `constellation.rs`, `eclipse.rs`, `error_metrics.rs`, `fusion.rs`, `geodetic_time_series.rs`, `iono.rs`, `nmea.rs`, `ntrip.rs`, `observables.rs`, `precise_positioning.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `source_localization.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `static_positioning.rs`, `tle_fit.rs`, `trls.rs` |
+| `status` | fn | `astro_phase_b.rs`, `bias.rs`, `constellation.rs`, `eclipse.rs`, `error_metrics.rs`, `fusion.rs`, `geodetic_time_series.rs`, `iono.rs`, `nmea.rs`, `ntrip.rs`, `observables.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `source_localization.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `static_positioning.rs`, `tle_fit.rs`, `trls.rs` |
 | `status_with_model` | fn | `eclipse.rs` |
 
 ## `sidereon_core::astro::events::root`
@@ -699,7 +699,7 @@ found and when it counts as bound.
 |---|---|---|
 | `DirectionOfEnergy` | enum | `lambert.rs` |
 | `DirectionOfMotion` | enum | `lambert.rs` |
-| `LambertError` | enum | MISSING |
+| `LambertError` | enum | `lambert.rs` |
 | `battin` | fn | `lambert.rs` |
 
 ## `sidereon_core::astro::math::interp`
@@ -871,7 +871,7 @@ found and when it counts as bound.
 | `OemSkippedState` | struct | `oem.rs` |
 | `OemState` | struct | `oem.rs` |
 | `OemStateLineError` | enum | `ndm_errors.rs`, `oem.rs` |
-| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs`, `tle_fit.rs` |
+| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `encode_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
 | `parse_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `parse_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
@@ -880,13 +880,14 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Omm` | struct | `constellation.rs`, `omm.rs` |
+| `Omm` | struct | `constellation.rs`, `data.rs`, `omm.rs` |
 | `OmmArray` | struct | `omm.rs` |
 | `OmmComments` | struct | `omm.rs` |
 | `OmmCovariance` | struct | `omm.rs` |
 | `OmmEpoch` | struct | `constellation.rs`, `omm.rs` |
 | `OmmError` | enum | `ndm_errors.rs`, `omm.rs`, `tle_fit.rs` |
 | `OmmInputErrorKind` | enum | `ndm_errors.rs` |
+| `OmmRecordSpan` | struct | MISSING |
 | `OmmSkippedRecord` | struct | `constellation.rs` |
 | `OmmSpacecraft` | struct | `omm.rs` |
 | `OmmUserDefined` | struct | `omm.rs` |
@@ -896,11 +897,13 @@ found and when it counts as bound.
 | `encode_json_array` | fn | MISSING |
 | `encode_json_array_discarding_comments` | fn | MISSING |
 | `encode_json_discarding_comments` | fn | `omm.rs` |
-| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs`, `tle_fit.rs` |
+| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
+| `encode_kvn_lenient` | fn | `omm.rs`, `tle_fit.rs` |
 | `encode_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
+| `encode_xml_lenient` | fn | `omm.rs` |
 | `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
 | `parse_csv` | fn | MISSING |
-| `parse_csv_array` | fn | MISSING |
+| `parse_csv_array` | fn | `omm.rs` |
 | `parse_epoch` | fn | `constellation.rs` |
 | `parse_json` | fn | `omm.rs` |
 | `parse_json_array` | fn | `constellation.rs`, `omm.rs` |
@@ -923,7 +926,7 @@ found and when it counts as bound.
 | `OpmSpacecraft` | struct | `opm.rs` |
 | `OpmState` | struct | `opm.rs` |
 | `OpmUserDefined` | struct | `opm.rs` |
-| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs`, `tle_fit.rs` |
+| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `encode_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
 | `parse_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `parse_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
@@ -934,7 +937,7 @@ found and when it counts as bound.
 |---|---|---|
 | `ConstellationMember` | struct | MISSING |
 | `GroundStation` | struct | `coverage.rs`, `look_angle.rs`, `passes.rs` |
-| `LookAngle` | struct | MISSING |
+| `LookAngle` | struct | `coverage.rs` |
 | `LookAngleError` | enum | `coverage.rs`, `look_angle.rs`, `passes.rs` |
 | `PassError` | enum | `passes.rs` |
 | `PassFinderOptions` | struct | `passes.rs` |
@@ -1088,8 +1091,8 @@ found and when it counts as bound.
 |---|---|---|
 | `DecayLatch` | struct | `sgp4_batch.rs` |
 | `DecayLatchedError` | enum | `sgp4_batch.rs` |
-| `ElementSet` | struct | `propagation.rs`, `tle_fit.rs` |
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `ElementSet` | struct | `omm.rs`, `propagation.rs`, `tle_fit.rs` |
+| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `JulianDate` | struct | `conjunction.rs`, `iono.rs`, `omm.rs`, `precise_samples.rs`, `propagation.rs`, `sp3.rs`, `tle_fit.rs` |
 | `MinutesSinceEpoch` | struct | `sgp4_batch.rs` |
 | `NamedSatellite` | struct | MISSING |
@@ -1114,6 +1117,7 @@ found and when it counts as bound.
 |---|---|---|
 | `FitConfig` | struct | `tle_fit.rs` |
 | `FitEpoch` | enum | `tle_fit.rs` |
+| `FitOmmHeader` | struct | `tle_fit.rs` |
 | `FitSample` | struct | `tle_fit.rs` |
 | `FitStatistics` | struct | MISSING |
 | `TleFit` | struct | `tle_fit.rs` |
@@ -1246,7 +1250,7 @@ found and when it counts as bound.
 | `TdmUnit` | enum | `tdm.rs` |
 | `TdmWarning` | enum | `tdm.rs` |
 | `TdmWritePolicy` | struct | `tdm.rs` |
-| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs`, `tle_fit.rs` |
+| `encode_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `encode_kvn_with_policy` | fn | `tdm.rs` |
 | `parse_kvn` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `tdm.rs` |
 | `parse_kvn_with_policy` | fn | `tdm.rs` |
@@ -1364,7 +1368,7 @@ found and when it counts as bound.
 | `TleError` | enum | `ndm_errors.rs` |
 | `TlePolicy` | enum | `tle.rs` |
 | `decode_catalog_number` | fn | `propagation.rs` |
-| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
+| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
 | `encode_catalog_number` | fn | MISSING |
 | `line_checksum` | fn | MISSING |
 | `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
@@ -1452,24 +1456,24 @@ found and when it counts as bound.
 |---|---|---|
 | `ArcEpoch` | struct | `carrier_phase.rs` |
 | `CarrierPhaseError` | enum | `carrier_phase.rs` |
-| `CycleSlipOptions` | struct | `carrier_phase.rs`, `rtk_filter.rs` |
+| `CycleSlipOptions` | struct | `carrier_phase.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `DEFAULT_GF_THRESHOLD_M` | const | MISSING |
 | `DEFAULT_HATCH_WINDOW_CAP` | const | MISSING |
 | `DEFAULT_MIN_ARC_GAP_S` | const | MISSING |
 | `DEFAULT_MW_THRESHOLD_CYCLES` | const | MISSING |
 | `IonoFreeSmoothResult` | struct | MISSING |
-| `SlipReason` | enum | `carrier_phase.rs`, `rtk_filter.rs` |
+| `SlipReason` | enum | `carrier_phase.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `SlipResult` | struct | MISSING |
 | `SmoothCodeResult` | struct | MISSING |
 | `code_minus_carrier` | fn | `carrier_phase.rs` |
-| `detect_cycle_slips` | fn | `carrier_phase.rs` |
-| `geometry_free` | fn | `carrier_phase.rs`, `rtk_filter.rs` |
-| `melbourne_wubbena` | fn | `carrier_phase.rs`, `rtk_filter.rs` |
+| `detect_cycle_slips` | fn | `carrier_phase.rs`, `precise_positioning_surfaces.rs` |
+| `geometry_free` | fn | `carrier_phase.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
+| `melbourne_wubbena` | fn | `carrier_phase.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `narrow_lane_code` | fn | `carrier_phase.rs` |
 | `phase_meters` | fn | `carrier_phase.rs` |
 | `smooth_code` | fn | `carrier_phase.rs` |
 | `smooth_iono_free_code` | fn | `carrier_phase.rs` |
-| `wide_lane_cycles` | fn | `carrier_phase.rs`, `rtk_filter.rs` |
+| `wide_lane_cycles` | fn | `carrier_phase.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `wide_lane_wavelength` | fn | `carrier_phase.rs` |
 
 ## `sidereon_core::clock_stability`
@@ -1566,6 +1570,7 @@ found and when it counts as bound.
 | `RecordSource` | struct | `constellation.rs` |
 | `SkippedOmm` | struct | MISSING |
 | `Validation` | struct | `constellation.rs`, `qc.rs`, `spp.rs` |
+| `celestrak_group` | fn | `data.rs` |
 | `changed` | fn | `rinex_obs.rs` |
 | `diff` | fn | `constellation.rs` |
 | `from_celestrak_omm` | fn | `constellation.rs` |
@@ -1589,7 +1594,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
+| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
 | `decode_to` | fn | MISSING |
 | `encode_crinex` | fn | `rinex_obs.rs`, `rinex_qc.rs` |
 
@@ -1601,6 +1606,18 @@ found and when it counts as bound.
 | `ArchiveCompression` | enum | `sp3.rs` |
 | `ArchiveLayout` | enum | MISSING |
 | `ArchiveProtocol` | enum | MISSING |
+| `CelestrakGpFormat` | enum | `data.rs` |
+| `CelestrakGpPayload` | enum | `data.rs` |
+| `CelestrakGpQuery` | enum | `data.rs` |
+| `CelestrakGpRecord` | struct | MISSING |
+| `CelestrakGpRecordError` | enum | MISSING |
+| `CelestrakGpRejectedRecord` | struct | MISSING |
+| `CelestrakGpRejectionReason` | enum | `data.rs` |
+| `CelestrakGpResponse` | struct | MISSING |
+| `CelestrakGpSourceEntry` | struct | MISSING |
+| `CelestrakGpSpecial` | enum | `data.rs` |
+| `CelestrakGpStructuralError` | enum | `data.rs` |
+| `CelestrakTleRecord` | struct | MISSING |
 | `CenterCatalogEntry` | struct | MISSING |
 | `CenterProductConvention` | struct | MISSING |
 | `DataCatalogError` | enum | `data.rs`, `sp3.rs` |
@@ -1608,6 +1625,7 @@ found and when it counts as bound.
 | `DistributionSource` | enum | `cache_lock.rs`, `data.rs`, `sp3.rs` |
 | `ExactProductSetError` | enum | MISSING |
 | `HgtConversionError` | enum | `data.rs` |
+| `NavcenSourceEntry` | struct | MISSING |
 | `NoOpenMirrorProduct` | struct | MISSING |
 | `NominalCoverage` | struct | MISSING |
 | `NominalCoverageInterval` | struct | `data.rs` |
@@ -1638,6 +1656,9 @@ found and when it counts as bound.
 | `canonical_filename` | fn | `data.rs` |
 | `catalog` | fn | `constellation.rs`, `data.rs`, `frame_catalog.rs`, `omm.rs`, `passes.rs`, `propagation.rs`, `sp3.rs` |
 | `cddis_archive_url` | fn | MISSING |
+| `celestrak_constellation_url` | fn | `data.rs` |
+| `celestrak_gp_source_entry` | fn | `data.rs` |
+| `celestrak_gp_url` | fn | `data.rs` |
 | `center_catalog` | fn | `data.rs` |
 | `centers` | fn | `data.rs`, `sp3.rs` |
 | `day_of_year` | fn | `data.rs`, `dgnss.rs`, `qc.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `static_positioning.rs`, `time.rs` |
@@ -1657,6 +1678,8 @@ found and when it counts as bound.
 | `mgex_ionex` | fn | MISSING |
 | `mgex_nav` | fn | MISSING |
 | `mgex_sp3` | fn | MISSING |
+| `navcen_constellation_url` | fn | `data.rs` |
+| `navcen_source_entry` | fn | `data.rs` |
 | `newest_published_product` | fn | `data.rs` |
 | `next_issue_due` | fn | `data.rs` |
 | `no_open_mirrors` | fn | MISSING |
@@ -1665,6 +1688,7 @@ found and when it counts as bound.
 | `ops_ultra_clk` | fn | MISSING |
 | `ops_ultra_sp3` | fn | MISSING |
 | `parse_archive_listing` | fn | `data.rs` |
+| `parse_celestrak_gp_response` | fn | `data.rs` |
 | `parse_skadi_tile_id` | fn | `data.rs` |
 | `predicted_day_offset` | fn | `data.rs` |
 | `predicted_ionex` | fn | MISSING |
@@ -1715,14 +1739,14 @@ found and when it counts as bound.
 | Item | Kind | Binding |
 |---|---|---|
 | `DesignGeometryCofactor` | struct | MISSING |
-| `Dop` | struct | `geofence.rs`, `geometry.rs`, `source_localization.rs` |
+| `Dop` | struct | `geofence.rs`, `geometry.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `source_localization.rs` |
 | `DopError` | enum | `covariance.rs`, `geometry.rs`, `source_localization.rs` |
 | `EnuConvention` | enum | `geometry.rs` |
 | `GeometryCofactor` | struct | MISSING |
 | `HorizontalErrorEllipse` | struct | MISSING |
-| `LineOfSight` | struct | `araim.rs`, `geometry.rs` |
+| `LineOfSight` | struct | `araim.rs`, `geometry.rs`, `precise_positioning_surfaces.rs` |
 | `PositionCovariance` | struct | `error_metrics.rs`, `precise_positioning.rs` |
-| `dop` | fn | `geometry.rs`, `source_localization.rs`, `spp.rs` |
+| `dop` | fn | `geometry.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `source_localization.rs`, `spp.rs` |
 | `dop_from_design_rows` | fn | MISSING |
 | `dop_with_convention` | fn | `geometry.rs` |
 | `ecef_to_enu_rotation` | fn | MISSING |
@@ -1741,7 +1765,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `BroadcastEphemeris` | type | `broadcast.rs` |
+| `BroadcastEphemeris` | type | `broadcast.rs`, `spp.rs` |
 | `EphemerisSampleRow` | struct | `astro_phase_b.rs`, `sbas.rs`, `ssr.rs` |
 | `EphemerisSampleStatus` | enum | `astro_phase_b.rs`, `sbas.rs`, `ssr.rs` |
 | `SP3` | type | `broadcast_comparison.rs`, `data.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `precise_samples.rs`, `sp3.rs`, `spp.rs`, `staleness.rs`, `static_positioning.rs` |
@@ -1754,8 +1778,8 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
-| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
+| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
 
 ## `sidereon_core::error_metrics`
 
@@ -1831,7 +1855,7 @@ found and when it counts as bound.
 | `EstimateOptions` | struct | `spp.rs` |
 | `EstimateOutput` | enum | `spp.rs` |
 | `ResolvedStrategy` | struct | MISSING |
-| `estimate` | fn | `drag.rs`, `observables.rs`, `precise_samples.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs` |
+| `estimate` | fn | `drag.rs`, `observables.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs` |
 
 ## `sidereon_core::estimation::track`
 
@@ -1890,7 +1914,7 @@ found and when it counts as bound.
 | `FrameValueError` | enum | `iono.rs`, `tropo.rs` |
 | `ItrfPositionM` | struct | MISSING |
 | `ItrfVelocityMS` | struct | MISSING |
-| `Wgs84Geodetic` | struct | `araim.rs`, `error_metrics.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geometry.rs`, `iono.rs`, `rtk_filter.rs`, `tides.rs`, `tropo.rs` |
+| `Wgs84Geodetic` | struct | `araim.rs`, `error_metrics.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geometry.rs`, `iono.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs`, `tides.rs`, `tropo.rs` |
 | `geocentric_east` | fn | MISSING |
 | `geocentric_neu_basis` | fn | MISSING |
 | `geocentric_up` | fn | MISSING |
@@ -1946,6 +1970,7 @@ found and when it counts as bound.
 | `EkfUpdateOptions` | struct | `fusion.rs` |
 | `InnovationGate` | struct | `fusion.rs` |
 | `InnovationGateReport` | struct | `fusion.rs` |
+| `JointInnovationGateReport` | struct | MISSING |
 | `apply_closed_loop_error` | fn | MISSING |
 | `ekf_correct_closed_loop` | fn | MISSING |
 | `joseph_covariance_update` | fn | MISSING |
@@ -2179,7 +2204,7 @@ found and when it counts as bound.
 | `DopOptions` | struct | `geometry.rs` |
 | `DopSeriesPoint` | struct | MISSING |
 | `DopWeighting` | enum | `geometry.rs` |
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `VisibilityOptions` | struct | `geometry.rs` |
 | `VisibilityPass` | struct | MISSING |
 | `VisibilitySeriesPoint` | struct | MISSING |
@@ -2238,7 +2263,7 @@ found and when it counts as bound.
 | Item | Kind | Binding |
 |---|---|---|
 | `GnssSatelliteId` | struct | `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `fusion.rs`, `geometry.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `sbas.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
-| `GnssSystem` | enum | `araim.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `constellation.rs`, `frequencies.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observables.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sp3.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
+| `GnssSystem` | enum | `araim.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `constellation.rs`, `data.rs`, `frequencies.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observables.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sp3.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
 | `SatelliteIdError` | enum | `rtcm.rs` |
 
 ## `sidereon_core::ils`
@@ -2254,7 +2279,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `InertialError` | enum | `inertial.rs` |
+| `InertialError` | enum | `fusion.rs`, `inertial.rs` |
 
 ## `sidereon_core::inertial::config`
 
@@ -2424,8 +2449,8 @@ found and when it counts as bound.
 | `PREAMBLE` | const | `lnav.rs` |
 | `SUBFRAME_LENGTH` | const | `lnav.rs` |
 | `WORD_LENGTH` | const | `lnav.rs` |
-| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
-| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
+| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
+| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
 | `parity` | fn | `lnav.rs`, `rtk_filter.rs`, `trls.rs` |
 | `parity_valid` | fn | `lnav.rs` |
 | `subframe_id` | fn | `lnav.rs` |
@@ -2658,7 +2683,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `ReducedOrbitModel` | type | MISSING |
 
 ## `sidereon_core::orbit_determination`
@@ -2704,7 +2729,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `RinexSppAssemblySource` | trait | MISSING |
 | `RinexSppBroadcastCorrections` | struct | MISSING |
 | `RinexSppEpochInputs` | struct | `spp.rs` |
@@ -2748,12 +2773,12 @@ found and when it counts as bound.
 |---|---|---|
 | `PppAutoInitError` | enum | `precise_positioning.rs` |
 | `PppAutoInitOptions` | struct | `precise_positioning.rs` |
-| `PppAutoInitStrategy` | enum | MISSING |
+| `PppAutoInitStrategy` | enum | `precise_positioning.rs` |
 | `PppInitialGuess` | struct | `precise_positioning.rs` |
 | `solve_ppp_auto_init_fixed` | fn | `precise_positioning.rs` |
-| `solve_ppp_auto_init_fixed_with_strategy` | fn | MISSING |
+| `solve_ppp_auto_init_fixed_with_strategy` | fn | `precise_positioning.rs` |
 | `solve_ppp_auto_init_float` | fn | `precise_positioning.rs` |
-| `solve_ppp_auto_init_float_with_strategy` | fn | MISSING |
+| `solve_ppp_auto_init_float_with_strategy` | fn | `precise_positioning.rs` |
 
 ## `sidereon_core::precise_positioning`
 
@@ -2766,10 +2791,10 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `CycleSlipConfig` | struct | MISSING |
-| `CycleSlipConfigError` | enum | MISSING |
+| `CycleSlipConfig` | struct | `precise_positioning_surfaces.rs` |
+| `CycleSlipConfigError` | enum | `precise_positioning_surfaces.rs` |
 | `CycleSlipDetectorState` | struct | MISSING |
-| `CycleSlipError` | enum | MISSING |
+| `CycleSlipError` | enum | `precise_positioning_surfaces.rs` |
 | `CycleSlipFlagEpoch` | struct | MISSING |
 | `CycleSlipFlagObservation` | struct | MISSING |
 | `CycleSlipStateKey` | type | MISSING |
@@ -2777,13 +2802,13 @@ found and when it counts as bound.
 | `DEFAULT_RUNNING_STATISTIC_K_FACTOR` | const | MISSING |
 | `GeometryFreeUpdate` | struct | MISSING |
 | `MelbourneWubbenaUpdate` | struct | MISSING |
-| `RunningMeanVariance` | struct | MISSING |
-| `SatelliteCycleSlipState` | struct | MISSING |
-| `detect_cycle_slips` | fn | `carrier_phase.rs` |
-| `geometry_free_m` | fn | MISSING |
-| `melbourne_wubbena_cycles` | fn | MISSING |
-| `update_geometry_free` | fn | MISSING |
-| `update_melbourne_wubbena` | fn | MISSING |
+| `RunningMeanVariance` | struct | `precise_positioning_surfaces.rs` |
+| `SatelliteCycleSlipState` | struct | `precise_positioning_surfaces.rs` |
+| `detect_cycle_slips` | fn | `carrier_phase.rs`, `precise_positioning_surfaces.rs` |
+| `geometry_free_m` | fn | `precise_positioning_surfaces.rs` |
+| `melbourne_wubbena_cycles` | fn | `precise_positioning_surfaces.rs` |
+| `update_geometry_free` | fn | `precise_positioning_surfaces.rs` |
+| `update_melbourne_wubbena` | fn | `precise_positioning_surfaces.rs` |
 
 ## `sidereon_core::precise_positioning::fixed`
 
@@ -2802,91 +2827,93 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `KinematicConfig` | struct | MISSING |
-| `KinematicEpochSolution` | struct | `error_metrics.rs` |
-| `KinematicEpochStatus` | enum | `error_metrics.rs` |
-| `KinematicMotionModel` | enum | MISSING |
-| `KinematicPositionProcessNoise` | enum | MISSING |
-| `KinematicProcessNoise` | struct | MISSING |
-| `KinematicSolveError` | enum | MISSING |
-| `KinematicState` | struct | MISSING |
-| `KinematicUpdateSummary` | struct | MISSING |
-| `correct_kinematic_state` | fn | MISSING |
-| `predict_kinematic_state` | fn | MISSING |
-| `solve_kinematic_ppp` | fn | MISSING |
+| `KinematicConfig` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicEpochSolution` | struct | `error_metrics.rs`, `precise_positioning.rs` |
+| `KinematicEpochStatus` | enum | `error_metrics.rs`, `precise_positioning.rs` |
+| `KinematicMotionModel` | enum | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicPositionProcessNoise` | enum | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicProcessNoise` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicSolveError` | enum | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicState` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `KinematicUpdateSummary` | struct | `precise_positioning.rs` |
+| `correct_kinematic_state` | fn | `precise_positioning.rs` |
+| `predict_kinematic_state` | fn | `precise_positioning_surfaces.rs` |
+| `solve_kinematic_ppp` | fn | `precise_positioning.rs` |
 
 ## `sidereon_core::precise_positioning::prep`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `DualFrequencyEpoch` | struct | MISSING |
-| `DualFrequencyObservation` | struct | MISSING |
-| `FloatCycleSlipEpoch` | struct | MISSING |
-| `FloatCycleSlipObservation` | struct | MISSING |
+| `DualFrequencyEpoch` | struct | `precise_positioning_surfaces.rs` |
+| `DualFrequencyObservation` | struct | `precise_positioning_surfaces.rs` |
+| `FloatCycleSlipEpoch` | struct | `precise_positioning_surfaces.rs` |
+| `FloatCycleSlipObservation` | struct | `precise_positioning_surfaces.rs` |
 | `FloatCycleSlipTaggedEpoch` | struct | MISSING |
 | `FloatCycleSlipTaggedObservation` | struct | MISSING |
 | `PppSplitArc` | struct | MISSING |
 | `PreparedFloatEpoch` | struct | MISSING |
 | `PreparedFloatObservation` | struct | MISSING |
-| `WideLanePrepError` | enum | MISSING |
-| `WideLanePrepOptions` | struct | MISSING |
+| `WideLanePrepError` | enum | `precise_positioning_surfaces.rs` |
+| `WideLanePrepOptions` | struct | `precise_positioning_surfaces.rs` |
 | `WideLanePrepResult` | struct | MISSING |
-| `prepare_widelane_fixed_epochs` | fn | MISSING |
-| `split_float_cycle_slip_epochs` | fn | MISSING |
+| `prepare_widelane_fixed_epochs` | fn | `precise_positioning_surfaces.rs` |
+| `split_float_cycle_slip_epochs` | fn | `precise_positioning_surfaces.rs` |
 
 ## `sidereon_core::precise_positioning::raim`
 
 | Item | Kind | Binding |
 |---|---|---|
 | `ProtectionLevels` | struct | MISSING |
-| `RaimConfig` | struct | MISSING |
-| `RaimError` | enum | MISSING |
-| `RaimFdeError` | enum | MISSING |
-| `RaimFdeResult` | struct | MISSING |
-| `RaimFdeStatus` | enum | MISSING |
-| `RaimGeometryRow` | struct | MISSING |
+| `RaimConfig` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `RaimError` | enum | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `RaimFdeError` | enum | `precise_positioning.rs` |
+| `RaimFdeResult` | struct | `precise_positioning.rs` |
+| `RaimFdeStatus` | enum | `precise_positioning.rs` |
+| `RaimGeometryRow` | struct | `precise_positioning_surfaces.rs` |
 | `RaimIdentification` | struct | MISSING |
-| `RaimResult` | struct | `qc.rs` |
-| `RaimStatus` | enum | MISSING |
-| `SatelliteTestStatistic` | struct | MISSING |
-| `fde_float_epoch` | fn | MISSING |
-| `global_test` | fn | `qc.rs` |
-| `global_test_with_geometry` | fn | MISSING |
-| `per_satellite_statistics` | fn | MISSING |
-| `protection_levels` | fn | MISSING |
-| `solve_float_epoch_with_raim` | fn | MISSING |
+| `RaimResult` | struct | `precise_positioning_surfaces.rs`, `qc.rs` |
+| `RaimStatus` | enum | `precise_positioning.rs`, `precise_positioning_surfaces.rs` |
+| `SatelliteTestStatistic` | struct | `precise_positioning_surfaces.rs` |
+| `fault_free_accuracy_bounds` | fn | `precise_positioning_surfaces.rs` |
+| `fde_float_epoch` | fn | `precise_positioning.rs` |
+| `global_test` | fn | `precise_positioning_surfaces.rs`, `qc.rs` |
+| `global_test_with_geometry` | fn | `precise_positioning_surfaces.rs` |
+| `per_satellite_statistics` | fn | `precise_positioning_surfaces.rs` |
+| `protection_levels` | fn | `precise_positioning_surfaces.rs` |
+| `protection_levels_with_weights` | fn | `precise_positioning_surfaces.rs` |
+| `solve_float_epoch_with_raim` | fn | `precise_positioning.rs` |
 
 ## `sidereon_core::precise_positioning::tec`
 
 | Item | Kind | Binding |
 |---|---|---|
 | `CodeSlantTecEstimate` | struct | MISSING |
-| `DEFAULT_IONOSPHERIC_SHELL_HEIGHT_M` | const | MISSING |
-| `ELECTRONS_PER_TECU_M2` | const | MISSING |
+| `DEFAULT_IONOSPHERIC_SHELL_HEIGHT_M` | const | `precise_positioning_surfaces.rs` |
+| `ELECTRONS_PER_TECU_M2` | const | `precise_positioning_surfaces.rs` |
 | `IonosphericPiercePoint` | struct | MISSING |
 | `LeveledTecSample` | struct | MISSING |
 | `PhaseSlantTecEstimate` | struct | MISSING |
-| `TEC_GROUP_DELAY_COEFFICIENT` | const | MISSING |
-| `TecConfig` | struct | MISSING |
-| `TecEpoch` | struct | MISSING |
-| `TecError` | enum | MISSING |
+| `TEC_GROUP_DELAY_COEFFICIENT` | const | `precise_positioning_surfaces.rs` |
+| `TecConfig` | struct | `precise_positioning_surfaces.rs` |
+| `TecEpoch` | struct | `precise_positioning_surfaces.rs` |
+| `TecError` | enum | `precise_positioning_surfaces.rs` |
 | `TecEstimate` | struct | MISSING |
 | `TecEstimateSample` | struct | MISSING |
 | `TecLevelingResult` | struct | MISSING |
-| `TecLevelingSample` | struct | MISSING |
-| `TecObservation` | struct | MISSING |
+| `TecLevelingSample` | struct | `precise_positioning_surfaces.rs` |
+| `TecObservation` | struct | `precise_positioning_surfaces.rs` |
 | `TecSatelliteArc` | struct | MISSING |
-| `code_geometry_free_m` | fn | MISSING |
-| `estimate_code_slant_tec` | fn | MISSING |
-| `estimate_phase_slant_tec` | fn | MISSING |
-| `estimate_tec` | fn | MISSING |
-| `ionospheric_pierce_point` | fn | MISSING |
-| `level_slant_tec_arc` | fn | MISSING |
-| `phase_geometry_free_m` | fn | MISSING |
-| `slant_tec_from_code_geometry_free_m` | fn | MISSING |
-| `slant_tec_from_phase_geometry_free_m` | fn | MISSING |
-| `thin_shell_mapping_function` | fn | MISSING |
-| `vertical_tec_from_slant_tec` | fn | MISSING |
+| `code_geometry_free_m` | fn | `precise_positioning_surfaces.rs` |
+| `estimate_code_slant_tec` | fn | `precise_positioning_surfaces.rs` |
+| `estimate_phase_slant_tec` | fn | `precise_positioning_surfaces.rs` |
+| `estimate_tec` | fn | `precise_positioning_surfaces.rs` |
+| `ionospheric_pierce_point` | fn | `precise_positioning_surfaces.rs` |
+| `level_slant_tec_arc` | fn | `precise_positioning_surfaces.rs` |
+| `phase_geometry_free_m` | fn | `precise_positioning_surfaces.rs` |
+| `slant_tec_from_code_geometry_free_m` | fn | `precise_positioning_surfaces.rs` |
+| `slant_tec_from_phase_geometry_free_m` | fn | `precise_positioning_surfaces.rs` |
+| `thin_shell_mapping_function` | fn | `precise_positioning_surfaces.rs` |
+| `vertical_tec_from_slant_tec` | fn | `precise_positioning_surfaces.rs` |
 
 ## `sidereon_core::precise_positioning::types`
 
@@ -2894,7 +2921,7 @@ found and when it counts as bound.
 |---|---|---|
 | `AmbiguitySearch` | struct | MISSING |
 | `FixedSolveError` | enum | `precise_positioning.rs`, `rtk_filter.rs` |
-| `FloatResidual` | struct | `precise_positioning.rs`, `rtk_filter.rs` |
+| `FloatResidual` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `FloatSolveError` | enum | `precise_positioning.rs`, `rtk_filter.rs` |
 | `IntegerStatus` | enum | `precise_positioning.rs`, `rtk_filter.rs` |
 
@@ -2903,15 +2930,15 @@ found and when it counts as bound.
 | Item | Kind | Binding |
 |---|---|---|
 | `RangeRatePrediction` | struct | MISSING |
-| `ReceiverVelocityState` | struct | MISSING |
-| `VelocityConfig` | struct | MISSING |
-| `VelocityObservation` | struct | `velocity.rs` |
-| `VelocityRobustConfig` | struct | MISSING |
+| `ReceiverVelocityState` | struct | `precise_positioning.rs` |
+| `VelocityConfig` | struct | `precise_positioning.rs` |
+| `VelocityObservation` | struct | `precise_positioning.rs`, `velocity.rs` |
+| `VelocityRobustConfig` | struct | `precise_positioning.rs` |
 | `VelocitySolution` | struct | `spp.rs`, `velocity.rs` |
-| `VelocitySolveError` | enum | MISSING |
-| `predict_range_rate_m_s` | fn | MISSING |
+| `VelocitySolveError` | enum | `precise_positioning.rs` |
+| `predict_range_rate_m_s` | fn | `precise_positioning.rs` |
 | `solve_velocity` | fn | MISSING |
-| `solve_velocity_least_squares` | fn | MISSING |
+| `solve_velocity_least_squares` | fn | `precise_positioning.rs` |
 
 ## `sidereon_core::quality`
 
@@ -2936,7 +2963,7 @@ found and when it counts as bound.
 | `QualityError` | enum | `qc.rs`, `reliability.rs` |
 | `RaimInput` | struct | `qc.rs` |
 | `RaimOptions` | struct | `qc.rs` |
-| `RaimResult` | struct | `qc.rs` |
+| `RaimResult` | struct | `precise_positioning_surfaces.rs`, `qc.rs` |
 | `RaimSolution` | trait | MISSING |
 | `RaimWeights` | enum | `qc.rs` |
 | `RangeChiSquareTest` | struct | `qc.rs` |
@@ -2946,13 +2973,14 @@ found and when it counts as bound.
 | `RangeMeasurementDiagnostic` | struct | `qc.rs` |
 | `ResidualDiagnostics` | struct | MISSING |
 | `SolutionValidationError` | enum | `qc.rs`, `spp.rs` |
-| `SolutionValidationOptions` | struct | `qc.rs`, `sbas.rs`, `spp.rs` |
+| `SolutionValidationOptions` | struct | `qc.rs`, `spp.rs` |
 | `WeightEntry` | struct | `qc.rs` |
 | `chi2_inv` | fn | `qc.rs` |
+| `chi2_isf` | fn | `qc.rs` |
 | `fde` | fn | `qc.rs` |
 | `fde_spp` | fn | `qc.rs` |
 | `pseudorange_variance` | fn | `qc.rs` |
-| `raim` | fn | `qc.rs` |
+| `raim` | fn | `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `qc.rs` |
 | `raim_fde_design` | fn | `qc.rs` |
 | `raim_for_solution` | fn | MISSING |
 | `residual_diagnostics` | fn | MISSING |
@@ -3013,7 +3041,7 @@ found and when it counts as bound.
 | `piecewise_drift` | fn | `reduced_orbit.rs` |
 | `piecewise_position` | fn | `reduced_orbit.rs` |
 | `piecewise_position_velocity` | fn | `reduced_orbit.rs` |
-| `position` | fn | `angles.rs`, `antex.rs`, `cdm.rs`, `covariance.rs`, `covariance_transport.rs`, `drag.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `forces.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `reduced_orbit.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tides.rs`, `unix_compress.rs`, `velocity.rs` |
+| `position` | fn | `angles.rs`, `antex.rs`, `cdm.rs`, `covariance.rs`, `covariance_transport.rs`, `drag.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `forces.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `reduced_orbit.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tides.rs`, `unix_compress.rs`, `velocity.rs` |
 | `position_velocity` | fn | `reduced_orbit.rs` |
 | `select_piecewise_segment` | fn | `reduced_orbit.rs` |
 
@@ -3085,9 +3113,9 @@ found and when it counts as bound.
 | `FrameSkipReason` | enum | `rtcm.rs` |
 | `Message` | enum | `ntrip.rs`, `rtcm.rs`, `sp3.rs`, `spp.rs`, `tdm.rs` |
 | `RtcmDeparture` | enum | `rtcm.rs` |
-| `RtcmPolicy` | enum | `rtcm.rs` |
+| `RtcmPolicy` | enum | `rtcm.rs`, `ssr.rs` |
 | `RtcmStream` | struct | MISSING |
-| `SsrStreamAssembler` | struct | `ntrip.rs` |
+| `SsrStreamAssembler` | struct | `ntrip.rs`, `ssr.rs` |
 | `StreamDeparture` | struct | MISSING |
 | `StreamDiagnostics` | struct | `rtcm.rs` |
 | `UnsupportedMessage` | struct | `rtcm.rs` |
@@ -3273,7 +3301,7 @@ found and when it counts as bound.
 | `DualCycleSlipEpoch` | struct | MISSING |
 | `DualCycleSlipObservation` | struct | MISSING |
 | `DualCycleSlipPrepResult` | struct | MISSING |
-| `DualEpoch` | struct | MISSING |
+| `DualEpoch` | struct | `precise_positioning_surfaces.rs` |
 | `DualIonosphereFreeEpoch` | struct | MISSING |
 | `DualIonosphereFreeObservation` | struct | MISSING |
 | `DualIonosphereFreeSatelliteObservation` | struct | MISSING |
@@ -3286,7 +3314,7 @@ found and when it counts as bound.
 | `IonosphereFreeBaselineEpoch` | struct | MISSING |
 | `IonosphereFreeBaselineError` | enum | `rtk_filter.rs` |
 | `IonosphereFreeBaselineResult` | struct | MISSING |
-| `Observation` | struct | `astro_observe_almanac.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
+| `Observation` | struct | `astro_observe_almanac.rs`, `precise_positioning_surfaces.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
 | `ReferenceReport` | enum | `rtk.rs` |
 | `ReferenceSelection` | enum | `rtk.rs` |
 | `WideLaneError` | enum | `rtk_filter.rs` |
@@ -3306,7 +3334,7 @@ found and when it counts as bound.
 | Item | Kind | Binding |
 |---|---|---|
 | `AmbiguityScale` | struct | `rtk_filter.rs` |
-| `RtkInputErrorKind` | enum | MISSING |
+| `RtkInputErrorKind` | enum | `rtk_filter.rs` |
 
 ## `sidereon_core::rtk_filter::antenna`
 
@@ -3320,6 +3348,7 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
+| `ReleasedRtkHold` | struct | MISSING |
 | `RtkArcConfig` | struct | `rtk_filter.rs` |
 | `RtkArcEpoch` | struct | `rtk_filter.rs` |
 | `RtkArcEpochSolution` | struct | `rtk_filter.rs` |
@@ -3331,6 +3360,7 @@ found and when it counts as bound.
 | `RtkDualFrequencyArcEpoch` | struct | `rtk_filter.rs` |
 | `RtkDualFrequencyObservation` | struct | `rtk_filter.rs` |
 | `RtkDualFrequencySatelliteObservation` | struct | `rtk_filter.rs` |
+| `RtkHoldReleaseReason` | enum | `rtk_filter.rs` |
 | `RtkIonosphereFreeArcConfig` | struct | `rtk_filter.rs` |
 | `RtkIonosphereFreeArcError` | enum | `rtk_filter.rs` |
 | `RtkIonosphereFreeArcSolution` | struct | `rtk_filter.rs` |
@@ -3378,7 +3408,7 @@ found and when it counts as bound.
 | Item | Kind | Binding |
 |---|---|---|
 | `FloatBaselineSolution` | struct | `rtk_filter.rs` |
-| `FloatResidual` | struct | `precise_positioning.rs`, `rtk_filter.rs` |
+| `FloatResidual` | struct | `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `rtk_filter.rs` |
 | `FloatSolveError` | enum | `precise_positioning.rs`, `rtk_filter.rs` |
 | `FloatSolveOpts` | struct | `rtk_filter.rs` |
 | `FloatSolveStatus` | enum | `rtk_filter.rs` |
@@ -3851,6 +3881,10 @@ found and when it counts as bound.
 
 | Item | Kind | Binding |
 |---|---|---|
+| `Sp3AccuracyRoundingPolicy` | enum | `sp3.rs` |
+| `Sp3AccuracyRoundingReport` | struct | `sp3.rs` |
+| `Sp3DetailedRoundingReport` | struct | MISSING |
+| `Sp3RoundingReport` | struct | `sp3.rs` |
 | `Sp3WriteError` | enum | `sp3.rs` |
 
 ## `sidereon_core::spp`
@@ -3862,7 +3896,7 @@ found and when it counts as bound.
 | `DopplerVelocityInputs` | struct | MISSING |
 | `ExactSolveInputs` | struct | `spp.rs` |
 | `KlobucharCoeffs` | struct | `qc.rs`, `spp.rs`, `ssr.rs`, `static_positioning.rs` |
-| `Observation` | struct | `astro_observe_almanac.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
+| `Observation` | struct | `astro_observe_almanac.rs`, `precise_positioning_surfaces.rs`, `rtk.rs`, `rtk_filter.rs`, `spp.rs` |
 | `PseudorangeCode` | enum | `spp.rs` |
 | `QzssClock` | enum | `spp.rs` |
 | `ReceiverSolution` | struct | `qc.rs`, `spp.rs` |
@@ -3871,7 +3905,7 @@ found and when it counts as bound.
 | `RobustConfig` | struct | `qc.rs`, `spp.rs`, `static_positioning.rs` |
 | `SolutionMetadata` | struct | MISSING |
 | `SolveInputs` | struct | `qc.rs`, `spp.rs` |
-| `SolvePolicy` | struct | `sbas.rs`, `spp.rs` |
+| `SolvePolicy` | struct | `spp.rs` |
 | `SolvePolicyError` | enum | `spp.rs` |
 | `SppDopplerSolution` | struct | `spp.rs` |
 | `SppError` | enum | `qc.rs`, `spp.rs` |
@@ -3955,8 +3989,8 @@ found and when it counts as bound.
 | `SsrOversizedCorrection` | struct | `ssr.rs` |
 | `SsrPhaseBias` | struct | MISSING |
 | `SsrPhaseBiasQueryResult` | struct | `ssr_bias_exclusion.rs` |
-| `SsrReferencePoint` | enum | MISSING |
-| `SsrSatelliteAttitude` | enum | MISSING |
+| `SsrReferencePoint` | enum | `ssr.rs` |
+| `SsrSatelliteAttitude` | enum | `ssr.rs` |
 | `SsrSolution` | struct | `ssr.rs`, `ssr_bias_exclusion.rs` |
 | `SsrSource` | enum | `ssr.rs`, `ssr_bias_exclusion.rs` |
 | `SsrStateUnavailable` | enum | MISSING |
@@ -4160,7 +4194,7 @@ found and when it counts as bound.
 |---|---|---|
 | `VelocityError` | enum | `spp.rs`, `velocity.rs` |
 | `VelocityObservable` | enum | `velocity.rs` |
-| `VelocityObservation` | struct | `velocity.rs` |
+| `VelocityObservation` | struct | `precise_positioning.rs`, `velocity.rs` |
 | `VelocitySolution` | struct | `spp.rs`, `velocity.rs` |
 | `VelocitySolveOptions` | struct | `velocity.rs` |
 | `doppler_to_range_rate` | fn | `velocity.rs` |

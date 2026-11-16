@@ -291,6 +291,8 @@ fn scenario_expected(ctx: &Context, name: &str) {
         &format!("{name}_expected.json"),
         &json!({
             "source": source(ctx, &format!("simulate_scenario of {name}.json")),
+            "engine_version": value["engine_version"],
+            "determinism_fingerprint": set.determinism_fingerprint().to_string(),
             "observations": value["observations"],
             "truth_terms": value["truth_terms"],
             "receiver_truth": value["receiver_truth"],

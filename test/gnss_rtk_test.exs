@@ -646,12 +646,7 @@ defmodule Sidereon.GNSS.RTKTest do
       assert solution.fix_status == :carrier_fixed
       assert solution.code_solution == nil
       assert solution.carrier_solution.integer_status == :fixed
-      # The validation ratio comes out of the iterative ILS search, whose last
-      # bits differ across architectures (arm64 vs x86_64 libm), so it is held
-      # to a tight relative band around the core's value, beside the acceptance
-      # threshold that actually gates fixing.
-      expected_ratio = CoreGolden.f(golden["integer_ratio"])
-      assert_in_delta solution.carrier_solution.integer_ratio, expected_ratio, 1.0e-6 * expected_ratio
+      assert solution.carrier_solution.integer_ratio == CoreGolden.f(golden["integer_ratio"])
       assert solution.carrier_solution.integer_ratio > 3.0
       assert length(solution.diagnostics) == 24
       assert length(solution.carrier_solution.diagnostics) == 24
@@ -663,29 +658,12 @@ defmodule Sidereon.GNSS.RTKTest do
       assert hd(solution.mode_reports).used_measurements == golden["mode_report"]["used_measurements"]
       assert norm(sub3(ecef_tuple(solution.baseline_vector_m), ctx.truth_baseline)) < 0.005
 
-      # The outputs come from the iterative solve chain, whose last bits differ
-      # across architectures, so each is held to a tight band around the core's
-      # value rather than exact bits: one micrometre on positions, 1e-9 metres
-      # on the baseline vector and 1e-9 relative on the covariance, far below
-      # any real regression and far above cross-architecture rounding.
-      solution.position_m
-      |> ecef_tuple()
-      |> Tuple.to_list()
-      |> Enum.zip(CoreGolden.f(golden["position_m"]))
-      |> Enum.each(fn {got, expected} -> assert_in_delta got, expected, 1.0e-6 end)
+      assert solution.position_m |> ecef_tuple() |> Tuple.to_list() == CoreGolden.f(golden["position_m"])
 
-      solution.baseline_vector_m
-      |> ecef_tuple()
-      |> Tuple.to_list()
-      |> Enum.zip(CoreGolden.f(golden["baseline_vector_m"]))
-      |> Enum.each(fn {got, expected} -> assert_in_delta got, expected, 1.0e-9 end)
+      assert solution.baseline_vector_m |> ecef_tuple() |> Tuple.to_list() ==
+               CoreGolden.f(golden["baseline_vector_m"])
 
-      solution.covariance.position_ecef_m2
-      |> List.flatten()
-      |> Enum.zip(List.flatten(CoreGolden.f(golden["covariance_position_ecef_m2"])))
-      |> Enum.each(fn {got, expected} ->
-        assert_in_delta got, expected, 1.0e-9 * max(abs(expected), 1.0e-12)
-      end)
+      assert solution.covariance.position_ecef_m2 == CoreGolden.f(golden["covariance_position_ecef_m2"])
     end
   end
 

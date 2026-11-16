@@ -6,11 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+## [4.0.0] - 2026-11-16
 
-- Preserve RAIM degree-of-freedom limits and unsupported ARAIM constellation
-  identifiers in structured errors; forward GDOP ceilings across FDE, RINEX
-  SPP and SBAS positioning entry points.
+### Added
 
 - Add checked coverage visibility masks and access counts, and carried RTK filter updates.
 - Add ADD v3.0 satellite models, RTKLIB single-clock DOP, a GDOP ceiling,
@@ -18,19 +16,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add `QC.chi2_isf/2`, weighted Brown snapshot-RAIM protection levels,
   and explicitly named fault-free accuracy bounds.
 - Report PPP posterior variance estimation and RTK arc mask and hold diagnostics.
-
-### Changed
-
-- Tight EKF joint innovation gates now reject outliers without changing the
-  state or covariance and report diagnostics for accepted and rejected updates.
-- Rejected loose updates preserve tight GNSS cross-covariance.
-- Loose updates with every row removed by IGG III coast; per-row gate reports
-  count the rejected rows, while joint gate reports are absent.
-- Filter options for the other filter kind, invalid gate probabilities, and
-  simultaneous per-row and joint gates are refused.
-- PPP protection levels now use Brown fault-mode protection and require positive redundancy.
-
-
+- Preserve RAIM degree-of-freedom limits and unsupported ARAIM constellation
+  identifiers in structured errors; forward GDOP ceilings across FDE, RINEX
+  SPP and SBAS positioning entry points.
 - Add `OMM.encode_kvn_lenient/1` and `OMM.encode_xml_lenient/1` for partial messages.
 - Add CelesTrak GP and NAVCEN source metadata, URL builders, GP response
   parsing, and cache-first fetching. GP records retain native fields, source
@@ -43,20 +31,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kinematic PPP prediction and correction.
 - Add reference/canonical PPP auto-init strategy entry points and the
   precise-positioning precomputed-state velocity least-squares API, including
-  core-backed default configuration factories, direct range-rate prediction,
-  additive detailed float/fixed PPP errors, and lossless result/error maps.
+  default configuration factories, direct range-rate prediction,
+  detailed float/fixed PPP errors, and complete result and error maps.
 - Add `Metadata.get_last/2`, `WritePolicy.as_read/1`, and the
   `InputErrorKind` `t()` type with `display/1`.
-- Document and test that TDM values are plain structs, maps, atoms and strings
-  and compare structurally with `==`.
 
 ### Changed
 
+- **Breaking:** PPP solution maps distinguish an estimated posterior variance
+  factor from the a-priori unit scale; zero-redundancy FDE reports `:untested`.
+- **Breaking:** RAIM and ARAIM errors preserve unsupported-domain and
+  constellation details; observation rejection and GDOP validation have
+  distinct error values.
+- **Breaking:** RTK arc results include elevation-mask convergence, excluded
+  satellites, reference satellites, and released holds with their reasons.
+  Missing ambiguity columns and incomplete carried fixed-cycle states are refused.
+- **Breaking:** Joint innovation-gate diagnostics have their own correction
+  report field, with statistic, degrees of freedom, threshold, probability and verdict.
+- **Breaking:** PPP protection levels now use Brown fault-mode protection and
+  require positive redundancy. Use `fault_free_accuracy_bounds` for fault-free bounds.
+- **Breaking:** Non-default options for the inactive filter kind, invalid gate
+  probabilities, and simultaneous per-row and joint gates are refused.
+- **Breaking:** OMM KVN and XML writers require the mandatory CCSDS fields.
+  Malformed documents and missing alternative fields have distinct typed errors.
+- **Breaking:** TLE epoch days must be finite and in the half-open range `[0, 1000)`.
+- TDM values are plain structs, maps, atoms and strings and compare structurally with `==`.
+- Elevation-weighted RTK solutions use RTKLIB receiver geodetic and satellite
+  azimuth/elevation arithmetic.
+
+### Fixed
+
+- Tight EKF joint innovation gates reject outliers without changing the state
+  or covariance and report diagnostics for accepted and rejected updates.
+- Rejected loose updates preserve tight GNSS cross-covariance.
+- Loose updates with every row removed by IGG III coast; per-row gate reports
+  count the rejected rows, while joint gate reports are absent.
 - Retry transient GP HTTP errors even when their bodies are empty or HTML.
   Repeat-download errors include the verified cached file path when available.
-- OMM KVN and XML writers require the mandatory CCSDS fields. Malformed
-  documents and missing alternative fields have distinct typed errors.
-- TLE epoch days must be finite and in the half-open range `[0, 1000)`.
 
 ## [3.0.6] - 2026-10-30
 

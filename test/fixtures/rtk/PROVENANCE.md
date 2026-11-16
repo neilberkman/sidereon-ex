@@ -1,5 +1,7 @@
 # RTKLIB Wettzell Oracle Fixture
 
+Core 4.0.0 uses RTKLIB `ecef2pos`/`satazel` arithmetic for receiver geodetic position and satellite azimuth/elevation, changing the elevation-weighted WTZR/WTZZ reference-station position, baseline, covariance and integer ratio.
+
 `wtzr_wtzz_rtklib_oracle.json`,
 `wtzr_wtzz_rtklib_precise_oracle.json`, and
 `wtzr_wtzz_rtklib_precise_epoch2_ambiguity.json` record RTKLIB `rnx2rtkp`
