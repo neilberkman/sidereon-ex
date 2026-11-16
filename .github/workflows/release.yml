@@ -1,0 +1,96 @@
+name: Publish to Hex
+
+# Publishes the package and its documentation to Hex from a clean checkout of
+# the release tag.
+#
+# Hex trusted publishing: hex.pm holds a workload identity for this
+# repository, this workflow file and the `release` environment. With no Hex
+# key set, `mix hex.publish` exchanges the job's GitHub OIDC token for a token
+# that can only publish this package. Staged publishing is enabled for the
+# package, so the release waits on hex.pm until an owner approves it.
+#
+# The `release` environment accepts only tags matching `v*`, so a branch or a
+# pull request cannot obtain the token.
+#
+# The workflow is started by hand on the tag rather than by the tag push: the
+# tag is first pushed to build the precompiled NIFs, then moved to the commit
+# that records their checksums. Only that checksum-complete commit may be
+# published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: "Full checksum-complete release commit SHA the tag points at"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: ./.github/workflows/ci.yml
+    with:
+      candidate: false
+
+  publish:
+    name: Publish package and docs
+    needs: gate
+    runs-on: ubuntu-22.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SIDEREON_BUILD: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Require the checksum-complete release tag
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          test "${#EXPECTED_COMMIT}" -eq 40
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          test "v${version}" = "$GITHUB_REF_NAME"
+          grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs
+          test "$(grep -c -- '=> "sha256:' checksum-Elixir.Sidereon.NIF.exs)" -eq 9
+          test "$(grep -c -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs)" -eq 9
+          if grep -nE '(^|[,{[:space:]])(git|path)[[:space:]]*=' \
+            native/sidereon_nif/Cargo.toml test/generators/core_goldens/Cargo.toml; then
+            echo "release manifests still contain a Git or path dependency" >&2
+            exit 1
+          fi
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28.3"
+          elixir-version: "1.19.4"
+
+      - name: Install pinned Hex and Rebar
+        run: |
+          mix local.hex 2.7.0 --force
+          mix local.rebar --force
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.98.1
+
+      - name: Fetch dependencies and compile
+        run: |
+          mix deps.get
+          mix compile --warnings-as-errors
+
+      - name: Publish package and docs
+        shell: bash
+        run: |
+          if [ -n "${HEX_API_KEY:-}" ]; then
+            echo "HEX_API_KEY is set; this workflow publishes with its workload identity only" >&2
+            exit 1
+          fi
+          mix hex.publish --yes
