@@ -12,17 +12,22 @@ name: Publish to Hex
 # The `release` environment accepts only tags matching `v*`, so a branch or a
 # pull request cannot obtain the token.
 #
-# The workflow is started by hand on the tag rather than by the tag push: the
-# tag is first pushed to build the precompiled NIFs, then moved to the commit
-# that records their checksums. Only that checksum-complete commit may be
-# published.
+# The workflow runs when a version tag is pushed. The precompiled NIFs are
+# built from the release branch beforehand and their checksums committed, so
+# the tag is pushed once, on the checksum-complete commit; the first step
+# refuses any other commit. It can also be started by hand on a tag to retry
+# a failed run.
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       expected_commit:
-        description: "Full checksum-complete release commit SHA the tag points at"
-        required: true
+        description: "Full release commit SHA the tag must point at (optional)"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -50,12 +55,14 @@ jobs:
       - name: Require the checksum-complete release tag
         shell: bash
         env:
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          EXPECTED_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_commit || '' }}
         run: |
           test "$GITHUB_REF_TYPE" = tag
-          test "${#EXPECTED_COMMIT}" -eq 40
-          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ -n "$EXPECTED_COMMIT" ]; then
+            test "${#EXPECTED_COMMIT}" -eq 40
+            test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          fi
           version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
           test "v${version}" = "$GITHUB_REF_NAME"
           grep -q -- "-v${version}-" checksum-Elixir.Sidereon.NIF.exs
