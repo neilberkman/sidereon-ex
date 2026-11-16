@@ -250,9 +250,9 @@ defmodule Sidereon.GNSS.PPPCorrections do
     end
   end
 
-  defp valid_satellite_id?(<<system::binary-size(1), prn::binary>>) when system in ~w(G R E C J I S) do
-    case Integer.parse(prn) do
-      {value, ""} when value > 0 -> true
+  defp valid_satellite_id?(<<system::binary-size(1), prn::binary>>) do
+    case {Sidereon.GNSS.System.letter(system), Integer.parse(prn)} do
+      {{:ok, ^system}, {value, ""}} when value > 0 -> true
       _other -> false
     end
   end

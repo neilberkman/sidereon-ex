@@ -140,17 +140,17 @@ defmodule Sidereon.Sidereal do
 
   defp satellite({system, prn}) when is_integer(prn), do: {system_letter(system), prn}
 
-  defp system_letter(:gps), do: "G"
-  defp system_letter(:glonass), do: "R"
-  defp system_letter(:galileo), do: "E"
-  defp system_letter(:beidou), do: "C"
-  defp system_letter(:bds), do: "C"
-  defp system_letter(:qzss), do: "J"
-  defp system_letter(:navic), do: "I"
-  defp system_letter(:sbas), do: "S"
+  defp system_letter(:bds), do: system_letter(:beidou)
+
+  defp system_letter(system) when is_atom(system) do
+    case Sidereon.GNSS.System.letter(system) do
+      {:ok, letter} -> letter
+      _ -> Atom.to_string(system)
+    end
+  end
+
   defp system_letter(<<letter::binary-size(1)>>), do: letter
   defp system_letter(system) when is_binary(system), do: system
-  defp system_letter(system) when is_atom(system), do: system |> Atom.to_string() |> system_letter()
 
   defp numbers(values), do: Enum.map(values, &(&1 / 1.0))
 end

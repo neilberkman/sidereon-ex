@@ -33,6 +33,8 @@ mod atoms {
     rustler::atoms! {
         // Shared variant tags.
         missing_field,
+        missing_one_of,
+        malformed_document,
         invalid_field,
         field,
         epoch,
@@ -179,6 +181,19 @@ fn unwritable<'a>(env: Env<'a>, field: &str, value: &str, issue: TextIssue) -> T
 /// The typed term for an [`OmmError`].
 pub(crate) fn omm_error_term<'a>(env: Env<'a>, error: &OmmError) -> Term<'a> {
     match error {
+        OmmError::MalformedDocument {
+            format,
+            message,
+            byte_offset,
+        } => (atoms::malformed_document(), format, message, byte_offset).encode(env),
+        OmmError::MissingOneOf(fields) => (
+            atoms::missing_one_of(),
+            fields
+                .iter()
+                .map(|field| name_atom(env, field))
+                .collect::<Vec<_>>(),
+        )
+            .encode(env),
         OmmError::MissingField(field) => {
             (atoms::missing_field(), name_atom(env, field)).encode(env)
         }

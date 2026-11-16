@@ -32,8 +32,12 @@ defmodule Sidereon.GNSS.Data do
   directly and provide their own transport and cache policy.
   """
 
+  alias Sidereon.CCSDS.Error
+  alias Sidereon.Format.OMM
+  alias Sidereon.Format.TLE
   alias Sidereon.GNSS.ArchiveCompression
   alias Sidereon.GNSS.ArchiveIngress
+  alias Sidereon.GNSS.Data.Catalog.CatalogError
   alias Sidereon.GNSS.Distribution
   alias Sidereon.GNSS.Distribution.ProductIdentity
   alias Sidereon.GNSS.FtpClient
@@ -51,11 +55,19 @@ defmodule Sidereon.GNSS.Data do
   @aiub_web_host "www.aiub.unibe.ch"
   @aiub_download_host "download.aiub.unibe.ch"
   @aiub_object_store_suffix ".s3.cloud.switch.ch"
+  @gp_formats [:tle, :three_line, :two_line, :xml, :kvn, :json, :json_pretty, :csv]
+  @gp_selectors [:group, :catalog_number, :international_designator, :name, :special]
 
   @type error_reason ::
-          :offline_cache_miss
+          CatalogError.t()
+          | :offline_cache_miss
           | {:not_found_on_archive, String.t()}
           | {:http_status, integer(), String.t()}
+          | {:gp_response, integer(), String.t(), CatalogError.t()}
+          | {:invalid_format, term()}
+          | {:invalid_selector, term()}
+          | {:invalid_selector, term(), term()}
+          | {:unsupported_system, term()}
           | {:redirect_not_allowed, integer(), String.t()}
           | {:network, term()}
           | {:checksum_mismatch, String.t(), String.t()}
@@ -71,6 +83,20 @@ defmodule Sidereon.GNSS.Data do
           | {:no_products, [term()]}
           | {:no_coverage, String.t()}
           | {:unknown_product, term()}
+
+  @typedoc "CelesTrak GP wire formats, represented as atoms that compare by value."
+  @type celestrak_gp_format :: :tle | :three_line | :two_line | :xml | :kvn | :json | :json_pretty | :csv
+
+  @typedoc "CelesTrak GP query selector and its value; tuples compare by value."
+  @type celestrak_gp_query ::
+          {:group, String.t()}
+          | {:catalog_number, integer()}
+          | {:international_designator, String.t()}
+          | {:name, String.t()}
+          | {:special, :gpz | :gpz_plus | :decaying}
+
+  @typedoc "Source protocol, host and root URL; maps compare by value."
+  @type catalog_source :: %{protocol: String.t(), host: String.t(), root_url: String.t()}
 
   defmodule Product do
     @moduledoc """
@@ -270,6 +296,504 @@ defmodule Sidereon.GNSS.Data do
   """
   @spec allowed_hosts() :: [String.t()]
   def allowed_hosts, do: NIF.data_allowed_hosts()
+
+  defmodule CelestrakGpRecord do
+    @moduledoc """
+    A GP record. `record_index` is one-based; `line_number` is the optional
+    one-based source line. `raw` holds the exact source bytes, `object_name`
+    holds the optional name and `payload` is `{:tle, record}` or `{:omm, omm}`.
+    Values compare structurally.
+    """
+    alias Sidereon.GNSS.Data.CelestrakTleRecord
+
+    defstruct [
+      :record_index,
+      :line_number,
+      :raw,
+      :object_name,
+      :payload
+    ]
+
+    @type t :: %__MODULE__{
+            record_index: pos_integer(),
+            line_number: pos_integer() | nil,
+            raw: binary(),
+            object_name: String.t() | nil,
+            payload: {:tle, CelestrakTleRecord.t()} | {:omm, OMM.t()}
+          }
+
+    @typedoc """
+    Core SGP4 elements. `epoch_jd` is a split Julian date, `bstar` is the
+    drag term, and `mean_motion_dot` and `mean_motion_double_dot` are the
+    optional TLE derivative fields in rev/day² and rev/day³ using the TLE
+    half and one-sixth conventions. `eccentricity` is dimensionless;
+    `argument_of_perigee_deg`, `inclination_deg`, `mean_anomaly_deg`, and
+    `right_ascension_deg` are angles in degrees. `mean_motion_rev_per_day` is
+    revolutions per day. `catalog_number` is the optional decoded identifier,
+    and `omm_epoch_days` is the optional OMM-specific epoch value.
+    """
+    @type element_set :: %{
+            epoch_jd: {float(), float()},
+            bstar: float(),
+            mean_motion_dot: float() | nil,
+            mean_motion_double_dot: float() | nil,
+            eccentricity: float(),
+            argument_of_perigee_deg: float(),
+            inclination_deg: float(),
+            mean_anomaly_deg: float(),
+            mean_motion_rev_per_day: float(),
+            right_ascension_deg: float(),
+            catalog_number: non_neg_integer() | nil,
+            omm_epoch_days: float() | nil
+          }
+    @typedoc "A native TLE or OMM conversion refusal."
+    @type conversion_error :: {:tle, Error.tle()} | {:omm, Error.omm()}
+
+    @doc "Convert the native payload to the core SGP4 element set."
+    @spec to_element_set(t()) :: {:ok, element_set()} | {:error, conversion_error()}
+    def to_element_set(%__MODULE__{payload: {:tle, tle}}), do: wrap(Sidereon.NIF.tle_to_element_set(tle.elements), :tle)
+    def to_element_set(%__MODULE__{payload: {:omm, omm}}), do: wrap(OMM.to_element_set(omm), :omm)
+
+    @doc "Convert the native payload to an OMM."
+    @spec to_omm(t()) :: {:ok, OMM.t()} | {:error, conversion_error()}
+    def to_omm(%__MODULE__{payload: {:tle, tle}, object_name: name}), do: wrap(OMM.from_tle(tle.elements, name), :tle)
+    def to_omm(%__MODULE__{payload: {:omm, omm}}), do: {:ok, omm}
+
+    defp wrap({:error, reason}, kind), do: {:error, {kind, reason}}
+    defp wrap(result, _kind), do: result
+  end
+
+  defmodule CelestrakTleRecord do
+    @moduledoc """
+    A parsed TLE. `elements` holds the native fields, `line1` and `line2` hold
+    the original source lines, and `checksum_warnings` holds checksum findings.
+    Values compare structurally.
+    """
+    defstruct [
+      :elements,
+      :line1,
+      :line2,
+      :checksum_warnings
+    ]
+
+    @typedoc """
+    Native fixed-column TLE element fields.
+
+    `catalog_number`, `classification`, and `international_designator` retain
+    the source identity fields. `epoch_year` and `epoch_day_of_year` hold the
+    resolved year and fractional day. `mean_motion_dot` and
+    `mean_motion_double_dot` are the TLE derivative fields in rev/day² and
+    rev/day³, using the TLE half and one-sixth conventions; the latter's
+    `mean_motion_double_dot_text` preserves its source representation. `bstar`
+    is the drag term and `bstar_text` preserves its source representation.
+    `ephemeris_type`, `elset_number`, and `rev_number` are optional TLE
+    bookkeeping fields. `inclination_deg`, `raan_deg`, `arg_perigee_deg`, and
+    `mean_anomaly_deg` are angles in degrees. `eccentricity` is dimensionless,
+    and `mean_motion` is in revolutions per day.
+    """
+    @type elements :: %{
+            catalog_number: String.t(),
+            classification: String.t(),
+            international_designator: String.t(),
+            epoch_year: integer(),
+            epoch_day_of_year: float(),
+            mean_motion_dot: float(),
+            mean_motion_double_dot: float(),
+            mean_motion_double_dot_text: String.t() | nil,
+            bstar: float(),
+            bstar_text: String.t() | nil,
+            ephemeris_type: integer() | nil,
+            elset_number: integer() | nil,
+            inclination_deg: float(),
+            raan_deg: float(),
+            eccentricity: float(),
+            arg_perigee_deg: float(),
+            mean_anomaly_deg: float(),
+            mean_motion: float(),
+            rev_number: integer() | nil
+          }
+
+    @type t :: %__MODULE__{
+            elements: elements(),
+            line1: binary(),
+            line2: binary(),
+            checksum_warnings: [TLE.checksum_warning()]
+          }
+  end
+
+  defmodule CelestrakGpRejectedRecord do
+    @moduledoc """
+    A rejected GP record. `record_index` and `line_number` locate it, `reason`
+    carries the typed refusal, and `raw` contains exact source bytes. Values
+    compare structurally.
+    """
+    defstruct [
+      :record_index,
+      :line_number,
+      :reason,
+      :raw
+    ]
+
+    @typedoc "A GP framing failure or an SGP4 element-set validation error."
+    @type structural_error ::
+            :unexpected_content
+            | :incomplete_record
+            | :invalid_tle_structure
+            | {:invalid_element_set, Error.sgp4()}
+    @typedoc "A TLE, OMM, or structural reason for rejecting a GP record."
+    @type reason ::
+            {:tle, Error.tle()}
+            | {:omm, Error.omm()}
+            | {:structural, structural_error()}
+    @type t :: %__MODULE__{
+            record_index: pos_integer(),
+            line_number: pos_integer() | nil,
+            reason: reason(),
+            raw: binary()
+          }
+  end
+
+  defmodule CelestrakGpResponse do
+    @moduledoc "Accepted `records` and `rejected` GP records. Values compare structurally."
+    alias Sidereon.GNSS.Data.CelestrakGpRecord
+    alias Sidereon.GNSS.Data.CelestrakGpRejectedRecord
+
+    defstruct records: [],
+              rejected: []
+
+    @type t :: %__MODULE__{
+            records: [CelestrakGpRecord.t()],
+            rejected: [CelestrakGpRejectedRecord.t()]
+          }
+  end
+
+  defmodule CelestrakGpFormat do
+    @moduledoc "CelesTrak GP formats, represented by atoms that compare by value."
+    @type t :: :tle | :three_line | :two_line | :xml | :kvn | :json | :json_pretty | :csv
+
+    @doc "Return the exact GP format wire value."
+    @spec as_str(t()) :: String.t() | {:error, {:invalid_format, term()}}
+    def as_str(format) when format in [:tle, :three_line, :two_line, :xml, :kvn, :json, :json_pretty, :csv],
+      do: Sidereon.NIF.data_celestrak_gp_format_as_str(to_string(format))
+
+    def as_str(format), do: {:error, {:invalid_format, format}}
+  end
+
+  defmodule CelestrakGpSpecial do
+    @moduledoc "CelesTrak special selectors, represented by atoms that compare by value."
+    @type t :: :gpz | :gpz_plus | :decaying
+
+    @doc "Return the exact GP special selector wire value."
+    @spec as_str(t()) :: String.t() | {:error, {:invalid_selector, :special, term()}}
+    def as_str(special) when special in [:gpz, :gpz_plus, :decaying],
+      do: Sidereon.NIF.data_celestrak_gp_special_as_str(to_string(special))
+
+    def as_str(special), do: {:error, {:invalid_selector, :special, special}}
+  end
+
+  @doc "Return the CelesTrak GP source scheme, host and endpoint."
+  @spec celestrak_gp_source_entry() :: catalog_source()
+  def celestrak_gp_source_entry do
+    {gp, _} = NIF.data_gp_sources()
+    source_entry(gp)
+  end
+
+  @doc "Return the NAVCEN source scheme, host and page URL."
+  @spec navcen_source_entry() :: catalog_source()
+  def navcen_source_entry do
+    {_, navcen} = NIF.data_gp_sources()
+    source_entry(navcen)
+  end
+
+  defp source_entry({protocol, host, root_url}), do: %{protocol: protocol, host: host, root_url: root_url}
+
+  @doc "Return the NAVCEN GPS constellation status URL."
+  @spec navcen_constellation_url() :: String.t()
+  def navcen_constellation_url, do: NIF.data_navcen_constellation_url()
+
+  @doc "Build a GP URL from a `{selector, value}` pair and a format atom."
+  @spec celestrak_gp_url(celestrak_gp_query(), celestrak_gp_format()) :: {:ok, String.t()} | {:error, term()}
+  def celestrak_gp_url({selector, value}, format) when is_atom(selector) and is_atom(format) do
+    cond do
+      selector not in @gp_selectors -> {:error, {:invalid_selector, selector, value}}
+      format not in @gp_formats -> {:error, {:invalid_format, format}}
+      not (is_binary(value) or is_atom(value) or is_integer(value)) -> {:error, {:invalid_selector, selector, value}}
+      true -> NIF.data_celestrak_gp_url(to_string(selector), to_string(value), to_string(format)) |> gp_catalog_result()
+    end
+  end
+
+  def celestrak_gp_url({_selector, _value}, format) when not is_atom(format), do: {:error, {:invalid_format, format}}
+  def celestrak_gp_url({selector, value}, _format), do: {:error, {:invalid_selector, selector, value}}
+  def celestrak_gp_url(query, _format), do: {:error, {:invalid_selector, query}}
+
+  @doc "Return the CelesTrak group for a GNSS system."
+  def celestrak_group(system) do
+    case gp_constellation(system, :json) do
+      {:ok, group, _url} -> group
+      error -> error
+    end
+  end
+
+  @doc "Build the GP constellation URL for a GNSS system and format."
+  def celestrak_constellation_url(system, format) do
+    if format in @gp_formats do
+      case gp_constellation(system, format) do
+        {:ok, _group, url} -> {:ok, url}
+        error -> error
+      end
+    else
+      {:error, {:invalid_format, format}}
+    end
+  end
+
+  defp gp_constellation(system, format) when is_atom(system) or is_binary(system) do
+    case NIF.data_celestrak_constellation(to_string(system), to_string(format)) do
+      {:error, "unsupported_system"} -> {:error, {:unsupported_system, system}}
+      result -> gp_catalog_result(result)
+    end
+  end
+
+  defp gp_constellation(system, _format), do: {:error, {:unsupported_system, system}}
+
+  @doc "Parse a CelesTrak GP response, preserving accepted and rejected source bytes."
+  @spec parse_celestrak_gp_response(binary(), celestrak_gp_format()) ::
+          {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  def parse_celestrak_gp_response(bytes, format) when is_binary(bytes) and is_atom(format) do
+    if format in @gp_formats do
+      case NIF.data_parse_celestrak_gp_response(bytes, to_string(format)) do
+        {:ok, records, rejected} ->
+          records =
+            Enum.map(records, fn {index, line, raw, name, payload} ->
+              payload =
+                case payload do
+                  {"tle", elements, line1, line2, warnings} ->
+                    {:tle,
+                     %CelestrakTleRecord{elements: elements, line1: line1, line2: line2, checksum_warnings: warnings}}
+
+                  {"omm", fields} ->
+                    {:omm, OMM.from_native_fields(fields)}
+                end
+
+              %CelestrakGpRecord{record_index: index, line_number: line, raw: raw, object_name: name, payload: payload}
+            end)
+
+          rejected =
+            Enum.map(rejected, fn {index, line, reason, raw} ->
+              %CelestrakGpRejectedRecord{record_index: index, line_number: line, reason: gp_rejection(reason), raw: raw}
+            end)
+
+          {:ok, %CelestrakGpResponse{records: records, rejected: rejected}}
+
+        error ->
+          gp_catalog_result(error)
+      end
+    else
+      {:error, {:invalid_format, format}}
+    end
+  end
+
+  def parse_celestrak_gp_response(_bytes, format) when not is_atom(format), do: {:error, {:invalid_format, format}}
+  def parse_celestrak_gp_response(bytes, _format), do: {:error, {:invalid_input, {:not_a_binary, bytes}}}
+
+  defp gp_catalog_result({:error, {:unsupported_product, {:catalog_error, details}}}) do
+    {:error, %CatalogError{kind: details.kind, fields: Map.drop(details, [:kind, :message]), message: details.message}}
+  end
+
+  defp gp_catalog_result(result), do: result
+
+  defp gp_rejection({"tle", detail}), do: {:tle, detail}
+  defp gp_rejection({"omm", detail}), do: {:omm, detail}
+  defp gp_rejection({"structural", {"unexpected_content", _}}), do: {:structural, :unexpected_content}
+  defp gp_rejection({"structural", {"incomplete_record", _}}), do: {:structural, :incomplete_record}
+  defp gp_rejection({"structural", {"invalid_tle_structure", _}}), do: {:structural, :invalid_tle_structure}
+  defp gp_rejection({"structural", {"invalid_element_set", error}}), do: {:structural, {:invalid_element_set, error}}
+
+  @doc """
+  Fetch, classify and cache a CelesTrak GP response.
+
+  The format defaults to `:json`. Pass options as the second argument, with an
+  optional `:format`, or pass the format followed by options. When CelesTrak
+  reports an unchanged download, the error fields include `:cache_path` if a
+  verified cached copy is available.
+  """
+  @spec fetch_celestrak_gp(celestrak_gp_query()) :: {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  @spec fetch_celestrak_gp(celestrak_gp_query(), celestrak_gp_format() | keyword()) ::
+          {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  @spec fetch_celestrak_gp(celestrak_gp_query(), celestrak_gp_format(), keyword()) ::
+          {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  def fetch_celestrak_gp(query, format \\ :json, opts \\ [])
+
+  def fetch_celestrak_gp(query, opts, []) when is_list(opts) do
+    {format, opts} = Keyword.pop(opts, :format, :json)
+    fetch_celestrak_gp(query, format, opts)
+  end
+
+  def fetch_celestrak_gp(query, format, opts) do
+    with {:ok, url} <- celestrak_gp_url(query, format) do
+      fetch_gp_url(url, format, opts)
+    end
+  end
+
+  @doc """
+  Fetch and parse the GP feed for a GNSS system.
+
+  The format defaults to `:json`. Pass options as the second argument, with an
+  optional `:format`, or pass the format followed by options.
+  """
+  @spec fetch_constellation(atom() | String.t()) :: {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  @spec fetch_constellation(atom() | String.t(), celestrak_gp_format() | keyword()) ::
+          {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  @spec fetch_constellation(atom() | String.t(), celestrak_gp_format(), keyword()) ::
+          {:ok, CelestrakGpResponse.t()} | {:error, term()}
+  def fetch_constellation(system, format \\ :json, opts \\ [])
+
+  def fetch_constellation(system, opts, []) when is_list(opts) do
+    {format, opts} = Keyword.pop(opts, :format, :json)
+    fetch_constellation(system, format, opts)
+  end
+
+  def fetch_constellation(system, format, opts) do
+    with {:ok, url} <- celestrak_constellation_url(system, format) do
+      fetch_gp_url(url, format, opts)
+    end
+  end
+
+  @doc "Fetch and cache the NAVCEN GPS constellation-status page as bytes."
+  @spec fetch_navcen_constellation_status(keyword()) :: {:ok, binary()} | {:error, term()}
+  def fetch_navcen_constellation_status(opts \\ []) do
+    fetch_cached_url(navcen_constellation_url(), opts, fn bytes -> {:ok, bytes} end, false)
+  end
+
+  defp fetch_gp_url(url, format, opts) do
+    fetch_cached_url(url, opts, &parse_celestrak_gp_response(&1, format), true)
+  end
+
+  defp fetch_cached_url(url, opts, parse, gp?) do
+    protocol = if gp?, do: celestrak_gp_source_entry().protocol, else: navcen_source_entry().protocol
+
+    path =
+      if gp? do
+        Path.join([resolve_cache_dir(opts, :gnss), "celestrak-gp", sha256(url)])
+      else
+        Path.join([resolve_cache_dir(opts, :gnss), "navcen", "constellation.html"])
+      end
+
+    default_max_age = if gp?, do: 7200, else: 86_400
+
+    case classify_space_weather(path, Keyword.get(opts, :sha256), Keyword.get(opts, :max_age_s, default_max_age), opts) do
+      {:hit, _} ->
+        case File.read(path) do
+          {:ok, bytes} -> parse.(bytes)
+          {:error, reason} -> {:error, {:cache_not_writable, {:read, path, reason}}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+
+      cache_state ->
+        if truthy?(Keyword.get(opts, :offline)) do
+          {:error, :offline_cache_miss}
+        else
+          verified_path = if cache_state == {:stale, :expired}, do: path
+
+          with :ok <- check_host(url, protocol),
+               {:ok, bytes} <- fetch_catalog_response(url, opts, parse, gp?, 0, 1, verified_path),
+               {:ok, parsed} <- attach_gp_cache_path(parse.(bytes), verified_path),
+               :ok <- verify_sha256(bytes, Keyword.get(opts, :sha256)),
+               :ok <-
+                 commit_file(path, bytes, %{
+                   source_url: url,
+                   protocol: protocol,
+                   compression: "none",
+                   sha256_data: sha256(bytes),
+                   size_data: byte_size(bytes),
+                   sha256_downloaded: sha256(bytes),
+                   size_downloaded: byte_size(bytes),
+                   fetched_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+                   fetcher: "Sidereon.GNSS.Data"
+                 }) do
+            {:ok, parsed}
+          end
+        end
+    end
+  end
+
+  defp attach_gp_cache_path({:error, %CatalogError{kind: :celestrak_gp_not_modified} = error}, path)
+       when is_binary(path) do
+    {:error, %{error | fields: Map.put(error.fields, :cache_path, path)}}
+  end
+
+  defp attach_gp_cache_path(result, _path), do: result
+
+  defp fetch_catalog_response(url, opts, parse, gp?, redirects, attempt, verified_path) do
+    retries = Keyword.get(opts, :retries, @default_retries)
+
+    response =
+      try do
+        case Keyword.get(opts, :http_client) do
+          fun when is_function(fun, 2) -> fun.(url, opts) |> normalize_http_response(url)
+          nil -> req_download(url, opts)
+        end
+      rescue
+        error -> {:error, {:network, Exception.message(error)}}
+      catch
+        kind, reason -> {:error, {:network, {kind, reason}}}
+      end
+
+    case response do
+      {:ok, status, _headers, body} when status in 200..299 ->
+        if byte_size(body) > max_compressed_bytes(opts),
+          do: {:error, {:download_size_exceeded, max_compressed_bytes(opts)}},
+          else: {:ok, body}
+
+      {:ok, status, headers, body} ->
+        classification = if gp?, do: parse.(body), else: :not_gp
+
+        case classification do
+          {:error, %CatalogError{kind: kind} = error}
+          when kind in [
+                 :celestrak_gp_data_not_found,
+                 :celestrak_gp_not_modified
+               ] ->
+            {:error, error} = attach_gp_cache_path({:error, error}, verified_path)
+
+            {:error, {:gp_response, status, url, error}}
+
+          _ when gp? and status in 300..399 ->
+            {:error, {:http_status, status, url}}
+
+          _ when not gp? and status == 404 ->
+            {:error, {:not_found_on_archive, url}}
+
+          _ when status in 300..399 ->
+            with true <- redirects < @max_redirects,
+                 location when is_binary(location) <- header_value(headers, "location"),
+                 {:ok, target} <- validated_redirect_url(url, status, location) do
+              fetch_catalog_response(target, opts, parse, gp?, redirects + 1, attempt, verified_path)
+            else
+              _ -> {:error, {:redirect_not_allowed, status, url}}
+            end
+
+          _ when (status in [408, 429] or status >= 500) and attempt < retries ->
+            sleep_backoff(opts, attempt)
+            fetch_catalog_response(url, opts, parse, gp?, redirects, attempt + 1, verified_path)
+
+          _ ->
+            {:error, {:http_status, status, url}}
+        end
+
+      {:error, {:network, _}} = error ->
+        if attempt < Keyword.get(opts, :retries, @default_retries) do
+          sleep_backoff(opts, attempt)
+          fetch_catalog_response(url, opts, parse, gp?, redirects, attempt + 1, verified_path)
+        else
+          error
+        end
+
+      error ->
+        error
+    end
+  end
 
   @doc "Resolve an exact GNSS product identity independently from its distributor."
   defdelegate identity(product), to: Distribution
@@ -2395,7 +2919,7 @@ defmodule Sidereon.GNSS.Data do
   defp persisted_epoch_interval(_value), do: {:error, {:invalid_field, {:merge_policy, :epoch_interval_s}}}
 
   defp persisted_systems(systems) when is_list(systems) do
-    valid = Enum.all?(systems, &(&1 in ~w(G R E C J I S)))
+    valid = Enum.all?(systems, fn system -> match?({:ok, ^system}, Sidereon.GNSS.System.letter(system)) end)
     canonical = systems |> Enum.uniq() |> Enum.sort()
 
     if valid and systems == canonical,

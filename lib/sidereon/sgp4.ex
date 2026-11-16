@@ -7,9 +7,32 @@ defmodule Sidereon.SGP4 do
   alias Sidereon.NifCall
   alias Sidereon.TemeState
 
+  defmodule FitOmmHeader do
+    @moduledoc """
+    Header for a fitted CCSDS OMM. `creation_date` is the message creation
+    date and `originator` is its producing organization. Values compare structurally.
+    """
+    @enforce_keys [
+      :creation_date,
+      :originator
+    ]
+    defstruct [
+      :creation_date,
+      :originator
+    ]
+
+    @type t :: %__MODULE__{
+            creation_date: String.t(),
+            originator: String.t()
+          }
+  end
+
   defmodule Fit do
     @moduledoc """
     Result of inverse SGP4 TLE fitting.
+
+    `omm_kvn` uses the lenient OMM writer so that it can represent a fit
+    without a CCSDS header. Supply `FitOmmHeader` to include that header.
     """
     @enforce_keys [
       :elements,
@@ -157,6 +180,9 @@ defmodule Sidereon.SGP4 do
 
   @doc """
   Fit a TLE to TEME position samples using the core inverse-SGP4 solver.
+
+  Set `:omm_header` to a `FitOmmHeader` to supply the CCSDS
+  header for the fitted OMM. The core validates the header and object metadata.
   """
   @spec fit_tle([map()], keyword()) :: {:ok, Fit.t()} | {:error, term()}
   def fit_tle(samples, opts \\ []) when is_list(samples) do
@@ -241,9 +267,13 @@ defmodule Sidereon.SGP4 do
       x_scale_values: x_scale_values,
       loss: Keyword.get(opts, :loss, :linear) |> to_string(),
       f_scale: Keyword.get(opts, :f_scale, 1.0) / 1.0,
-      metadata: fit_metadata(Keyword.get(opts, :metadata, []))
+      metadata: fit_metadata(Keyword.get(opts, :metadata, [])),
+      omm_header: fit_omm_header(Keyword.get(opts, :omm_header))
     }
   end
+
+  defp fit_omm_header(nil), do: nil
+  defp fit_omm_header(%FitOmmHeader{creation_date: date, originator: originator}), do: {date, originator}
 
   defp decode_fit(fit) do
     %Fit{

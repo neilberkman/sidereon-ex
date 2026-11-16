@@ -7,7 +7,10 @@ computing look angles, and setting up real-time tracking, all in about
 ## Fetch the TLE
 
 ```elixir
-{:ok, [iss]} = Sidereon.CelesTrak.fetch_tle(25544)
+{:ok, %{records: [record | _]}} =
+  Sidereon.GNSS.Data.fetch_celestrak_gp({:catalog_number, 25544}, :two_line)
+{:tle, tle} = record.payload
+{:ok, iss} = Sidereon.Format.TLE.parse(tle.line1, tle.line2)
 ```
 
 ## Propagate to Now

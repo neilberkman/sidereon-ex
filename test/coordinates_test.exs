@@ -246,25 +246,21 @@ defmodule Sidereon.CoordinatesTest do
       assert {:ok, []} = Sidereon.ground_track(tle, [])
     end
 
-    # The ground-track NIF surfaces an SGP4 init failure rather than masking it
-    # as {:ok, []}. Init failure is unreachable through parse_tle (the element
-    # bridge enforces the same field ranges as SGP4 init), so we drive the NIF
-    # boundary directly with a valid element map whose epoch is pushed out of the
-    # JD domain SGP4 accepts.
+    # Epoch days outside the TLE domain are rejected by the element bridge.
     defp uninitializable_nif_map do
       {:ok, tle} = Sidereon.parse_tle(@iss_line1, @iss_line2)
       {:ok, map} = Sidereon.SGP4.to_nif_elements_map(tle)
       %{map | epochdays: 1.0e9}
     end
 
-    test "the NIF still returns {:ok, []} for empty datetimes even when init would fail" do
-      assert {:ok, []} = Sidereon.NIF.ground_track(uninitializable_nif_map(), [], :afspc)
+    test "the NIF rejects an out-of-range epoch even for empty datetimes" do
+      assert {:error, :invalid_input} = Sidereon.NIF.ground_track(uninitializable_nif_map(), [], :afspc)
     end
 
-    test "the NIF errors (does not mask as {:ok, []}) when SGP4 init fails for non-empty datetimes" do
+    test "the NIF rejects an out-of-range epoch for non-empty datetimes" do
       tuples = [{{2024, 1, 1}, {12, 0, 0, 0}}]
 
-      assert {:error, "SGP4 init: " <> _} =
+      assert {:error, :invalid_input} =
                Sidereon.NIF.ground_track(uninitializable_nif_map(), tuples, :afspc)
     end
 

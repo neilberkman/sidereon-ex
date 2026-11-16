@@ -4,7 +4,7 @@
 //! and encodes the returned elements, TLE lines, OMM text, and diagnostics.
 
 use rustler::{Encoder, Env, Term};
-use sidereon_core::astro::omm::{encode_kvn, OmmError};
+use sidereon_core::astro::omm::{encode_kvn_lenient, OmmError};
 use sidereon_core::astro::sgp4::{
     fit_tle, ElementSet, FitConfig, FitEpoch, FitSample, JulianDate, Loss, OpsMode, TleFit,
     TleFitError, TleMetadata, XScale,
@@ -32,6 +32,7 @@ mod atoms {
         solution_infeasible,
         final_elements,
         tle_encode,
+        omm_header,
         trf_error,
         empty_residual,
         empty_parameters,
@@ -91,6 +92,7 @@ struct FitConfigTerm {
     loss: String,
     f_scale: f64,
     metadata: MetadataTerm,
+    omm_header: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
@@ -187,7 +189,7 @@ impl From<&ElementSet> for ElementSetTerm {
 
 impl TleFitTerm {
     fn from_fit(value: TleFit) -> (Self, Option<OmmError>) {
-        let omm_kvn = encode_kvn(&value.omm);
+        let omm_kvn = encode_kvn_lenient(&value.omm);
         let omm_error = omm_kvn.as_ref().err().cloned();
         let stats = value.stats;
         let term = Self {
@@ -285,6 +287,12 @@ fn decode_config(config: FitConfigTerm) -> Option<FitConfig> {
     fit_config.loss = loss;
     fit_config.f_scale = config.f_scale;
     fit_config.metadata = config.metadata.into();
+    fit_config.omm_header = config.omm_header.map(|(creation_date, originator)| {
+        sidereon_core::astro::sgp4::fit::FitOmmHeader {
+            creation_date,
+            originator,
+        }
+    });
     Some(fit_config)
 }
 
@@ -380,6 +388,10 @@ fn tle_fit_error_term<'a>(env: Env<'a>, error: &TleFitError) -> Term<'a> {
         E::TleEncode(source) => (
             atoms::tle_encode().encode(env),
             crate::ndm_errors::tle_error_term(env, source),
+        ),
+        E::OmmHeader(source) => (
+            atoms::omm_header().encode(env),
+            crate::ndm_errors::omm_error_term(env, source),
         ),
     };
     (atoms::tle_fit_error(), kind, error.to_string(), detail).encode(env)

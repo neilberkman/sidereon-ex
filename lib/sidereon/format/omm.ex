@@ -25,6 +25,8 @@ defmodule Sidereon.Format.OMM do
 
   alias Sidereon.CCSDS.Error
   alias Sidereon.Elements
+  alias Sidereon.GNSS.Data.CelestrakGpRecord
+  alias Sidereon.GNSS.Data.CelestrakTleRecord
   alias Sidereon.NIF
   alias Sidereon.NifCall
 
@@ -227,6 +229,20 @@ defmodule Sidereon.Format.OMM do
   @type skipped_record :: {non_neg_integer(), Error.omm()}
 
   @typedoc """
+  A source span: `index` is the zero-based record index, `byte_start` is the
+  first byte, `byte_end` is the exclusive end, and `line` is the one-based
+  starting line. Spans are maps and compare by value.
+  """
+  @type record_span :: %{
+          index: non_neg_integer(),
+          byte_start: non_neg_integer(),
+          byte_end: non_neg_integer(),
+          line: pos_integer()
+        }
+
+  @type array_with_spans :: {:ok, [t()], [skipped_record()], [record_span()]} | {:error, Error.omm()}
+
+  @typedoc """
   A refusal of the decoded-map `parse/1`: a missing or unreadable key, named
   as the key it reads.
   """
@@ -385,6 +401,24 @@ defmodule Sidereon.Format.OMM do
     text |> NIF.omm_parse_json_array() |> from_nif_array()
   end
 
+  @doc "Parse XML records with their zero-based byte ranges and one-based source lines. Span maps compare by value."
+  @spec parse_xml_all_with_spans(String.t()) :: array_with_spans()
+  def parse_xml_all_with_spans(text) when is_binary(text) do
+    text |> NIF.omm_parse_xml_all_with_spans() |> from_nif_array_with_spans()
+  end
+
+  @doc "Parse JSON records with their zero-based byte ranges and one-based source lines. Span maps compare by value."
+  @spec parse_json_array_with_spans(String.t()) :: array_with_spans()
+  def parse_json_array_with_spans(text) when is_binary(text) do
+    text |> NIF.omm_parse_json_array_with_spans() |> from_nif_array_with_spans()
+  end
+
+  @doc "Parse CSV records with their zero-based byte ranges and one-based source lines. Span maps compare by value."
+  @spec parse_csv_array_with_spans(String.t()) :: array_with_spans()
+  def parse_csv_array_with_spans(text) when is_binary(text) do
+    text |> NIF.omm_parse_csv_array_with_spans() |> from_nif_array_with_spans()
+  end
+
   @doc """
   Encode an OMM value.
 
@@ -446,6 +480,28 @@ defmodule Sidereon.Format.OMM do
   """
   @spec encode_xml(t()) :: {:ok, String.t()} | {:error, encode_error()}
   def encode_xml(%__MODULE__{} = omm), do: encode_with_nif(omm, &NIF.omm_encode_xml/1)
+
+  @doc "Encodes a partial OMM as KVN without requiring the CCSDS mandatory fields."
+  @spec encode_kvn_lenient(t()) :: {:ok, String.t()} | {:error, encode_error()}
+  def encode_kvn_lenient(%__MODULE__{} = omm), do: encode_with_nif(omm, &NIF.omm_encode_kvn_lenient/1)
+
+  @doc "Encodes a partial OMM as XML without requiring the CCSDS mandatory fields."
+  @spec encode_xml_lenient(t()) :: {:ok, String.t()} | {:error, encode_error()}
+  def encode_xml_lenient(%__MODULE__{} = omm), do: encode_with_nif(omm, &NIF.omm_encode_xml_lenient/1)
+
+  @doc "Convert native TLE element fields to an OMM, retaining the optional object name."
+  @spec from_tle(CelestrakTleRecord.elements(), String.t() | nil) :: {:ok, t()} | {:error, term()}
+  def from_tle(fields, object_name \\ nil) when is_map(fields) do
+    fields |> NIF.omm_from_tle(object_name) |> from_nif_fields()
+  end
+
+  @doc "Set and validate the mandatory CCSDS header fields."
+  @spec with_ccsds_header(t(), String.t(), String.t(), String.t()) :: {:ok, t()} | {:error, term()}
+  def with_ccsds_header(%__MODULE__{} = omm, version, creation_date, originator) do
+    with {:ok, fields} <- to_nif_fields(omm) do
+      fields |> NIF.omm_with_ccsds_header(version, creation_date, originator) |> from_nif_fields()
+    end
+  end
 
   @doc """
   Encode a typed OMM struct as CCSDS/CelesTrak OMM JSON text.
@@ -551,6 +607,12 @@ defmodule Sidereon.Format.OMM do
     e in ErlangError -> NifCall.error(e, __STACKTRACE__, :omm_to_element_set)
   end
 
+  @doc "Return the core SGP4 element set without converting its epoch to a DateTime."
+  @spec to_element_set(t()) :: {:ok, CelestrakGpRecord.element_set()} | {:error, term()}
+  def to_element_set(%__MODULE__{} = omm) do
+    with {:ok, fields} <- to_nif_fields(omm), do: NIF.omm_to_element_set(fields)
+  end
+
   # The epoch as a `DateTime` to the microsecond. A UTC leap second, which a
   # `DateTime` cannot hold, is the instant after 23:59:59 by its seconds, the
   # same Julian date the core forms for it. The core has already checked that
@@ -573,6 +635,15 @@ defmodule Sidereon.Format.OMM do
 
   defp from_nif_array({:ok, omms, skipped}), do: {:ok, Enum.map(omms, &build_omm/1), skipped}
   defp from_nif_array({:error, reason}), do: {:error, reason}
+
+  defp from_nif_array_with_spans({:ok, omms, skipped, spans}) do
+    {:ok, Enum.map(omms, &build_omm/1), skipped,
+     Enum.map(spans, fn {index, byte_start, byte_end, line} ->
+       %{index: index, byte_start: byte_start, byte_end: byte_end, line: line}
+     end)}
+  end
+
+  defp from_nif_array_with_spans({:error, reason}), do: {:error, reason}
 
   @plain_fields [
     :ccsds_omm_vers,
@@ -623,6 +694,9 @@ defmodule Sidereon.Format.OMM do
       })
     )
   end
+
+  @doc false
+  def from_native_fields(fields), do: build_omm(fields)
 
   defp build_spacecraft(nil), do: nil
   defp build_spacecraft(fields), do: struct(Spacecraft, fields)

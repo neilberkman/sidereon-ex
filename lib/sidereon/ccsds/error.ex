@@ -72,6 +72,8 @@ defmodule Sidereon.CCSDS.Error do
   @type omm ::
           shared()
           | {:missing_field, atom()}
+          | {:missing_one_of, [atom()]}
+          | {:malformed_document, String.t(), String.t(), non_neg_integer() | nil}
           | {:field, String.t()}
           | {:epoch, String.t()}
           | {:csv_column_count, non_neg_integer(), non_neg_integer()}

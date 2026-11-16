@@ -77,6 +77,17 @@ mod atoms {
         lon_deg_bits,
         lat_index,
         lon_index,
+        invalid_celestrak_gp_selector,
+        empty_celestrak_gp_response,
+        celestrak_gp_data_not_found,
+        celestrak_gp_not_modified,
+        celestrak_gp_html_response,
+        invalid_celestrak_gp_response,
+        selector,
+        query,
+        last_successful_download,
+        line,
+        column,
     }
 }
 
@@ -269,6 +280,8 @@ enum CatalogProjectionValue {
     I32(i32),
     U8(u8),
     Date(ProductDate),
+    OptionalText(Option<String>),
+    OptionalSize(Option<usize>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +301,47 @@ fn catalog_error_projection(error: &DataCatalogError) -> CatalogErrorProjection 
     };
 
     match error {
+        DataCatalogError::InvalidCelestrakGpSelector { selector, value } => projection(
+            "invalid_celestrak_gp_selector",
+            vec![
+                ("selector", Value::Text((*selector).into())),
+                ("value", Value::Text(value.clone())),
+            ],
+        ),
+        DataCatalogError::EmptyCelestrakGpResponse => {
+            projection("empty_celestrak_gp_response", vec![])
+        }
+        DataCatalogError::CelestrakGpDataNotFound => {
+            projection("celestrak_gp_data_not_found", vec![])
+        }
+        DataCatalogError::CelestrakGpNotModified {
+            query,
+            last_successful_download,
+        } => projection(
+            "celestrak_gp_not_modified",
+            vec![
+                ("query", Value::OptionalText(query.clone())),
+                (
+                    "last_successful_download",
+                    Value::OptionalText(last_successful_download.clone()),
+                ),
+            ],
+        ),
+        DataCatalogError::CelestrakGpHtmlResponse => {
+            projection("celestrak_gp_html_response", vec![])
+        }
+        DataCatalogError::InvalidCelestrakGpResponse {
+            reason,
+            line,
+            column,
+        } => projection(
+            "invalid_celestrak_gp_response",
+            vec![
+                ("reason", Value::Text(reason.clone())),
+                ("line", Value::OptionalSize(*line)),
+                ("column", Value::OptionalSize(*column)),
+            ],
+        ),
         DataCatalogError::UnknownCenter(value) => projection(
             "unknown_center",
             vec![("value", Value::Text(value.clone()))],
@@ -475,6 +529,17 @@ fn catalog_error_projection(error: &DataCatalogError) -> CatalogErrorProjection 
 
 fn catalog_atom(name: &str) -> rustler::Atom {
     match name {
+        "invalid_celestrak_gp_selector" => atoms::invalid_celestrak_gp_selector(),
+        "empty_celestrak_gp_response" => atoms::empty_celestrak_gp_response(),
+        "celestrak_gp_data_not_found" => atoms::celestrak_gp_data_not_found(),
+        "celestrak_gp_not_modified" => atoms::celestrak_gp_not_modified(),
+        "celestrak_gp_html_response" => atoms::celestrak_gp_html_response(),
+        "invalid_celestrak_gp_response" => atoms::invalid_celestrak_gp_response(),
+        "selector" => atoms::selector(),
+        "query" => atoms::query(),
+        "last_successful_download" => atoms::last_successful_download(),
+        "line" => atoms::line(),
+        "column" => atoms::column(),
         "unknown_center" => atoms::unknown_center(),
         "unknown_product_type" => atoms::unknown_product_type(),
         "unsupported_product" => atoms::unsupported_product(),
@@ -535,6 +600,8 @@ fn catalog_projection_value_term<'a>(env: Env<'a>, value: CatalogProjectionValue
         CatalogProjectionValue::I32(value) => value.encode(env),
         CatalogProjectionValue::U8(value) => value.encode(env),
         CatalogProjectionValue::Date(value) => (value.year, value.month, value.day).encode(env),
+        CatalogProjectionValue::OptionalText(value) => value.encode(env),
+        CatalogProjectionValue::OptionalSize(value) => value.encode(env),
     }
 }
 
@@ -2076,4 +2143,218 @@ mod catalog_error_contract_tests {
             assert_eq!(error, error.clone(), "{expected_kind} derived Eq");
         }
     }
+}
+
+fn gp_format(value: &str) -> Option<data::CelestrakGpFormat> {
+    use data::CelestrakGpFormat as F;
+    Some(match value {
+        "tle" => F::Tle,
+        "three_line" => F::ThreeLine,
+        "two_line" => F::TwoLine,
+        "xml" => F::Xml,
+        "kvn" => F::Kvn,
+        "json" => F::Json,
+        "json_pretty" => F::JsonPretty,
+        "csv" => F::Csv,
+        _ => return None,
+    })
+}
+
+#[rustler::nif]
+fn data_celestrak_gp_format_as_str(format: String) -> rustler::NifResult<&'static str> {
+    Ok(gp_format(&format).ok_or(rustler::Error::BadArg)?.as_str())
+}
+
+#[rustler::nif]
+fn data_celestrak_gp_special_as_str(special: String) -> rustler::NifResult<&'static str> {
+    use data::CelestrakGpSpecial as S;
+    Ok(match special.as_str() {
+        "gpz" => S::Gpz,
+        "gpz_plus" => S::GpzPlus,
+        "decaying" => S::Decaying,
+        _ => return Err(rustler::Error::BadArg),
+    }
+    .as_str())
+}
+
+#[rustler::nif]
+fn data_gp_sources() -> (
+    (&'static str, &'static str, &'static str),
+    (&'static str, &'static str, &'static str),
+) {
+    let gp = data::celestrak_gp_source_entry();
+    let navcen = data::navcen_source_entry();
+    (
+        (gp.protocol.as_str(), gp.host, gp.root_url),
+        (navcen.protocol.as_str(), navcen.host, navcen.root_url),
+    )
+}
+
+#[rustler::nif]
+fn data_navcen_constellation_url() -> &'static str {
+    data::navcen_constellation_url()
+}
+
+#[rustler::nif]
+fn data_celestrak_gp_url<'a>(
+    env: Env<'a>,
+    selector: String,
+    value: String,
+    format: String,
+) -> rustler::NifResult<Term<'a>> {
+    use data::{CelestrakGpQuery as Q, CelestrakGpSpecial as S};
+    let format = gp_format(&format).ok_or(rustler::Error::BadArg)?;
+    let query = match selector.as_str() {
+        "group" => Q::Group(&value),
+        "international_designator" => Q::InternationalDesignator(&value),
+        "name" => Q::Name(&value),
+        "catalog_number" => match value.parse::<u32>() {
+            Ok(n) => Q::CatalogNumber(n),
+            Err(_) => {
+                return Ok(encode_catalog_error(
+                    env,
+                    DataCatalogError::InvalidCelestrakGpSelector {
+                        selector: "CATNR",
+                        value,
+                    },
+                ))
+            }
+        },
+        "special" => Q::Special(match value.as_str() {
+            "gpz" => S::Gpz,
+            "gpz_plus" => S::GpzPlus,
+            "decaying" => S::Decaying,
+            _ => {
+                return Ok(encode_catalog_error(
+                    env,
+                    DataCatalogError::InvalidCelestrakGpSelector {
+                        selector: "SPECIAL",
+                        value,
+                    },
+                ))
+            }
+        }),
+        _ => return Err(rustler::Error::BadArg),
+    };
+    Ok(match data::celestrak_gp_url(query, format) {
+        Ok(url) => (atoms::ok(), url).encode(env),
+        Err(error) => encode_catalog_error(env, error),
+    })
+}
+
+fn gnss_system(input: &str) -> Option<sidereon_core::GnssSystem> {
+    ('A'..='Z')
+        .filter_map(sidereon_core::GnssSystem::from_letter)
+        .find(|system| {
+            input == system.letter().to_string() || input.eq_ignore_ascii_case(system.as_str())
+        })
+}
+
+#[rustler::nif]
+fn data_gnss_system<'a>(env: Env<'a>, input: String) -> Term<'a> {
+    match gnss_system(&input) {
+        Some(system) => (atoms::ok(), system.letter().to_string(), system.as_str()).encode(env),
+        None => (atoms::error(), "unsupported_system").encode(env),
+    }
+}
+
+#[rustler::nif]
+fn data_celestrak_constellation<'a>(
+    env: Env<'a>,
+    letter: String,
+    format: String,
+) -> rustler::NifResult<Term<'a>> {
+    let Some(system) = gnss_system(&letter) else {
+        return Ok((atoms::error(), "unsupported_system").encode(env));
+    };
+    let format = gp_format(&format).ok_or(rustler::Error::BadArg)?;
+    Ok(match data::celestrak_constellation_url(system, format) {
+        Ok(url) => (
+            atoms::ok(),
+            sidereon_core::constellation::celestrak_group(system),
+            url,
+        )
+            .encode(env),
+        Err(error) => encode_catalog_error(env, error),
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn data_parse_celestrak_gp_response<'a>(
+    env: Env<'a>,
+    bytes: Binary<'a>,
+    format: String,
+) -> rustler::NifResult<Term<'a>> {
+    use data::{
+        CelestrakGpPayload as P, CelestrakGpRejectionReason as R, CelestrakGpStructuralError as S,
+    };
+    let format = gp_format(&format).ok_or(rustler::Error::BadArg)?;
+    Ok(
+        match data::parse_celestrak_gp_response(bytes.as_slice(), format) {
+            Err(error) => encode_catalog_error(env, error),
+            Ok(response) => {
+                let records: Vec<_> = response
+                    .records
+                    .into_iter()
+                    .map(|record| {
+                        let payload = match record.payload {
+                            P::Tle(tle) => (
+                                "tle",
+                                crate::tle::TleFields::from(tle.elements),
+                                tle.line1,
+                                tle.line2,
+                                crate::tle::encode_warnings(env, &tle.checksum_warnings),
+                            )
+                                .encode(env),
+                            P::Omm(omm) => ("omm", crate::omm::OmmFields::from(*omm)).encode(env),
+                        };
+                        (
+                            record.record_index,
+                            record.line_number,
+                            bytes_to_binary(env, record.raw.as_bytes()),
+                            record.object_name,
+                            payload,
+                        )
+                            .encode(env)
+                    })
+                    .collect();
+                let rejected: Vec<_> = response
+                    .rejected
+                    .into_iter()
+                    .map(|record| {
+                        let reason = match record.reason {
+                            R::Tle(error) => {
+                                ("tle", crate::ndm_errors::tle_error_term(env, &error)).encode(env)
+                            }
+                            R::Omm(error) => {
+                                ("omm", crate::ndm_errors::omm_error_term(env, &error)).encode(env)
+                            }
+                            R::Structural(error) => {
+                                let detail = match error {
+                                    S::UnexpectedContent => ("unexpected_content", ().encode(env)),
+                                    S::IncompleteRecord => ("incomplete_record", ().encode(env)),
+                                    S::InvalidTleStructure => {
+                                        ("invalid_tle_structure", ().encode(env))
+                                    }
+                                    S::InvalidElementSet(error) => (
+                                        "invalid_element_set",
+                                        crate::ndm_errors::sgp4_error_term(env, &error),
+                                    ),
+                                };
+                                ("structural", detail).encode(env)
+                            }
+                        };
+                        (
+                            record.record_index,
+                            record.line_number,
+                            reason,
+                            bytes_to_binary(env, record.raw.as_bytes()),
+                        )
+                            .encode(env)
+                    })
+                    .collect();
+                (atoms::ok(), records, rejected).encode(env)
+            }
+        },
+    )
 }

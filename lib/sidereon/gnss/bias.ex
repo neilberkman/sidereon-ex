@@ -389,12 +389,13 @@ defmodule Sidereon.GNSS.Bias do
   defp scale_name(scale) when is_binary(scale), do: String.upcase(scale)
 
   defp system_letter(nil), do: nil
-  defp system_letter(:gps), do: "G"
-  defp system_letter(:glonass), do: "R"
-  defp system_letter(:galileo), do: "E"
-  defp system_letter(:beidou), do: "C"
-  defp system_letter(:qzss), do: "J"
-  defp system_letter(:navic), do: "I"
-  defp system_letter(:sbas), do: "S"
+
+  defp system_letter(value) when is_atom(value) do
+    case Sidereon.GNSS.System.letter(value) do
+      {:ok, letter} -> letter
+      _ -> raise FunctionClauseError, module: __MODULE__, function: :system_letter, arity: 1
+    end
+  end
+
   defp system_letter(value) when is_binary(value), do: value
 end

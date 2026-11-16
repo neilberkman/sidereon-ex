@@ -285,6 +285,8 @@ defmodule Sidereon.NIF do
 
   def tle_parse(_line1, _line2, _policy), do: :erlang.nif_error(:nif_not_loaded)
 
+  def tle_to_element_set(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
   def tle_encode(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def parse_tle_file(_text, _policy), do: :erlang.nif_error(:nif_not_loaded)
@@ -308,9 +310,23 @@ defmodule Sidereon.NIF do
 
   def omm_parse_json_array(_text), do: :erlang.nif_error(:nif_not_loaded)
 
+  def omm_parse_xml_all_with_spans(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_parse_json_array_with_spans(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_parse_csv_array_with_spans(_text), do: :erlang.nif_error(:nif_not_loaded)
+
   def omm_encode_kvn(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_encode_xml(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_encode_kvn_lenient(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_encode_xml_lenient(_fields), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_from_tle(_fields, _object_name), do: :erlang.nif_error(:nif_not_loaded)
+
+  def omm_with_ccsds_header(_fields, _version, _creation_date, _originator), do: :erlang.nif_error(:nif_not_loaded)
 
   def omm_encode_json(_fields), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -2860,6 +2876,15 @@ defmodule Sidereon.NIF do
   def data_centers, do: :erlang.nif_error(:nif_not_loaded)
   def data_content_types, do: :erlang.nif_error(:nif_not_loaded)
   def data_allowed_hosts, do: :erlang.nif_error(:nif_not_loaded)
+
+  def data_gp_sources, do: :erlang.nif_error(:nif_not_loaded)
+  def data_navcen_constellation_url, do: :erlang.nif_error(:nif_not_loaded)
+  def data_celestrak_gp_format_as_str(_format), do: :erlang.nif_error(:nif_not_loaded)
+  def data_celestrak_gp_special_as_str(_special), do: :erlang.nif_error(:nif_not_loaded)
+  def data_celestrak_gp_url(_selector, _value, _format), do: :erlang.nif_error(:nif_not_loaded)
+  def data_gnss_system(_system), do: :erlang.nif_error(:nif_not_loaded)
+  def data_celestrak_constellation(_system, _format), do: :erlang.nif_error(:nif_not_loaded)
+  def data_parse_celestrak_gp_response(_bytes, _format), do: :erlang.nif_error(:nif_not_loaded)
 
   def data_validate_exact_product_set(_expected, _available), do: :erlang.nif_error(:nif_not_loaded)
   def data_validate_product_identity_catalog_details(_identity_fields), do: :erlang.nif_error(:nif_not_loaded)

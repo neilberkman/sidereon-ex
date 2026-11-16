@@ -400,6 +400,11 @@ The configured policy propagates across the pipeline:
 - **Format parse and serialize** TLE and OMM (KVN, XML, JSON) parse and encode,
   CCSDS OPM / OEM / CDM / TDM, and the GNSS products above. See `Sidereon.Format.TLE`,
   `Sidereon.Format.OMM`, `Sidereon.CCSDS.OPM`, `Sidereon.CCSDS.OEM`, `Sidereon.CCSDS.TDM`.
+  OMM KVN and XML writers require mandatory CCSDS fields; their lenient
+  counterparts accept partial messages.
+  `Sidereon.GNSS.Data` builds CelesTrak GP and NAVCEN URLs, parses GP
+  responses with source bytes and typed rejections, and fetches and caches
+  catalog data. GP cache entries are fresh for two hours by default.
   TDM also exposes ordered metadata lookup, matching read/write policies, and
   typed input-error kinds with core diagnostic text.
 
