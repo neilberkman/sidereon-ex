@@ -2401,22 +2401,18 @@ defmodule Sidereon.GNSS.SP3 do
   defp normalize_merge_systems(system), do: {:error, {:unsupported_systems_filter, system}}
 
   defp normalize_merge_system(system) when is_atom(system) do
-    case system do
-      :gps -> {:ok, "G"}
-      :glonass -> {:ok, "R"}
-      :galileo -> {:ok, "E"}
-      :beidou -> {:ok, "C"}
-      :qzss -> {:ok, "J"}
-      :navic -> {:ok, "I"}
-      :sbas -> {:ok, "S"}
-      other -> {:error, {:unsupported_system, other}}
+    case Sidereon.GNSS.System.letter(system) do
+      {:ok, letter} -> {:ok, letter}
+      _ -> {:error, {:unsupported_system, system}}
     end
   end
 
   defp normalize_merge_system(<<letter::binary-size(1)>>) do
-    case String.upcase(letter) do
-      system when system in ~w(G R E C J I S) -> {:ok, system}
-      other -> {:error, {:unsupported_system, other}}
+    upper = String.upcase(letter)
+
+    case Sidereon.GNSS.System.letter(upper) do
+      {:ok, value} -> {:ok, value}
+      _ -> {:error, {:unsupported_system, upper}}
     end
   end
 

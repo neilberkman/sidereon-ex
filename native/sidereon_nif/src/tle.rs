@@ -33,7 +33,7 @@ mod atoms {
 /// `%Sidereon.Elements{}` numeric content with the epoch already split into a
 /// calendar year and one-based fractional day-of-year.
 #[derive(Debug, Clone, rustler::NifMap)]
-struct TleFields {
+pub(crate) struct TleFields {
     catalog_number: String,
     classification: String,
     international_designator: String,
@@ -137,7 +137,7 @@ fn encode_warning<'a>(env: Env<'a>, warning: &ChecksumWarning) -> Term<'a> {
         .encode(env)
 }
 
-fn encode_warnings<'a>(env: Env<'a>, warnings: &[ChecksumWarning]) -> Term<'a> {
+pub(crate) fn encode_warnings<'a>(env: Env<'a>, warnings: &[ChecksumWarning]) -> Term<'a> {
     warnings
         .iter()
         .map(|w| encode_warning(env, w))
@@ -228,4 +228,13 @@ fn parse_tle_file<'a>(env: Env<'a>, text: String, policy: Atom) -> NifResult<Ter
         })
         .collect();
     Ok((atoms::ok(), satellites, rejected).encode(env))
+}
+
+#[rustler::nif]
+fn tle_to_element_set<'a>(env: Env<'a>, fields: TleFields) -> Term<'a> {
+    let elements: TleElements = fields.into();
+    match elements.to_element_set() {
+        Ok(set) => (atoms::ok(), crate::omm::ElementSetFields::from(set)).encode(env),
+        Err(error) => (atoms::error(), tle_error_term(env, &error)).encode(env),
+    }
 }

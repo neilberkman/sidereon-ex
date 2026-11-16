@@ -52,8 +52,6 @@ defmodule Sidereon.GNSS.Constellation do
   # The five constellations the catalog resolves identities for. (The core's
   # `GnssSystem` also has NavIC/SBAS, but there is no OMM identity adapter for
   # them, so they are out of scope for this module.)
-  @system_letters %{gps: "G", glonass: "R", galileo: "E", beidou: "C", qzss: "J"}
-  @letter_systems Map.new(@system_letters, fn {atom, letter} -> {letter, atom} end)
   # Sort order matching the core's `GnssSystem` enum (used to keep multi-system
   # results deterministic), not Elixir's atom ordering.
   @system_order %{gps: 0, glonass: 1, galileo: 2, beidou: 3, qzss: 4}
@@ -687,7 +685,7 @@ defmodule Sidereon.GNSS.Constellation do
   """
   @spec sp3_id(system(), pos_integer()) :: String.t()
   def sp3_id(system, prn) when is_integer(prn) and prn > 0 do
-    NIF.constellation_sp3_id(Map.fetch!(@system_letters, system), prn)
+    NIF.constellation_sp3_id(system_letter!(system), prn)
   end
 
   @doc """
@@ -726,14 +724,23 @@ defmodule Sidereon.GNSS.Constellation do
 
   # --- system identity helpers ---------------------------------------------
 
-  defp system_letter(system) do
-    case Map.fetch(@system_letters, system) do
-      {:ok, letter} -> {:ok, letter}
-      :error -> {:error, {:unsupported_system, system}}
+  defp system_letter(system) when is_map_key(@system_order, system) do
+    Sidereon.GNSS.System.letter(system)
+  end
+
+  defp system_letter(system), do: {:error, {:unsupported_system, system}}
+
+  defp system_letter!(system) do
+    case system_letter(system) do
+      {:ok, letter} -> letter
+      _ -> raise KeyError, key: system, term: @system_order
     end
   end
 
-  defp letter_to_system(letter), do: Map.fetch!(@letter_systems, letter)
+  defp letter_to_system(letter) do
+    {:ok, _letter, name} = Sidereon.GNSS.System.identity(letter)
+    name |> String.downcase() |> String.to_existing_atom()
+  end
 
   # --- OMM extraction (user maps -> NIF OMM-lite maps) ---------------------
 
@@ -807,7 +814,7 @@ defmodule Sidereon.GNSS.Constellation do
 
   defp to_nif_record(%Record{} = record) do
     %{
-      system: Map.fetch!(@system_letters, record.system),
+      system: system_letter!(record.system),
       prn: record.prn,
       svn: record.svn,
       norad_id: record.norad_id,
@@ -839,7 +846,7 @@ defmodule Sidereon.GNSS.Constellation do
 
   defp to_nif_status(%NavcenStatus{} = status) do
     %{
-      system: Map.fetch!(@system_letters, status.system),
+      system: system_letter!(status.system),
       prn: status.prn,
       svn: status.svn,
       usable: status.usable?,

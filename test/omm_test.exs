@@ -54,6 +54,16 @@ defmodule Sidereon.OMMTest do
   end
 
   describe "text OMM parsing" do
+    test "malformed documents and missing orbital size retain distinct details" do
+      assert {:error, {:malformed_document, "JSON", "expected ident at line 1 column 2", 1}} =
+               OMM.parse_json("not json")
+
+      kvn =
+        "EPOCH = 2026-01-01T00:00:00\nECCENTRICITY = 0.01\nINCLINATION = 1\nRA_OF_ASC_NODE = 2\nARG_OF_PERICENTER = 3\nMEAN_ANOMALY = 4\n"
+
+      assert {:error, {:missing_one_of, [:semi_major_axis, :mean_motion]}} = OMM.parse_kvn(kvn)
+    end
+
     test "parses KVN, XML, and JSON fixtures into typed OMM structs" do
       {:ok, kvn} = OMM.parse_kvn(core_omm_fixture("25544", "kvn"))
       {:ok, xml} = OMM.parse_xml(core_omm_fixture("25544", "xml"))
@@ -87,12 +97,23 @@ defmodule Sidereon.OMMTest do
   end
 
   describe "text OMM serialization" do
+    test "partial records require explicit lenient KVN and XML writers" do
+      {:ok, omm} = OMM.parse_json(core_omm_fixture("28884", "json"))
+
+      assert {:error, {:missing_field, :ccsds_omm_vers}} = OMM.encode_kvn(omm)
+      assert {:error, {:missing_field, :ccsds_omm_vers}} = OMM.encode_xml(omm)
+      assert {:ok, kvn} = OMM.encode_kvn_lenient(omm)
+      assert {:ok, xml} = OMM.encode_xml_lenient(omm)
+      assert kvn =~ "OBJECT_NAME = GALAXY 15 (G-15)\n"
+      assert xml =~ "<OBJECT_NAME>GALAXY 15 (G-15)</OBJECT_NAME>"
+    end
+
     test "round-trips through KVN, XML, and JSON encoders" do
       {:ok, omm} = OMM.parse_kvn(core_omm_fixture("24876", "kvn"))
 
       for {encode, parse} <- [
-            {&OMM.encode_kvn/1, &OMM.parse_kvn/1},
-            {&OMM.encode_xml/1, &OMM.parse_xml/1},
+            {&OMM.encode_kvn_lenient/1, &OMM.parse_kvn/1},
+            {&OMM.encode_xml_lenient/1, &OMM.parse_xml/1},
             {&OMM.encode_json/1, &OMM.parse_json/1}
           ] do
         {:ok, text} = encode.(omm)
@@ -108,14 +129,18 @@ defmodule Sidereon.OMMTest do
 
       # CelesTrak GP JSON states no version, and none is filled in.
       assert omm.ccsds_omm_vers == nil
-      assert {:ok, kvn} = OMM.to_kvn_string(omm)
+      assert {:error, {:missing_field, :ccsds_omm_vers}} = OMM.to_kvn_string(omm)
+      assert {:ok, kvn} = OMM.encode_kvn_lenient(omm)
       refute String.contains?(kvn, "CCSDS_OMM_VERS")
-      assert {:ok, kvn} = OMM.to_kvn_string(%{omm | ccsds_omm_vers: "2.0"})
+      assert {:ok, complete} = OMM.with_ccsds_header(omm, "2.0", "2026-06-17T05:00:00", "TEST")
+      complete = %{complete | center_name: "EARTH", ref_frame: "TEME", time_system: "UTC", mean_element_theory: "SGP4"}
+      assert {:ok, kvn} = OMM.to_kvn_string(complete)
       assert String.contains?(kvn, "CCSDS_OMM_VERS = 2.0")
 
-      assert {:ok, xml} = OMM.to_xml_string(omm)
+      assert {:error, {:missing_field, :ccsds_omm_vers}} = OMM.to_xml_string(omm)
+      assert {:ok, xml} = OMM.encode_xml_lenient(omm)
       assert String.contains?(xml, "<omm>\n")
-      assert {:ok, xml} = OMM.to_xml_string(%{omm | ccsds_omm_vers: "2.0"})
+      assert {:ok, xml} = OMM.to_xml_string(complete)
       assert String.contains?(xml, ~s(<omm id="CCSDS_OMM_VERS" version="2.0">))
 
       assert {:ok, json} = OMM.to_json_string(omm)
@@ -274,13 +299,30 @@ defmodule Sidereon.OMMTest do
       {:ok, omm} = OMM.parse_kvn(core_omm_fixture("25544", "kvn"))
 
       assert {:error, {:unwritable_text, field, "ISS\nZARYA", :line_break}} =
-               OMM.encode_kvn(%{omm | object_name: "ISS\nZARYA"})
+               OMM.encode_kvn_lenient(%{omm | object_name: "ISS\nZARYA"})
 
       assert is_binary(field)
     end
   end
 
   describe "multi-record OMM documents" do
+    test "JSON spans identify the original record bytes" do
+      text = core_omm_fixture("28884", "json")
+
+      assert {:ok, [_], [], [span]} =
+               OMM.parse_json_array_with_spans(text)
+
+      assert span == %{index: 0, byte_start: 1, byte_end: 410, line: 1}
+      refute span == %{index: 0, byte_start: 1, byte_end: 411, line: 1}
+    end
+
+    test "XML spans identify the original record bytes" do
+      text = core_omm_fixture("25544", "xml")
+
+      assert {:ok, [_], [], [%{index: 0, byte_start: 207, byte_end: 1194, line: 3}]} =
+               OMM.parse_xml_all_with_spans(text)
+    end
+
     test "parse_json_array/1 reads every record and reports the ones it skips" do
       [record] = core_omm_fixture("28884", "json") |> Jason.decode!()
       broken = Map.delete(record, "EPOCH")

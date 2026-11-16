@@ -8,7 +8,10 @@ pointing, and frequency compensation.
 
 ```elixir
 # Fetch a satellite
-{:ok, [sat]} = Sidereon.CelesTrak.fetch_tle(25544)
+{:ok, %{records: [record | _]}} =
+  Sidereon.GNSS.Data.fetch_celestrak_gp({:catalog_number, 25544}, :two_line)
+{:tle, tle} = record.payload
+{:ok, sat} = Sidereon.Format.TLE.parse(tle.line1, tle.line2)
 
 # Define your ground station
 station = %{latitude: 51.5074, longitude: -0.1278, altitude_m: 11.0}  # London

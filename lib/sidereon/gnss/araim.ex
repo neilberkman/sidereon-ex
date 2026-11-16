@@ -634,13 +634,12 @@ defmodule Sidereon.GNSS.ARAIM do
 
   @doc false
   @spec system_letter(atom() | String.t()) :: {:ok, String.t()} | {:error, term()}
-  def system_letter(:gps), do: {:ok, "G"}
-  def system_letter(:glonass), do: {:ok, "R"}
-  def system_letter(:galileo), do: {:ok, "E"}
-  def system_letter(:beidou), do: {:ok, "C"}
-  def system_letter(:qzss), do: {:ok, "J"}
-  def system_letter(:navic), do: {:ok, "I"}
-  def system_letter(:sbas), do: {:ok, "S"}
+  def system_letter(system) when is_atom(system) do
+    case Sidereon.GNSS.System.letter(system) do
+      {:ok, letter} -> {:ok, letter}
+      _ -> {:error, :bad_system}
+    end
+  end
 
   def system_letter(<<letter::binary-size(1)>>) do
     {:ok, String.upcase(letter)}

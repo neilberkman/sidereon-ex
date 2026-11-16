@@ -375,6 +375,44 @@ fn array_result<'a>(env: Env<'a>, result: Result<OmmArray, core_omm::OmmError>) 
     }
 }
 
+fn array_result_with_spans<'a>(
+    env: Env<'a>,
+    result: Result<OmmArray, core_omm::OmmError>,
+) -> Term<'a> {
+    match result {
+        Ok(array) => {
+            let omms: Vec<OmmFields> = array.omms.into_iter().map(OmmFields::from).collect();
+            let skipped: Vec<Term<'a>> = array
+                .skipped
+                .iter()
+                .map(|r| (r.index, omm_error_term(env, &r.reason)).encode(env))
+                .collect();
+            let spans: Vec<_> = array
+                .spans
+                .iter()
+                .map(|s| (s.index, s.byte_start, s.byte_end, s.line))
+                .collect();
+            (atoms::ok(), omms, skipped, spans).encode(env)
+        }
+        Err(e) => (atoms::error(), omm_error_term(env, &e)).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn omm_parse_xml_all_with_spans<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    array_result_with_spans(env, core_omm::parse_xml_all(&text))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn omm_parse_json_array_with_spans<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    array_result_with_spans(env, core_omm::parse_json_array(&text))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn omm_parse_csv_array_with_spans<'a>(env: Env<'a>, text: String) -> Term<'a> {
+    array_result_with_spans(env, core_omm::parse_csv_array(&text))
+}
+
 /// Parse CCSDS OMM KVN text.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn omm_parse_kvn<'a>(env: Env<'a>, text: String) -> Term<'a> {
@@ -417,6 +455,51 @@ fn omm_encode_xml<'a>(env: Env<'a>, fields: OmmFields) -> Term<'a> {
     encode_result(env, fields, core_omm::encode_xml)
 }
 
+/// Encode a partial OMM as KVN.
+#[rustler::nif]
+fn omm_encode_kvn_lenient<'a>(env: Env<'a>, fields: OmmFields) -> Term<'a> {
+    encode_result(env, fields, core_omm::encode_kvn_lenient)
+}
+
+/// Encode a partial OMM as XML.
+#[rustler::nif]
+fn omm_encode_xml_lenient<'a>(env: Env<'a>, fields: OmmFields) -> Term<'a> {
+    encode_result(env, fields, core_omm::encode_xml_lenient)
+}
+
+#[rustler::nif]
+fn omm_from_tle<'a>(
+    env: Env<'a>,
+    fields: crate::tle::TleFields,
+    object_name: Option<String>,
+) -> Term<'a> {
+    match Omm::from_tle(&fields.into(), object_name) {
+        Ok(omm) => (atoms::ok(), OmmFields::from(omm)).encode(env),
+        Err(error) => (
+            atoms::error(),
+            crate::ndm_errors::tle_error_term(env, &error),
+        )
+            .encode(env),
+    }
+}
+
+#[rustler::nif]
+fn omm_with_ccsds_header<'a>(
+    env: Env<'a>,
+    fields: OmmFields,
+    version: String,
+    creation_date: String,
+    originator: String,
+) -> Term<'a> {
+    match Omm::try_from(fields) {
+        Ok(omm) => parse_result(
+            env,
+            omm.with_ccsds_header(&version, &creation_date, &originator),
+        ),
+        Err(reason) => (atoms::error(), reason.term(env)).encode(env),
+    }
+}
+
 /// Encode normalized OMM fields as CCSDS/CelesTrak OMM JSON text.
 #[rustler::nif]
 fn omm_encode_json<'a>(env: Env<'a>, fields: OmmFields) -> Term<'a> {
@@ -435,7 +518,7 @@ fn omm_encode_json_discarding_comments<'a>(env: Env<'a>, fields: OmmFields) -> T
 /// second included), B* and the second mean-motion derivative quantized as the
 /// TLE writes them, and the catalog number `nil` when the OMM states none.
 #[derive(Debug, Clone, rustler::NifMap)]
-struct ElementSetFields {
+pub(crate) struct ElementSetFields {
     epoch_jd: (f64, f64),
     bstar: f64,
     mean_motion_dot: Option<f64>,
@@ -448,6 +531,25 @@ struct ElementSetFields {
     right_ascension_deg: f64,
     catalog_number: Option<u32>,
     omm_epoch_days: Option<f64>,
+}
+
+impl From<sidereon_core::astro::sgp4::ElementSet> for ElementSetFields {
+    fn from(set: sidereon_core::astro::sgp4::ElementSet) -> Self {
+        Self {
+            epoch_jd: (set.epoch.0, set.epoch.1),
+            bstar: set.bstar,
+            mean_motion_dot: set.mean_motion_dot,
+            mean_motion_double_dot: set.mean_motion_double_dot,
+            eccentricity: set.eccentricity,
+            argument_of_perigee_deg: set.argument_of_perigee_deg,
+            inclination_deg: set.inclination_deg,
+            mean_anomaly_deg: set.mean_anomaly_deg,
+            mean_motion_rev_per_day: set.mean_motion_rev_per_day,
+            right_ascension_deg: set.right_ascension_deg,
+            catalog_number: set.catalog_number,
+            omm_epoch_days: set.omm_epoch_days,
+        }
+    }
 }
 
 /// The SGP4 element set of normalized OMM fields, through

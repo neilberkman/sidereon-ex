@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add `OMM.encode_kvn_lenient/1` and `OMM.encode_xml_lenient/1` for partial messages.
+- Add CelesTrak GP and NAVCEN source metadata, URL builders, GP response
+  parsing, and cache-first fetching. GP records retain native fields, source
+  bytes, source positions, and typed rejections.
+- Add TLE-to-OMM conversion, CCSDS header validation, OMM source spans, and
+  fitted OMM header options.
 - Add the precise-positioning `TEC`, `CycleSlip`, `Prep`, `RAIM`, and
   `Kinematic` modules, including lossless exact-epoch state, typed core errors,
   TEC arc leveling, dual-frequency preparation, snapshot FDE, and sequential
@@ -20,6 +26,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InputErrorKind` `t()` type with `display/1`.
 - Document and test that TDM values are plain structs, maps, atoms and strings
   and compare structurally with `==`.
+
+### Changed
+
+- Retry transient GP HTTP errors even when their bodies are empty or HTML.
+  Repeat-download errors include the verified cached file path when available.
+- OMM KVN and XML writers require the mandatory CCSDS fields. Malformed
+  documents and missing alternative fields have distinct typed errors.
+- TLE epoch days must be finite and in the half-open range `[0, 1000)`.
 
 ## [3.0.6] - 2026-10-30
 
