@@ -286,12 +286,9 @@ defmodule Sidereon.GNSSFusionTest do
       measurement = loose_measurement(0.0, {@wgs84_a_m + 0.25, -0.5, 0.75})
 
       for kind <- [:ekf, :ukf] do
-        config =
-          Fusion.filter_config(zero_imu_spec(),
-            filter_kind: kind,
-            loose: %{update_options: %{joint_innovation_gate_probability: 0.01}},
-            ukf_update_options: %{joint_innovation_gate_probability: 0.01}
-          )
+        gate = %{joint_innovation_gate_probability: 0.01}
+        options = if kind == :ekf, do: [loose: %{update_options: gate}], else: [ukf_update_options: gate]
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ options)
 
         assert {:ok, filter} = Fusion.new(initial_state(), config)
         assert {:ok, update} = Fusion.update_loose(filter, measurement)
@@ -302,6 +299,166 @@ defmodule Sidereon.GNSSFusionTest do
         # 0.25² + 0.5² + 0.75² over innovation variance 5.
         assert_in_delta gate.statistic, 0.175, 1.0e-12
         assert_in_delta gate.threshold, 11.344866730144373, 1.0e-12
+      end
+    end
+
+    test "tight joint gates accept and reject using clock-only covariance" do
+      sp3 = SP3.load!("test/fixtures/sp3/degenerate_coincident_5sat.sp3")
+      epoch = SP3.coverage(sp3).start_j2000_s + 1800.0
+
+      for kind <- [:ekf, :ukf], {x, y, accepted} <- [{1.0, 2.0, true}, {8.0, 9.0, false}] do
+        gate = %{joint_innovation_gate_probability: 0.01}
+
+        tight = %{
+          light_time: false,
+          sagnac: false,
+          initial_clock_bias_variance_m2: 2.0,
+          initial_clock_drift_variance_m2_s2: 3.0
+        }
+
+        options =
+          if kind == :ekf,
+            do: [tight: Map.put(tight, :update_options, gate)],
+            else: [tight: tight, ukf_update_options: gate]
+
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ options)
+        {:ok, filter} = Fusion.new(%{initial_state(0.0) | t_j2000_s: epoch}, config)
+        {:ok, before} = Fusion.state(filter)
+        {:ok, clock_before} = Fusion.tight_clock_state(filter)
+        observation = tight_observation(epoch, x, y)
+        assert {:ok, report} = Fusion.update_tight(filter, sp3, observation)
+        joint = report.ekf.joint_innovation_gate
+        assert joint.accepted == accepted
+        assert joint.degrees_of_freedom == 2
+        assert joint.false_alarm_probability == 0.01
+        assert_in_delta joint.threshold, 9.21034037197618, 1.0e-12
+        # SP3 interpolation and UKF sigma points subtract ranges near 20,181,863 m;
+        # 512 machine epsilons at that scale bound cancellation.
+        tolerance = 512.0 * 2.220446049250313e-16 * 20_181_863.0 * max(x, y)
+        # H = I, P = diag(2, 3), R = diag(1, 4), S = diag(3, 7).
+        assert_close_matrix(report.ekf.innovation_covariance, [[3.0, 0.0], [0.0, 7.0]], tolerance)
+        assert_in_delta joint.statistic, x * x / 3.0 + y * y / 7.0, tolerance
+        assert report.applied == accepted
+        assert {report.accepted_rows, report.rejected_rows} == if(accepted, do: {2, 0}, else: {0, 2})
+
+        if accepted do
+          assert {:ok, clock} = Fusion.tight_clock_state(filter)
+          assert_in_delta clock.bias_m, 2.0 * x / 3.0, tolerance
+          assert_in_delta clock.drift_m_s, 3.0 * y / 7.0, tolerance
+        else
+          assert {:ok, ^before} = Fusion.state(filter)
+          assert {:ok, ^clock_before} = Fusion.tight_clock_state(filter)
+        end
+      end
+    end
+
+    test "rejected loose joint gate preserves tight cross covariance" do
+      sp3 = SP3.load!("test/fixtures/sp3/degenerate_coincident_5sat.sp3")
+      epoch = SP3.coverage(sp3).start_j2000_s + 1800.0
+
+      config =
+        Fusion.filter_config(zero_imu_spec(),
+          loose: %{update_options: %{joint_innovation_gate_probability: 0.01}},
+          tight: %{
+            light_time: false,
+            sagnac: false,
+            initial_clock_bias_variance_m2: 2.0,
+            initial_clock_drift_variance_m2_s2: 3.0
+          }
+        )
+
+      {:ok, a} = Fusion.new(%{initial_state() | t_j2000_s: epoch}, config)
+      {:ok, b} = Fusion.new(%{initial_state() | t_j2000_s: epoch}, config)
+      assert {:ok, _} = Fusion.update_tight(a, sp3, tight_observation(epoch, 1.0, 2.0))
+      assert {:ok, _} = Fusion.update_tight(b, sp3, tight_observation(epoch, 1.0, 2.0))
+      assert {:ok, _} = Fusion.propagate(a, zero_increment_sample(epoch + 1.0, 1.0))
+      assert {:ok, _} = Fusion.propagate(b, zero_increment_sample(epoch + 1.0, 1.0))
+
+      assert {:ok, rejected} =
+               Fusion.update_loose(a, loose_measurement(epoch + 1.0, {@wgs84_a_m + 1000.0, 1000.0, 1000.0}))
+
+      refute rejected.applied
+      refute rejected.ekf.joint_innovation_gate.accepted
+      assert {:ok, _} = Fusion.propagate(a, zero_increment_sample(epoch + 2.0, 1.0))
+      assert {:ok, _} = Fusion.propagate(b, zero_increment_sample(epoch + 2.0, 1.0))
+      assert {:ok, report_a} = Fusion.update_tight(a, sp3, tight_observation(epoch + 2.0, 2.0, 1.0))
+      assert {:ok, report_b} = Fusion.update_tight(b, sp3, tight_observation(epoch + 2.0, 2.0, 1.0))
+      assert report_a == report_b
+      assert Fusion.state(a) == Fusion.state(b)
+      assert Fusion.tight_clock_state(a) == Fusion.tight_clock_state(b)
+    end
+
+    test "IGG III removing every row coasts with either gate" do
+      for kind <- [:ekf, :ukf], gate_kind <- [:row, :joint] do
+        gate =
+          if gate_kind == :row,
+            do: %{innovation_gate: %{threshold_sigma: 3.0, min_rows: 1}},
+            else: %{joint_innovation_gate_probability: 0.01}
+
+        loose = %{measurement_reweighting: :standard}
+
+        options =
+          if kind == :ekf,
+            do: [loose: Map.put(loose, :update_options, gate)],
+            else: [loose: loose, ukf_update_options: gate]
+
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ options)
+        {:ok, filter} = Fusion.new(initial_state(), config)
+        {:ok, before} = Fusion.state(filter)
+        assert {:ok, report} = Fusion.update_loose(filter, loose_measurement(0.0, {@wgs84_a_m + 50.0, 50.0, 50.0}))
+        refute report.applied
+        assert report.ekf.accepted_rows == 0
+        assert report.ekf.rejected_rows == 3
+        assert report.ekf.joint_innovation_gate == nil
+
+        if gate_kind == :row do
+          assert report.ekf.innovation_gate.input_rows == 3
+          assert report.ekf.innovation_gate.rejected_rows == 3
+          assert report.ekf.innovation_gate.coasted
+        end
+
+        assert {:ok, ^before} = Fusion.state(filter)
+      end
+    end
+
+    test "gate options validate on each filter path" do
+      for gate <- [%{joint_innovation_gate_probability: 0.01}, %{innovation_gate: %{threshold_sigma: 3.0}}],
+          {kind, path, field} <- [
+            {:ekf, :ukf, "ukf_update_options"},
+            {:ukf, :loose, "loose.update_options"},
+            {:ukf, :tight, "tight.update_options"}
+          ] do
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ gate_options(path, gate))
+        assert {:error, {:invalid_input, ^field, _}} = Fusion.new(initial_state(), config)
+      end
+
+      for options <- [%{alpha: 0.6}, %{beta: 1.0}, %{kappa: 1.0}] do
+        config = Fusion.filter_config(zero_imu_spec(), ukf_update_options: options)
+        assert {:error, {:invalid_input, "ukf_update_options", _}} = Fusion.new(initial_state(), config)
+      end
+
+      for {kind, path} <- [{:ekf, :loose}, {:ekf, :tight}, {:ukf, :ukf}],
+          probability <- [0.0, 1.0, -0.1] do
+        options = gate_options(path, %{joint_innovation_gate_probability: probability})
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ options)
+
+        assert {:error, {:invalid_input, "joint_innovation_gate_probability", "must be finite and in (0, 1)"}} =
+                 Fusion.new(initial_state(), config)
+      end
+
+      for {kind, path} <- [{:ekf, :loose}, {:ekf, :tight}, {:ukf, :ukf}] do
+        for gate <- [%{joint_innovation_gate_probability: 0.01}, %{innovation_gate: %{threshold_sigma: 3.0}}] do
+          config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ gate_options(path, gate))
+          assert {:ok, _} = Fusion.new(initial_state(), config)
+        end
+
+        options =
+          gate_options(path, %{joint_innovation_gate_probability: 0.01, innovation_gate: %{threshold_sigma: 3.0}})
+
+        config = Fusion.filter_config(zero_imu_spec(), [filter_kind: kind] ++ options)
+
+        assert {:error, {:invalid_input, "innovation_gate", "per-row and joint gates are mutually exclusive"}} =
+                 Fusion.new(initial_state(), config)
       end
     end
 
@@ -733,6 +890,18 @@ defmodule Sidereon.GNSSFusionTest do
   end
 
   defp config(kind), do: Fusion.filter_config(zero_imu_spec(), filter_kind: kind)
+
+  defp gate_options(:loose, gate), do: [loose: %{update_options: gate}]
+  defp gate_options(:tight, gate), do: [tight: %{update_options: gate}]
+  defp gate_options(:ukf, gate), do: [ukf_update_options: gate]
+
+  defp tight_observation(epoch, range_innovation, rate_innovation) do
+    TightGnssEpoch.new(epoch, [
+      TightGnssObservation.new("G01", 20_181_863.0 + range_innovation, 1.0,
+        range_rate: TightRangeRateObservation.new(rate_innovation, 2.0, 0.0)
+      )
+    ])
+  end
 
   defp zero_imu_spec do
     %{

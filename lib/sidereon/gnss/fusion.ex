@@ -953,6 +953,11 @@ defmodule Sidereon.GNSS.Fusion do
   `:joint_innovation_gate_probability`, a false-alarm probability. When set,
   correction reports include `:joint_innovation_gate` with the statistic,
   degrees of freedom, threshold, probability and acceptance verdict.
+  For EKF filters, set gate options in `:loose` or `:tight` under
+  `:update_options`. For UKF filters, set them in `:ukf_update_options`.
+  Per-row and joint gates are mutually exclusive, and the probability must
+  be finite and strictly between zero and one. Non-default options for the
+  other filter kind are refused.
   """
   @spec filter_config(imu_spec(), keyword() | map()) :: filter_config()
   def filter_config(spec \\ :mems, opts \\ []) do
@@ -1449,11 +1454,7 @@ defmodule Sidereon.GNSS.Fusion do
   defp normalize_ekf_options(options) do
     %{
       joint_innovation_gate_probability: field(options, :joint_innovation_gate_probability, nil),
-      innovation_gate:
-        case field(options, :innovation_gate, nil) do
-          nil -> nil
-          gate -> %{threshold_sigma: field!(gate, :threshold_sigma) / 1.0, min_rows: field(gate, :min_rows, 1)}
-        end
+      innovation_gate: normalize_innovation_gate(field(options, :innovation_gate, nil))
     }
   end
 
@@ -1463,8 +1464,14 @@ defmodule Sidereon.GNSS.Fusion do
       beta: field(options, :beta, 2.0) / 1.0,
       kappa: field(options, :kappa, 0.0) / 1.0,
       joint_innovation_gate_probability: field(options, :joint_innovation_gate_probability, nil),
-      innovation_gate: normalize_ekf_options(options).innovation_gate
+      innovation_gate: normalize_innovation_gate(field(options, :innovation_gate, nil))
     }
+  end
+
+  defp normalize_innovation_gate(nil), do: nil
+
+  defp normalize_innovation_gate(gate) do
+    %{threshold_sigma: field!(gate, :threshold_sigma) / 1.0, min_rows: field(gate, :min_rows, 1)}
   end
 
   defp loose_config_term(config) do
