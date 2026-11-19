@@ -150,6 +150,21 @@ defmodule Sidereon.PassesTest do
       assert Sidereon.Passes.predict(tle, @london, t, t) == {:ok, []}
     end
 
+    test "refuses window endpoints outside years 0..9999", %{tle: tle} do
+      in_range = ~U[2024-12-19 06:00:00Z]
+
+      for outside <- [
+            ~U[-0001-12-31 23:59:59Z],
+            DateTime.new!(Date.new!(10_000, 1, 1), ~T[00:00:00])
+          ] do
+        assert Sidereon.Passes.predict(tle, @london, outside, in_range) ==
+                 {:error, {:nif_error, "argument error"}}
+
+        assert Sidereon.Passes.predict(tle, @london, in_range, outside) ==
+                 {:error, {:nif_error, "argument error"}}
+      end
+    end
+
     test "passes are sorted by rise time", %{tle: tle} do
       start_time = ~U[2024-12-19 00:00:00Z]
       end_time = ~U[2024-12-20 00:00:00Z]

@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:sidereon, "~> 4.0"}
+  {:sidereon, "~> 4.1"}
 ])
 ```
 

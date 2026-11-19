@@ -1,11 +1,11 @@
 # Core API coverage
 
-Public module-level items of `sidereon-core` and `sidereon` at core revision `3132eeac13ebf30f63766fc608aa9aae9258dd3d`,
+Public module-level items of `sidereon-core` and `sidereon` at core revision `012c6c38ea054b61293e83fc95ac60ff6d11fb8b`,
 and the native source files that expose each item.
 
-- Items: 2854
-- Bound (used by the native code): 1749
-- MISSING: 1105
+- Items: 2858
+- Bound (used by the native code): 1750
+- MISSING: 1108
 
 ## `sidereon`
 
@@ -958,6 +958,10 @@ and the native source files that expose each item.
 | `find_passes_with_opsmode` | fn | MISSING |
 | `find_passes_with_validity` | fn | MISSING |
 | `ground_track` | fn | `lib.rs`, `passes.rs` |
+| `ground_track_batch_parallel` | fn | MISSING |
+| `ground_track_batch_parallel_with_validity` | fn | MISSING |
+| `ground_track_batch_serial` | fn | `passes.rs` |
+| `ground_track_batch_serial_with_validity` | fn | MISSING |
 | `ground_track_with_validity` | fn | MISSING |
 | `look_angle` | fn | `lib.rs`, `look_angle.rs`, `passes.rs` |
 | `look_angle_arc` | fn | `look_angle.rs` |

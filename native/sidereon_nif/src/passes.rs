@@ -6,8 +6,9 @@
 use crate::propagation::{elements_from_map, get_map_val, opsmode_from_term};
 use rustler::{Encoder, Env, Error, NifResult, Term};
 use sidereon_core::astro::passes::{
-    find_passes_for_satellite, ground_track, look_angle_batch_serial, visible_from_satellites,
-    GroundStation, PassError as CorePassError, PassFinderOptions, UtcInstant,
+    find_passes_for_satellite, ground_track, ground_track_batch_serial, look_angle_batch_serial,
+    visible_from_satellites, GroundStation, PassError as CorePassError, PassFinderOptions,
+    UtcInstant,
 };
 use sidereon_core::astro::sgp4::Satellite;
 
@@ -349,11 +350,11 @@ pub(crate) fn constellation_look_angle_arcs_detailed_impl<'a>(
 /// Sub-satellite WGS84 ground tracks for a whole constellation over a shared
 /// epoch grid, in fleet order (element `i` is satellite `i`'s track).
 ///
-/// Per-satellite loop over the core `ground_track`, building each satellite with
-/// the requested opsmode. A satellite that fails SGP4 init or whose track errors
-/// yields an empty track, keeping the result index-aligned (mirroring the WASM
-/// `Constellation.groundTracks`). Radians/metres are bridged back to the
-/// degrees/kilometres convention used by `Sidereon.Geodetic`.
+/// Builds each satellite once with the requested opsmode and hands the valid
+/// fleet to the shared core `ground_track_batch_serial`. A satellite that fails
+/// SGP4 init or whose track errors yields an empty track, keeping the result
+/// index-aligned. Radians/metres are bridged back to the degrees/kilometres
+/// convention used by `Sidereon.Geodetic`.
 pub(crate) fn constellation_ground_tracks_impl<'a>(
     env: Env<'a>,
     tle_maps: Vec<Term<'a>>,
@@ -366,26 +367,34 @@ pub(crate) fn constellation_ground_tracks_impl<'a>(
         .map(instant_from_datetime_tuple)
         .collect::<NifResult<Vec<_>>>()?;
 
-    let mut tracks = Vec::with_capacity(tle_maps.len());
-    for tle_map in tle_maps {
+    let satellite_count = tle_maps.len();
+    let mut satellites = Vec::with_capacity(satellite_count);
+    let mut fleet_indices = Vec::with_capacity(satellite_count);
+    for (index, tle_map) in tle_maps.into_iter().enumerate() {
         let elements = elements_from_map(env, tle_map)?;
-        let track: Arc = match Satellite::from_elements_with_opsmode(&elements, opsmode) {
-            Ok(satellite) => match ground_track(&satellite, &instants) {
-                Ok(points) => points
-                    .into_iter()
-                    .map(|p| {
-                        (
-                            p.lat_rad.to_degrees(),
-                            p.lon_rad.to_degrees(),
-                            p.height_m / 1000.0,
-                        )
-                    })
-                    .collect(),
-                Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        };
-        tracks.push(track);
+        if let Ok(satellite) = Satellite::from_elements_with_opsmode(&elements, opsmode) {
+            satellites.push(satellite);
+            fleet_indices.push(index);
+        }
+    }
+
+    let mut tracks: Vec<Arc> = vec![Vec::new(); satellite_count];
+    for (compact_index, track) in ground_track_batch_serial(&satellites, &instants)
+        .into_iter()
+        .enumerate()
+    {
+        if let Ok(points) = track {
+            tracks[fleet_indices[compact_index]] = points
+                .into_iter()
+                .map(|p| {
+                    (
+                        p.lat_rad.to_degrees(),
+                        p.lon_rad.to_degrees(),
+                        p.height_m / 1000.0,
+                    )
+                })
+                .collect();
+        }
     }
     Ok(tracks)
 }
@@ -403,12 +412,24 @@ pub(crate) fn constellation_ground_tracks_detailed_impl<'a>(
         .into_iter()
         .map(instant_from_datetime_tuple)
         .collect::<NifResult<Vec<_>>>()?;
-    tle_maps
+    let mut slots = Vec::with_capacity(tle_maps.len());
+    let mut satellites = Vec::with_capacity(tle_maps.len());
+    for tle_map in tle_maps {
+        let elements = elements_from_map(env, tle_map)?;
+        match Satellite::from_elements_with_opsmode(&elements, opsmode) {
+            Ok(satellite) => {
+                satellites.push(satellite);
+                slots.push(Ok(()));
+            }
+            Err(error) => slots.push(Err(error)),
+        }
+    }
+    let mut tracks = ground_track_batch_serial(&satellites, &instants).into_iter();
+    slots
         .into_iter()
         .enumerate()
-        .map(|(index, tle_map)| {
-            let elements = elements_from_map(env, tle_map)?;
-            let outcome = match Satellite::from_elements_with_opsmode(&elements, opsmode) {
+        .map(|(index, slot)| {
+            let outcome = match slot {
                 Err(error) => (
                     atoms::error(),
                     crate::coverage::look_angle_error_term(
@@ -417,7 +438,7 @@ pub(crate) fn constellation_ground_tracks_detailed_impl<'a>(
                     ),
                 )
                     .encode(env),
-                Ok(satellite) => match ground_track(&satellite, &instants) {
+                Ok(()) => match tracks.next().expect("core keeps initialized fleet order") {
                     Ok(points) => (
                         atoms::ok(),
                         points
