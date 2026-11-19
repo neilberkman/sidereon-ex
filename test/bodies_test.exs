@@ -85,5 +85,12 @@ defmodule Sidereon.BodiesTest do
         assert kind in [:upper, :lower]
       end
     end
+
+    test "returns invalid_input for instants outside years 0..9999" do
+      outside = ~U[-0001-12-31 23:59:59Z]
+      assert {:error, :invalid_input} = Bodies.sun_az_el(@greenwich, outside)
+      assert {:error, :invalid_input} = Bodies.find_moon_elevation_crossings(@greenwich, @start, outside)
+      assert {:error, :invalid_input} = Bodies.find_moon_transits(@greenwich, outside, @stop)
+    end
   end
 end

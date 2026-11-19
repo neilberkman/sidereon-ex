@@ -92,6 +92,14 @@ defmodule Sidereon.PhaseBApiTest do
              )
 
     assert Enum.any?(transits, &(&1.kind == :upper))
+
+    outside_utc = ~U[-0001-12-31 23:59:59Z]
+    assert {:error, "invalid UTC datetime"} = Observe.observe(station, outside_utc, :sun)
+
+    assert {:error, "invalid UTC datetime"} = Almanac.seasons({outside_utc, ~U[0000-01-02 00:00:00Z]})
+
+    assert {:error, "invalid UTC datetime"} =
+             Almanac.meridian_transits(:sun, station, {~U[2025-03-20 00:00:00Z], outside_utc})
   end
 
   test "drag parameters, acceleration, and decay estimate wrappers call core" do

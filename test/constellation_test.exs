@@ -289,6 +289,52 @@ defmodule Sidereon.ConstellationTest do
       {:ok, single} = Sidereon.ground_track(tle, times, opsmode: :improved)
       assert improved_track == single
     end
+
+    test "ground_tracks_detailed matches per-satellite ground_track and preserves init errors", %{
+      constellation: c,
+      epoch: dt
+    } do
+      [first, second | _] = c.satellites
+      invalid_second = %{second | epoch_jd: %{jd_whole: 9_000_000.0, jd_fraction: 0.0}}
+      fleet = %{c | satellites: [first, invalid_second], count: 2}
+      times = for s <- 0..240//120, do: DateTime.add(dt, s, :second)
+
+      assert {:ok, [first_outcome, second_outcome]} =
+               Sidereon.Constellation.ground_tracks_detailed(fleet, times)
+
+      assert {:ok, single} = Sidereon.ground_track(first, times, opsmode: :afspc)
+      assert first_outcome == %{satellite_index: 0, value: single, error: nil}
+
+      assert second_outcome == %{
+               satellite_index: 1,
+               value: nil,
+               error: {:init, {:invalid_input, :"element.epoch", :out_of_range}}
+             }
+
+      assert {:ok, [first_track, second_track]} =
+               Sidereon.Constellation.ground_tracks(fleet, times)
+
+      assert first_track == single
+      assert second_track == []
+    end
+
+    test "ground_tracks and look_angle_arcs refuse datetimes outside years 0..9999", %{
+      constellation: c
+    } do
+      c = %{c | satellites: Enum.take(c.satellites, 2), count: 2}
+      station = %{latitude: 51.5074, longitude: -0.1278, altitude_m: 11.0}
+
+      for outside <- [
+            ~U[-0001-12-31 23:59:59Z],
+            DateTime.new!(Date.new!(10_000, 1, 1), ~T[00:00:00])
+          ] do
+        assert Sidereon.Constellation.ground_tracks(c, [outside]) ==
+                 {:error, {:nif_error, "argument error"}}
+
+        assert Sidereon.Constellation.look_angle_arcs(c, station, [outside]) ==
+                 {:error, {:nif_error, "argument error"}}
+      end
+    end
   end
 
   describe "passes/5" do

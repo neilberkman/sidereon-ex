@@ -53,6 +53,19 @@ defmodule Sidereon.CoverageTest do
     assert [[{:error, {:frame_transform, {:ut1_outside_coverage, :before_coverage}}}]] = rows
   end
 
+  test "look_angles refuses datetimes outside years 0..9999", %{tle: tle} do
+    stations = [{51.5, -0.1, 11.0}]
+
+    for outside <- [
+          ~U[-0001-12-31 23:59:59Z],
+          DateTime.new!(Date.new!(10_000, 1, 1), ~T[00:00:00])
+        ] do
+      assert_raise ArgumentError, "argument error", fn ->
+        Coverage.look_angles([tle], stations, outside)
+      end
+    end
+  end
+
   test "invalid satellite initialization preserves detailed row and refuses legacy grid", %{tle: tle} do
     invalid = %{tle | epoch_jd: %{jd_whole: 1.0e99, jd_fraction: 0.0}}
     stations = [{51.5, -0.1, 11.0}, {40.7, -74.0, 10.0}]

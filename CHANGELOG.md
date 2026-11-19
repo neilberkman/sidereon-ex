@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-19
+
+### Changed
+
+- Engine update: `sidereon` 4.1.0 / `sidereon-core` 4.1.0.
+- `Sidereon.Constellation.ground_tracks/3` and
+  `Sidereon.Constellation.ground_tracks_detailed/3` now route through core's
+  `ground_track_batch_serial` kernel in a single NIF call instead of looping
+  per satellite.
+- Look-angle, ground-track, visibility, and coverage-grid batches share each
+  epoch's frame matrices across all satellites with bit-identical results
+  (reducing 143 satellites × 51 epochs from ~250 ms to ~5 ms in core).
+
 ## [4.0.0] - 2026-11-16
 
 ### Added
