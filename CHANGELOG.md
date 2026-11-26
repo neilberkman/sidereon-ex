@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.2.0] - 2026-11-26
 
 ### Added
 
@@ -34,6 +34,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Engine update to `sidereon` 4.2.0 and `sidereon-core` 4.2.0.
 - Numerical propagation integrates in elapsed TT and evaluates forces at
   absolute TDB epochs. Drag uses UT1 Earth orientation and UTC space weather.
 - Solar radiation pressure defaults to apparent-disc occultation with WGS84

@@ -81,6 +81,13 @@ This derived code is used under the MIT license option:
   SOFTWARE.
 
 --------------------------------------------------------------------------------
+## Orekit 13.1.10 and Hipparchus 4.0.3 (Apache-2.0)
+
+The IERS 2010 Earth-orientation and JPL DE ephemeris implementations in
+`sidereon-core` include adaptations of Orekit and Hipparchus. The license is
+included in `LICENSES/Apache-2.0.txt` and the upstream notices are included in
+`LICENSES/OREKIT-NOTICE.txt` and `LICENSES/HIPPARCHUS-NOTICE.txt`.
+
 ## Compiled Rust dependencies (Apache-2.0 and ISC)
 
 The source-build and precompiled NIF distributions include the following
@@ -110,8 +117,8 @@ The full official notice is reproduced in
 `LICENSES/IERS-Conventions-Software-License.txt` from the official
 [`DEHANTTIDEINEL.F`](https://iers-conventions.obspm.fr/content/chapter7/software/dehanttideinel/DEHANTTIDEINEL.F)
 source (accessed 2026-07-20). The exact public non-test tide sources from
-[sidereon-core 4.1.0](https://github.com/neilberkman/sidereon/tree/012c6c38ea054b61293e83fc95ac60ff6d11fb8b/crates/sidereon-core/src/tides)
-are distributed under `third_party_source/sidereon-core-4.1.0/tides/`.
+[sidereon-core 4.2.0](https://github.com/neilberkman/sidereon/tree/17b493fe8cf6d1b45ecc0982e7d594b88cdd2b7b/crates/sidereon-core/src/tides)
+are distributed under `third_party_source/sidereon-core-4.2.0/tides/`.
 Published results obtained with these routines should acknowledge use of the
 IERS Conventions software.
 

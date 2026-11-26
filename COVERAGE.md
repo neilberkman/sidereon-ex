@@ -1,20 +1,20 @@
 # Core API coverage
 
-Public module-level items of `sidereon-core` and `sidereon` at core revision `012c6c38ea054b61293e83fc95ac60ff6d11fb8b`,
+Public module-level items of `sidereon-core` and `sidereon` at core revision `17b493fe8cf6d1b45ecc0982e7d594b88cdd2b7b`,
 and the native source files that expose each item.
 
-- Items: 2858
-- Bound (used by the native code): 1750
-- MISSING: 1108
+- Items: 3004
+- Bound (used by the native code): 1907
+- MISSING: 1097
 
 ## `sidereon`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | enum | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `PppFixedConfig` | struct | MISSING |
 | `PppFloatConfig` | struct | MISSING |
-| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
+| `Result` | type | `analytic.rs`, `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `orbit_scoring.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
 | `RtkFixedConfig` | struct | MISSING |
 | `RtkFloatConfig` | struct | MISSING |
 | `SsrIngestRefusal` | struct | MISSING |
@@ -274,6 +274,57 @@ and the native source files that expose each item.
 | `nrlmsise00` | fn | `atmosphere.rs` |
 | `nrlmsise00_with_lst` | fn | MISSING |
 
+## `sidereon_core::astro::attitude::gnss`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `AttitudeMode` | enum | `gnss_attitude.rs` |
+| `AttitudeSample` | struct | `gnss_attitude.rs` |
+| `AttitudeTrajectory` | trait | `gnss_attitude.rs` |
+| `BEIDOU2_ON_TO_YS_BETA_RAD` | const | `gnss_attitude.rs` |
+| `BEIDOU2_YS_TO_ON_BETA_RAD` | const | `gnss_attitude.rs` |
+| `BEIDOU3_CAST_IGSO_TURN` | const | `gnss_attitude.rs` |
+| `BEIDOU3_CAST_MEO_TURN` | const | `gnss_attitude.rs` |
+| `BEIDOU3_SECM_BETA0_RAD` | const | `gnss_attitude.rs` |
+| `CosineTurnParameters` | struct | `gnss_attitude.rs` |
+| `CosineTurnStartAngle` | enum | `gnss_attitude.rs` |
+| `DybAxes` | struct | `gnss_attitude.rs` |
+| `GALILEO_FOC_TURN` | const | `gnss_attitude.rs` |
+| `GALILEO_IOV_BETA_X_RAD` | const | `gnss_attitude.rs` |
+| `GALILEO_IOV_BETA_Y_RAD` | const | `gnss_attitude.rs` |
+| `GLONASS_M_DEFAULT_YAW_RATE_RAD_S` | const | `gnss_attitude.rs` |
+| `GLONASS_M_SHADOW_LIMIT_RAD` | const | `gnss_attitude.rs` |
+| `GPS_IIA_DEFAULT_YAW_BIAS_RAD` | const | `gnss_attitude.rs` |
+| `GPS_IIF_DEFAULT_YAW_BIAS_RAD` | const | `gnss_attitude.rs` |
+| `GPS_IIF_DEFAULT_YAW_RATE_RAD_S` | const | `gnss_attitude.rs` |
+| `GPS_III_BETA_X_RAD` | const | `gnss_attitude.rs` |
+| `GPS_III_BETA_Y_RAD` | const | `gnss_attitude.rs` |
+| `GPS_IIR_DEFAULT_YAW_RATE_RAD_S` | const | `gnss_attitude.rs` |
+| `GPS_SHADOW_LIMIT_RAD` | const | `gnss_attitude.rs` |
+| `GnssAttitude` | struct | `gnss_attitude.rs` |
+| `GnssAttitudeError` | enum | `gnss_attitude.rs` |
+| `GnssAttitudeLaw` | enum | `gnss_attitude.rs` |
+| `NominalYaw` | struct | `gnss_attitude.rs` |
+| `dyb_axes` | fn | `gnss_attitude.rs` |
+| `gnss_attitude` | fn | `force_models.rs`, `gnss_attitude.rs`, `lib.rs` |
+| `gps_iia_default_yaw_rate_rad_s` | fn | `gnss_attitude.rs` |
+| `nominal_yaw` | fn | `gnss_attitude.rs` |
+
+## `sidereon_core::astro::attitude::gnss::block`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `BeidouManufacturer` | enum | `gnss_attitude.rs` |
+| `BeidouOrbitClass` | enum | `gnss_attitude.rs` |
+| `GnssBlock` | enum | `gnss_attitude.rs` |
+| `GnssBlockError` | enum | `gnss_attitude.rs` |
+
+## `sidereon_core::astro::attitude::gnss::orbit`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `OrbitAttitudeTrajectory` | struct | `gnss_attitude.rs` |
+
 ## `sidereon_core::astro::bodies::observe`
 
 | Item | Kind | Binding |
@@ -328,12 +379,15 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `SunMoon` | struct | `tides.rs` |
-| `SunMoonError` | enum | `tides.rs` |
+| `SunMoon` | struct | `bodies.rs`, `tides.rs` |
+| `SunMoonError` | enum | `bodies.rs`, `tides.rs` |
 | `sun_moon_ecef` | fn | `lib.rs`, `tides.rs` |
 | `sun_moon_ecef_with_polar_motion` | fn | MISSING |
 | `sun_moon_eci` | fn | MISSING |
 | `sun_moon_eci_at` | fn | `tides.rs` |
+| `sun_moon_gcrs` | fn | `bodies.rs` |
+| `sun_moon_gcrs_at` | fn | `bodies.rs` |
+| `sun_moon_gcrs_at_tdb_seconds` | fn | `bodies.rs` |
 
 ## `sidereon_core::astro::cdm`
 
@@ -382,7 +436,7 @@ and the native source files that expose each item.
 | `Covariance6` | struct | `covariance_transport.rs` |
 | `Covariance6Error` | enum | `covariance_transport.rs` |
 | `Mat6` | type | `covariance_transport.rs` |
-| `RtnFrameError` | enum | MISSING |
+| `RtnFrameError` | enum | `orbit_parameters.rs` |
 | `covariance6_km_to_m` | fn | `covariance_transport.rs` |
 | `covariance6_m_to_km` | fn | `covariance_transport.rs` |
 | `eci_to_rtn_covariance6` | fn | `covariance_transport.rs` |
@@ -423,6 +477,16 @@ and the native source files that expose each item.
 |---|---|---|
 | `UT1_DATA` | static | MISSING |
 | `Ut1Entry` | struct | MISSING |
+
+## `sidereon_core::astro::de`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `DeBody` | enum | `de.rs` |
+| `DeEphemeris` | struct | `de.rs` |
+| `DeError` | enum | `de.rs` |
+| `DeState` | struct | `de.rs` |
+| `DeSunMoon` | struct | MISSING |
 
 ## `sidereon_core::astro::doppler`
 
@@ -466,7 +530,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `PropagationError` | enum | MISSING |
+| `PropagationError` | enum | `drag.rs`, `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::events`
 
@@ -478,14 +542,29 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `EarthShadowModel` | enum | `eclipse.rs` |
-| `EclipseError` | enum | MISSING |
+| `EarthShadowModel` | enum | `eclipse.rs`, `force_models.rs` |
+| `EclipseError` | enum | `eclipse.rs` |
 | `EclipseStatus` | enum | `eclipse.rs` |
+| `ShadowFunction` | enum | `force_models.rs`, `propagation.rs` |
 | `WGS84_FLATTENING` | const | MISSING |
+| `moon_shadow_fraction` | fn | `eclipse.rs` |
 | `shadow_fraction` | fn | `eclipse.rs` |
 | `shadow_fraction_with_model` | fn | `eclipse.rs` |
+| `shadow_fraction_with_model_and_moon` | fn | `eclipse.rs` |
+| `shadow_fraction_with_moon` | fn | `eclipse.rs` |
 | `status` | fn | `astro_phase_b.rs`, `bias.rs`, `constellation.rs`, `eclipse.rs`, `error_metrics.rs`, `fusion.rs`, `geodetic_time_series.rs`, `iono.rs`, `nmea.rs`, `ntrip.rs`, `observables.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `source_localization.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `static_positioning.rs`, `tle_fit.rs`, `trls.rs` |
 | `status_with_model` | fn | `eclipse.rs` |
+| `status_with_model_and_moon` | fn | `eclipse.rs` |
+| `status_with_moon` | fn | `eclipse.rs` |
+
+## `sidereon_core::astro::events::eclipse::gradient`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `ShadowGradientError` | enum | `eclipse.rs` |
+| `shadow_fraction_with_gradient` | fn | `eclipse.rs` |
+| `shadow_fraction_with_model_and_gradient` | fn | `eclipse.rs` |
+| `shadow_fraction_with_model_moon_and_gradient` | fn | `eclipse.rs` |
 
 ## `sidereon_core::astro::events::root`
 
@@ -501,13 +580,13 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `EarthRadiationPressure` | struct | MISSING |
+| `EarthRadiationPressure` | struct | `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::forces::composite`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `CompositeForceModel` | struct | MISSING |
+| `CompositeForceModel` | struct | `force_models.rs` |
 
 ## `sidereon_core::astro::forces::drag`
 
@@ -519,6 +598,30 @@ and the native source files that expose each item.
 | `SpaceWeather` | struct | `drag.rs`, `space_weather.rs` |
 | `SpaceWeatherSource` | enum | `space_weather.rs` |
 
+## `sidereon_core::astro::forces::ecom`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `ECOM1_COEFFICIENT_COUNT` | const | `force_models.rs` |
+| `ECOM2_D2B1_COEFFICIENT_COUNT` | const | `force_models.rs` |
+| `ECOM2_D4B1_COEFFICIENT_COUNT` | const | `force_models.rs` |
+| `Ecom1Coefficients` | struct | `force_models.rs` |
+| `Ecom1SolarRadiationPressure` | struct | `force_models.rs` |
+| `Ecom2D2b1Coefficients` | struct | `force_models.rs` |
+| `Ecom2D4b1Coefficients` | struct | `force_models.rs` |
+| `Ecom2SolarRadiationPressure` | struct | `force_models.rs` |
+| `EcomGeometry` | struct | `force_models.rs` |
+| `ecom_geometry` | fn | `force_models.rs` |
+| `ecom_geometry_with_shadow` | fn | `force_models.rs` |
+
+## `sidereon_core::astro::forces::empirical`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `EmpiricalHarmonic` | enum | `force_models.rs` |
+| `EmpiricalRtnAcceleration` | struct | `force_models.rs` |
+| `RtnAxis` | enum | `force_models.rs` |
+
 ## `sidereon_core::astro::forces::geopotential`
 
 | Item | Kind | Binding |
@@ -528,35 +631,49 @@ and the native source files that expose each item.
 | `EGM96_EMBEDDED_MAX_ORDER` | const | `propagation.rs` |
 | `EGM96_MU_KM3_S2` | const | MISSING |
 | `EGM96_REFERENCE_RADIUS_KM` | const | MISSING |
-| `SphericalHarmonicCoefficient` | struct | MISSING |
-| `SphericalHarmonicGravity` | struct | MISSING |
+| `SphericalHarmonicCoefficient` | struct | `gravity_field.rs` |
+| `SphericalHarmonicGravity` | struct | `gravity_field.rs` |
 | `SphericalHarmonicGravityConfig` | struct | `propagation.rs` |
-| `TideSystem` | enum | `propagation.rs` |
+| `TideSystem` | enum | `gravity_field.rs`, `propagation.rs` |
+
+## `sidereon_core::astro::forces::icgem`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `IcgemError` | enum | `gravity_field.rs` |
+| `IcgemErrors` | enum | `gravity_field.rs` |
+| `IcgemFormat` | enum | `gravity_field.rs` |
+| `IcgemGravityField` | struct | `gravity_field.rs` |
+| `IcgemHeader` | struct | `gravity_field.rs` |
+| `IcgemNormalization` | enum | `gravity_field.rs` |
+| `IcgemSigmas` | struct | `gravity_field.rs` |
+| `IcgemTermKind` | enum | `gravity_field.rs` |
+| `IcgemTimeVariableTerm` | struct | `gravity_field.rs` |
 
 ## `sidereon_core::astro::forces::j2`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `J2Gravity` | struct | `forces.rs` |
+| `J2Gravity` | struct | `force_models.rs`, `forces.rs` |
 
 ## `sidereon_core::astro::forces::relativity`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `SchwarzschildRelativity` | struct | `propagation.rs` |
+| `SchwarzschildRelativity` | struct | `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::forces::srp`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `SolarRadiationPressure` | struct | `propagation.rs` |
+| `SolarRadiationPressure` | struct | `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::forces::third_body`
 
 | Item | Kind | Binding |
 |---|---|---|
 | `ThirdBodyBodies` | struct | MISSING |
-| `ThirdBodyGravity` | struct | `propagation.rs` |
+| `ThirdBodyGravity` | struct | `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::forces::tides`
 
@@ -579,8 +696,8 @@ and the native source files that expose each item.
 | `SOLID_EARTH_TIDE_K31_REAL` | const | MISSING |
 | `SOLID_EARTH_TIDE_K32_REAL` | const | MISSING |
 | `SOLID_EARTH_TIDE_K33_REAL` | const | MISSING |
-| `SolidEarthPoleTideGravity` | struct | `propagation.rs` |
-| `SolidEarthTideGravity` | struct | `propagation.rs` |
+| `SolidEarthPoleTideGravity` | struct | `force_models.rs`, `propagation.rs` |
+| `SolidEarthTideGravity` | struct | `force_models.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::forces::two_body`
 
@@ -594,7 +711,14 @@ and the native source files that expose each item.
 |---|---|---|
 | `ZonalCoefficients` | struct | `propagation.rs` |
 | `ZonalDegrees` | struct | `propagation.rs` |
-| `ZonalGravity` | struct | `propagation.rs` |
+| `ZonalGravity` | struct | `force_models.rs`, `propagation.rs` |
+
+## `sidereon_core::astro::frames::iers2010`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `Iers2010EarthOrientationProvider` | struct | `earth_orientation.rs` |
+| `Iers2010EopSample` | struct | `earth_orientation.rs` |
 
 ## `sidereon_core::astro::frames::nutation`
 
@@ -611,11 +735,11 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `EarthOrientation` | struct | `broadcast.rs` |
-| `EarthOrientationProvider` | trait | MISSING |
+| `EarthOrientation` | struct | `broadcast.rs`, `earth_orientation.rs` |
+| `EarthOrientationProvider` | trait | `earth_orientation.rs`, `orbit_parameters.rs` |
 | `PolarMotionSample` | struct | MISSING |
 | `PolarMotionSeriesEarthOrientationProvider` | struct | MISSING |
-| `TdbEarthOrientationProvider` | struct | `orbit_determination.rs`, `propagation.rs` |
+| `TdbEarthOrientationProvider` | struct | `earth_orientation.rs`, `gnss_attitude.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `propagation.rs` |
 
 ## `sidereon_core::astro::frames::precession`
 
@@ -629,15 +753,16 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `FrameTransformError` | enum | `coverage.rs`, `tides.rs` |
+| `FrameTransformError` | enum | `coverage.rs`, `earth_orientation.rs`, `lib.rs`, `tides.rs` |
 | `GeodeticStationKm` | struct | `astro_observe_almanac.rs`, `bodies.rs`, `lib.rs` |
 | `PolarMotion` | struct | `astro_observe_almanac.rs` |
 | `TemeStateKm` | struct | `lib.rs` |
-| `Vec3` | type | `angles.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `collision.rs`, `conjunction.rs`, `covariance.rs`, `covariance_transport.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `error_metrics.rs`, `forces.rs`, `frame_catalog.rs`, `gauss.rs`, `geodetic_time_series.rs`, `geometry.rs`, `iod.rs`, `lambert.rs`, `lib.rs`, `observables.rs`, `observation.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `reduced_orbit.rs`, `reliability.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `ssr.rs`, `static_positioning.rs`, `tides.rs`, `tle_fit.rs`, `velocity.rs` |
+| `Vec3` | type | `analytic.rs`, `angles.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `collision.rs`, `conjunction.rs`, `covariance.rs`, `covariance_transport.rs`, `de.rs`, `dgnss.rs`, `drag.rs`, `earth_orientation.rs`, `eclipse.rs`, `elements.rs`, `error_metrics.rs`, `force_models.rs`, `forces.rs`, `frame_catalog.rs`, `gauss.rs`, `geodetic_time_series.rs`, `geometry.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `iod.rs`, `lambert.rs`, `lib.rs`, `observables.rs`, `observation.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `reduced_orbit.rs`, `reliability.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `ssr.rs`, `static_positioning.rs`, `tides.rs`, `tle_fit.rs`, `velocity.rs` |
 | `gcrs_to_itrs_compute` | fn | `lib.rs` |
 | `gcrs_to_itrs_compute_with_polar_motion` | fn | MISSING |
 | `gcrs_to_itrs_matrix` | fn | MISSING |
 | `gcrs_to_itrs_matrix_with_polar_motion` | fn | MISSING |
+| `gcrs_to_mean_of_date_matrix` | fn | `lib.rs` |
 | `gcrs_to_teme_compute` | fn | MISSING |
 | `gcrs_to_topocentric_compute` | fn | `lib.rs` |
 | `gcrs_to_true_of_date_matrix` | fn | MISSING |
@@ -653,6 +778,7 @@ and the native source files that expose each item.
 | `itrs_to_geodetic_compute` | fn | `lib.rs` |
 | `itrs_to_topocentric` | fn | MISSING |
 | `mat3_vec3_mul` | fn | MISSING |
+| `mean_of_date_to_gcrs_matrix` | fn | `lib.rs` |
 | `mean_of_date_to_itrs_matrix` | fn | MISSING |
 | `mean_of_date_to_itrs_matrix_with_polar_motion` | fn | MISSING |
 | `polar_motion_matrix` | fn | MISSING |
@@ -664,7 +790,7 @@ and the native source files that expose each item.
 | Item | Kind | Binding |
 |---|---|---|
 | `DynamicsModel` | trait | `rtk_filter.rs` |
-| `Integrator` | trait | MISSING |
+| `Integrator` | trait | `orbit_parameters.rs`, `variational.rs` |
 
 ## `sidereon_core::astro::integrators::dp54`
 
@@ -762,7 +888,7 @@ and the native source files that expose each item.
 | `solve_linear_last_tie` | fn | MISSING |
 | `solve_matrix_flat_first_tie_into` | fn | MISSING |
 | `solve_matrix_last_tie` | fn | MISSING |
-| `transpose` | fn | `antex.rs`, `astro_observe_almanac.rs`, `bias.rs`, `broadcast.rs`, `cdm.rs`, `constellation.rs`, `data.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `nmea.rs`, `omm.rs`, `opm.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `propagation.rs`, `rtcm.rs`, `sp3.rs`, `ssr_bias_exclusion.rs`, `tle_fit.rs` |
+| `transpose` | fn | `antex.rs`, `astro_observe_almanac.rs`, `bias.rs`, `broadcast.rs`, `cdm.rs`, `constellation.rs`, `data.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `nmea.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `propagation.rs`, `rtcm.rs`, `sp3.rs`, `ssr_bias_exclusion.rs`, `tle_fit.rs`, `variational.rs` |
 
 ## `sidereon_core::astro::math::mat3`
 
@@ -784,7 +910,7 @@ and the native source files that expose each item.
 | `matrix_from_f64` | fn | MISSING |
 | `matrix_from_row_slice` | fn | MISSING |
 | `matrix_to_f64` | fn | MISSING |
-| `product` | fn | `antex.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `data.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `precise_samples.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sp3.rs`, `spp.rs`, `staleness.rs`, `terrain_store.rs` |
+| `product` | fn | `antex.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `data.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `precise_samples.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sp3.rs`, `spp.rs`, `staleness.rs`, `terrain_store.rs` |
 | `product_fixed` | fn | MISSING |
 | `product_vector` | fn | MISSING |
 | `solve_cholesky` | fn | MISSING |
@@ -901,7 +1027,7 @@ and the native source files that expose each item.
 | `encode_kvn_lenient` | fn | `omm.rs`, `tle_fit.rs` |
 | `encode_xml` | fn | `cdm.rs`, `oem.rs`, `omm.rs`, `opm.rs` |
 | `encode_xml_lenient` | fn | `omm.rs` |
-| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
+| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `gravity_field.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
 | `parse_csv` | fn | MISSING |
 | `parse_csv_array` | fn | `omm.rs` |
 | `parse_epoch` | fn | `constellation.rs` |
@@ -982,12 +1108,45 @@ and the native source files that expose each item.
 | `visible_from_satellites` | fn | `passes.rs` |
 | `visible_from_satellites_with_validity` | fn | MISSING |
 
+## `sidereon_core::astro::propagator::analytic`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `AnalyticPropagationError` | enum | `analytic.rs` |
+| `AnalyticTheory` | enum | `analytic.rs` |
+| `MeanConversionOptions` | struct | `analytic.rs` |
+| `MeanElements` | struct | MISSING |
+| `ZonalHarmonics` | struct | `analytic.rs` |
+
+## `sidereon_core::astro::propagator::analytic::brouwer_lyddane`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `BrouwerLyddanePropagator` | struct | `analytic.rs`, `gnss_attitude.rs` |
+| `brouwer_lyddane_mean_elements` | fn | `analytic.rs` |
+| `brouwer_lyddane_osculating_elements` | fn | `analytic.rs` |
+
+## `sidereon_core::astro::propagator::analytic::eckstein_hechler`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `EcksteinHechlerPropagator` | struct | `analytic.rs`, `gnss_attitude.rs` |
+| `eckstein_hechler_mean_elements` | fn | `analytic.rs` |
+| `eckstein_hechler_osculating_elements` | fn | `analytic.rs` |
+
+## `sidereon_core::astro::propagator::analytic::elements`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `CircularElements` | struct | `analytic.rs` |
+| `KeplerianElements` | struct | `analytic.rs`, `broadcast.rs` |
+
 ## `sidereon_core::astro::propagator::api`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `IntegratorOptions` | struct | `covariance_transport.rs`, `drag.rs`, `propagation.rs` |
-| `PropagationContext` | struct | `drag.rs`, `forces.rs`, `propagation.rs` |
+| `IntegratorOptions` | struct | `covariance_transport.rs`, `drag.rs`, `propagation.rs`, `variational.rs` |
+| `PropagationContext` | struct | `covariance_transport.rs`, `drag.rs`, `earth_orientation.rs`, `forces.rs`, `propagation.rs`, `variational.rs` |
 
 ## `sidereon_core::astro::propagator::controller`
 
@@ -1016,14 +1175,16 @@ and the native source files that expose each item.
 | `DecayError` | enum | `drag.rs` |
 | `DecayEstimate` | struct | MISSING |
 | `estimate_decay` | fn | `drag.rs` |
+| `estimate_decay_with_context` | fn | `drag.rs` |
 | `estimate_decay_with_source` | fn | `space_weather.rs` |
+| `estimate_decay_with_source_and_context` | fn | `drag.rs` |
 
 ## `sidereon_core::astro::propagator::dense_output`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `DenseOutput` | struct | MISSING |
-| `DenseOutputError` | enum | MISSING |
+| `DenseOutput` | struct | `gnss_attitude.rs`, `variational.rs` |
+| `DenseOutputError` | enum | `variational.rs` |
 | `DenseSegment` | struct | MISSING |
 
 ## `sidereon_core::astro::propagator::driver`
@@ -1045,10 +1206,10 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `ForceModelComponents` | struct | `propagation.rs` |
-| `ForceModelKind` | enum | `covariance_transport.rs`, `propagation.rs` |
-| `IntegratorKind` | enum | `covariance_transport.rs`, `propagation.rs` |
-| `StatePropagator` | struct | `covariance_transport.rs`, `propagation.rs` |
+| `ForceModelComponents` | struct | `force_models.rs`, `propagation.rs` |
+| `ForceModelKind` | enum | `force_models.rs`, `propagation.rs` |
+| `IntegratorKind` | enum | `covariance_transport.rs`, `propagation.rs`, `variational.rs` |
+| `StatePropagator` | struct | `covariance_transport.rs`, `propagation.rs`, `variational.rs` |
 | `StateTransitionMatrix` | type | `covariance_transport.rs` |
 
 ## `sidereon_core::astro::propagator::result`
@@ -1056,8 +1217,17 @@ and the native source files that expose each item.
 | Item | Kind | Binding |
 |---|---|---|
 | `PropagationPoint` | struct | MISSING |
-| `PropagationResult` | struct | MISSING |
+| `PropagationResult` | struct | `variational.rs` |
 | `PropagationStats` | struct | MISSING |
+
+## `sidereon_core::astro::propagator::variational`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `VariationalEpoch` | struct | `variational.rs` |
+| `VariationalEquations` | struct | `variational.rs` |
+| `VariationalState` | struct | `variational.rs` |
+| `propagate_variational` | fn | `variational.rs` |
 
 ## `sidereon_core::astro::relative`
 
@@ -1096,14 +1266,14 @@ and the native source files that expose each item.
 | `DecayLatch` | struct | `sgp4_batch.rs` |
 | `DecayLatchedError` | enum | `sgp4_batch.rs` |
 | `ElementSet` | struct | `omm.rs`, `propagation.rs`, `tle_fit.rs` |
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | enum | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `JulianDate` | struct | `conjunction.rs`, `iono.rs`, `omm.rs`, `precise_samples.rs`, `propagation.rs`, `sp3.rs`, `tle_fit.rs` |
 | `MinutesSinceEpoch` | struct | `sgp4_batch.rs` |
 | `NamedSatellite` | struct | MISSING |
 | `OpsMode` | enum | `coverage.rs`, `propagation.rs`, `tle.rs`, `tle_fit.rs` |
 | `Prediction` | struct | `sgp4_batch.rs` |
 | `RejectedTleRecord` | struct | MISSING |
-| `Satellite` | struct | `antex.rs`, `bias.rs`, `coverage.rs`, `look_angle.rs`, `observable_states.rs`, `passes.rs`, `propagation.rs`, `rtk.rs`, `rtk_filter.rs`, `sgp4_batch.rs` |
+| `Satellite` | struct | `antex.rs`, `bias.rs`, `coverage.rs`, `gnss_attitude.rs`, `look_angle.rs`, `observable_states.rs`, `orbit_scoring.rs`, `passes.rs`, `propagation.rs`, `rtk.rs`, `rtk_filter.rs`, `sgp4_batch.rs` |
 | `Sgp4InputErrorKind` | enum | `coverage.rs`, `ndm_errors.rs` |
 | `TleFile` | struct | MISSING |
 | `TleRecordIssue` | enum | `tle.rs` |
@@ -1149,7 +1319,7 @@ and the native source files that expose each item.
 | `SpaceWeatherTable` | struct | `space_weather.rs` |
 | `encode_csv` | fn | `space_weather.rs` |
 | `encode_txt` | fn | `space_weather.rs` |
-| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
+| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `gravity_field.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
 | `parse_csv` | fn | MISSING |
 | `parse_txt` | fn | MISSING |
 
@@ -1180,7 +1350,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `CartesianState` | struct | `astro_phase_b.rs`, `covariance_transport.rs`, `drag.rs`, `forces.rs`, `propagation.rs` |
+| `CartesianState` | struct | `analytic.rs`, `astro_phase_b.rs`, `covariance_transport.rs`, `drag.rs`, `forces.rs`, `propagation.rs` |
 | `StateDerivative` | struct | MISSING |
 
 ## `sidereon_core::astro::tca`
@@ -1295,13 +1465,13 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `CoverageError` | enum | `tides.rs` |
+| `CoverageError` | enum | `earth_orientation.rs`, `lib.rs`, `tides.rs` |
 | `DegradeReason` | enum | `coverage.rs`, `errors.rs`, `passes.rs`, `ppp_corrections.rs`, `rtk_filter.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `tides.rs` |
 | `LeapSecondTable` | struct | MISSING |
-| `TimeScaleInputErrorKind` | enum | `tides.rs` |
+| `TimeScaleInputErrorKind` | enum | `earth_orientation.rs`, `tides.rs` |
 | `Ut1Provenance` | struct | MISSING |
 | `Validated` | struct | `tides.rs`, `time.rs` |
-| `ValidityMode` | enum | `ppp_corrections.rs`, `tides.rs` |
+| `ValidityMode` | enum | `earth_orientation.rs`, `orbit_parameters.rs`, `ppp_corrections.rs`, `tides.rs` |
 | `check_ut1_coverage` | fn | MISSING |
 
 ## `sidereon_core::astro::time::exact`
@@ -1326,7 +1496,7 @@ and the native source files that expose each item.
 |---|---|---|
 | `Duration` | struct | `cache_lock.rs`, `sidereal.rs` |
 | `GnssWeekTow` | struct | `broadcast.rs`, `sbas.rs`, `ssr.rs` |
-| `Instant` | struct | `bias.rs`, `iono.rs`, `precise_samples.rs`, `sp3.rs`, `staleness.rs`, `time.rs`, `tropo.rs` |
+| `Instant` | struct | `bias.rs`, `iono.rs`, `orbit_scoring.rs`, `precise_samples.rs`, `sp3.rs`, `staleness.rs`, `time.rs`, `tropo.rs` |
 | `InstantRepr` | enum | `iono.rs`, `precise_samples.rs`, `sp3.rs` |
 | `JulianDateSplit` | struct | `bias.rs`, `broadcast_comparison.rs`, `iono.rs`, `precise_samples.rs`, `sp3.rs`, `time.rs`, `tropo.rs` |
 | `TimeModelError` | enum | `iono.rs`, `time.rs`, `tropo.rs` |
@@ -1353,9 +1523,12 @@ and the native source files that expose each item.
 | `tai_utc_offset_s` | fn | `time.rs` |
 | `tcb_to_tdb_jd` | fn | MISSING |
 | `tcg_to_tt_jd` | fn | MISSING |
+| `tdb_from_tt_j2000_seconds` | fn | `time.rs` |
+| `tdb_minus_tt_seconds` | fn | `time.rs` |
 | `tdb_to_tcb_jd` | fn | MISSING |
 | `timescale_offset_at_s` | fn | `time.rs` |
 | `timescale_offset_s` | fn | `time.rs` |
+| `tt_from_tdb_j2000_seconds` | fn | `time.rs` |
 | `tt_to_tcg_jd` | fn | MISSING |
 | `ut1_coverage` | fn | `time.rs` |
 
@@ -1372,10 +1545,10 @@ and the native source files that expose each item.
 | `TleError` | enum | `ndm_errors.rs` |
 | `TlePolicy` | enum | `tle.rs` |
 | `decode_catalog_number` | fn | `propagation.rs` |
-| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
+| `encode` | fn | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `de.rs`, `dgnss.rs`, `drag.rs`, `earth_orientation.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `variational.rs`, `velocity.rs` |
 | `encode_catalog_number` | fn | MISSING |
 | `line_checksum` | fn | MISSING |
-| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
+| `parse` | fn | `antex.rs`, `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `data.rs`, `ephemeris.rs`, `fusion.rs`, `geometry.rs`, `gravity_field.rs`, `iono.rs`, `nmea.rs`, `observable_states.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `terrain_store.rs`, `tle.rs` |
 | `parse_with_policy` | fn | `tle.rs` |
 
 ## `sidereon_core::astro::tolerances`
@@ -1430,7 +1603,7 @@ and the native source files that expose each item.
 | `CnavRates` | struct | MISSING |
 | `ConstellationConstants` | struct | MISSING |
 | `EccentricAnomaly` | struct | MISSING |
-| `KeplerianElements` | struct | `broadcast.rs` |
+| `KeplerianElements` | struct | `analytic.rs`, `broadcast.rs` |
 | `OrbitState` | struct | MISSING |
 | `SatelliteState` | struct | MISSING |
 | `eccentric_anomaly` | fn | MISSING |
@@ -1492,7 +1665,7 @@ and the native source files that expose each item.
 | `AllanOptions` | struct | `clock_stability.rs` |
 | `AllanResult` | struct | `clock_stability.rs` |
 | `AllanSeries` | enum | `clock_stability.rs` |
-| `GapPolicy` | enum | `clock_stability.rs` |
+| `GapPolicy` | enum | `clock_stability.rs`, `orbit_scoring.rs` |
 | `PowerLawNoiseError` | enum | `clock_stability.rs` |
 | `PowerLawNoiseFit` | struct | `clock_stability.rs` |
 | `PowerLawNoiseOptions` | struct | `clock_stability.rs` |
@@ -1598,7 +1771,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
+| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `de.rs`, `drag.rs`, `eclipse.rs`, `gnss_attitude.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
 | `decode_to` | fn | MISSING |
 | `encode_crinex` | fn | `rinex_obs.rs`, `rinex_qc.rs` |
 
@@ -1697,7 +1870,7 @@ and the native source files that expose each item.
 | `predicted_day_offset` | fn | `data.rs` |
 | `predicted_ionex` | fn | MISSING |
 | `predicted_ionex_line_candidates` | fn | `data.rs` |
-| `product` | fn | `antex.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `data.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `precise_samples.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sp3.rs`, `spp.rs`, `staleness.rs`, `terrain_store.rs` |
+| `product` | fn | `antex.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `data.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `precise_samples.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `sp3.rs`, `spp.rs`, `staleness.rs`, `terrain_store.rs` |
 | `product_convention` | fn | `data.rs` |
 | `product_identity` | fn | `cache_lock.rs`, `data.rs`, `sp3.rs` |
 | `product_solution_class` | fn | `data.rs` |
@@ -1776,14 +1949,14 @@ and the native source files that expose each item.
 | `broadcast_group_delay_s` | fn | MISSING |
 | `broadcast_message_group_delay_s` | fn | MISSING |
 | `broadcast_record_group_delay_s` | fn | MISSING |
-| `sample` | fn | `antex.rs`, `astro_phase_b.rs`, `clock_stability.rs`, `data.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geometry.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `reduced_orbit.rs`, `rtk_filter.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `ssr.rs`, `tle_fit.rs` |
+| `sample` | fn | `antex.rs`, `astro_phase_b.rs`, `clock_stability.rs`, `data.rs`, `earth_orientation.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geometry.rs`, `gnss_attitude.rs`, `iono.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `reduced_orbit.rs`, `rtk_filter.rs`, `sbas.rs`, `sp3.rs`, `space_weather.rs`, `ssr.rs`, `tle_fit.rs` |
 
 ## `sidereon_core::error`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | enum | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
-| `Result` | type | `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
+| `Error` | enum | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Result` | type | `analytic.rs`, `antex.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `frame_catalog.rs`, `fusion.rs`, `gauss.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `orbit_scoring.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `primitive_estimation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sgp4_batch.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `staleness.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `unix_compress.rs`, `velocity.rs` |
 
 ## `sidereon_core::error_metrics`
 
@@ -2144,7 +2317,7 @@ and the native source files that expose each item.
 | `StepDetectionHeuristic` | enum | MISSING |
 | `StepDetectionOptions` | struct | `geodetic_time_series.rs` |
 | `TimeSeriesQuality` | enum | `geodetic_time_series.rs` |
-| `Trajectory` | struct | `geodetic_time_series.rs` |
+| `Trajectory` | struct | `geodetic_time_series.rs`, `gnss_attitude.rs`, `orbit_scoring.rs` |
 | `TrajectoryComponent` | struct | `geodetic_time_series.rs` |
 | `TrajectoryFitOptions` | struct | `geodetic_time_series.rs` |
 | `TrajectoryModel` | struct | `geodetic_time_series.rs` |
@@ -2208,7 +2381,7 @@ and the native source files that expose each item.
 | `DopOptions` | struct | `geometry.rs` |
 | `DopSeriesPoint` | struct | MISSING |
 | `DopWeighting` | enum | `geometry.rs` |
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `VisibilityOptions` | struct | `geometry.rs` |
 | `VisibilityPass` | struct | MISSING |
 | `VisibilitySeriesPoint` | struct | MISSING |
@@ -2266,9 +2439,9 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `GnssSatelliteId` | struct | `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `fusion.rs`, `geometry.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `sbas.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
+| `GnssSatelliteId` | struct | `araim.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `fusion.rs`, `geometry.rs`, `observable_states.rs`, `observables.rs`, `orbit_determination.rs`, `orbit_scoring.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_samples.rs`, `sbas.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
 | `GnssSystem` | enum | `araim.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `constellation.rs`, `data.rs`, `frequencies.rs`, `geometry.rs`, `iono.rs`, `nmea.rs`, `observables.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sp3.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `velocity.rs` |
-| `SatelliteIdError` | enum | `rtcm.rs` |
+| `SatelliteIdError` | enum | `orbit_scoring.rs`, `rtcm.rs` |
 
 ## `sidereon_core::ils`
 
@@ -2453,8 +2626,8 @@ and the native source files that expose each item.
 | `PREAMBLE` | const | `lnav.rs` |
 | `SUBFRAME_LENGTH` | const | `lnav.rs` |
 | `WORD_LENGTH` | const | `lnav.rs` |
-| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `drag.rs`, `eclipse.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
-| `encode` | fn | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `dgnss.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `velocity.rs` |
+| `decode` | fn | `angles.rs`, `astro_observe_almanac.rs`, `bodies.rs`, `carrier_phase.rs`, `cdm.rs`, `collision.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `de.rs`, `drag.rs`, `eclipse.rs`, `gnss_attitude.rs`, `iono.rs`, `lib.rs`, `lnav.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `passes.rs`, `precise_positioning.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rinex_obs.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tides.rs`, `tle.rs`, `unix_compress.rs` |
+| `encode` | fn | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `bodies.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cache_lock.rs`, `carrier_phase.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `covariance_transport.rs`, `coverage.rs`, `data.rs`, `de.rs`, `dgnss.rs`, `drag.rs`, `earth_orientation.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `frame_catalog.rs`, `frequencies.rs`, `fusion.rs`, `geodesic.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `geometry.rs`, `geometry_quality.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `ils.rs`, `iod.rs`, `iono.rs`, `lambert.rs`, `lib.rs`, `lnav.rs`, `look_angle.rs`, `ndm_errors.rs`, `nmea.rs`, `normality.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `primitive_estimation.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `reliability.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk.rs`, `rtk_filter.rs`, `sbas.rs`, `scenario.rs`, `sgp4_batch.rs`, `sidereal.rs`, `signal.rs`, `source_localization.rs`, `sp3.rs`, `space_weather.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tle_fit.rs`, `track_estimation.rs`, `trls.rs`, `variational.rs`, `velocity.rs` |
 | `parity` | fn | `lnav.rs`, `rtk_filter.rs`, `trls.rs` |
 | `parity_valid` | fn | `lnav.rs` |
 | `subframe_id` | fn | `lnav.rs` |
@@ -2687,7 +2860,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `ReducedOrbitModel` | type | MISSING |
 
 ## `sidereon_core::orbit_determination`
@@ -2696,14 +2869,14 @@ and the native source files that expose each item.
 |---|---|---|
 | `OrbitArcSpan` | struct | MISSING |
 | `OrbitFitCovariance` | enum | `orbit_determination.rs` |
-| `OrbitFitError` | enum | `orbit_determination.rs` |
+| `OrbitFitError` | enum | `orbit_determination.rs`, `orbit_parameters.rs` |
 | `OrbitFitOptions` | struct | `orbit_determination.rs` |
 | `OrbitFitReport` | struct | `orbit_determination.rs` |
 | `OrbitFitSolution` | struct | `orbit_determination.rs` |
 | `OrbitResidualLedger` | struct | `orbit_determination.rs` |
 | `OrbitResidualStats` | struct | `orbit_determination.rs` |
 | `OrientedPreciseEphemerisStateSample` | struct | MISSING |
-| `Ut1ProviderRole` | enum | MISSING |
+| `Ut1ProviderRole` | enum | `orbit_parameters.rs` |
 | `fit_all_sp3_ecef_precise_orbits` | fn | `orbit_determination.rs` |
 | `fit_all_sp3_ecef_precise_orbits_with_validity` | fn | MISSING |
 | `fit_all_sp3_precise_orbits` | fn | MISSING |
@@ -2729,11 +2902,64 @@ and the native source files that expose each item.
 | `fit_sp3_precise_orbits` | fn | MISSING |
 | `fit_sp3_precise_orbits_with_validity` | fn | MISSING |
 
+## `sidereon_core::orbit_determination::parameters`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `EstimatedForceParameter` | struct | `orbit_parameters.rs` |
+| `InertialPositionSample` | struct | `orbit_parameters.rs` |
+| `OrbitParameterCovariance` | enum | `orbit_parameters.rs` |
+| `OrbitParameterFit` | struct | `orbit_parameters.rs` |
+| `OrbitParameterFitError` | enum | `orbit_parameters.rs` |
+| `OrbitParameterFitOptions` | struct | `orbit_parameters.rs` |
+| `OrbitRtnResidual` | struct | MISSING |
+| `STATE_PARAMETER_NAMES` | const | `orbit_parameters.rs` |
+| `fit_inertial_orbit_parameters` | fn | `orbit_parameters.rs` |
+| `fit_inertial_orbit_parameters_with_validity` | fn | `orbit_parameters.rs` |
+| `fit_sp3_ecef_orbit_parameters` | fn | `orbit_parameters.rs` |
+| `fit_sp3_ecef_orbit_parameters_with_validity` | fn | `orbit_parameters.rs` |
+
+## `sidereon_core::orbit_scoring`
+
+| Item | Kind | Binding |
+|---|---|---|
+| `BroadcastOrbit` | struct | `orbit_scoring.rs` |
+| `ClockDatum` | enum | `orbit_scoring.rs` |
+| `DEFAULT_VELOCITY_HALF_STEP_S` | const | `orbit_scoring.rs` |
+| `ErrorStats` | struct | `orbit_scoring.rs` |
+| `FrameAgreement` | enum | `orbit_scoring.rs` |
+| `GapPolicy` | enum | `clock_stability.rs`, `orbit_scoring.rs` |
+| `HorizonBinStats` | struct | `orbit_scoring.rs` |
+| `MIN_VELOCITY_HALF_STEP_S` | const | `orbit_scoring.rs` |
+| `OrbitFrame` | enum | `orbit_scoring.rs` |
+| `OrbitReferencePoint` | enum | `orbit_scoring.rs` |
+| `OrbitRegime` | enum | `orbit_scoring.rs` |
+| `OrbitScoreError` | enum | `gnss_attitude.rs`, `orbit_scoring.rs` |
+| `OrbitScoreOptions` | struct | `orbit_scoring.rs` |
+| `OrbitScoreReport` | struct | `orbit_scoring.rs` |
+| `OrbitSource` | trait | `gnss_attitude.rs`, `orbit_scoring.rs` |
+| `OrbitSourceState` | struct | `orbit_scoring.rs` |
+| `OrbitTrajectory` | struct | `orbit_scoring.rs` |
+| `PredictedSp3` | struct | `orbit_scoring.rs` |
+| `RtnComponents` | struct | `orbit_scoring.rs` |
+| `SatelliteScore` | struct | `orbit_scoring.rs` |
+| `ScoreCoverage` | struct | `orbit_scoring.rs` |
+| `ScoreEpochs` | enum | `orbit_scoring.rs` |
+| `ScoredProduct` | enum | `orbit_scoring.rs` |
+| `SisreWeightSelection` | enum | `orbit_scoring.rs` |
+| `SisreWeights` | struct | `orbit_scoring.rs` |
+| `SystemScore` | struct | `orbit_scoring.rs` |
+| `TrajectorySample` | struct | `orbit_scoring.rs` |
+| `TriadVelocity` | enum | `orbit_scoring.rs` |
+| `inertial_velocity_from_earth_fixed` | fn | `orbit_scoring.rs` |
+| `rtn_components` | fn | `orbit_scoring.rs` |
+| `score_orbit` | fn | `orbit_scoring.rs` |
+
 ## `sidereon_core::positioning`
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Error` | type | `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `forces.rs`, `geodetic_time_series.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
+| `Error` | type | `analytic.rs`, `antex.rs`, `araim.rs`, `astro_observe_almanac.rs`, `astro_phase_b.rs`, `bias.rs`, `broadcast.rs`, `broadcast_comparison.rs`, `cdm.rs`, `clock_stability.rs`, `collision.rs`, `conjunction.rs`, `constellation.rs`, `covariance.rs`, `coverage.rs`, `data.rs`, `drag.rs`, `eclipse.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `errors.rs`, `force_models.rs`, `forces.rs`, `geodetic_time_series.rs`, `gnss_attitude.rs`, `inertial.rs`, `iono.rs`, `ndm_errors.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `opm.rs`, `orbit_parameters.rs`, `orbit_scoring.rs`, `passes.rs`, `ppp_corrections.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `qc.rs`, `reduced_orbit.rs`, `rf.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rinex_qc.rs`, `rtcm.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sidereal.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `terrain_store.rs`, `tides.rs`, `time.rs`, `tle.rs`, `tropo.rs` |
 | `RinexSppAssemblySource` | trait | MISSING |
 | `RinexSppBroadcastCorrections` | struct | MISSING |
 | `RinexSppEpochInputs` | struct | `spp.rs` |
@@ -2767,7 +2993,7 @@ and the native source files that expose each item.
 | `SatelliteAntenna` | struct | `ppp_corrections.rs`, `precise_positioning.rs` |
 | `SatelliteAntennaFrequency` | struct | `ppp_corrections.rs`, `precise_positioning.rs` |
 | `SatelliteAntennaOptions` | struct | `ppp_corrections.rs`, `precise_positioning.rs` |
-| `build` | fn | `collision.rs`, `ntrip.rs`, `precise_samples.rs`, `propagation.rs`, `rtk_filter.rs`, `sp3.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `tides.rs`, `time.rs` |
+| `build` | fn | `collision.rs`, `force_models.rs`, `ntrip.rs`, `precise_samples.rs`, `propagation.rs`, `rtk_filter.rs`, `sp3.rs`, `ssr_bias_exclusion.rs`, `tdm.rs`, `tides.rs`, `time.rs` |
 | `build_with_validity` | fn | MISSING |
 | `build_with_validity_and_tide_constants` | fn | `ppp_corrections.rs` |
 
@@ -2988,7 +3214,7 @@ and the native source files that expose each item.
 | `raim_fde_design` | fn | `qc.rs` |
 | `raim_for_solution` | fn | MISSING |
 | `residual_diagnostics` | fn | MISSING |
-| `sigmas` | fn | `araim.rs`, `qc.rs` |
+| `sigmas` | fn | `araim.rs`, `gravity_field.rs`, `orbit_parameters.rs`, `qc.rs` |
 | `spp_robust_fde_driver` | fn | `qc.rs` |
 | `validate_receiver_solution` | fn | MISSING |
 | `weight_vector` | fn | `qc.rs` |
@@ -3016,7 +3242,7 @@ and the native source files that expose each item.
 | `EcefSample` | struct | `reduced_orbit.rs` |
 | `Elements` | struct | `propagation.rs`, `reduced_orbit.rs`, `tle.rs` |
 | `FitStats` | struct | `reduced_orbit.rs` |
-| `Frame` | enum | `collision.rs`, `covariance_transport.rs`, `orbit_determination.rs`, `reduced_orbit.rs`, `rtk_filter.rs`, `scenario.rs` |
+| `Frame` | enum | `collision.rs`, `covariance_transport.rs`, `orbit_determination.rs`, `orbit_parameters.rs`, `reduced_orbit.rs`, `rtk_filter.rs`, `scenario.rs` |
 | `MIN_SAMPLES` | const | MISSING |
 | `Model` | enum | `reduced_orbit.rs` |
 | `PiecewiseOrbit` | struct | `reduced_orbit.rs` |
@@ -3037,7 +3263,7 @@ and the native source files that expose each item.
 | `drift` | fn | `consts.rs`, `propagation.rs`, `reduced_orbit.rs` |
 | `drift_piecewise_reduced_orbit_source` | fn | MISSING |
 | `drift_reduced_orbit_source` | fn | MISSING |
-| `fit` | fn | `clock_stability.rs`, `covariance.rs`, `nmea.rs`, `precise_positioning.rs`, `reduced_orbit.rs`, `rtcm.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `tle_fit.rs` |
+| `fit` | fn | `clock_stability.rs`, `covariance.rs`, `nmea.rs`, `orbit_parameters.rs`, `precise_positioning.rs`, `reduced_orbit.rs`, `rtcm.rs`, `spp.rs`, `ssr_bias_exclusion.rs`, `tle_fit.rs` |
 | `fit_piecewise` | fn | `reduced_orbit.rs` |
 | `fit_piecewise_reduced_orbit_source` | fn | MISSING |
 | `fit_reduced_orbit_source` | fn | MISSING |
@@ -3045,7 +3271,7 @@ and the native source files that expose each item.
 | `piecewise_drift` | fn | `reduced_orbit.rs` |
 | `piecewise_position` | fn | `reduced_orbit.rs` |
 | `piecewise_position_velocity` | fn | `reduced_orbit.rs` |
-| `position` | fn | `angles.rs`, `antex.rs`, `cdm.rs`, `covariance.rs`, `covariance_transport.rs`, `drag.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `forces.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `passes.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `reduced_orbit.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tides.rs`, `unix_compress.rs`, `velocity.rs` |
+| `position` | fn | `analytic.rs`, `angles.rs`, `antex.rs`, `cdm.rs`, `covariance.rs`, `covariance_transport.rs`, `drag.rs`, `elements.rs`, `ephemeris.rs`, `error_metrics.rs`, `force_models.rs`, `forces.rs`, `frame_catalog.rs`, `fusion.rs`, `geodetic_time_series.rs`, `geofence.rs`, `geoid.rs`, `gnss_attitude.rs`, `gravity_field.rs`, `iono.rs`, `lib.rs`, `nmea.rs`, `ntrip.rs`, `observable_states.rs`, `observables.rs`, `oem.rs`, `omm.rs`, `orbit_scoring.rs`, `passes.rs`, `precise_positioning.rs`, `precise_positioning_surfaces.rs`, `precise_samples.rs`, `propagation.rs`, `reduced_orbit.rs`, `rinex_clock.rs`, `rinex_obs.rs`, `rtk_filter.rs`, `sbas.rs`, `sgp4_batch.rs`, `sp3.rs`, `spp.rs`, `ssr.rs`, `staleness.rs`, `static_positioning.rs`, `tides.rs`, `unix_compress.rs`, `velocity.rs` |
 | `position_velocity` | fn | `reduced_orbit.rs` |
 | `select_piecewise_segment` | fn | `reduced_orbit.rs` |
 
@@ -3089,7 +3315,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `EarthOrientation` | struct | `broadcast.rs` |
+| `EarthOrientation` | struct | `broadcast.rs`, `earth_orientation.rs` |
 
 ## `sidereon_core::rinex_nav::geo`
 
@@ -3422,7 +3648,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Epoch` | struct | `iono.rs`, `ndm_errors.rs`, `rtk_filter.rs`, `sp3.rs` |
+| `Epoch` | struct | `iono.rs`, `ndm_errors.rs`, `rtk_filter.rs`, `sp3.rs`, `variational.rs` |
 | `MeasModel` | struct | `rtk_filter.rs` |
 | `SatMeas` | struct | `rtk_filter.rs` |
 | `StochasticModel` | enum | `rtk_filter.rs` |
@@ -3726,7 +3952,7 @@ and the native source files that expose each item.
 
 | Item | Kind | Binding |
 |---|---|---|
-| `Sp3` | struct | `data.rs`, `sp3.rs`, `spp.rs`, `staleness.rs` |
+| `Sp3` | struct | `data.rs`, `gnss_attitude.rs`, `sp3.rs`, `spp.rs`, `staleness.rs` |
 | `Sp3AccuracyCodeGroup` | struct | `sp3.rs` |
 | `Sp3AccuracyValue` | enum | `precise_samples.rs`, `sp3.rs` |
 | `Sp3ClockRecord` | struct | MISSING |
@@ -3772,10 +3998,10 @@ and the native source files that expose each item.
 | `OutlierRejectOptions` | struct | `sp3.rs` |
 | `PrecedenceTransition` | struct | MISSING |
 | `ProvenanceMode` | enum | `sp3.rs` |
-| `Sp3FrameLabelSet` | struct | `sp3.rs` |
+| `Sp3FrameLabelSet` | struct | `orbit_scoring.rs`, `sp3.rs` |
 | `Sp3FrameReconciliation` | struct | `sp3.rs` |
 | `Sp3FrameReconciliationMethod` | enum | `sp3.rs` |
-| `Sp3FrameReconciliationOptions` | struct | `sp3.rs` |
+| `Sp3FrameReconciliationOptions` | struct | `orbit_scoring.rs`, `sp3.rs` |
 | `TransitionReason` | enum | `sp3.rs` |
 | `align_clock_reference` | fn | `sp3.rs` |
 | `clock_reference_offset` | fn | `sp3.rs` |
@@ -3793,7 +4019,7 @@ and the native source files that expose each item.
 | `ContinuityReport` | struct | `sp3.rs` |
 | `EpochWindow` | struct | `sp3.rs` |
 | `InterpolationNodes` | struct | `sp3.rs` |
-| `OrbitClass` | enum | `sp3.rs` |
+| `OrbitClass` | enum | `gnss_attitude.rs`, `sp3.rs` |
 | `SpeedBound` | enum | `sp3.rs` |
 | `StencilExtent` | struct | `sp3.rs` |
 | `UnusableSampleReason` | enum | `sp3.rs` |
@@ -3967,7 +4193,7 @@ and the native source files that expose each item.
 | `IngestionActionReason` | enum | MISSING |
 | `MissingCorrectionAction` | enum | `ssr.rs` |
 | `OrbitBasis` | enum | MISSING |
-| `OrbitReferencePoint` | type | MISSING |
+| `OrbitReferencePoint` | type | `orbit_scoring.rs` |
 | `PhaseContinuityToken` | struct | `ssr_bias_exclusion.rs` |
 | `PhaseDiscontinuityIndicator` | enum | `ssr_bias_exclusion.rs` |
 | `RegionalPolicy` | enum | `ssr.rs` |

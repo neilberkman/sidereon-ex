@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Intended release tag for branch asset preparation (for example v4.1.0)"
+        description: "Intended release tag for branch asset preparation (for example v4.2.0)"
         required: false
         default: ""
         type: string
@@ -238,10 +238,12 @@ jobs:
           test -f LICENSES/IERS-Conventions-Software-License.txt
           test -f LICENSES/ISC-libloading.txt
           test -f LICENSES/SciPy-BSD-3-Clause.txt
+          test -f LICENSES/OREKIT-NOTICE.txt
+          test -f LICENSES/HIPPARCHUS-NOTICE.txt
           test -f THIRD-PARTY-NOTICES.md
-          test -f third_party_source/sidereon-core-4.1.0/tides/mod.rs
-          test -f third_party_source/sidereon-core-4.1.0/tides/ocean.rs
-          test -f third_party_source/sidereon-core-4.1.0/tides/pole.rs
+          test -f third_party_source/sidereon-core-4.2.0/tides/mod.rs
+          test -f third_party_source/sidereon-core-4.2.0/tides/ocean.rs
+          test -f third_party_source/sidereon-core-4.2.0/tides/pole.rs
           rm -f "$final_lib" "$archive"
           cp "$source_lib" "$final_lib"
           tar -czf "$archive" \
@@ -252,10 +254,12 @@ jobs:
             LICENSES/IERS-Conventions-Software-License.txt \
             LICENSES/ISC-libloading.txt \
             LICENSES/SciPy-BSD-3-Clause.txt \
+            LICENSES/OREKIT-NOTICE.txt \
+            LICENSES/HIPPARCHUS-NOTICE.txt \
             THIRD-PARTY-NOTICES.md \
-            third_party_source/sidereon-core-4.1.0/tides/mod.rs \
-            third_party_source/sidereon-core-4.1.0/tides/ocean.rs \
-            third_party_source/sidereon-core-4.1.0/tides/pole.rs
+            third_party_source/sidereon-core-4.2.0/tides/mod.rs \
+            third_party_source/sidereon-core-4.2.0/tides/ocean.rs \
+            third_party_source/sidereon-core-4.2.0/tides/pole.rs
 
           archive_listing="$(tar -tzf "$archive")"
           grep -Fxq "$final_lib" <<<"$archive_listing"
@@ -265,11 +269,13 @@ jobs:
           grep -Fxq "LICENSES/IERS-Conventions-Software-License.txt" <<<"$archive_listing"
           grep -Fxq "LICENSES/ISC-libloading.txt" <<<"$archive_listing"
           grep -Fxq "LICENSES/SciPy-BSD-3-Clause.txt" <<<"$archive_listing"
+          grep -Fxq "LICENSES/OREKIT-NOTICE.txt" <<<"$archive_listing"
+          grep -Fxq "LICENSES/HIPPARCHUS-NOTICE.txt" <<<"$archive_listing"
           grep -Fxq "THIRD-PARTY-NOTICES.md" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-4.1.0/tides/mod.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-4.1.0/tides/ocean.rs" <<<"$archive_listing"
-          grep -Fxq "third_party_source/sidereon-core-4.1.0/tides/pole.rs" <<<"$archive_listing"
-          test "$(wc -l <<<"$archive_listing" | tr -d ' ')" -eq 11
+          grep -Fxq "third_party_source/sidereon-core-4.2.0/tides/mod.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-4.2.0/tides/ocean.rs" <<<"$archive_listing"
+          grep -Fxq "third_party_source/sidereon-core-4.2.0/tides/pole.rs" <<<"$archive_listing"
+          test "$(wc -l <<<"$archive_listing" | tr -d ' ')" -eq 13
 
           if command -v sha256sum >/dev/null 2>&1; then
             sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"

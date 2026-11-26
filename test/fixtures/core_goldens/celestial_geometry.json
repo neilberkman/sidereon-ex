@@ -1,5 +1,5 @@
 {
-  "source": "sidereon-core 3c61740 celestial positions, frame rotations, eclipse geometry and GNSS yaw",
+  "source": "sidereon-core 17b493fe8cf6d1b45ecc0982e7d594b88cdd2b7b celestial positions, frame rotations, eclipse geometry and GNSS yaw",
   "sun_moon_gcrs": [
     [
       "0x42185d0e1fe197c3",
