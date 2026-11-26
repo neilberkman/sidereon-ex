@@ -17,7 +17,8 @@ use sidereon_core::astro::space_weather::{
 use sidereon_core::nmea::Diagnostics;
 
 use crate::drag::{
-    decay_config_from_terms, decode_decay_error, DecayEstimateTerm, DragParametersTerm,
+    decay_config_from_terms, decode_decay_error, decode_drag_parameters_from_term,
+    DecayEstimateTerm, DragParametersTerm,
 };
 
 pub struct SpaceWeatherTableResource {
@@ -375,7 +376,7 @@ fn drag_estimate_decay_with_space_weather_table<'a>(
     policy: Option<SpaceWeatherPolicyTerm>,
 ) -> rustler::NifResult<Term<'a>> {
     let mut config = decay_config_from_terms(
-        params,
+        decode_drag_parameters_from_term(params)?,
         force_model_name,
         abs_tol,
         rel_tol,

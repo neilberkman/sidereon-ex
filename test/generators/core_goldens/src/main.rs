@@ -13,6 +13,8 @@
 //! answer on exactly those inputs, with every float as the hex of its IEEE-754
 //! bits, and names the core revision in its `source` field.
 
+mod astrodynamics;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -83,6 +85,7 @@ fn main() {
     fusion_tight(&ctx);
     rtk_reference_station(&ctx);
     constellation_visibility(&ctx);
+    astrodynamics::write_goldens(&ctx);
 }
 
 fn source(ctx: &Context, what: &str) -> String {

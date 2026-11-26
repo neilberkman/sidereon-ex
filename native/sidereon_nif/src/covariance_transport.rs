@@ -5,7 +5,7 @@
 //! transition matrices, process noise, and numerical propagation all live in
 //! `sidereon-core`.
 
-use rustler::{Encoder, Env, Term};
+use rustler::{Atom, Encoder, Env, NifResult, Term};
 use sidereon_core::astro::covariance::{
     covariance6_km_to_m as core_covariance6_km_to_m,
     covariance6_m_to_km as core_covariance6_m_to_km, eci_to_rtn_covariance6,
@@ -13,7 +13,7 @@ use sidereon_core::astro::covariance::{
 };
 use sidereon_core::astro::propagator::{
     transport_covariance, CovarianceFrame, CovariancePropagationOptions, CovarianceSegment,
-    ForceModelKind, IntegratorKind, IntegratorOptions, LabeledCovariance6, ProcessNoise,
+    IntegratorKind, IntegratorOptions, LabeledCovariance6, ProcessNoise, PropagationContext,
     StatePropagator, StateTransitionMatrix,
 };
 use sidereon_core::astro::state::CartesianState;
@@ -26,6 +26,7 @@ mod atoms {
         ok,
         error,
         invalid_input,
+        invalid_dimensions,
         non_finite,
         asymmetric,
         not_positive_semidefinite,
@@ -142,6 +143,11 @@ fn covariance_from_rows(rows: Vec<Vec<f64>>) -> Result<Covariance6, Covariance6E
     Covariance6::try_from_matrix(matrix)
 }
 
+pub(crate) fn decode_covariance(rows: Vec<Vec<f64>>) -> Result<Covariance6, Atom> {
+    let matrix = mat6_from_rows(rows).ok_or_else(atoms::invalid_dimensions)?;
+    Covariance6::try_from_matrix(matrix).map_err(covariance_error_atom)
+}
+
 fn covariance_result<'a>(env: Env<'a>, result: Result<Covariance6, Covariance6Error>) -> Term<'a> {
     match result {
         Ok(covariance) => (atoms::ok(), rows_from_mat6(covariance.into_matrix())).encode(env),
@@ -173,17 +179,6 @@ fn process_noise(term: ProcessNoiseTerm) -> Option<ProcessNoise> {
             q_normal_km2_s3: term.q_normal_km2_s3?,
         }),
         _ => None,
-    }
-}
-
-fn force_model(forces: &[String]) -> ForceModelKind {
-    if forces
-        .iter()
-        .any(|force| force == "j2" || force == "twobody_j2")
-    {
-        ForceModelKind::two_body_j2()
-    } else {
-        ForceModelKind::two_body()
     }
 }
 
@@ -346,23 +341,73 @@ fn propagate_covariance<'a>(
     matrix: Vec<Vec<f64>>,
     epochs_tdb_seconds: Vec<f64>,
     options: PropagateOptionsTerm,
-) -> Term<'a> {
-    let covariance = match covariance_from_rows(matrix) {
+) -> NifResult<Term<'a>> {
+    run_covariance(
+        env,
+        initial_state,
+        matrix,
+        epochs_tdb_seconds,
+        options,
+        None,
+    )
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn propagate_covariance_with_context<'a>(
+    env: Env<'a>,
+    initial_state: StateTerm,
+    matrix: Vec<Vec<f64>>,
+    epochs_tdb_seconds: Vec<f64>,
+    options: PropagateOptionsTerm,
+    context: rustler::ResourceArc<crate::earth_orientation::ContextResource>,
+) -> NifResult<Term<'a>> {
+    run_covariance(
+        env,
+        initial_state,
+        matrix,
+        epochs_tdb_seconds,
+        options,
+        Some(context.0.clone()),
+    )
+}
+
+fn run_covariance(
+    env: Env<'_>,
+    initial_state: StateTerm,
+    matrix: Vec<Vec<f64>>,
+    epochs_tdb_seconds: Vec<f64>,
+    options: PropagateOptionsTerm,
+    context: Option<PropagationContext>,
+) -> NifResult<Term<'_>> {
+    let explicit_context = context.is_some();
+    let covariance = if explicit_context {
+        decode_covariance(matrix)
+    } else {
+        covariance_from_rows(matrix).map_err(covariance_error_atom)
+    };
+    let covariance = match covariance {
         Ok(covariance) => covariance,
-        Err(error) => return atom_error(env, covariance_error_atom(error)),
+        Err(reason) => return Ok(atom_error(env, reason)),
     };
     let Some(input_frame) = frame(&options.input_frame) else {
-        return atom_error(env, atoms::invalid_input());
+        return Ok(atom_error(env, atoms::invalid_input()));
     };
     let Some(output_frame) = frame(&options.output_frame) else {
-        return atom_error(env, atoms::invalid_input());
+        return Ok(atom_error(env, atoms::invalid_input()));
     };
     let Some(process_noise) = process_noise(options.process_noise) else {
-        return atom_error(env, atoms::invalid_input());
+        return Ok(atom_error(env, atoms::invalid_input()));
     };
     let Some(integrator) = integrator(&options.integrator) else {
-        return atom_error(env, atoms::invalid_input());
+        return Ok(atom_error(env, atoms::invalid_input()));
     };
+    let force_model = if explicit_context {
+        crate::propagation::force_model_kind(&options.forces)?
+    } else {
+        crate::propagation::covariance_force_model_kind(&options.forces)?
+    };
+    let context = context
+        .unwrap_or_else(|| crate::propagation::propagation_context_for_force_model(force_model));
     let initial = state(initial_state);
     let mut integrator_options = IntegratorOptions::default();
     integrator_options.abs_tol = options.abs_tol;
@@ -377,7 +422,7 @@ fn propagate_covariance<'a>(
         initial.epoch_tdb_seconds,
         initial.position_array(),
         initial.velocity_array(),
-        force_model(&options.forces),
+        force_model,
         integrator,
     )
     .with_options(integrator_options);
@@ -385,26 +430,34 @@ fn propagate_covariance<'a>(
     let mut propagation_options = CovariancePropagationOptions::default();
     propagation_options.process_noise = process_noise;
     propagation_options.output_frame = output_frame;
-    match propagator.propagate_covariance(
-        LabeledCovariance6 {
-            covariance,
-            frame: input_frame,
+    Ok(
+        match propagator.propagate_covariance_with_context(
+            LabeledCovariance6 {
+                covariance,
+                frame: input_frame,
+            },
+            &epochs_tdb_seconds,
+            &propagation_options,
+            &context,
+        ) {
+            Ok(ephemeris) => {
+                let nodes: Vec<CovarianceNodeTerm> = ephemeris
+                    .nodes()
+                    .iter()
+                    .map(|node| CovarianceNodeTerm {
+                        state: state_out(node.state),
+                        covariance: rows_from_mat6(node.covariance.into_matrix()),
+                        frame: frame_label(node.frame),
+                    })
+                    .collect();
+                (atoms::ok(), nodes).encode(env)
+            }
+            Err(error) if explicit_context => (
+                atoms::error(),
+                crate::force_models::propagation_error(env, error),
+            )
+                .encode(env),
+            Err(error) => string_error(env, error),
         },
-        &epochs_tdb_seconds,
-        &propagation_options,
-    ) {
-        Ok(ephemeris) => {
-            let nodes: Vec<CovarianceNodeTerm> = ephemeris
-                .nodes()
-                .iter()
-                .map(|node| CovarianceNodeTerm {
-                    state: state_out(node.state),
-                    covariance: rows_from_mat6(node.covariance.into_matrix()),
-                    frame: frame_label(node.frame),
-                })
-                .collect();
-            (atoms::ok(), nodes).encode(env)
-        }
-        Err(error) => string_error(env, error),
-    }
+    )
 }

@@ -67,4 +67,24 @@ defmodule Sidereon.NifCall do
   @spec describe(Exception.t()) :: String.t()
   def describe(%ErlangError{original: original}), do: inspect(original)
   def describe(exception), do: Exception.message(exception)
+
+  @doc false
+  @spec decode(term(), module()) :: term()
+  def decode({:ok, _} = result, _module), do: result
+
+  def decode({:error, %{kind: kind, detail: detail, message: message}}, module) do
+    {:error, struct!(module, kind: kind, detail: detail, message: message)}
+  end
+
+  def decode({:error, reason}, module) do
+    kind =
+      case reason do
+        {kind, _} when is_atom(kind) -> kind
+        kind when is_atom(kind) -> kind
+        _ -> :invalid_input
+      end
+
+    message = if is_binary(reason), do: reason, else: inspect(reason)
+    {:error, struct!(module, kind: kind, detail: %{reason: reason}, message: message)}
+  end
 end

@@ -69,3 +69,43 @@ pub(crate) fn ut1_outside_coverage(
         degrade_reason_atom(reason),
     )))
 }
+
+use rustler::{Atom, Encoder, Env, NifMap, Term};
+
+#[derive(NifMap)]
+pub(crate) struct Refusal<'a> {
+    pub kind: Atom,
+    pub detail: Term<'a>,
+    pub message: String,
+}
+
+pub(crate) fn encode_result<'a>(
+    env: Env<'a>,
+    value: Result<impl Encoder, Refusal<'a>>,
+) -> Term<'a> {
+    match value {
+        Ok(value) => (result_atoms::ok(), value).encode(env),
+        Err(error) => (result_atoms::error(), error).encode(env),
+    }
+}
+
+mod result_atoms {
+    rustler::atoms! { ok, error }
+}
+
+pub(crate) fn detail_map<'a>(env: Env<'a>, fields: &[(Atom, Term<'a>)]) -> Term<'a> {
+    let (keys, values): (Vec<_>, Vec<_>) = fields
+        .iter()
+        .map(|(key, value)| (key.encode(env), *value))
+        .unzip();
+    Term::map_from_term_arrays(env, &keys, &values).expect("distinct detail keys")
+}
+
+pub(crate) fn ordering_atom(value: std::cmp::Ordering) -> Atom {
+    rustler::atoms! { lt, eq, gt }
+    match value {
+        std::cmp::Ordering::Less => lt(),
+        std::cmp::Ordering::Equal => eq(),
+        std::cmp::Ordering::Greater => gt(),
+    }
+}

@@ -417,6 +417,123 @@ Every result is what the engine computes, returned as plain Elixir structs and
 maps with `{:ok, _}` / `{:error, _}` tuples. Full signatures live on
 [HexDocs](https://hexdocs.pm/sidereon).
 
+## Numerical forces and orbit fits
+
+`Sidereon.Propagator.propagate_state/3` samples an inertial Cartesian state at
+absolute TDB epochs. The integrator advances in elapsed TT and evaluates
+forces at each step's TDB epoch. Atmospheric drag uses UT1 Earth orientation
+and UTC space-weather inputs. Select built-in gravity and perturbations with
+`:forces`. Supply `:drag` for fixed space weather or add `:space_weather_table`
+and, optionally, `:space_weather_policy` for table-driven drag. The
+`:additional_forces` option takes the same force objects as an orbit parameter
+fit and evaluates them in list order after the built-in configuration and drag.
+
+`Sidereon.Propagator.propagate_to_with_context/3` returns the full integration
+result at a single TDB epoch. It takes the same force options as
+`propagate_state/3`. With `dense_output: true` on the DP5(4) integration options,
+`DenseOutput.coverage/1` gives the earliest and latest covered epochs and
+`DenseOutput.eval/2` gives the GCRF state at an epoch on the arc.
+
+`PropagationContext.with_body_fixed_frame_provider/2` accepts `:tdb` for the
+built-in Earth orientation provider with strict UT1 validity, or an IERS 2010
+provider for supplied daily samples. Pass `:strict` or `:permissive` as the third
+argument to configure the built-in provider explicitly. An orbit parameter
+fit with a configured provider requires the provider and fit to use the same
+UT1 validity mode.
+
+Pass a `:context` with a body-fixed frame provider when using tides in
+`propagate_state/3` or `propagate_to_with_context/3`, whether selected in
+`:forces` or supplied in `:additional_forces`. The `:de_ephemeris` option supplies
+Sun and Moon positions. Standalone tide evaluation and orbit parameter fits
+with tides also require a body-fixed frame provider. The relative-span
+`propagate/3` uses its built-in TDB provider for tide selectors.
+
+Select covariance forces with `:forces` on both `propagate_covariance/4` and
+`propagate_covariance_with_context/5`. The `:twobody_j2` selector uses two-body
+gravity with J2. The state, state-transition and covariance functions that
+take a propagation context return `{:error, %Sidereon.Forces.PropagationError{}}`
+for rejected force selectors and propagation failures. A covariance with
+dimensions other than 6×6 has error kind `:invalid_dimensions` in the
+context-based functions. The context-based decay estimators return
+`{:error, %Sidereon.Drag.DecayError{}}` for invalid options and decay failures.
+
+`Sidereon.Forces` evaluates accelerations, estimable parameters and position,
+velocity and parameter partials. Its concrete force models include ECOM1,
+ECOM2, empirical RTN, cannonball solar radiation pressure, and Earth albedo and
+infrared radiation pressure. `CompositeForceModel` evaluates components in
+the order supplied. Use a model as the variational equations' force or
+supply it in `:additional_forces` for state propagation and orbit parameter
+fitting in `Sidereon.OrbitDetermination.Parameters`. The position-based fit estimates
+the initial state and selected force parameters, returning covariance,
+correlation and post-fit residuals. Positions in the inertial fit and SP3
+observations are in metres. The fitted state uses kilometres and kilometres
+per second at the first observation's TDB epoch.
+Both fits return `{:error, %OrbitParameterFitError{}}` for rejected options,
+with the kind, detail and diagnostic message.
+
+Solar radiation pressure uses the apparent discs of the WGS84 oblate Earth
+and the Moon by default, with flux based on satellite–Sun distance. Set
+`with_shadow_function/2`, `with_earth_shadow_model/2` and
+`with_moon_eclipse/2` to choose its occultation geometry. Earth radiation
+pressure offers lunar occultation as an option.
+
+`Sidereon.Forces.IcgemGravityField` reads ICGEM coefficients, uncertainties,
+tide conventions and time-variable terms. Its spherical-harmonic models
+evaluate body-fixed acceleration and potential through Holmes–Featherstone
+recursion. Time-variable coefficients take TT seconds past J2000.
+
+## Analytic orbits and celestial geometry
+
+`Sidereon.Propagator.Analytic` provides the Eckstein–Hechler and
+Brouwer–Lyddane theories, Cartesian and orbital element conversions, and
+mean and osculating states. Analytic angles are in radians and epochs are
+TDB seconds past J2000.
+
+`Sidereon.DeEphemeris` reads JPL DE binary files and returns geocentric
+GCRF Sun and Moon states in metres and metres per second.
+`Sidereon.Bodies` also provides analytic GCRS positions. Use
+`Sidereon.Iers2010EarthOrientationProvider` with daily Earth orientation
+samples to evaluate GCRF–ITRF rotations, rotation rates and quaternions.
+A `Sidereon.Propagator.PropagationContext` can supply both Earth orientation
+and JPL DE positions to propagation and force evaluation.
+
+`Sidereon.Eclipse` provides lunar and combined Earth–Moon occultation alongside
+the conical Earth shadow model. Gradient calls return position derivatives
+per kilometre. `Sidereon.GNSS.Attitude` identifies GNSS spacecraft blocks,
+returns their published yaw-law parameters, and evaluates nominal yaw and
+Sun-fixed DYB axes from geocentric inertial vectors in SI units.
+
+Use `Sidereon.GNSS.Attitude.gnss_attitude/3` to evaluate a yaw law along an
+`OrbitAttitudeTrajectory` at TDB seconds past J2000. Build the trajectory from
+SP3, broadcast navigation, an orbit scoring source, a GCRF analytic orbit or
+continuous numerical output. Earth-fixed sources support the default TDB
+orientation provider and the IERS 2010 provider. Pass `:tdb` to use core's
+default UT1 policy, or `{:tdb, :strict}` or `{:tdb, :permissive}` to select it
+explicitly. Use
+`with_velocity_half_step_s/2` to set the differencing interval for
+Earth-fixed velocities. `sample/2` returns the
+satellite and Sun in GCRF in metres and metres per second. The Sun comes from
+the analytic ephemeris by default. Use `with_de_ephemeris/2` to supply a JPL
+DE ephemeris.
+
+For continuous numerical output, set `dense_output: true` on
+`Sidereon.Propagator.IntegratorOptions` and pass it under `:integration` to
+`Sidereon.Propagator.propagate_to_with_context/3` with DP5(4). Pass the
+result's `dense` field to `OrbitAttitudeTrajectory.from_dense_output/1`.
+The requested epoch and any neighbouring epochs needed by the yaw law must
+lie within the available coverage.
+
+## Orbit scoring
+
+`Sidereon.OrbitScoring` compares a predicted SP3 product, broadcast ephemeris
+or sampled trajectory against a precise SP3 reference. The report gives
+radial, transverse and normal errors, clock errors and SISRE by satellite,
+constellation and prediction horizon. Coverage counts account for each
+requested satellite and epoch. Callers can choose the evaluation epochs,
+clock datum, RTN velocity convention, SISRE weights and frame reconciliation.
+Invalid satellite identifiers and epochs are reported as `OrbitScoreError`
+values with the refusal details.
+
 ## Other languages
 
 sidereon is one validated engine with first-class interfaces in several

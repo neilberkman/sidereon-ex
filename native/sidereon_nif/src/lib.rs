@@ -1,3 +1,4 @@
+mod analytic;
 mod angles;
 mod antex;
 mod araim;
@@ -20,13 +21,16 @@ mod covariance;
 mod covariance_transport;
 mod coverage;
 mod data;
+mod de;
 mod dgnss;
 mod drag;
+mod earth_orientation;
 mod eclipse;
 mod elements;
 mod ephemeris;
 mod error_metrics;
 mod errors;
+mod force_models;
 mod forces;
 mod frame_catalog;
 mod frequencies;
@@ -38,6 +42,8 @@ mod geofence;
 mod geoid;
 mod geometry;
 mod geometry_quality;
+mod gnss_attitude;
+mod gravity_field;
 mod ils;
 mod inertial;
 mod iod;
@@ -56,6 +62,8 @@ mod oem;
 mod omm;
 mod opm;
 mod orbit_determination;
+mod orbit_parameters;
+mod orbit_scoring;
 mod passes;
 mod ppp_corrections;
 mod precise_positioning;
@@ -96,6 +104,7 @@ mod track_estimation;
 mod trls;
 mod tropo;
 mod unix_compress;
+mod variational;
 mod velocity;
 
 use rustler::{Env, NifResult, Term};
@@ -126,11 +135,23 @@ fn parse_datetime_tuple(term: Term) -> NifResult<(i32, i32, i32, i32, i32, i32, 
 /// Build the relocated `TimeScales` from an Elixir datetime tuple. Glue only:
 /// folds microseconds into fractional seconds and forwards to the crate.
 fn time_scales_from_tuple(datetime_tuple: Term) -> NifResult<TimeScales> {
+    try_time_scales_from_tuple(datetime_tuple)?.map_err(errors::invalid_input)
+}
+
+fn try_time_scales_from_tuple(
+    datetime_tuple: Term,
+) -> NifResult<Result<TimeScales, sidereon_core::astro::time::CoverageError>> {
     let (year, month, day, hour, minute, second, microsecond) =
         parse_datetime_tuple(datetime_tuple)?;
     let second_with_micro = second as f64 + microsecond as f64 / 1_000_000.0;
-    TimeScales::from_utc(year, month, day, hour, minute, second_with_micro)
-        .map_err(errors::invalid_input)
+    Ok(TimeScales::from_utc(
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second_with_micro,
+    ))
 }
 
 #[rustler::nif]
@@ -1132,3 +1153,47 @@ fn ocean_tide_loading(
 }
 
 rustler::init!("Elixir.Sidereon.NIF");
+
+#[rustler::nif]
+fn gcrs_to_mean_of_date_matrix<'a>(env: Env<'a>, datetime: Term<'a>) -> NifResult<Term<'a>> {
+    frame_matrix_result(
+        env,
+        datetime,
+        sidereon_core::astro::frames::transforms::gcrs_to_mean_of_date_matrix,
+    )
+}
+
+#[rustler::nif]
+fn mean_of_date_to_gcrs_matrix<'a>(env: Env<'a>, datetime: Term<'a>) -> NifResult<Term<'a>> {
+    frame_matrix_result(
+        env,
+        datetime,
+        sidereon_core::astro::frames::transforms::mean_of_date_to_gcrs_matrix,
+    )
+}
+
+fn frame_matrix_result<'a>(
+    env: Env<'a>,
+    datetime: Term<'a>,
+    transform: impl FnOnce(
+        &TimeScales,
+    ) -> Result<
+        [[f64; 3]; 3],
+        sidereon_core::astro::frames::transforms::FrameTransformError,
+    >,
+) -> NifResult<Term<'a>> {
+    let matrix = match try_time_scales_from_tuple(datetime)? {
+        Ok(scales) => {
+            transform(&scales).map_err(|error| earth_orientation::frame_error(env, error))
+        }
+        Err(error) => Err(earth_orientation::time_error(env, error)),
+    };
+    Ok(errors::encode_result(
+        env,
+        matrix.map(|matrix| matrix.map(vector_tuple).to_vec()),
+    ))
+}
+
+fn vector_tuple([x, y, z]: [f64; 3]) -> Vec3 {
+    (x, y, z)
+}

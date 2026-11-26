@@ -214,38 +214,13 @@ defmodule Sidereon.OrbitDetermination do
     tolerance = Keyword.get(opts, :tolerance, 1.0e-12) / 1.0
 
     {
-      Keyword.get(opts, :forces, [:earth_phase_a]) |> Enum.map(&force_token/1),
+      Keyword.get(opts, :forces, [:earth_phase_a]) |> Enum.map(&Sidereon.Propagator.force_token/1),
       Keyword.get(opts, :abs_tol, tolerance) / 1.0,
       Keyword.get(opts, :rel_tol, tolerance) / 1.0,
       Keyword.get(opts, :max_nfev, 500),
       Keyword.get(opts, :min_ledger_samples, 3)
     }
   end
-
-  defp force_token({:srp, cr, area_to_mass_m2_kg}) when is_number(cr) and is_number(area_to_mass_m2_kg) do
-    "srp:#{cr / 1.0}:#{area_to_mass_m2_kg / 1.0}"
-  end
-
-  defp force_token({:geopotential, degree, order}) when is_integer(degree) and is_integer(order) do
-    "geopotential:#{degree}:#{order}"
-  end
-
-  defp force_token({:spherical_harmonic, degree, order}) when is_integer(degree) and is_integer(order) do
-    "spherical_harmonic:#{degree}:#{order}"
-  end
-
-  defp force_token({:egm96, degree, order}) when is_integer(degree) and is_integer(order) do
-    "egm96:#{degree}:#{order}"
-  end
-
-  defp force_token({:earth_phase_b, degree, order}) when is_integer(degree) and is_integer(order) do
-    "earth_phase_b:#{degree}:#{order}"
-  end
-
-  defp force_token(:solid_earth_tide), do: "solid_earth_tide"
-  defp force_token(:solid_earth_pole_tide), do: "solid_earth_pole_tide"
-
-  defp force_token(value), do: to_string(value)
 
   defp sample_terms(samples) do
     samples

@@ -20,11 +20,12 @@ defmodule Sidereon.GNSS.Time do
   alias Sidereon.GNSS.Ionosphere.CivilFields
   alias Sidereon.GNSS.Ionosphere.Numeric
   alias Sidereon.GNSS.Time.ExactEpoch
-  alias Sidereon.NIF
 
   # Named time scales the core resolves, mapped to the abbreviations the NIF
   # boundary expects. GLONASST and QZSST are the GNSS scales added with the
   # multi-system catalog work; GLONASST (like UTC) is leap-second-based.
+  alias Sidereon.NIF
+
   @time_scales %{
     utc: "UTC",
     tai: "TAI",
@@ -432,4 +433,16 @@ defmodule Sidereon.GNSS.Time do
       :not_a_number -> {:error, {:invalid_epoch_field, :second, second}}
     end
   end
+
+  @doc "Return TDB minus TT in seconds at TT seconds past J2000."
+  @spec tdb_minus_tt_seconds(number()) :: float()
+  def tdb_minus_tt_seconds(epoch), do: Sidereon.NIF.tdb_minus_tt_seconds(epoch / 1.0)
+
+  @doc "Convert TT seconds past J2000 to TDB seconds past J2000."
+  @spec tdb_from_tt_j2000_seconds(number()) :: float()
+  def tdb_from_tt_j2000_seconds(epoch), do: Sidereon.NIF.tdb_from_tt_j2000_seconds(epoch / 1.0)
+
+  @doc "Convert TDB seconds past J2000 to TT seconds past J2000."
+  @spec tt_from_tdb_j2000_seconds(number()) :: float()
+  def tt_from_tdb_j2000_seconds(epoch), do: Sidereon.NIF.tt_from_tdb_j2000_seconds(epoch / 1.0)
 end

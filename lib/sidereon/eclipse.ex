@@ -33,6 +33,38 @@ defmodule Sidereon.Eclipse do
     @type t :: :spherical | :wgs84_oblate | String.t()
   end
 
+  defmodule ShadowFunction do
+    @moduledoc "Illumination functions for radiation pressure forces."
+    @type t :: :apparent_disc | :conical
+  end
+
+  defmodule EclipseError do
+    @moduledoc "An eclipse evaluation refusal with its input details."
+    defstruct [:kind, :detail, :message]
+    @type t :: %__MODULE__{kind: atom(), detail: map(), message: String.t()}
+    defimpl String.Chars do
+      def to_string(error), do: error.message
+    end
+  end
+
+  defmodule ShadowGradientError do
+    @moduledoc "A shadow-gradient evaluation refusal with its details."
+    defstruct [:kind, :detail, :message]
+    @type t :: %__MODULE__{kind: atom(), detail: map(), message: String.t()}
+    defimpl String.Chars do
+      def to_string(error), do: error.message
+    end
+  end
+
+  @typedoc "A geocentric Cartesian position in kilometres."
+  @type position :: {number(), number(), number()}
+
+  @typedoc "Illumination from the visible portion of the Sun."
+  @type eclipse_status :: :sunlit | :penumbra | :umbra
+
+  @typedoc "Shadow fraction and its derivative with respect to position, per kilometre."
+  @type gradient :: {float(), {float(), float(), float()}}
+
   @doc """
   Determine the eclipse status of a satellite.
 
@@ -131,4 +163,101 @@ defmodule Sidereon.Eclipse do
   defp shadow_model(:spherical), do: "spherical"
   defp shadow_model(:wgs84_oblate), do: "wgs84_oblate"
   defp shadow_model(value) when is_binary(value), do: value
+
+  @doc "Compute the apparent-disc shadow fraction cast by the Moon."
+  @spec moon_shadow_fraction(position(), position(), position()) :: {:ok, float()} | {:error, EclipseError.t()}
+  def moon_shadow_fraction(satellite, sun, moon) do
+    case NIF.eclipse_moon_shadow_fraction(float_position(satellite), float_position(sun), float_position(moon)) do
+      {:error, details} -> {:error, struct!(EclipseError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Compute the apparent-disc shadow fraction cast by a spherical Earth and the Moon."
+  @spec shadow_fraction_with_moon(position(), position(), position()) :: {:ok, float()} | {:error, EclipseError.t()}
+  def shadow_fraction_with_moon(satellite, sun, moon) do
+    case NIF.eclipse_shadow_fraction_with_moon(float_position(satellite), float_position(sun), float_position(moon)) do
+      {:error, details} -> {:error, struct!(EclipseError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Compute Earth and Moon apparent-disc shadow with an explicit Earth model."
+  @spec shadow_fraction_with_model_and_moon(position(), position(), position(), EarthShadowModel.t()) ::
+          {:ok, float()} | {:error, EclipseError.t()}
+  def shadow_fraction_with_model_and_moon(satellite, sun, moon, model) do
+    case NIF.eclipse_shadow_fraction_with_model_and_moon(
+           float_position(satellite),
+           float_position(sun),
+           float_position(moon),
+           model
+         ) do
+      {:error, details} -> {:error, struct!(EclipseError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Classify illumination with occultation by a spherical Earth and the Moon."
+  @spec status_with_moon(position(), position(), position()) :: {:ok, eclipse_status()} | {:error, EclipseError.t()}
+  def status_with_moon(satellite, sun, moon) do
+    case NIF.eclipse_status_with_moon(float_position(satellite), float_position(sun), float_position(moon)) do
+      {:error, details} -> {:error, struct!(EclipseError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Classify illumination with occultation by Earth and the Moon using an explicit Earth model."
+  @spec status_with_model_and_moon(position(), position(), position(), EarthShadowModel.t()) ::
+          {:ok, eclipse_status()} | {:error, EclipseError.t()}
+  def status_with_model_and_moon(satellite, sun, moon, model) do
+    case NIF.eclipse_status_with_model_and_moon(
+           float_position(satellite),
+           float_position(sun),
+           float_position(moon),
+           model
+         ) do
+      {:error, details} -> {:error, struct!(EclipseError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Compute spherical Earth conical shadow and its position gradient."
+  @spec shadow_fraction_with_gradient(position(), position()) :: {:ok, gradient()} | {:error, ShadowGradientError.t()}
+  def shadow_fraction_with_gradient(satellite, sun) do
+    case NIF.eclipse_shadow_fraction_with_gradient(float_position(satellite), float_position(sun)) do
+      {:error, details} -> {:error, struct!(ShadowGradientError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Compute Earth conical shadow and its position gradient with an explicit Earth model."
+  @spec shadow_fraction_with_model_and_gradient(position(), position(), EarthShadowModel.t()) ::
+          {:ok, gradient()} | {:error, ShadowGradientError.t()}
+  def shadow_fraction_with_model_and_gradient(satellite, sun, model) do
+    case NIF.eclipse_shadow_fraction_with_model_and_gradient(float_position(satellite), float_position(sun), model) do
+      {:error, details} -> {:error, struct!(ShadowGradientError, details)}
+      result -> result
+    end
+  end
+
+  @doc "Compute Earth and Moon apparent-disc shadow and its position gradient."
+  @spec shadow_fraction_with_model_moon_and_gradient(position(), position(), position(), EarthShadowModel.t()) ::
+          {:ok, gradient()} | {:error, ShadowGradientError.t()}
+  def shadow_fraction_with_model_moon_and_gradient(satellite, sun, moon, model) do
+    case NIF.eclipse_shadow_fraction_with_model_moon_and_gradient(
+           float_position(satellite),
+           float_position(sun),
+           float_position(moon),
+           model
+         ) do
+      {:error, details} -> {:error, struct!(ShadowGradientError, details)}
+      result -> result
+    end
+  end
+
+  defp float_position({x, y, z}), do: {x / 1.0, y / 1.0, z / 1.0}
+
+  @doc "Return the IAU 2015 nominal solar radius in kilometres."
+  @spec iau_2015_solar_radius_km() :: float()
+  def iau_2015_solar_radius_km, do: NIF.eclipse_iau_2015_solar_radius_km()
 end

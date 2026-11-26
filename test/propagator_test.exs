@@ -1,9 +1,11 @@
 defmodule Sidereon.PropagatorTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.Forces
   alias Sidereon.Forces.J2
   alias Sidereon.Forces.TwoBody
   alias Sidereon.Propagator
+  alias Sidereon.Test.CoreGolden
 
   describe "force acceleration bindings" do
     test "two-body acceleration is delegated to the core force model" do
@@ -14,10 +16,11 @@ defmodule Sidereon.PropagatorTest do
     end
 
     test "J2 acceleration is delegated to the core force model" do
-      acceleration = J2.acceleration({7000.0, -1210.0, 1300.0}, {0.0, 0.0, 0.0})
-
-      assert bits_tuple(acceleration) ==
-               {13_754_131_348_549_160_135, 4_519_025_615_523_880_849, 13_750_824_904_549_515_386}
+      position = {7000.0, -1210.0, 1300.0}
+      velocity = {0.0, 0.0, 0.0}
+      expected = CoreGolden.load("numerical_orbits.json")["j2_acceleration"] |> CoreGolden.tuple3()
+      assert J2.acceleration(position, velocity) === expected
+      assert Forces.acceleration(:j2, {0.0, position, velocity}) === {:ok, expected}
     end
   end
 
@@ -52,7 +55,7 @@ defmodule Sidereon.PropagatorTest do
   end
 
   describe "High-Precision Adaptive Propagation (NIF Adaptive DP54)" do
-    test "circular orbit is accurate to machine precision over a full period" do
+    test "circular orbit integrates a TDB span over elapsed TT" do
       r_mag = 7000.0
       mu = 398_600.4418
       v_mag = :math.sqrt(mu / r_mag)
@@ -68,9 +71,10 @@ defmodule Sidereon.PropagatorTest do
       {:ok, final_state} = Propagator.propagate(state, period, tolerance: 1.0e-12)
 
       {rf, vf} = final_state
-      # Return to start {7000, 0, 0} with sub-millimeter precision
-      assert_in_delta elem(rf, 0), 7000.0, 1.0e-7
-      assert_in_delta elem(rf, 1), 0.0, 1.0e-7
+      [epoch, position, velocity] = CoreGolden.load("numerical_orbits.json")["circular_end"]
+      assert period === CoreGolden.f(epoch)
+      assert rf === CoreGolden.tuple3(position)
+      assert vf === CoreGolden.tuple3(velocity)
 
       # Energy conservation
       rf_mag = :math.sqrt(elem(rf, 0) ** 2 + elem(rf, 1) ** 2 + elem(rf, 2) ** 2)

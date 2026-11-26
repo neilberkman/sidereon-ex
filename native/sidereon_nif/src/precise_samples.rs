@@ -154,7 +154,7 @@ pub(crate) fn decode_sample(
     })
 }
 
-fn instant_from_fields(fields: EpochTerm) -> NifResult<Instant> {
+pub(crate) fn instant_from_fields(fields: EpochTerm) -> NifResult<Instant> {
     let scale = time_scale_from_abbrev(&fields.time_scale)?;
     match (fields.julian_date, fields.nanos_since_j2000) {
         (Some((jd_whole, jd_fraction)), None) => {

@@ -3465,4 +3465,307 @@ defmodule Sidereon.NIF do
         _step_seconds,
         _time_tolerance_seconds
       ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def bodies_sun_moon_gcrs(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def bodies_sun_moon_gcrs_at(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def bodies_sun_moon_gcrs_at_tdb_seconds(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def gcrs_to_mean_of_date_matrix(_datetime), do: :erlang.nif_error(:nif_not_loaded)
+  def mean_of_date_to_gcrs_matrix(_datetime), do: :erlang.nif_error(:nif_not_loaded)
+  def tdb_minus_tt_seconds(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def tdb_from_tt_j2000_seconds(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def tt_from_tdb_j2000_seconds(_epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_moon_shadow_fraction(_satellite, _sun, _moon), do: :erlang.nif_error(:nif_not_loaded)
+  def eclipse_shadow_fraction_with_moon(_satellite, _sun, _moon), do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_shadow_fraction_with_model_and_moon(_satellite, _sun, _moon, _model),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_status_with_moon(_satellite, _sun, _moon), do: :erlang.nif_error(:nif_not_loaded)
+  def eclipse_status_with_model_and_moon(_satellite, _sun, _moon, _model), do: :erlang.nif_error(:nif_not_loaded)
+  def eclipse_shadow_fraction_with_gradient(_satellite, _sun), do: :erlang.nif_error(:nif_not_loaded)
+  def eclipse_shadow_fraction_with_model_and_gradient(_satellite, _sun, _model), do: :erlang.nif_error(:nif_not_loaded)
+
+  def eclipse_shadow_fraction_with_model_moon_and_gradient(_satellite, _sun, _moon, _model),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def de_load(_path), do: :erlang.nif_error(:nif_not_loaded)
+  def de_from_bytes(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+  def de_gm_m3_s2(_handle, _body), do: :erlang.nif_error(:nif_not_loaded)
+  def de_sun_moon_at_tdb_seconds(_handle, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def de_sun_moon_positions_at_tdb_seconds(_handle, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def de_version(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def de_record_size(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def de_coverage_tdb_seconds(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def de_constants(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def de_astronomical_unit_m(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def de_earth_moon_mass_ratio(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def analytic_circular_elements_from_cartesian(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_circular_elements_to_cartesian(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eccentricity(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_keplerian_elements_from_cartesian(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_keplerian_elements_to_cartesian(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_zonal_earth, do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_default, do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_default, do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_mean_elements(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_osculating_elements(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_new(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_from_mean_elements(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_propagate(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+
+  def analytic_eckstein_hechler_propagator_osculating_elements(_value, _position),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def analytic_eckstein_hechler_ephemeris(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_propagator_epoch_tdb_seconds(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_propagator_mean_elements(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_eckstein_hechler_propagator_gravity(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_mean_elements(_value, _position, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_osculating_elements(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_new(_value, _position, _options, _extra), do: :erlang.nif_error(:nif_not_loaded)
+
+  def analytic_brouwer_lyddane_from_mean_elements(_value, _position, _options, _extra),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def analytic_brouwer_lyddane_propagate(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_propagator_osculating_elements(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_ephemeris(_value, _position), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_propagator_epoch_tdb_seconds(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_propagator_mean_elements(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_propagator_gravity(_value), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_brouwer_lyddane_propagator_m2_rad_s2(_value), do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_builtin_model(_model), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_named(_kind, _coefficients), do: :erlang.nif_error(:nif_not_loaded)
+  def force_model_new(_description), do: :erlang.nif_error(:nif_not_loaded)
+  def force_composite(_models), do: :erlang.nif_error(:nif_not_loaded)
+  def force_parameters(_model), do: :erlang.nif_error(:nif_not_loaded)
+  def force_parameter_count(_model), do: :erlang.nif_error(:nif_not_loaded)
+  def force_acceleration(_model, _state, _de), do: :erlang.nif_error(:nif_not_loaded)
+  def force_acceleration_with_parameters(_model, _parameters, _state, _de), do: :erlang.nif_error(:nif_not_loaded)
+  def force_acceleration_partials(_model, _parameters, _state, _de), do: :erlang.nif_error(:nif_not_loaded)
+  def force_parameter_partials(_model, _parameters, _state, _de), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_coefficient_count(_n_d, _n_b), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_parameter_names(_n_d, _n_b), do: :erlang.nif_error(:nif_not_loaded)
+  def force_partials_zeros, do: :erlang.nif_error(:nif_not_loaded)
+  def force_partials_position_only(_matrix), do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_parameter_name(_axis, _harmonic), do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_constant_terms, do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_all_terms, do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_with_zero_terms(_terms), do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_with_term(_terms, _axis, _harmonic, _value), do: :erlang.nif_error(:nif_not_loaded)
+  def force_empirical_coefficient(_terms, _axis, _harmonic), do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_coefficients_from_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom1_coefficients_to_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom1_coefficients_names, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom1_coefficients_parameter_names, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d2b1_coefficients_from_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d2b1_coefficients_to_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d2b1_coefficients_names, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d2b1_coefficients_parameter_names, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d4b1_coefficients_from_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d4b1_coefficients_to_array(_values), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d4b1_coefficients_names, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d4b1_coefficients_parameter_names, do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_acceleration_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_acceleration_partials_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_parameter_partials_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_acceleration_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_acceleration_partials_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom1_parameter_partials_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_acceleration_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_acceleration_partials_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_parameter_partials_with_sun(_description, _position, _velocity, _sun),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_acceleration_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_acceleration_partials_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom2_parameter_partials_with_sun_moon(_description, _position, _velocity, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_cr_parameter, do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_solar_acceleration_with_sun_moon(_description, _position, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_earth_acceleration_with_sun_moon(_description, _state, _sun, _moon), do: :erlang.nif_error(:nif_not_loaded)
+
+  def integration_defaults, do: :erlang.nif_error(:nif_not_loaded)
+  def variational_epoch_from_tdb_seconds(_initial, _target), do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_variational_states(_initial, _epochs, _equations, _integrator, _options, _de),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_to_with_context(_initial, _target, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def dense_output_eval(_handle, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def dense_output_coverage(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_trajectory_validate(_trajectory), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_trajectory_sample(_trajectory, _t_s), do: :erlang.nif_error(:nif_not_loaded)
+  def gnss_attitude(_law, _trajectory, _t_s), do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_state_nodes(_initial, _epochs, _options), do: :erlang.nif_error(:nif_not_loaded)
+
+  def attitude_nominal_yaw(_position, _velocity, _sun), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_dyb_axes(_position, _sun), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iia_default_yaw_rate_rad_s(_prn), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_block_from_igs_name(_name), do: :erlang.nif_error(:nif_not_loaded)
+
+  def attitude_block_from_constellation_block_type(_system, _block_type, _orbit_class),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def attitude_block_igs_name(_block), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_block_system(_block), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_law_for_block(_block, _prn), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iia_default_yaw_bias_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iir_default_yaw_rate_rad_s, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iif_default_yaw_rate_rad_s, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iif_default_yaw_bias_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_shadow_limit_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_glonass_m_default_yaw_rate_rad_s, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_glonass_m_shadow_limit_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_galileo_iov_beta_x_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_galileo_iov_beta_y_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iii_beta_x_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_gps_iii_beta_y_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_galileo_foc_turn, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_beidou3_cast_meo_turn, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_beidou3_cast_igso_turn, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_beidou3_secm_beta0_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_beidou2_ys_to_on_beta_rad, do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_beidou2_on_to_ys_beta_rad, do: :erlang.nif_error(:nif_not_loaded)
+
+  def iers2010_new(_samples), do: :erlang.nif_error(:nif_not_loaded)
+  def iers2010_with_validity(_handle, _validity), do: :erlang.nif_error(:nif_not_loaded)
+  def iers2010_equal(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def iers2010_orientation_at_utc_mjd(_handle, _mjd, _seconds), do: :erlang.nif_error(:nif_not_loaded)
+  def iers2010_orientation_at_tdb_seconds(_handle, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def propagation_context_new, do: :erlang.nif_error(:nif_not_loaded)
+  def propagation_context_with_de_ephemeris(_context, _ephemeris), do: :erlang.nif_error(:nif_not_loaded)
+  def propagation_context_with_body_fixed_frame_provider(_context, _provider), do: :erlang.nif_error(:nif_not_loaded)
+  def propagation_context_ut1_departure(_context), do: :erlang.nif_error(:nif_not_loaded)
+
+  def icgem_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_parse_truncated(_text, _degree, _order), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_equal(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_with_assumed_tide_system(_handle, _tide), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_gravity(_handle, _degree, _order), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_gravity_in_tide_system(_handle, _degree, _order, _tide), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_time_variable_terms(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_coefficient_at(_handle, _degree, _order, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_header(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_is_time_variable(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_stored_max_degree(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_stored_max_order(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_static_coefficient(_handle, _degree, _order), do: :erlang.nif_error(:nif_not_loaded)
+  def icgem_static_sigmas(_handle, _degree, _order), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_equal(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_egm96_truncated(_degree, _order), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_coefficient_at(_handle, _degree, _order, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_body_fixed_acceleration_km_s2(_handle, _position), do: :erlang.nif_error(:nif_not_loaded)
+
+  def harmonic_gravity_body_fixed_acceleration_at_km_s2(_handle, _position, _epoch),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def harmonic_gravity_body_fixed_potential_km2_s2(_handle, _position), do: :erlang.nif_error(:nif_not_loaded)
+
+  def harmonic_gravity_body_fixed_potential_at_km2_s2(_handle, _position, _epoch),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def harmonic_gravity_mu_km3_s2(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_reference_radius_km(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_max_degree(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_max_order(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_tide_system(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def harmonic_gravity_is_time_variable(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_score_predicted_sp3(_product, _cutoff), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_broadcast(_ephemeris, _origin), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_trajectory(_frame, _origin, _samples), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_trajectory_configure(_handle, _included), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_trajectory_equal(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_trajectory_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_trajectory_satellites(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_source_metadata(_handle), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_source_state(_handle, _sat, _epoch), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_source_origin(_handle, _sat), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_evaluate(_source, _reference, _satellites, _options), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_rtn_components(_difference, _position, _velocity), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_inertial_velocity_from_earth_fixed(_position, _velocity), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_orbit_regime(_position, _velocity), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_orbit_regime_display(_regime), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_product_display(_product), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_sisre_weights(_radial, _transverse_normal_squared), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_sisre_montenbruck_2018(_system, _regime), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_sisre_orbit_only_m(_weights, _components), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_sisre_with_clock_m(_weights, _components, _clock), do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_default_velocity_half_step_s, do: :erlang.nif_error(:nif_not_loaded)
+  def orbit_score_min_velocity_half_step_s, do: :erlang.nif_error(:nif_not_loaded)
+
+  def fit_inertial_orbit_parameters(_samples, _satellite, _seed, _options, _mode),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def fit_sp3_ecef_orbit_parameters(_product, _satellite, _seed, _options, _mode, _orientation_provider),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def orbit_fit_state_parameter_names, do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_ecom_geometry(_position, _velocity, _sun), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom_geometry_with_shadow(_position, _velocity, _sun, _moon, _earth), do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom1_coefficient_count, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d2b1_coefficient_count, do: :erlang.nif_error(:nif_not_loaded)
+  def force_ecom2_d4b1_coefficient_count, do: :erlang.nif_error(:nif_not_loaded)
+  def force_drag_model(_drag), do: :erlang.nif_error(:nif_not_loaded)
+  def eclipse_iau_2015_solar_radius_km, do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_covariance_with_context(_state, _covariance, _epochs, _options, _context),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def state_transition_matrix_to_with_context(_initial, _target, _options, _context),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def propagate_state_with_covariance_with_context(_initial, _covariance, _span, _options, _context),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def drag_estimate_decay_with_context(_state, _parameters, _options, _context, _weather),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def attitude_block_compare(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_manufacturer_compare(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def attitude_orbit_class_compare(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def analytic_theory_display(_theory), do: :erlang.nif_error(:nif_not_loaded)
+  def force_axis_compare(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def force_harmonic_compare(_first, _second), do: :erlang.nif_error(:nif_not_loaded)
+  def force_all_axes, do: :erlang.nif_error(:nif_not_loaded)
+  def force_all_harmonics, do: :erlang.nif_error(:nif_not_loaded)
+  def force_solar_au_km(_cr, _area), do: :erlang.nif_error(:nif_not_loaded)
+
+  def force_update_occultation(_model, _change), do: :erlang.nif_error(:nif_not_loaded)
 end

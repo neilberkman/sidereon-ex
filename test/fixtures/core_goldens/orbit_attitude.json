@@ -1,0 +1,1353 @@
+{
+  "source": "sidereon-core 3c61740 orbit attitude and continuous propagation",
+  "modes": {
+    "nominal": {
+      "epoch": "0x0000000000000000",
+      "attitude": {
+        "mode": "nominal",
+        "yaw_rad": "0x400921d3a4b62e80",
+        "nominal_yaw_rad": "0x400921d3a4b62e80",
+        "beta_rad": "0xbf1384b6791a4000",
+        "orbit_angle_rad": "0xbffc07b9cb0cbd84",
+        "body_x": [
+          "0x8000000000000000",
+          "0xbfed5c0354c06d05",
+          "0xbfd9752e5d342a69"
+        ],
+        "body_y": [
+          "0x0000000000000000",
+          "0xbfd9752e5d342a69",
+          "0x3fed5c0354c06d05"
+        ],
+        "body_z": [
+          "0xbff0000000000000",
+          "0x8000000000000000",
+          "0x8000000000000000"
+        ],
+        "dyb": {
+          "d": [
+            "0x3fc707d91f594da9",
+            "0xbfece159f62bc887",
+            "0xbfd90ad20b221a59"
+          ],
+          "y": [
+            "0x0000000000000000",
+            "0xbfd9752e5d342a70",
+            "0x3fed5c0354c06d03"
+          ],
+          "b": [
+            "0xbfef7a4e67a374f4",
+            "0xbfc52155ba5e818f",
+            "0xbfb25277b0b4da8f"
+          ]
+        }
+      }
+    },
+    "noon_turn": {
+      "epoch": "0x40e0680000000000",
+      "attitude": {
+        "mode": "noon_turn",
+        "yaw_rad": "0x3fc221d9f5a706df",
+        "nominal_yaw_rad": "0x40081e632720561c",
+        "beta_rad": "0xbf2240f9167a6000",
+        "orbit_angle_rad": "0xc0091fbe623ab7ca",
+        "body_x": [
+          "0x3fef1d92eab15263",
+          "0x3fcd088c0082bd1c",
+          "0xbfac5adc73205992"
+        ],
+        "body_y": [
+          "0xbfc1ba3b840badcb",
+          "0x3fd7a37b658db24d",
+          "0xbfed67b7b8c548ce"
+        ],
+        "body_z": [
+          "0xbfc80f93c0003b13",
+          "0x3fecd67c224a650c",
+          "0x3fd8fee87b29ccdd"
+        ],
+        "dyb": {
+          "d": [
+            "0x3fc7ec65a90e177b",
+            "0xbfecd79201041d3c",
+            "0xbfd90256f29497fb"
+          ],
+          "y": [
+            "0xbfbfd468e240a1bd",
+            "0xbfdaa45bc567eb26",
+            "0x3fecd27d1920ea96"
+          ],
+          "b": [
+            "0xbfef2eedc6ab62fc",
+            "0xbfbea848d0d5fc94",
+            "0xbfc84d9d6f7ef4c6"
+          ]
+        }
+      }
+    },
+    "midnight_turn": {
+      "epoch": "0x40c78e0000000000",
+      "attitude": {
+        "mode": "midnight_turn",
+        "yaw_rad": "0x4007562af42d6284",
+        "nominal_yaw_rad": "0x3f98c7da17650b80",
+        "beta_rad": "0xbf1f300b819c0000",
+        "orbit_angle_rad": "0x3f74220761e8b800",
+        "body_x": [
+          "0x3feea51050a11476",
+          "0x3fd0643bf3dd7686",
+          "0xbfc0d75e5f62da93"
+        ],
+        "body_y": [
+          "0x3fcbfc096d4a8c73",
+          "0xbfd65cfff677d09c",
+          "0x3fed27ba83ab07ab"
+        ],
+        "body_z": [
+          "0x3fc7fbdeacd6302c",
+          "0xbfecd7485c56b6ea",
+          "0xbfd8fff6163c2bdd"
+        ],
+        "dyb": {
+          "d": [
+            "0x3fc75d9d459a3af4",
+            "0xbfecddb9e3eb25fa",
+            "0xbfd907ad342b7c2d"
+          ],
+          "y": [
+            "0x3f98684ae9a62acb",
+            "0x3fd9b5c99f4cfdd8",
+            "0xbfed4b623a477eb8"
+          ],
+          "b": [
+            "0x3fef73fcda27c9c0",
+            "0x3fc4326c51c5a441",
+            "0x3fb846f77eed3c44"
+          ]
+        }
+      }
+    },
+    "shadow": {
+      "epoch": "0x40c4640000000000",
+      "attitude": {
+        "mode": "shadow",
+        "yaw_rad": "0x40091e61ae51eace",
+        "nominal_yaw_rad": "0x400920ef282e78b4",
+        "beta_rad": "0xbf1eb56820e38000",
+        "orbit_angle_rad": "0xbfcd93c86f644080",
+        "body_x": [
+          "0x3feff69e3ef17676",
+          "0xbfa61d4ea23012a0",
+          "0xbf951355921eb241"
+        ],
+        "body_y": [
+          "0x3f5bf14357cb1271",
+          "0xbfd974c8e1404626",
+          "0x3fed5c1601661698"
+        ],
+        "body_z": [
+          "0xbfa87b34098e12a9",
+          "0xbfed53c407caeaa0",
+          "0xbfd96c1d4dd263cb"
+        ],
+        "dyb": {
+          "d": [
+            "0x3fc75182023916d6",
+            "0xbfecde3dbc267fc4",
+            "0xbfd9081f89a196d2"
+          ],
+          "y": [
+            "0x3f3e2dc050051903",
+            "0xbfd973e5c863c868",
+            "0x3fed5c4a4f218187"
+          ],
+          "b": [
+            "0xbfef76ea52414fa2",
+            "0xbfc56b0527cb9702",
+            "0xbfb270e84e604261"
+          ]
+        }
+      }
+    },
+    "modified_yaw_steering": {
+      "epoch": "0x0000000000000000",
+      "attitude": {
+        "mode": "modified_yaw_steering",
+        "yaw_rad": "0x400851cce77fdee8",
+        "nominal_yaw_rad": "0x400921d3a4b62e80",
+        "beta_rad": "0xbf1384b6791a4000",
+        "orbit_angle_rad": "0xbffc07b9cb0cbd84",
+        "body_x": [
+          "0x0000000000000000",
+          "0xbfebead96b9b63bd",
+          "0xbfdf47d932889f95"
+        ],
+        "body_y": [
+          "0x0000000000000000",
+          "0xbfdf47d932889f95",
+          "0x3febead96b9b63bd"
+        ],
+        "body_z": [
+          "0xbff0000000000000",
+          "0x8000000000000000",
+          "0x8000000000000000"
+        ],
+        "dyb": {
+          "d": [
+            "0x3fc707d91f594da9",
+            "0xbfece159f62bc887",
+            "0xbfd90ad20b221a59"
+          ],
+          "y": [
+            "0x0000000000000000",
+            "0xbfd9752e5d342a70",
+            "0x3fed5c0354c06d03"
+          ],
+          "b": [
+            "0xbfef7a4e67a374f4",
+            "0xbfc52155ba5e818f",
+            "0xbfb25277b0b4da8f"
+          ]
+        }
+      }
+    }
+  },
+  "sp3": {
+    "epoch": "0x41c34300d1b79671",
+    "sample": {
+      "position_m": [
+        "0x4169ddae5a59c56e",
+        "0x4159396f987d40f3",
+        "0xc174e7c32c22140e"
+      ],
+      "velocity_m_s": [
+        "0xc09aba827de5cd3f",
+        "0x40ab168b4e8ce098",
+        "0xc000c38fd5d4e4a7"
+      ],
+      "sun_position_m": [
+        "0xc201f973919543ba",
+        "0x42403594ea0e1ae0",
+        "0x422c1b58646d051e"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0xbfe15fbcf30dad48",
+      "beta_rad": "0x3fe134b0bc675b7e",
+      "orbit_angle_rad": "0x3ff6ab014baf0f03",
+      "body_x": [
+        "0xbfdc3ec8913169dc",
+        "0x3fecb7041eac14ca",
+        "0xbf6335b9e7a46fc0"
+      ],
+      "body_y": [
+        "0xbfe7a298ee4d4893",
+        "0xbfd757e8932aeb73",
+        "0xbfe2247cd0a619f6"
+      ],
+      "body_z": [
+        "0xbfe04eb1e7f4cfc9",
+        "0xbfcfce4a57de8478",
+        "0x3fea5c20bebfba9c"
+      ],
+      "dyb": {
+        "d": [
+          "0xbfb044aaef805807",
+          "0x3fed4c7c007f1586",
+          "0x3fd9699065326a43"
+        ],
+        "y": [
+          "0xbfeb8864bd9045fc",
+          "0x3fc35e99f97e4484",
+          "0xbfdf2506438d540b"
+        ],
+        "b": [
+          "0xbfe02e38e969a5d2",
+          "0xbfd7d80d811a0956",
+          "0x3fe8e6a30024d028"
+        ]
+      }
+    }
+  },
+  "predicted": {
+    "epoch": "0x41c34300d1b79671",
+    "sample": {
+      "position_m": [
+        "0x4169ddae5a59c56e",
+        "0x4159396f987d40f3",
+        "0xc174e7c32c22140e"
+      ],
+      "velocity_m_s": [
+        "0xc09aba827de5cd3f",
+        "0x40ab168b4e8ce098",
+        "0xc000c38fd5d4e4a7"
+      ],
+      "sun_position_m": [
+        "0xc201f973919543ba",
+        "0x42403594ea0e1ae0",
+        "0x422c1b58646d051e"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0xbfe15fbcf30dad48",
+      "beta_rad": "0x3fe134b0bc675b7e",
+      "orbit_angle_rad": "0x3ff6ab014baf0f03",
+      "body_x": [
+        "0xbfdc3ec8913169dc",
+        "0x3fecb7041eac14ca",
+        "0xbf6335b9e7a46fc0"
+      ],
+      "body_y": [
+        "0xbfe7a298ee4d4893",
+        "0xbfd757e8932aeb73",
+        "0xbfe2247cd0a619f6"
+      ],
+      "body_z": [
+        "0xbfe04eb1e7f4cfc9",
+        "0xbfcfce4a57de8478",
+        "0x3fea5c20bebfba9c"
+      ],
+      "dyb": {
+        "d": [
+          "0xbfb044aaef805807",
+          "0x3fed4c7c007f1586",
+          "0x3fd9699065326a43"
+        ],
+        "y": [
+          "0xbfeb8864bd9045fc",
+          "0x3fc35e99f97e4484",
+          "0xbfdf2506438d540b"
+        ],
+        "b": [
+          "0xbfe02e38e969a5d2",
+          "0xbfd7d80d811a0956",
+          "0x3fe8e6a30024d028"
+        ]
+      }
+    }
+  },
+  "broadcast": {
+    "epoch": "0x41c3437e35b795c2",
+    "sample": {
+      "position_m": [
+        "0xc16ae0c02e44ea7a",
+        "0xc154670157b840b7",
+        "0x4174ca3842d518c6"
+      ],
+      "velocity_m_s": [
+        "0x40990d358caf9f32",
+        "0xc0ab95d46d6c7b30",
+        "0x40667ff1397395e1"
+      ],
+      "sun_position_m": [
+        "0xc2057852e15efa3d",
+        "0x42403223033b9e70",
+        "0x422c155f6a540388"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0xc004d8398dc0557b",
+      "beta_rad": "0x3fe0d6162091f624",
+      "orbit_angle_rad": "0xbffc860567e707dc",
+      "body_x": [
+        "0x3fda80e22086a944",
+        "0xbfed179437fe25c5",
+        "0x3fa6dbf444a7b6d8"
+      ],
+      "body_y": [
+        "0xbfe7a41b7a0a58e3",
+        "0xbfd751c2c160b12e",
+        "0xbfe2247f2a50394a"
+      ],
+      "body_z": [
+        "0x3fe103b57de429f2",
+        "0x3fc9d49e68fba663",
+        "0xbfea523adf07d965"
+      ],
+      "dyb": {
+        "d": [
+          "0xbfb361a6885f241c",
+          "0x3fed4710d5c88f79",
+          "0x3fd95f9902726eee"
+        ],
+        "y": [
+          "0x3feb17def50a802c",
+          "0xbfc3554a511abc02",
+          "0x3fe053e73c9e7c3d"
+        ],
+        "b": [
+          "0x3fe0dad8c5aefe01",
+          "0x3fd7f47fbffcb188",
+          "0xbfe86c202b7f4711"
+        ]
+      }
+    }
+  },
+  "broadcast_source": {
+    "epoch": "0x41c3437e35b795c2",
+    "sample": {
+      "position_m": [
+        "0xc16ae0c02e44ea7a",
+        "0xc154670157b840b7",
+        "0x4174ca3842d518c6"
+      ],
+      "velocity_m_s": [
+        "0x40990d358caf9f32",
+        "0xc0ab95d46d6c7b30",
+        "0x40667ff1397395e1"
+      ],
+      "sun_position_m": [
+        "0xc2057852e15efa3d",
+        "0x42403223033b9e70",
+        "0x422c155f6a540388"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0xc004d8398dc0557b",
+      "beta_rad": "0x3fe0d6162091f624",
+      "orbit_angle_rad": "0xbffc860567e707dc",
+      "body_x": [
+        "0x3fda80e22086a944",
+        "0xbfed179437fe25c5",
+        "0x3fa6dbf444a7b6d8"
+      ],
+      "body_y": [
+        "0xbfe7a41b7a0a58e3",
+        "0xbfd751c2c160b12e",
+        "0xbfe2247f2a50394a"
+      ],
+      "body_z": [
+        "0x3fe103b57de429f2",
+        "0x3fc9d49e68fba663",
+        "0xbfea523adf07d965"
+      ],
+      "dyb": {
+        "d": [
+          "0xbfb361a6885f241c",
+          "0x3fed4710d5c88f79",
+          "0x3fd95f9902726eee"
+        ],
+        "y": [
+          "0x3feb17def50a802c",
+          "0xbfc3554a511abc02",
+          "0x3fe053e73c9e7c3d"
+        ],
+        "b": [
+          "0x3fe0dad8c5aefe01",
+          "0x3fd7f47fbffcb188",
+          "0xbfe86c202b7f4711"
+        ]
+      }
+    }
+  },
+  "sampled": {
+    "epoch": "0x41c34352e29795fe",
+    "sample": {
+      "position_m": [
+        "0x4169e77b7efe90f8",
+        "0x4174efd36074eae8",
+        "0x415e6aace13d415e"
+      ],
+      "velocity_m_s": [
+        "0xc0a57b072ea037ca",
+        "0xc08276925ac43df6",
+        "0xc08744fa9c9e26cd"
+      ],
+      "sun_position_m": [
+        "0xc20443380bdf49f5",
+        "0x4240336666c70d33",
+        "0x422c1790169ed5f8"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0xbfd6b596108e53c8",
+      "beta_rad": "0x3fc950add45798b0",
+      "orbit_angle_rad": "0x40048fa69c6e9325",
+      "body_x": [
+        "0xbfead1ae771271b1",
+        "0x3fe155faf497b4a2",
+        "0xbfb067e764920fd3"
+      ],
+      "body_y": [
+        "0x3fcb212988d6a06f",
+        "0x3fcb8913701fe0dc",
+        "0xbfee818489ba11d2"
+      ],
+      "body_z": [
+        "0xbfe015d61deadc09",
+        "0xbfea006548c4b52b",
+        "0xbfd2e3280daa7f41"
+      ],
+      "dyb": {
+        "d": [
+          "0xbfb256ca7b78d689",
+          "0x3fed48d284fb276a",
+          "0x3fd963e2a21f9d02"
+        ],
+        "y": [
+          "0xbfb7a9f1e68d77a7",
+          "0x3fd8f4c8e096ed69",
+          "0xbfed516b184d31ab"
+        ],
+        "b": [
+          "0xbfefc7c9de2b3a74",
+          "0xbfba30a1bce066b6",
+          "0x3fad0259c9f2b134"
+        ]
+      }
+    }
+  },
+  "eckstein_hechler": {
+    "epoch": "0x4082c00000000000",
+    "sample": {
+      "position_m": [
+        "0xc13e2d37c7f1f7a6",
+        "0x4157c59151cb7c73",
+        "0x414657d7c10ff626"
+      ],
+      "velocity_m_s": [
+        "0xc0b745b8bb82f853",
+        "0xc0a990dbf05ee921",
+        "0x40a85a61cef8b110"
+      ],
+      "sun_position_m": [
+        "0x4218b0b62c67337e",
+        "0xc23ee8a9fc04f817",
+        "0xc22acd1e9f8372dd"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0x3fd37d9b13581598",
+      "beta_rad": "0xbf9f82077586a100",
+      "orbit_angle_rad": "0x3fb91bcd4aa3bf40",
+      "body_x": [
+        "0xbfe968ff07de614c",
+        "0xbfdc8c1cb32af551",
+        "0x3fda6d2289e15f68"
+      ],
+      "body_y": [
+        "0xbfe1542a29d41f20",
+        "0x3fcaf5b84f6a0727",
+        "0xbfea0b3f87c08c2f"
+      ],
+      "body_z": [
+        "0x3fd1aafa32ff4780",
+        "0xbfebd5fb936a544f",
+        "0xbfda29bb609cf007"
+      ],
+      "dyb": {
+        "d": [
+          "0x3fc711b569881f47",
+          "0xbfece0eec8ca2ceb",
+          "0xbfd90a7b9383b987"
+        ],
+        "y": [
+          "0xbfd1d2f1ff4968f1",
+          "0x3fd56b7234594eda",
+          "0xbfeccebbe5e8b242"
+        ],
+        "b": [
+          "0x3fee301fe3e14574",
+          "0x3fd15b9600bb641e",
+          "0xbfc873306fdd68b4"
+        ]
+      }
+    }
+  },
+  "brouwer_lyddane": {
+    "epoch": "0x4082c00000000000",
+    "sample": {
+      "position_m": [
+        "0xc14e10479d2c57e9",
+        "0x4150e16c8115be55",
+        "0x414d6cd85c0b90e1"
+      ],
+      "velocity_m_s": [
+        "0xc0b34e98e4acaa6b",
+        "0xc0b58555319d896a",
+        "0x40992ee61ccb47e5"
+      ],
+      "sun_position_m": [
+        "0x4218b0b62c67337e",
+        "0xc23ee8a9fc04f817",
+        "0xc22acd1e9f8372dd"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0x3f92a3b677d0d400",
+      "beta_rad": "0xbf81cac5a959e100",
+      "orbit_angle_rad": "0x3fdfd6fd281ac530",
+      "body_x": [
+        "0xbfe472defba53c64",
+        "0xbfe7c5a739a5d4b2",
+        "0x3fc987d38f121fd9"
+      ],
+      "body_y": [
+        "0xbfe0f68f0f9e155b",
+        "0x3fce6425c7dd1362",
+        "0xbfea0c6c8968c740"
+      ],
+      "body_z": [
+        "0x3fe1d5decfb8abd1",
+        "0xbfe4076da0e8f6ff",
+        "0xbfe174e9638d2508"
+      ],
+      "dyb": {
+        "d": [
+          "0x3fc7122eba21f808",
+          "0xbfece0e0c7f77ad2",
+          "0xbfd90aa03b2975eb"
+        ],
+        "y": [
+          "0xbfe0968e646bf3d8",
+          "0x3fd00ef78e807f64",
+          "0xbfea290f581c2974"
+        ],
+        "b": [
+          "0x3feac0063ab441ad",
+          "0x3fd6695183f9e834",
+          "0xbfdb0ba5912f53a3"
+        ]
+      }
+    }
+  },
+  "de": {
+    "epoch": "0xc1b2d493f8000000",
+    "sample": {
+      "position_m": [
+        "0x4139ab5c0cad7bf3",
+        "0x415a4e7802c7d8cf",
+        "0x4124459f790ab804"
+      ],
+      "velocity_m_s": [
+        "0xc0b7a50d950d1cc6",
+        "0x40913ce341db0bb3",
+        "0x40b0dbd8e86076d0"
+      ],
+      "sun_position_m": [
+        "0x420e67ee3724633c",
+        "0xc23f3ba9e7d0d46c",
+        "0xc22b15906e17112e"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0x4007e4878a5733e4",
+      "beta_rad": "0xbfb1d4b3a338e4f0",
+      "orbit_angle_rad": "0xbfdd9eb9c51ff780",
+      "body_x": [
+        "0xbfe9d085f4623485",
+        "0x3fc21d738ff0ba69",
+        "0x3fe25c3ae18d8acb"
+      ],
+      "body_y": [
+        "0xbfe1566fda97c16a",
+        "0x3fcaf353698a17e2",
+        "0xbfea09e401343069"
+      ],
+      "body_z": [
+        "0xbfce341352244ce6",
+        "0xbfeef3febe589172",
+        "0xbfb7da4779a906ae"
+      ],
+      "dyb": {
+        "d": [
+          "0x3fbc66a84a03fb75",
+          "0xbfed2d9521c47d07",
+          "0xbfd94d1b1133980c"
+        ],
+        "y": [
+          "0x3fe51d7c87574d5f",
+          "0xbfcd6c9097056635",
+          "0x3fe6e4521e2d8429"
+        ],
+        "b": [
+          "0xbfe7c7fd10c4681f",
+          "0xbfd5c6381a8f24c6",
+          "0x3fe26fe19ee0f73e"
+        ]
+      }
+    }
+  },
+  "dense": {
+    "epoch": "0x405ed00000000000",
+    "sample": {
+      "position_m": [
+        "0x415a77b05eca6ea0",
+        "0x412c4ca937dc6391",
+        "0x0000000000000000"
+      ],
+      "velocity_m_s": [
+        "0xc08f3d3d4ad9e8b2",
+        "0x40bd378abf6b7991",
+        "0x0000000000000000"
+      ],
+      "sun_position_m": [
+        "0x4218ad537125da6a",
+        "0xc23ee8ce8cc589fa",
+        "0xc22acd3e545565e2"
+      ]
+    },
+    "attitude": {
+      "mode": "orbit_normal",
+      "yaw_rad": "0x0000000000000000",
+      "nominal_yaw_rad": "0x4005e92450b81098",
+      "beta_rad": "0xbfd9ba914d4f22e0",
+      "orbit_angle_rad": "0xbffa28b19bd053d4",
+      "body_x": [
+        "0xbfc0f4e6ccdc3934",
+        "0x3fefb7ccc3f760c7",
+        "0x0000000000000000"
+      ],
+      "body_y": [
+        "0x0000000000000000",
+        "0x0000000000000000",
+        "0xbff0000000000000"
+      ],
+      "body_z": [
+        "0xbfefb7ccc3f760c7",
+        "0xbfc0f4e6ccdc3934",
+        "0x8000000000000000"
+      ],
+      "dyb": {
+        "d": [
+          "0x3fc70cdc890336b5",
+          "0xbfece1262f440ca2",
+          "0xbfd90a99af0f9b14"
+        ],
+        "y": [
+          "0x3faa95b92c24e5d4",
+          "0xbfd8dd2a4c5bf63e",
+          "0x3fed7084980125b6"
+        ],
+        "b": [
+          "0xbfef6ed7aefcff76",
+          "0xbfc7ce6d46cb0cd6",
+          "0xbf97a7b5cb7d8fec"
+        ]
+      }
+    }
+  },
+  "numerical": {
+    "final_state": [
+      "0x4082c00000000000",
+      [
+        "0x40b5d218443cd989",
+        "0x40b07a7959441c90",
+        "0x0000000000000000"
+      ],
+      [
+        "0xc01230b11dc0e789",
+        "0x4018165f97c3806e",
+        "0x0000000000000000"
+      ]
+    ],
+    "points": [
+      [
+        "0x0000000000000000",
+        [
+          "0x40bb580000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ],
+        [
+          "0x0000000000000000",
+          "0x401e2f277f56562b",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x402d76516f69904b",
+        [
+          "0x40bb571e0cce1d65",
+          "0x405bca09f12ca02a",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfbead0c4f98503f",
+          "0x401e2e2e13704343",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x403cc0f54164d583",
+        [
+          "0x40bb54a3317b4f91",
+          "0x406b1e283470272a",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfcdef4fa7f25184",
+          "0x401e2b7145532467",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x404554b1f24483e9",
+        [
+          "0x40bb509940fba994",
+          "0x40741d04c6d9f441",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfd633e69c3ed546",
+          "0x401e26fbed335140",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x404c4679c40fc6b8",
+        [
+          "0x40bb4aff2bd4f9ba",
+          "0x407aa78220fa1f6a",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfdd6c564fc23e86",
+          "0x401e20ccdf631147",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40519becdfe5e7b0",
+        [
+          "0x40bb43d4977aa1cb",
+          "0x4080980b1eb20f83",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfe25154f9ad0499",
+          "0x401e18e3b7eda2f9",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4055149439b5cb8e",
+        [
+          "0x40bb3b19bcc8c05c",
+          "0x4083db5963619436",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfe5eb68da4e2ccc",
+          "0x401e0f40b597065f",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40588d3a23043810",
+        [
+          "0x40bb30cf10a18759",
+          "0x40871d82be9853be",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfe984396436d6ee",
+          "0x401e03e459657b14",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x405c05dfce2d225f",
+        [
+          "0x40bb24f527b81bf2",
+          "0x408a5e5878bbcd2e",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbfed1b93057975fa",
+          "0x401df6cf477e405c",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x405f7e856dae9000",
+        [
+          "0x40bb178caf948886",
+          "0x408d9daafcc8bbb8",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff058a09bdfce26",
+          "0x401de8023f6fc940",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40617b9585262d81",
+        [
+          "0x40bb08966cfd6c5e",
+          "0x40906da552595291",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff22287b0f2407e",
+          "0x401dd77e1a713748",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x406337e85353a0d5",
+        [
+          "0x40baf8133b98fe05",
+          "0x40920b83eecc007b",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff3eb647ff5f5bb",
+          "0x401dc543caf97ecf",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4064f43b21108734",
+        [
+          "0x40bae6040dde8083",
+          "0x4093a859969d0bf1",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff5b31cd485bd83",
+          "0x401db1545caf59a8",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4066b08dee43d96d",
+        [
+          "0x40bad269ecfa0f97",
+          "0x4095440e9c12490d",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff779968b3aeeb9",
+          "0x401d9bb0f44a2578",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40686ce0bb937d5b",
+        [
+          "0x40babd45f8b5b99a",
+          "0x4096de8b62b0058e",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbff93eb793b7da2d",
+          "0x401d845acf789ccf",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x406a293389733945",
+        [
+          "0x40baa699677269cb",
+          "0x409877b85fb3465c",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbffb0265f12eb95a",
+          "0x401d6b5344d9052f",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x406be586567cf8cb",
+        [
+          "0x40ba8e65862ecabc",
+          "0x409a0f7e19e7c429",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbffcc487ba334c3f",
+          "0x401d509bc400c8bb",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x406da1d9234645bb",
+        [
+          "0x40ba74abb841cc37",
+          "0x409ba5c52e88316d",
+          "0x0000000000000000"
+        ],
+        [
+          "0xbffe85031e1cc9af",
+          "0x401d3435d52fc4a8",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x406f5e2bf06d6b09",
+        [
+          "0x40ba596d775cfeda",
+          "0x409d3a7650c79a29",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00021df32417579",
+          "0x401d16231952e3c3",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40708d3f5eb633db",
+        [
+          "0x40ba3cac538ac735",
+          "0x409ecd7a4a169522",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc001004ff6c525ca",
+          "0x401cf6654a0221dd",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40716b68c508ad67",
+        [
+          "0x40ba1e69f3021d8e",
+          "0x40a02f5cfe686edc",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc001ddc71a6c9d26",
+          "0x401cd4fe394fb2ff",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407249922b297d18",
+        [
+          "0x40b9fea8121016cc",
+          "0x40a0f70f32b413e0",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc002ba37e970cb20",
+          "0x401cb1efd1af3724",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407327bb913e5bf3",
+        [
+          "0x40b9dd6882fa5869",
+          "0x40a1bdc84dee4e1b",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc0039595bf403337",
+          "0x401c8d3c15d51ca6",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407405e4f7983e9c",
+        [
+          "0x40b9baad2de2ccea",
+          "0x40a2837cea8661ca",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc0046fd4073853e7",
+          "0x401c66e52097647f",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4074e40e5d7ff8c6",
+        [
+          "0x40b9967810dd54fb",
+          "0x40a34821b0f1ae87",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00548e63c31a72f",
+          "0x401c3eed2505947f",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4075c237c31b6393",
+        [
+          "0x40b970cb3f8763cf",
+          "0x40a40bab5a027ea5",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00620bfeb14a5b0",
+          "0x401c15566df57be5",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4076a061289dd660",
+        [
+          "0x40b949a8e3076f13",
+          "0x40a4ce0eaed32143",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc006f754b2c2b461",
+          "0x401bea235e0294a2",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40777e8a8dde89f6",
+        [
+          "0x40b921133a006ad1",
+          "0x40a58f40890e96fc",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc007cc9844665d4c",
+          "0x401bbd566f8032ac",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40785cb3f3183306",
+        [
+          "0x40b8f70c984ef734",
+          "0x40a64f35d43bc9ec",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc008a07e64e0ef38",
+          "0x401b8ef2342fc10e",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40793add58261167",
+        [
+          "0x40b8cb97670abead",
+          "0x40a70de38db6ace2",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00972faecc2e560",
+          "0x401b5ef9554244b8",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407a1906bd458514",
+        [
+          "0x40b89eb6243e6a95",
+          "0x40a7cb3ec5f911c0",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00a4401c9b6e62f",
+          "0x401b2d6e9308d58e",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407af730225dd344",
+        [
+          "0x40b8706b62e6e316",
+          "0x40a8873ca09ceef4",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00b1386fe844493",
+          "0x401afa54c4f3caac",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407bd559874a1ba2",
+        [
+          "0x40b840b9cac023cc",
+          "0x40a941d2553c5d19",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00be17ea40641ca",
+          "0x401ac5aed95a3e95",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407cb382ebdf1cba",
+        [
+          "0x40b80fa4181d530c",
+          "0x40a9faf53015240c",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00caddce9e0975e",
+          "0x401a8f7fd54e0188",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407d91ac5001c736",
+        [
+          "0x40b7dd2d1bbb9301",
+          "0x40aab29a92b8bb1c",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00d78961741bf4d",
+          "0x401a57cad469b958",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407e6fd5b4450dbb",
+        [
+          "0x40b7a957ba72d911",
+          "0x40ab68b7f5288572",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00e419e8c1cb6cf",
+          "0x401a1e930879801c",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x407f4dff17b2a50d",
+        [
+          "0x40b77426ed8fa8c4",
+          "0x40ac1d42e49f58f4",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00f08eabfd24439",
+          "0x4019e3dbb9ddf1a4",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x408016143d96f059",
+        [
+          "0x40b73d9dc1dbf3e3",
+          "0x40acd03106f004a6",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc00fce6f44e91682",
+          "0x4019a7a8467b601f",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x40808528ef45a7c2",
+        [
+          "0x40b705bf5821728e",
+          "0x40ad817818bcca06",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc0104910638ae8c9",
+          "0x401969fc2249b6d2",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4080f43da0ee1217",
+        [
+          "0x40b6cc8ee4ad8e5f",
+          "0x40ae310def1cb843",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc010a9fa0686173c",
+          "0x40192adad6cb81e0",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4081635252611738",
+        [
+          "0x40b6920faf4e5561",
+          "0x40aedee877a8b6b8",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc01109eefc46b02a",
+          "0x4018ea48030a9080",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4081d26703e8e662",
+        [
+          "0x40b6564512c54594",
+          "0x40af8afdba24929c",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc01168e9c41ea4b0",
+          "0x4018a8475afc15ca",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4082417bb52529f3",
+        [
+          "0x40b619327d31205e",
+          "0x40b01aa1eba55a59",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc011c6e4eb2714e2",
+          "0x401864dca7f57acb",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4082b090661c0b17",
+        [
+          "0x40b5dadb6f4a9085",
+          "0x40b06ed885836345",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc01223db0d7b4608",
+          "0x4018200bc7d4b9dc",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        "0x4082c00000000000",
+        [
+          "0x40b5d218443cd989",
+          "0x40b07a7959441c90",
+          "0x0000000000000000"
+        ],
+        [
+          "0xc01230b11dc0e789",
+          "0x4018165f97c3806e",
+          "0x0000000000000000"
+        ]
+      ]
+    ],
+    "stats": [
+      44,
+      2,
+      277
+    ]
+  }
+}

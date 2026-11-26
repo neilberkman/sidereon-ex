@@ -168,4 +168,32 @@ defmodule Sidereon.Bodies do
   end
 
   defp decode_events({:error, _reason} = err), do: err
+
+  defmodule SunMoonError do
+    @moduledoc "A Sun or Moon ephemeris refusal with input or frame details."
+    defstruct [:kind, :detail, :message]
+    @type t :: %__MODULE__{kind: atom(), detail: map(), message: String.t()}
+
+    defimpl String.Chars do
+      def to_string(error), do: error.message
+    end
+  end
+
+  @doc "Return geocentric GCRS Sun and Moon positions in metres from Julian centuries of TT."
+  @spec sun_moon_gcrs(number()) :: {:ok, {vector(), vector()}} | {:error, SunMoonError.t()}
+  def sun_moon_gcrs(epoch), do: NIF.bodies_sun_moon_gcrs(epoch / 1.0) |> decode_celestial()
+
+  @doc "Return geocentric GCRS Sun and Moon positions in metres at a UTC instant."
+  @spec sun_moon_gcrs_at(time()) :: {:ok, {vector(), vector()}} | {:error, SunMoonError.t()}
+  def sun_moon_gcrs_at(time), do: NIF.bodies_sun_moon_gcrs_at(to_nif_datetime(time)) |> decode_celestial()
+
+  @doc "Return geocentric GCRS Sun and Moon positions in metres at TDB seconds past J2000."
+  @spec sun_moon_gcrs_at_tdb_seconds(number()) :: {:ok, {vector(), vector()}} | {:error, SunMoonError.t()}
+  def sun_moon_gcrs_at_tdb_seconds(epoch),
+    do: NIF.bodies_sun_moon_gcrs_at_tdb_seconds(epoch / 1.0) |> decode_celestial()
+
+  @typedoc "Cartesian components in metres."
+  @type vector :: {float(), float(), float()}
+  defp decode_celestial({:ok, _} = result), do: result
+  defp decode_celestial({:error, fields}), do: {:error, struct!(SunMoonError, fields)}
 end

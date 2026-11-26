@@ -39,7 +39,7 @@ type OptionsTerm = (Vec<String>, f64, f64, usize, usize);
 type SatelliteTerm = (String, u8);
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct GeometryQualityTerm {
+pub(crate) struct GeometryQualityTerm {
     tier: String,
     redundancy: i64,
     rank: i64,
@@ -74,12 +74,12 @@ struct OrbitFitSolutionTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct OrbitResidualStatsTerm {
+pub(crate) struct OrbitResidualStatsTerm {
     radial_rms_m: f64,
     along_rms_m: f64,
     cross_rms_m: f64,
     rms_3d_m: f64,
-    n: i64,
+    n: usize,
     low_sample_count: bool,
 }
 
@@ -111,7 +111,7 @@ fn vec3(value: [f64; 3]) -> Vec3 {
 fn options(
     (forces, abs_tol, rel_tol, max_nfev, min_ledger_samples): OptionsTerm,
 ) -> NifResult<OrbitFitOptions> {
-    let force_model = crate::propagation::force_model_kind(&forces)?;
+    let force_model = crate::propagation::legacy_force_model_kind(&forces)?;
     let mut options = OrbitFitOptions::default();
     options.force_model = force_model;
     options.propagation_context =
@@ -135,7 +135,7 @@ fn satellites(terms: Vec<SatelliteTerm>) -> NifResult<Vec<GnssSatelliteId>> {
         .collect()
 }
 
-fn geometry_quality(value: GeometryQuality) -> GeometryQualityTerm {
+pub(crate) fn geometry_quality(value: GeometryQuality) -> GeometryQualityTerm {
     let tier = match value.tier {
         ObservabilityTier::RankDeficient => "rank_deficient",
         ObservabilityTier::ZeroRedundancy => "zero_redundancy",
@@ -182,13 +182,13 @@ fn solution(value: OrbitFitSolution) -> OrbitFitSolutionTerm {
     }
 }
 
-fn residual_stats(value: OrbitResidualStats) -> OrbitResidualStatsTerm {
+pub(crate) fn residual_stats(value: OrbitResidualStats) -> OrbitResidualStatsTerm {
     OrbitResidualStatsTerm {
         radial_rms_m: value.radial_rms_m,
         along_rms_m: value.along_rms_m,
         cross_rms_m: value.cross_rms_m,
         rms_3d_m: value.rms_3d_m,
-        n: value.n as i64,
+        n: value.n,
         low_sample_count: value.low_sample_count,
     }
 }
