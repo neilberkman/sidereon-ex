@@ -10,12 +10,12 @@ defmodule Sidereon.Coordinates do
   - Geodetic → ITRS
   - Topocentric (azimuth/elevation/range) from a ground station
 
-  Time-scale handling is intentionally kept behind the public datetime inputs
-  in this module. The Rust core and Python binding expose lower-level
-  `Instant`, `TimeScale`, leap-second, and UT1 metadata APIs; the Elixir public
-  surface does not expose those as standalone modules yet to avoid a partial
-  time API.
+  UTC datetime inputs resolve time scales internally. The mean-of-date
+  rotations use the mean equator and equinox at the supplied instant.
   """
+
+  alias Sidereon.Iers2010EarthOrientationProvider.FrameTransformError
+  alias Sidereon.NIF
 
   @type vec3 :: {number(), number(), number()}
   @type state :: %{position: vec3(), velocity: vec3()}
@@ -165,4 +165,17 @@ defmodule Sidereon.Coordinates do
   defp to_nif_datetime(%DateTime{} = dt) do
     {{dt.year, dt.month, dt.day}, {dt.hour, dt.minute, dt.second, elem(dt.microsecond, 0)}}
   end
+
+  @doc "Return the rotation from GCRS to the mean equator and equinox of date."
+  @spec gcrs_to_mean_of_date_matrix(datetime()) :: {:ok, [Sidereon.Bodies.vector()]} | {:error, FrameTransformError.t()}
+  def gcrs_to_mean_of_date_matrix(datetime),
+    do: NIF.gcrs_to_mean_of_date_matrix(to_nif_datetime(datetime)) |> decode_celestial()
+
+  @doc "Return the rotation from the mean equator and equinox of date to GCRS."
+  @spec mean_of_date_to_gcrs_matrix(datetime()) :: {:ok, [Sidereon.Bodies.vector()]} | {:error, FrameTransformError.t()}
+  def mean_of_date_to_gcrs_matrix(datetime),
+    do: NIF.mean_of_date_to_gcrs_matrix(to_nif_datetime(datetime)) |> decode_celestial()
+
+  defp decode_celestial({:ok, _} = result), do: result
+  defp decode_celestial({:error, fields}), do: {:error, struct!(FrameTransformError, fields)}
 end

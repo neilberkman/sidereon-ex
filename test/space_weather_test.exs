@@ -1,8 +1,15 @@
 defmodule Sidereon.SpaceWeatherTest do
   use ExUnit.Case, async: true
 
+  alias Sidereon.Astro.Relative.State
+  alias Sidereon.Drag
+  alias Sidereon.Drag.DecayError
   alias Sidereon.GNSS.Data
+  alias Sidereon.Iers2010EarthOrientationProvider, as: Iers
+  alias Sidereon.Iers2010EarthOrientationProvider.Iers2010EopSample
+  alias Sidereon.Propagator.PropagationContext
   alias Sidereon.SpaceWeather
+  alias Sidereon.Test.CoreGolden
 
   @csv """
   DATE,BSRN,ND,KP1,KP2,KP3,KP4,KP5,KP6,KP7,KP8,KP_SUM,AP1,AP2,AP3,AP4,AP5,AP6,AP7,AP8,AP_AVG,CP,C9,ISN,F10.7_OBS,F10.7_ADJ,F10.7_DATA_TYPE,F10.7_OBS_CENTER81,F10.7_OBS_LAST81,F10.7_ADJ_CENTER81,F10.7_ADJ_LAST81
@@ -10,6 +17,105 @@ defmodule Sidereon.SpaceWeatherTest do
   2000-01-02,1,2,20,20,20,20,20,20,20,20,160,5,6,7,8,9,10,11,12,8,0.1,1,11,110.0,111.0,OBS,109.0,108.0,112.0,113.0
   2000-01-03,1,3,30,30,30,30,30,30,30,30,240,13,14,15,16,17,18,19,20,16,0.2,2,12,120.0,121.0,OBS,119.0,118.0,122.0,123.0
   """
+
+  test "decay controls are validated with fixed and sourced space weather" do
+    state = %State{epoch_tdb_seconds: 0.0, position_km: {7000.0, 0.0, 0.0}, velocity_km_s: {0.0, 7.5, 0.0}}
+    assert {:ok, drag} = Drag.from_bc_factor(0.02)
+    assert {:ok, source} = SpaceWeather.parse(@csv)
+    context = PropagationContext.new()
+    options = [max_duration_s: 0.0]
+
+    assert {:error, %DecayError{kind: :invalid_config, detail: %{field: "max_duration_s"}}} =
+             Drag.estimate_decay_with_context(state, drag, context, options)
+
+    assert {:error, %DecayError{kind: :invalid_config, detail: %{field: "max_duration_s"}}} =
+             Drag.estimate_decay_with_source_and_context(state, drag, source, context, options)
+
+    expected =
+      {:error,
+       %DecayError{kind: :invalid_input, detail: %{reason: "unknown force model"}, message: "unknown force model"}}
+
+    assert Drag.estimate_decay_with_context(state, drag, context, force_model: :unknown) === expected
+    assert Drag.estimate_decay_with_source_and_context(state, drag, source, context, force_model: :unknown) === expected
+
+    invalid_drag = %{drag | bc_factor_m2_kg: -1.0}
+
+    expected =
+      {:error,
+       %DecayError{
+         kind: :invalid_input,
+         detail: %{reason: "bc_factor_m2_kg not positive"},
+         message: "Invalid input: bc_factor_m2_kg not positive"
+       }}
+
+    assert Drag.estimate_decay_with_context(state, invalid_drag, context) === expected
+    assert Drag.estimate_decay_with_source_and_context(state, invalid_drag, source, context) === expected
+
+    assert Drag.estimate_decay(state, invalid_drag) === {:error, :invalid_input}
+    assert Drag.estimate_decay(state, invalid_drag, space_weather_table: source) === {:error, :invalid_input}
+  end
+
+  test "decay results preserve initial reentry, scan limits and propagation failures" do
+    context = PropagationContext.new()
+    assert {:ok, drag} = Drag.from_bc_factor(0.02)
+    assert {:ok, source} = SpaceWeather.parse(@csv)
+    state = %State{epoch_tdb_seconds: 0.0, position_km: {7000.0, 0.0, 0.0}, velocity_km_s: {0.0, 7.5, 0.0}}
+    expected = CoreGolden.load("numerical_orbits.json")["decay_initial_altitude"]
+
+    for result <- [
+          Drag.estimate_decay_with_context(state, drag, context, reentry_altitude_km: 1000.0),
+          Drag.estimate_decay_with_source_and_context(state, drag, source, context, reentry_altitude_km: 1000.0)
+        ] do
+      assert result ===
+               {:ok,
+                %Drag.DecayEstimate{
+                  time_to_decay_s: 0.0,
+                  reentry_state: state,
+                  reentry_altitude_km: CoreGolden.f(expected)
+                }}
+    end
+
+    assert {:error, %DecayError{kind: :no_decay_within_horizon, detail: detail}} =
+             Drag.estimate_decay_with_context(state, drag, context, scan_step_s: 1.0, max_duration_s: 1.0)
+
+    assert detail === %{horizon_s: 1.0}
+
+    assert {:error, %DecayError{kind: :scan_budget_exhausted, detail: detail}} =
+             Drag.estimate_decay_with_context(state, drag, context,
+               scan_step_s: 1.0,
+               max_duration_s: 5.0,
+               max_scan_samples: 1
+             )
+
+    assert detail === %{scanned_s: 1.0, samples: 1}
+
+    centre = %{state | position_km: {0.0, 0.0, 0.0}}
+
+    assert {:error, %DecayError{kind: :propagation, detail: %{source: error}}} =
+             Drag.estimate_decay_with_context(centre, drag, context)
+
+    assert error.kind === :numerical_failure
+    assert error.detail === %{reason: "Zero position magnitude"}
+
+    eop = %Iers2010EopSample{
+      mjd_utc: 59_025,
+      xp_arcsec: 0.0,
+      yp_arcsec: 0.0,
+      ut1_minus_utc_s: 0.0,
+      lod_s: 0.0,
+      dx_arcsec: 0.0,
+      dy_arcsec: 0.0
+    }
+
+    assert {:ok, iers} = Iers.new([eop, %{eop | mjd_utc: 59_026}])
+    context = PropagationContext.with_body_fixed_frame_provider(context, iers)
+
+    assert {:error, %DecayError{kind: :propagation, detail: %{source: error}}} =
+             Drag.estimate_decay_with_context(state, drag, context)
+
+    assert error.kind === :ut1_outside_coverage
+    assert error.detail === %{reason: :before_coverage}
+  end
 
   setup do
     root = Path.join(System.tmp_dir!(), "sidereon-space-weather-test-#{System.unique_integer([:positive])}")

@@ -1,0 +1,129 @@
+{
+  "source": "sidereon-core 3c61740 closed-form zonal propagation",
+  "gravity": [
+    "0x41185421c467381d",
+    "0x40b8ea23126e978d",
+    "0xbf51bcdd8bccd56e",
+    "0x3ec53ed6a09ccc3d",
+    "0x3ebb2c38c5b5c93e",
+    "0x3e8e81d57d0e1c6e",
+    "0xbea2246a9e5f011b"
+  ],
+  "circular_position": [
+    "0x409a4f3989ccece4",
+    "0x40baf3d32532f6a6",
+    "0x4084c43bdcde934d"
+  ],
+  "circular_velocity": [
+    "0xc01832924b1d7966",
+    "0x3ff1a92cd20f41d5",
+    "0x40113e357c1eb39d"
+  ],
+  "keplerian_position": [
+    "0xc07ce3435dc64d70",
+    "0x40b9d7f10e99dbbc",
+    "0x40a16d178af81627"
+  ],
+  "keplerian_velocity": [
+    "0xc019e4bc88235184",
+    "0xbffa176bdde69197",
+    "0x400df1094e8288e0"
+  ],
+  "circular_from_cartesian": [
+    "0x40bc1ffffffffffb",
+    "0x3f847ae147ae1367",
+    "0xbf70624dd2f1aa15",
+    "0x3fe3d70a3d70a3d6",
+    "0x3ff3333333333333",
+    "0x3fc3333333333338"
+  ],
+  "keplerian_from_cartesian": [
+    "0x40bc1ffffffffffe",
+    "0x3f9eb851eb851e97",
+    "0x3fe3d70a3d70a3d8",
+    "0x3fcc28f5c28f5c5d",
+    "0x3ff2666666666666",
+    "0x3fd5c28f5c28f5b0"
+  ],
+  "eccentricity": "0x3f860ec12baef3a9",
+  "eh_state": [
+    "0x4082c00000000000",
+    [
+      "0xc09ee69f851059c1",
+      "0x40b8579f0c13f42c",
+      "0x40a6e11e77df314e"
+    ],
+    [
+      "0xc017d4b4f95b1af5",
+      "0xc00a2def8db10f7e",
+      "0x4008f001da153031"
+    ]
+  ],
+  "bl_state": [
+    "0x4082c00000000000",
+    [
+      "0xc0aec8fd8e836c74",
+      "0x40b14923551437a3",
+      "0x40ae21a229019a80"
+    ],
+    [
+      "0xc013c53835f04c34",
+      "0xc016098e88d2783b",
+      "0x3ff9c99fdbf2f9bf"
+    ]
+  ],
+  "eh_osc": [
+    "0x40bc200f85bb5b27",
+    "0x3f853596efd2829c",
+    "0xbf6c39417de2e979",
+    "0x3fe3d71c6f2097df",
+    "0x3ff3329a3b894c81",
+    "0x3fe85a138906ff34"
+  ],
+  "bl_osc": [
+    "0x40bc1da90ea892b1",
+    "0x3f9efbd4e053b53a",
+    "0x3fe3d5178ecedd01",
+    "0x3fd014f9a42bd1a8",
+    "0x3ff265208490baf8",
+    "0x3fed6e890b781700"
+  ],
+  "eh_initial_osc": [
+    "0x40bc231cec914e13",
+    "0x3f86740560fffb58",
+    "0xbf6f23a79826247a",
+    "0x3fe3d9708c058aee",
+    "0x3ff333cb145a761e",
+    "0x3fc334f123621ad5"
+  ],
+  "bl_initial_osc": [
+    "0x40bc219c031dfaa8",
+    "0x3f9f976d40e2570a",
+    "0x3fe3d80904fcffe1",
+    "0x3fd017fb6c916d98",
+    "0x3ff26881c386bb72",
+    "0x3fd3be0695c6720a"
+  ],
+  "eh_mean": [
+    [
+      "0x40bc1ce7dee4a4e6",
+      "0x3f82820e59f95c99",
+      "0xbf7132bfff9d39ca",
+      "0x3fe3d4a3fea6757f",
+      "0x3ff3329b43eca6c4",
+      "0x3fc33199a52f2a4d"
+    ],
+    5
+  ],
+  "bl_mean": [
+    [
+      "0x40bc1ceac39041e1",
+      "0x3f84efe42728ccd0",
+      "0x3fe3d4a341ae0efe",
+      "0xbfdf249e6c7bc5f6",
+      "0x3ff33288907882d6",
+      "0x3fe45f2c49fd9d65"
+    ],
+    5
+  ]
+}

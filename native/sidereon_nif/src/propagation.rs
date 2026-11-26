@@ -5,9 +5,9 @@ use crate::errors;
 use rustler::Error;
 use rustler::{Encoder, Env, NifResult, Term};
 use sidereon_core::astro::forces::{
-    DragParameters, SchwarzschildRelativity, SolarRadiationPressure, SolidEarthPoleTideGravity,
-    SolidEarthTideGravity, SphericalHarmonicGravityConfig, ThirdBodyGravity, ZonalCoefficients,
-    ZonalDegrees, ZonalGravity,
+    DragParameters, EarthRadiationPressure, SchwarzschildRelativity, SolarRadiationPressure,
+    SolidEarthPoleTideGravity, SolidEarthTideGravity, SphericalHarmonicGravityConfig,
+    ThirdBodyGravity, ZonalCoefficients, ZonalDegrees, ZonalGravity,
 };
 use sidereon_core::astro::frames::TdbEarthOrientationProvider;
 use sidereon_core::astro::propagator::{
@@ -72,11 +72,11 @@ pub(crate) fn opsmode_from_term<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<O
     }
 }
 
-fn normalized_force_tokens(forces: &[String]) -> Vec<String> {
+fn normalized_force_tokens(forces: &[String], legacy: bool) -> Vec<String> {
     forces
         .iter()
         .map(|force| force.trim().to_ascii_lowercase())
-        .filter(|force| !force.is_empty())
+        .filter(|force| !legacy || !force.is_empty())
         .collect()
 }
 
@@ -86,20 +86,46 @@ fn has_force(tokens: &[String], aliases: &[&str]) -> bool {
         .any(|force| aliases.iter().any(|alias| force == alias))
 }
 
-fn no_composite_perturbations(tokens: &[String]) -> bool {
+fn no_composite_perturbations(tokens: &[String], legacy: bool) -> bool {
     tokens.iter().all(|force| {
         matches!(
             force.as_str(),
             "twobody" | "two_body" | "two-body" | "j2" | "composite"
-        )
+        ) || (!legacy && force == "twobody_j2")
     })
 }
 
-fn srp_from_tokens(tokens: &[String]) -> NifResult<Option<SolarRadiationPressure>> {
+#[derive(Clone, Copy)]
+enum ForceSelectorMode {
+    Legacy,
+    Display,
+    Structured,
+}
+
+impl ForceSelectorMode {
+    fn legacy(self) -> bool {
+        matches!(self, Self::Legacy)
+    }
+
+    fn core_error(self, error: sidereon_core::astro::error::PropagationError) -> Error {
+        match self {
+            Self::Legacy => errors::invalid_input(error),
+            Self::Display => Error::Term(Box::new(error.to_string())),
+            Self::Structured => crate::force_models::propagation_refusal(error),
+        }
+    }
+}
+
+fn srp_from_tokens(
+    tokens: &[String],
+    mode: ForceSelectorMode,
+) -> NifResult<Option<SolarRadiationPressure>> {
+    use sidereon_core::astro::events::eclipse::ShadowFunction;
+
     for token in tokens {
         if let Some(rest) = token.strip_prefix("srp:") {
             let fields: Vec<&str> = rest.split(':').collect();
-            if fields.len() != 2 {
+            if fields.len() != 2 && (mode.legacy() || fields.len() != 5) {
                 return Err(Error::Term(Box::new(
                     "srp token must be srp:cr:area_to_mass",
                 )));
@@ -110,16 +136,86 @@ fn srp_from_tokens(tokens: &[String]) -> NifResult<Option<SolarRadiationPressure
             let area_to_mass = fields[1]
                 .parse::<f64>()
                 .map_err(|_| Error::Term(Box::new("invalid srp area_to_mass")))?;
-            return SolarRadiationPressure::new(cr, area_to_mass)
-                .map(Some)
-                .map_err(crate::errors::invalid_input);
+            let mut model = SolarRadiationPressure::new(cr, area_to_mass)
+                .map_err(|error| mode.core_error(error))?;
+            if let [_, _, shadow, earth, lunar] = fields.as_slice() {
+                if !lunar.is_empty() {
+                    let lunar = lunar.parse().map_err(|_| {
+                        Error::Term(Box::new("invalid SRP lunar occultation setting"))
+                    })?;
+                    model = model.with_moon_eclipse(lunar);
+                }
+                match *shadow {
+                    "" => (),
+                    "apparent_disc" => {
+                        model = model.with_shadow_function(ShadowFunction::ApparentDisc)
+                    }
+                    "conical" => model = model.with_shadow_function(ShadowFunction::Conical),
+                    _ => return Err(Error::Term(Box::new("invalid SRP shadow function"))),
+                }
+                if !earth.is_empty() {
+                    let earth = crate::eclipse::model_from_string((*earth).to_owned())
+                        .map_err(|_| Error::Term(Box::new("invalid SRP Earth shadow model")))?;
+                    model = model.with_earth_shadow_model(earth);
+                }
+            }
+            return Ok(Some(model));
         }
     }
     Ok(None)
 }
 
+fn earth_radiation_from_tokens(
+    tokens: &[String],
+    mode: ForceSelectorMode,
+) -> NifResult<Option<EarthRadiationPressure>> {
+    let Some(token) = tokens
+        .iter()
+        .find_map(|token| token.strip_prefix("earth_radiation_pressure:"))
+    else {
+        return Ok(None);
+    };
+    let fields: Vec<_> = token.split(':').collect();
+    let [cr, area, lunar] = fields.as_slice() else {
+        return Err(Error::Term(Box::new(
+            "invalid Earth radiation pressure selector",
+        )));
+    };
+    let cr = cr
+        .parse()
+        .map_err(|_| Error::Term(Box::new("invalid Earth radiation pressure reflectivity")))?;
+    let area = area.parse().map_err(|_| {
+        Error::Term(Box::new(
+            "invalid Earth radiation pressure area to mass ratio",
+        ))
+    })?;
+    let model = EarthRadiationPressure::new(cr, area).map_err(|error| mode.core_error(error))?;
+    if lunar.is_empty() {
+        return Ok(Some(model));
+    }
+    let lunar = lunar.parse().map_err(|_| {
+        Error::Term(Box::new(
+            "invalid Earth radiation pressure lunar occultation setting",
+        ))
+    })?;
+    Ok(Some(model.with_moon_eclipse(lunar)))
+}
+
+fn with_earth_radiation_pressure(
+    force: ForceModelKind,
+    radiation: Option<EarthRadiationPressure>,
+) -> ForceModelKind {
+    match (force, radiation) {
+        (ForceModelKind::Composite { components }, Some(radiation)) => {
+            ForceModelKind::composite(components.with_earth_radiation_pressure(radiation))
+        }
+        (force, _) => force,
+    }
+}
+
 fn spherical_harmonic_from_tokens(
     tokens: &[String],
+    mode: ForceSelectorMode,
 ) -> NifResult<Option<SphericalHarmonicGravityConfig>> {
     for token in tokens {
         let (kind, rest) = if let Some(rest) = token.strip_prefix("geopotential:") {
@@ -155,7 +251,7 @@ fn spherical_harmonic_from_tokens(
         } else {
             SphericalHarmonicGravityConfig::earth(degree, order)
         }
-        .map_err(crate::errors::invalid_input)?;
+        .map_err(|error| mode.core_error(error))?;
         return Ok(Some(config));
     }
     Ok(None)
@@ -170,23 +266,91 @@ fn j2_only_zonal() -> ZonalGravity {
     )
 }
 
-/// Decode the binding's force-token list into the 0.15 force model selector.
-///
-/// Existing callers can keep passing `["twobody"]` or `["twobody", "j2"]`.
-/// New composable callers may pass aliases such as `:j2_j6`, `:third_body`,
-/// `:sun`, `:moon`, `{:srp, cr, area_to_mass_m2_kg}`, `:relativity`,
-/// `{:geopotential, degree, order}`, and `:earth_phase_a` through the Elixir
-/// wrapper.
+/// Decode the built-in force selectors for the context-based API.
 pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
-    let tokens = normalized_force_tokens(forces);
-    let tokens = if tokens.is_empty() {
-        vec!["twobody".to_string()]
+    decode_force_model(forces, ForceSelectorMode::Structured)
+}
+
+/// Keep the released force-list interpretation for propagation and state fits.
+pub(crate) fn legacy_force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
+    decode_force_model(forces, ForceSelectorMode::Legacy)
+}
+
+pub(crate) fn covariance_force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
+    decode_force_model(forces, ForceSelectorMode::Display)
+}
+
+fn validate_force_tokens(tokens: &[String]) -> NifResult<()> {
+    for token in tokens {
+        let known = if let Some((name, _)) = token.split_once(':') {
+            matches!(
+                name,
+                "srp"
+                    | "earth_radiation_pressure"
+                    | "geopotential"
+                    | "spherical_harmonic"
+                    | "spherical-harmonic"
+                    | "egm96"
+                    | "earth_phase_b"
+                    | "phase_b"
+                    | "solid_earth_tide"
+            )
+        } else {
+            matches!(
+                token.as_str(),
+                "twobody"
+                    | "two_body"
+                    | "two-body"
+                    | "j2"
+                    | "twobody_j2"
+                    | "composite"
+                    | "earth_phase_a"
+                    | "phase_a"
+                    | "earth_phase_b"
+                    | "phase_b"
+                    | "j2_j6"
+                    | "j2-j6"
+                    | "zonal"
+                    | "zonal_j2_j6"
+                    | "zonals"
+                    | "sun"
+                    | "third_body_sun"
+                    | "moon"
+                    | "third_body_moon"
+                    | "third_body"
+                    | "third-body"
+                    | "sun_moon"
+                    | "relativity"
+                    | "schwarzschild"
+                    | "solid_earth_tide"
+                    | "solid-earth-tide"
+                    | "solid_earth_pole_tide"
+                    | "solid-earth-pole-tide"
+            )
+        };
+        if !known {
+            return Err(Error::Term(Box::new(format!(
+                "unknown force token: {token}"
+            ))));
+        }
+    }
+    Ok(())
+}
+
+fn decode_force_model(forces: &[String], mode: ForceSelectorMode) -> NifResult<ForceModelKind> {
+    let legacy = mode.legacy();
+    let tokens = normalized_force_tokens(forces, legacy);
+    let srp = srp_from_tokens(&tokens, mode)?;
+    let earth_radiation = if legacy {
+        None
     } else {
-        tokens
+        earth_radiation_from_tokens(&tokens, mode)?
     };
-    let srp = srp_from_tokens(&tokens)?;
-    let spherical_harmonic = spherical_harmonic_from_tokens(&tokens)?;
+    let spherical_harmonic = spherical_harmonic_from_tokens(&tokens, mode)?;
     let tide_system = tide_system_from_tokens(&tokens)?;
+    if !legacy {
+        validate_force_tokens(&tokens)?;
+    }
     let requests_solid_earth_tide =
         has_force(&tokens, &["solid_earth_tide", "solid-earth-tide"]) || tide_system.is_some();
 
@@ -196,7 +360,10 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
                 "earth_phase_a does not accept a solid-earth-tide selector",
             )));
         }
-        return Ok(ForceModelKind::earth_phase_a(srp));
+        return Ok(with_earth_radiation_pressure(
+            ForceModelKind::earth_phase_a(srp),
+            earth_radiation,
+        ));
     }
     if has_force(&tokens, &["earth_phase_b", "phase_b"]) && spherical_harmonic.is_none() {
         if requests_solid_earth_tide {
@@ -209,10 +376,11 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
             sidereon_core::astro::forces::EGM96_EMBEDDED_MAX_ORDER,
             srp,
         )
-        .map_err(crate::errors::invalid_input);
+        .map(|force| with_earth_radiation_pressure(force, earth_radiation))
+        .map_err(|error| mode.core_error(error));
     }
 
-    let wants_j2 = has_force(&tokens, &["j2"]);
+    let wants_j2 = has_force(&tokens, &["j2"]) || (!legacy && has_force(&tokens, &["twobody_j2"]));
     let wants_full_zonal = has_force(
         &tokens,
         &["j2_j6", "j2-j6", "zonal", "zonal_j2_j6", "zonals"],
@@ -233,17 +401,14 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         || wants_solid_earth_tide
         || wants_solid_earth_pole_tide
         || spherical_harmonic.is_some()
-        || srp.is_some();
+        || srp.is_some()
+        || earth_radiation.is_some();
 
-    if wants_j2 && !wants_composite && no_composite_perturbations(&tokens) {
+    if wants_j2 && no_composite_perturbations(&tokens, legacy) {
         return Ok(ForceModelKind::two_body_j2());
     }
     if !wants_composite && !wants_j2 {
         return Ok(ForceModelKind::two_body());
-    }
-
-    if wants_composite && wants_j2 && no_composite_perturbations(&tokens) {
-        return Ok(ForceModelKind::two_body_j2());
     }
 
     let mut components = ForceModelComponents::earth_two_body();
@@ -287,7 +452,10 @@ pub(crate) fn force_model_kind(forces: &[String]) -> NifResult<ForceModelKind> {
         components = components.with_solid_earth_pole_tide(SolidEarthPoleTideGravity::default());
     }
 
-    Ok(ForceModelKind::composite(components))
+    Ok(with_earth_radiation_pressure(
+        ForceModelKind::composite(components),
+        earth_radiation,
+    ))
 }
 
 fn tide_system_from_tokens(
@@ -492,7 +660,7 @@ pub(crate) fn propagate_dp54_impl_with_drag(
     let mut options = IntegratorOptions::default();
     options.abs_tol = abs_tol;
     options.rel_tol = rel_tol;
-    let force_model = force_model_kind(&forces)?;
+    let force_model = legacy_force_model_kind(&forces)?;
     let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {
         initial: CartesianState::new(
@@ -543,7 +711,7 @@ pub(crate) fn propagate_dp54_impl_with_drag_and_space_weather(
     let mut options = IntegratorOptions::default();
     options.abs_tol = abs_tol;
     options.rel_tol = rel_tol;
-    let force_model = force_model_kind(&forces)?;
+    let force_model = legacy_force_model_kind(&forces)?;
     let context = propagation_context_for_force_model(force_model);
     let propagator = StatePropagator {
         initial: CartesianState::new(

@@ -443,3 +443,18 @@ fn civil_utc_instant_split_detailed<'a>(
         .ok_or_else(|| rustler::Error::Term(Box::new(atoms::invalid_instant())))?;
     Ok((atoms::ok(), (split.jd_whole, split.fraction)).encode(env))
 }
+
+#[rustler::nif]
+fn tdb_minus_tt_seconds(epoch: f64) -> f64 {
+    sidereon_core::astro::time::scales::tdb_minus_tt_seconds(epoch)
+}
+
+#[rustler::nif]
+fn tdb_from_tt_j2000_seconds(epoch: f64) -> f64 {
+    sidereon_core::astro::time::scales::tdb_from_tt_j2000_seconds(epoch)
+}
+
+#[rustler::nif]
+fn tt_from_tdb_j2000_seconds(epoch: f64) -> f64 {
+    sidereon_core::astro::time::scales::tt_from_tdb_j2000_seconds(epoch)
+}

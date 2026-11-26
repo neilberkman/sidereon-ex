@@ -6,6 +6,7 @@ defmodule Sidereon.Drag do
   alias Sidereon.Astro.Relative.State
   alias Sidereon.NIF
   alias Sidereon.NifCall
+  alias Sidereon.Propagator.PropagationContext
   alias Sidereon.SpaceWeather, as: SpaceWeatherTable
 
   defmodule SpaceWeather do
@@ -196,4 +197,78 @@ defmodule Sidereon.Drag do
   defp space_weather_map(%SpaceWeather{} = sw), do: Map.from_struct(sw)
   defp bang({:ok, value}), do: value
   defp bang({:error, reason}), do: raise(ArgumentError, "drag calculation failed: #{inspect(reason)}")
+
+  defmodule DecayError do
+    @moduledoc "An orbit decay estimate refusal with its details."
+    defstruct [:kind, :detail, :message]
+    @type t :: %__MODULE__{kind: atom(), detail: map(), message: String.t()}
+
+    defimpl String.Chars do
+      def to_string(error), do: error.message
+    end
+  end
+
+  @doc """
+  Estimate the time to reentry with a shared propagation context and fixed space weather.
+  Accepts the integration and scan options of estimate_decay/3.
+  """
+  @spec estimate_decay_with_context(State.t(), Parameters.t(), PropagationContext.t(), keyword()) ::
+          {:ok, DecayEstimate.t()} | {:error, DecayError.t()}
+  def estimate_decay_with_context(
+        %State{} = state,
+        %Parameters{} = parameters,
+        %PropagationContext{} = context,
+        opts \\ []
+      ) do
+    decay_with_context(state, parameters, context, nil, opts)
+  end
+
+  @doc """
+  Estimate the time to reentry with a space-weather table and shared propagation context.
+  The table supplies space weather along the arc. Set :space_weather_policy to select its read policy.
+  """
+  @spec estimate_decay_with_source_and_context(
+          State.t(),
+          Parameters.t(),
+          SpaceWeatherTable.t(),
+          PropagationContext.t(),
+          keyword()
+        ) ::
+          {:ok, DecayEstimate.t()} | {:error, DecayError.t()}
+  def estimate_decay_with_source_and_context(
+        %State{} = state,
+        %Parameters{} = parameters,
+        %SpaceWeatherTable{handle: table},
+        %PropagationContext{} = context,
+        opts \\ []
+      ) do
+    policy = Keyword.get(opts, :space_weather_policy)
+    weather = %{table: table, policy: if(policy, do: SpaceWeatherTable.policy_to_native(policy))}
+    decay_with_context(state, parameters, context, weather, opts)
+  end
+
+  defp decay_with_context(state, parameters, context, weather, opts) do
+    [state, params | integration] = decay_args(state, parameters, opts)
+
+    controls = [
+      :force_model,
+      :abs_tol,
+      :rel_tol,
+      :reentry_altitude_km,
+      :scan_step_s,
+      :crossing_tolerance_s,
+      :max_duration_s,
+      :max_scan_samples
+    ]
+
+    options = controls |> Enum.zip(integration) |> Map.new()
+
+    case NIF.drag_estimate_decay_with_context(state, params, options, context.handle, weather) do
+      {:ok, fields} -> {:ok, to_decay(fields)}
+      {:error, _} = error -> NifCall.decode(error, DecayError)
+    end
+  rescue
+    e in ErlangError ->
+      NifCall.error(e, __STACKTRACE__, :drag_estimate_decay_with_context) |> NifCall.decode(DecayError)
+  end
 end

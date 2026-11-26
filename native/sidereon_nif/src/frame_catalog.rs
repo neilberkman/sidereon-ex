@@ -56,7 +56,7 @@ struct TerrestrialStateTerm {
 }
 
 #[derive(Debug, Clone, rustler::NifMap)]
-struct FrameCatalogErrorTerm {
+pub(crate) struct FrameCatalogErrorTerm {
     kind: String,
     field: Option<String>,
     reason: Option<String>,
@@ -129,7 +129,7 @@ fn state_term(value: TerrestrialState) -> TerrestrialStateTerm {
     }
 }
 
-fn error_term(error: FrameCatalogError) -> FrameCatalogErrorTerm {
+pub(crate) fn error_term(error: FrameCatalogError) -> FrameCatalogErrorTerm {
     match error {
         FrameCatalogError::InvalidInput { field, reason } => FrameCatalogErrorTerm {
             kind: "invalid_input".to_string(),

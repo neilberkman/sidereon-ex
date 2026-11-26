@@ -1,0 +1,437 @@
+{
+  "source": "sidereon-core 3c61740 geopotential and radiation pressure",
+  "initial": [
+    "0x41c3410420200000",
+    [
+      "0x40d9640000000000",
+      "0x4097700000000000",
+      "0x407f400000000000"
+    ],
+    [
+      "0xbfc999999999999a",
+      "0x400599999999999a",
+      "0x4004000000000000"
+    ]
+  ],
+  "sun": [
+    "0x41a1e1a300000000",
+    "0x415ab3f000000000",
+    "0x417312d000000000"
+  ],
+  "moon": [
+    "0x4117764000000000",
+    "0xc0fe240000000000",
+    "0x4087180000000000"
+  ],
+  "icgem_acceleration": [
+    "0xbe6ed638b73a73a5",
+    "0xbe2e6d16263151bd",
+    "0xbe2c677ff0c827da"
+  ],
+  "icgem_potential": "0x3f40634bf1e50201",
+  "egm96_acceleration": [
+    "0xbe6ed0a4d28d42a5",
+    "0xbe2ddc07f0bfe672",
+    "0xbe2c2d6451133c94"
+  ],
+  "srp_acceleration": [
+    "0x3d7b3ab9ab6dc756",
+    "0xbddcf23f3c8558c1",
+    "0xbdc918ababda6f30"
+  ],
+  "third_body_acceleration": [
+    "0xbe29c2c000ed31f4",
+    "0xbe0e3a465261318e",
+    "0xbdfa066dc86d1969"
+  ],
+  "srp_explicit": [
+    "0xbddf7aa3c2b6ee39",
+    "0xbd9780df057611a0",
+    "0xbdb0ca942ca7cd49"
+  ],
+  "earth_explicit": [
+    "0x3d87a9ee0cfc672f",
+    "0x3d45fa2089339090",
+    "0x3d2f2a6040ed718c"
+  ],
+  "ecom1": {
+    "acceleration_with_sun": [
+      "0x3d7153ddb6af23c4",
+      "0x3d4316d8810bc51e",
+      "0x3d43cd3559a1dedd"
+    ],
+    "acceleration_with_sun_moon": [
+      "0x3d7153ddb6af23c4",
+      "0x3d4316d8810bc51e",
+      "0x3d43cd3559a1dedd"
+    ],
+    "acceleration_partials_with_sun": {
+      "wrt_position": [
+        [
+          "0x3c1029ed2c33e7a3",
+          "0xbc51ae380560daa9",
+          "0x3bff234e8d8d43bf"
+        ],
+        [
+          "0x3c0b54919f7f9e2e",
+          "0xbc4cc3951a50ecb3",
+          "0xbc148cb2a47cb1a4"
+        ],
+        [
+          "0xbc4065061e80e49c",
+          "0x3c8134056d7e0e35",
+          "0x3c4b1f30789102a6"
+        ]
+      ],
+      "wrt_velocity": [
+        [
+          "0xbc4017ff48f67c7a",
+          "0x3c8b48aec9b1df0a",
+          "0xbc8d8c0eaff48889"
+        ],
+        [
+          "0xbbf80846f3d669e8",
+          "0x3c445f0424b0bfc9",
+          "0xbc460f9921d5d338"
+        ],
+        [
+          "0xbc112b50d01eeb86",
+          "0x3c5d1b6f00d46b4c",
+          "0xbc5f85865e18c468"
+        ]
+      ]
+    },
+    "acceleration_partials_with_sun_moon": {
+      "wrt_position": [
+        [
+          "0x3c1029ed2c33e7a3",
+          "0xbc51ae380560daa9",
+          "0x3bff234e8d8d43bf"
+        ],
+        [
+          "0x3c0b54919f7f9e2e",
+          "0xbc4cc3951a50ecb3",
+          "0xbc148cb2a47cb1a4"
+        ],
+        [
+          "0xbc4065061e80e49c",
+          "0x3c8134056d7e0e35",
+          "0x3c4b1f30789102a6"
+        ]
+      ],
+      "wrt_velocity": [
+        [
+          "0xbc4017ff48f67c7a",
+          "0x3c8b48aec9b1df0a",
+          "0xbc8d8c0eaff48889"
+        ],
+        [
+          "0xbbf80846f3d669e8",
+          "0x3c445f0424b0bfc9",
+          "0xbc460f9921d5d338"
+        ],
+        [
+          "0xbc112b50d01eeb86",
+          "0x3c5d1b6f00d46b4c",
+          "0xbc5f85865e18c468"
+        ]
+      ]
+    },
+    "parameter_partials_with_sun": [
+      [
+        "0x3f50390f55eea747",
+        "0x3f0839a61571a25c",
+        "0x3f214e96791dc8c3"
+      ],
+      [
+        "0x3f503765faceb4f4",
+        "0x3f08372ae95ba499",
+        "0x3f214cd0b159eb9a"
+      ],
+      [
+        "0x3efd5dd1d5c9e77b",
+        "0x3eb5ed134faa30f8",
+        "0x3ecf543284c91e92"
+      ],
+      [
+        "0xbf0f05bf0612eb88",
+        "0x3f50478b2f9091f0",
+        "0x3f192b4db2d08ecb"
+      ],
+      [
+        "0xbf0f0291a184166c",
+        "0x3f5045e058aeac5f",
+        "0x3f1928b9c6a9f536"
+      ],
+      [
+        "0xbebc1406fb026f91",
+        "0x3efd7809bdc7fd8c",
+        "0x3ec6c7cbb37f8fa7"
+      ],
+      [
+        "0xbf209d75ef855478",
+        "0xbf1af843f478042a",
+        "0x3f502a07b49a0dac"
+      ],
+      [
+        "0xbf209bc24bf03ee6",
+        "0xbf1af580d22135c7",
+        "0x3f50285fe38d0501"
+      ],
+      [
+        "0xbece13906041756d",
+        "0xbec869027663bb80",
+        "0x3efd429ce6924c1b"
+      ]
+    ],
+    "parameter_partials_with_sun_moon": [
+      [
+        "0x3f50390f55eea747",
+        "0x3f0839a61571a25c",
+        "0x3f214e96791dc8c3"
+      ],
+      [
+        "0x3f503765faceb4f4",
+        "0x3f08372ae95ba499",
+        "0x3f214cd0b159eb9a"
+      ],
+      [
+        "0x3efd5dd1d5c9e77b",
+        "0x3eb5ed134faa30f8",
+        "0x3ecf543284c91e92"
+      ],
+      [
+        "0xbf0f05bf0612eb88",
+        "0x3f50478b2f9091f0",
+        "0x3f192b4db2d08ecb"
+      ],
+      [
+        "0xbf0f0291a184166c",
+        "0x3f5045e058aeac5f",
+        "0x3f1928b9c6a9f536"
+      ],
+      [
+        "0xbebc1406fb026f91",
+        "0x3efd7809bdc7fd8c",
+        "0x3ec6c7cbb37f8fa7"
+      ],
+      [
+        "0xbf209d75ef855478",
+        "0xbf1af843f478042a",
+        "0x3f502a07b49a0dac"
+      ],
+      [
+        "0xbf209bc24bf03ee6",
+        "0xbf1af580d22135c7",
+        "0x3f50285fe38d0501"
+      ],
+      [
+        "0xbece13906041756d",
+        "0xbec869027663bb80",
+        "0x3efd429ce6924c1b"
+      ]
+    ]
+  },
+  "ecom2": {
+    "acceleration_with_sun": [
+      "0x3d804dde8413bc5c",
+      "0xbd07936e6db8f1e6",
+      "0x3d760080ba1517a3"
+    ],
+    "acceleration_with_sun_moon": [
+      "0x3d804dde8413bc5c",
+      "0xbd07936e6db8f1e6",
+      "0x3d760080ba1517a3"
+    ],
+    "acceleration_partials_with_sun": {
+      "wrt_position": [
+        [
+          "0xbc35ddbcd090d562",
+          "0x3c76ed9369118e2e",
+          "0x3c41ccb35f46eb67"
+        ],
+        [
+          "0x3c76edc34e7c3e3b",
+          "0xbcb8108d0052dc65",
+          "0xbc829a119afe094b"
+        ],
+        [
+          "0x3c41bd360407a845",
+          "0xbc829a205d38369d",
+          "0xbc4cdf2b97b41848"
+        ]
+      ],
+      "wrt_velocity": [
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ],
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ],
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ]
+      ]
+    },
+    "acceleration_partials_with_sun_moon": {
+      "wrt_position": [
+        [
+          "0xbc35ddbcd090d562",
+          "0x3c76ed9369118e2e",
+          "0x3c41ccb35f46eb67"
+        ],
+        [
+          "0x3c76edc34e7c3e3b",
+          "0xbcb8108d0052dc65",
+          "0xbc829a119afe094b"
+        ],
+        [
+          "0x3c41bd360407a845",
+          "0xbc829a205d38369d",
+          "0xbc4cdf2b97b41848"
+        ]
+      ],
+      "wrt_velocity": [
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ],
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ],
+        [
+          "0x0000000000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ]
+      ]
+    },
+    "parameter_partials_with_sun": [
+      [
+        "0xbf209d75ef855479",
+        "0xbf1af843f4780427",
+        "0x3f502a07b49a0dad"
+      ],
+      [
+        "0xbf2093581e9a880f",
+        "0xbf1ae7d822dfb997",
+        "0x3f5020302c03502b"
+      ],
+      [
+        "0x3ee252f74b9ccfd1",
+        "0x3eddbe6dd3e26b7e",
+        "0xbf11d3a9915cb1ce"
+      ],
+      [
+        "0x3f50390f55eea747",
+        "0x3f0839a61571a25c",
+        "0x3f214e96791dc8c3"
+      ],
+      [
+        "0x3f501198a000d636",
+        "0x3f07feb7fcb42024",
+        "0x3f21247ca64fded5"
+      ],
+      [
+        "0xbf21d9582d9e911f",
+        "0xbedaa7465ec572c2",
+        "0xbef30ab0c506005a"
+      ],
+      [
+        "0xbf0f05bf0612eb88",
+        "0x3f50478b2f9091f1",
+        "0x3f192b4db2d08ec8"
+      ]
+    ],
+    "parameter_partials_with_sun_moon": [
+      [
+        "0xbf209d75ef855479",
+        "0xbf1af843f4780427",
+        "0x3f502a07b49a0dad"
+      ],
+      [
+        "0xbf2093581e9a880f",
+        "0xbf1ae7d822dfb997",
+        "0x3f5020302c03502b"
+      ],
+      [
+        "0x3ee252f74b9ccfd1",
+        "0x3eddbe6dd3e26b7e",
+        "0xbf11d3a9915cb1ce"
+      ],
+      [
+        "0x3f50390f55eea747",
+        "0x3f0839a61571a25c",
+        "0x3f214e96791dc8c3"
+      ],
+      [
+        "0x3f501198a000d636",
+        "0x3f07feb7fcb42024",
+        "0x3f21247ca64fded5"
+      ],
+      [
+        "0xbf21d9582d9e911f",
+        "0xbedaa7465ec572c2",
+        "0xbef30ab0c506005a"
+      ],
+      [
+        "0xbf0f05bf0612eb88",
+        "0x3f50478b2f9091f1",
+        "0x3f192b4db2d08ec8"
+      ]
+    ]
+  },
+  "geometry": {
+    "dyb": {
+      "d": [
+        "0x3fefaf71f3d61eb7",
+        "0x3fa7a84c30f0f88e",
+        "0x3fc0e6bef247160e"
+      ],
+      "y": [
+        "0xbfae4b9c8bee7a03",
+        "0x3fefcbbbd8e65d0a",
+        "0x3fb89449e09fab6f"
+      ],
+      "b": [
+        "0xbfc039c52be8347e",
+        "0xbfba56725cbd340e",
+        "0x3fef92170cbce2b5"
+      ]
+    },
+    "delta_u_rad": "0xbfb1a8e4d41a63da",
+    "argument_of_latitude_rad": "0x3f9cf784fb67f73d",
+    "lighting_ratio": "0x3ff0000000000000"
+  },
+  "geometry_with_shadow": {
+    "dyb": {
+      "d": [
+        "0x3fefaf71f3d61eb7",
+        "0x3fa7a84c30f0f88e",
+        "0x3fc0e6bef247160e"
+      ],
+      "y": [
+        "0xbfae4b9c8bee7a03",
+        "0x3fefcbbbd8e65d0a",
+        "0x3fb89449e09fab6f"
+      ],
+      "b": [
+        "0xbfc039c52be8347e",
+        "0xbfba56725cbd340e",
+        "0x3fef92170cbce2b5"
+      ]
+    },
+    "delta_u_rad": "0xbfb1a8e4d41a63da",
+    "argument_of_latitude_rad": "0x3f9cf784fb67f73d",
+    "lighting_ratio": "0x3ff0000000000000"
+  }
+}

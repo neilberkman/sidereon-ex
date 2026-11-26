@@ -6,6 +6,7 @@ defmodule Sidereon.Round2ParityTest do
   alias Sidereon.GNSS.NMEA
   alias Sidereon.GNSS.QC
   alias Sidereon.GNSS.RINEX.Observations
+  alias Sidereon.Test.CoreGolden
 
   defp fixture(parts), do: Path.join(["test", "fixtures" | parts])
 
@@ -28,8 +29,6 @@ defmodule Sidereon.Round2ParityTest do
     Enum.zip(actual, expected)
     |> Enum.each(fn {a, e} -> assert_close(a, e, delta) end)
   end
-
-  defp bits(value) when is_float(value), do: :binary.decode_unsigned(<<value::float-64>>)
 
   test "geoid batch lookup and loaded-grid height conversions are core-pinned" do
     points_deg = [{0.0, 0.0}, {48.1173, 11.5167}, {-33.9, 151.2}]
@@ -190,16 +189,19 @@ defmodule Sidereon.Round2ParityTest do
         max_step: 30.0
       )
 
-    [first, second] = nodes
-    assert_close(elem(first.state.position_km, 0), 6985.362638866473, 1.0e-9)
-    assert_close(elem(first.state.velocity_km_s, 1), 7.530269930140621, 1.0e-12)
-    Enum.at(first.covariance, 0) |> Enum.at(0) |> assert_close(3.710871092021438e-5, 1.0e-16)
-    Enum.at(first.covariance, 5) |> Enum.at(5) |> assert_close(2.9874682644014395e-8, 1.0e-20)
+    expected = CoreGolden.load("numerical_orbits.json")["covariance_nodes"]
 
-    assert_close(elem(second.state.position_km, 1), 903.0024564399226, 1.0e-9)
-    assert_close(elem(second.state.velocity_km_s, 0), -0.9734440709722663, 1.0e-12)
-    assert Enum.at(second.covariance, 1) |> Enum.at(1) |> bits() == 0x3F32E659E4062FCE
-    Enum.at(second.covariance, 4) |> Enum.at(4) |> assert_close(1.9675566290541275e-8, 1.0e-20)
+    actual =
+      Enum.map(nodes, fn node ->
+        {node.state.epoch_tdb_seconds, node.state.position_km, node.state.velocity_km_s, node.covariance}
+      end)
+
+    want =
+      Enum.map(expected, fn %{"state" => [epoch, position, velocity], "covariance" => covariance} ->
+        {CoreGolden.f(epoch), CoreGolden.tuple3(position), CoreGolden.tuple3(velocity), CoreGolden.f(covariance)}
+      end)
+
+    assert actual === want
   end
 
   test "CNAV RINEX-4 details expose mixed-store preference, URA, and ISC corrections" do

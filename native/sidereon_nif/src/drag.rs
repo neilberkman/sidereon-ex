@@ -53,17 +53,7 @@ pub(crate) struct DecayEstimateTerm {
 }
 
 pub(crate) fn decode_drag_parameters(term: Term<'_>) -> NifResult<DragParameters> {
-    let decoded: DragParametersTerm = term.decode()?;
-    DragParameters::from_bc_factor_m2_kg(
-        decoded.bc_factor_m2_kg,
-        SpaceWeather {
-            f107: decoded.f107,
-            f107a: decoded.f107a,
-            ap: decoded.ap,
-        },
-        decoded.cutoff_altitude_km,
-    )
-    .map_err(errors::invalid_input)
+    decode_drag_parameters_from_term(term.decode()?)
 }
 
 fn params_to_term(params: DragParameters) -> DragParametersTerm {
@@ -117,7 +107,7 @@ pub(crate) fn force_model(name: &str) -> NifResult<PropagationForceModel> {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn decay_config_from_terms(
-    params: DragParametersTerm,
+    drag: DragParameters,
     force_model_name: String,
     abs_tol: f64,
     rel_tol: f64,
@@ -130,7 +120,7 @@ pub(crate) fn decay_config_from_terms(
     let mut integrator_options = IntegratorOptions::default();
     integrator_options.abs_tol = abs_tol;
     integrator_options.rel_tol = rel_tol;
-    let mut config = DecayConfig::new(decode_drag_parameters_from_term(params)?)
+    let mut config = DecayConfig::new(drag)
         .with_force_model(force_model(&force_model_name)?)
         .with_options(integrator_options)
         .with_reentry_altitude_km(reentry_altitude_km)
@@ -142,17 +132,31 @@ pub(crate) fn decay_config_from_terms(
     Ok(config)
 }
 
-fn decode_drag_parameters_from_term(decoded: DragParametersTerm) -> NifResult<DragParameters> {
-    DragParameters::from_bc_factor_m2_kg(
-        decoded.bc_factor_m2_kg,
-        SpaceWeather {
-            f107: decoded.f107,
-            f107a: decoded.f107a,
-            ap: decoded.ap,
-        },
-        decoded.cutoff_altitude_km,
-    )
-    .map_err(errors::invalid_input)
+pub(crate) fn decode_drag_parameters_from_term(
+    decoded: DragParametersTerm,
+) -> NifResult<DragParameters> {
+    decoded.into_core().map_err(errors::invalid_input)
+}
+
+impl DragParametersTerm {
+    pub(crate) fn decode_with_reason(self) -> NifResult<DragParameters> {
+        self.into_core()
+            .map_err(crate::force_models::propagation_refusal)
+    }
+
+    pub(crate) fn into_core(
+        self,
+    ) -> Result<DragParameters, sidereon_core::astro::error::PropagationError> {
+        DragParameters::from_bc_factor_m2_kg(
+            self.bc_factor_m2_kg,
+            SpaceWeather {
+                f107: self.f107,
+                f107a: self.f107a,
+                ap: self.ap,
+            },
+            self.cutoff_altitude_km,
+        )
+    }
 }
 
 pub(crate) fn decode_decay_error<'a>(
@@ -327,4 +331,108 @@ fn drag_estimate_decay<'a>(
             }
         },
     })
+}
+
+#[derive(rustler::NifMap)]
+struct DecayOptions {
+    force_model: String,
+    abs_tol: f64,
+    rel_tol: f64,
+    reentry_altitude_km: f64,
+    scan_step_s: f64,
+    crossing_tolerance_s: f64,
+    max_duration_s: f64,
+    max_scan_samples: u32,
+}
+
+#[derive(rustler::NifMap)]
+struct DecayWeather {
+    table: rustler::ResourceArc<crate::space_weather::SpaceWeatherTableResource>,
+    policy: Option<crate::space_weather::SpaceWeatherPolicyTerm>,
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn drag_estimate_decay_with_context(
+    env: Env<'_>,
+    state: CartesianStateTerm,
+    params: DragParametersTerm,
+    opts: DecayOptions,
+    context: rustler::ResourceArc<crate::earth_orientation::ContextResource>,
+    weather: Option<DecayWeather>,
+) -> NifResult<Term<'_>> {
+    use sidereon_core::astro::propagator::decay::{
+        estimate_decay_with_context, estimate_decay_with_source_and_context, DecayError,
+    };
+    rustler::atoms! { propagation, invalid_config, source, field, horizon_s, scanned_s, samples }
+    use crate::errors::{detail_map, encode_result, Refusal};
+
+    let config = decay_config_from_terms(
+        params.decode_with_reason()?,
+        opts.force_model,
+        opts.abs_tol,
+        opts.rel_tol,
+        opts.reentry_altitude_km,
+        opts.scan_step_s,
+        opts.crossing_tolerance_s,
+        opts.max_duration_s,
+        opts.max_scan_samples,
+    )?;
+    let state = state_from_term(state);
+    let value = match weather {
+        None => estimate_decay_with_context(state, &config, &context.0),
+        Some(weather) => {
+            let source = crate::space_weather::table_source(&weather.table, weather.policy);
+            estimate_decay_with_source_and_context(state, &config, &source, &context.0)
+        }
+    };
+    Ok(encode_result(
+        env,
+        value
+            .map(|estimate| DecayEstimateTerm {
+                time_to_decay_s: estimate.time_to_decay_s,
+                reentry_state: state_to_term(estimate.reentry_state),
+                reentry_altitude_km: estimate.reentry_altitude_km,
+            })
+            .map_err(|error| {
+                let (kind, detail) = match &error {
+                    DecayError::Propagation(error) => (
+                        propagation(),
+                        detail_map(
+                            env,
+                            &[(
+                                source(),
+                                crate::force_models::propagation_error(env, error.clone())
+                                    .encode(env),
+                            )],
+                        ),
+                    ),
+                    DecayError::InvalidConfig(value) => (
+                        invalid_config(),
+                        detail_map(env, &[(field(), value.encode(env))]),
+                    ),
+                    DecayError::NoDecayWithinHorizon { horizon_s: horizon } => (
+                        atoms::no_decay_within_horizon(),
+                        detail_map(env, &[(horizon_s(), horizon.encode(env))]),
+                    ),
+                    DecayError::ScanBudgetExhausted {
+                        scanned_s: scanned,
+                        samples: count,
+                    } => (
+                        atoms::scan_budget_exhausted(),
+                        detail_map(
+                            env,
+                            &[
+                                (scanned_s(), scanned.encode(env)),
+                                (samples(), count.encode(env)),
+                            ],
+                        ),
+                    ),
+                };
+                Refusal {
+                    kind,
+                    detail,
+                    message: error.to_string(),
+                }
+            }),
+    ))
 }

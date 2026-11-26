@@ -1,0 +1,228 @@
+{
+  "source": "sidereon-core 3c61740 celestial positions, frame rotations, eclipse geometry and GNSS yaw",
+  "sun_moon_gcrs": [
+    [
+      "0x42185d0e1fe197c3",
+      "0xc23eec54b4c17d45",
+      "0xc22acf75c5da5bd1"
+    ],
+    [
+      "0x41b7c31105381aca",
+      "0xc1823a5283643111",
+      "0xc18a91bb57b289f0"
+    ]
+  ],
+  "sun_moon_gcrs_at": [
+    [
+      "0xc201e8f712dd51fb",
+      "0x424035a39afbb4b0",
+      "0x422c1b71dcbe8f40"
+    ],
+    [
+      "0xc1b11f1b040efc17",
+      "0x41a91eb5340b8ec3",
+      "0x419cc2710ec4364f"
+    ]
+  ],
+  "sun_moon_gcrs_at_tdb_seconds": [
+    [
+      "0xc21fd03bfe692927",
+      "0x423fa9283a1cf9ca",
+      "0x422b7402839f6e82"
+    ],
+    [
+      "0xc1b16594c21a570c",
+      "0x41a6f2431f73fded",
+      "0x4197e8fe014ba8e1"
+    ]
+  ],
+  "gcrs_to_mean_of_date_matrix": [
+    [
+      "0x3fefffe5daa95f0f",
+      "0xbf72c252b046bf8c",
+      "0xbf604cfa70cf09a4"
+    ],
+    [
+      "0x3f72c252b84eb671",
+      "0x3fefffea0184d6d1",
+      "0xbed2dd8b404bbd77"
+    ],
+    [
+      "0x3f604cfa4bd733f6",
+      "0xbed35baaedb1462d",
+      "0x3feffffbd924881e"
+    ]
+  ],
+  "mean_of_date_to_gcrs_matrix": [
+    [
+      "0x3fefffe5daa95f0f",
+      "0x3f72c252b84eb671",
+      "0x3f604cfa4bd733f6"
+    ],
+    [
+      "0xbf72c252b046bf8c",
+      "0x3fefffea0184d6d1",
+      "0xbed35baaedb1462d"
+    ],
+    [
+      "0xbf604cfa70cf09a4",
+      "0xbed2dd8b404bbd77",
+      "0x3feffffbd924881e"
+    ]
+  ],
+  "tt_from_tdb_j2000_seconds": "0x416e847fffffd1f6",
+  "tdb_from_tt_j2000_seconds": "0x416e848000002e0a",
+  "tdb_minus_tt_seconds": "0x3ef70507d42317ac",
+  "position": [
+    "0x40d9640000000000",
+    "0x40a2c00000000000",
+    "0x408d100000000000"
+  ],
+  "velocity": [
+    "0xbfd3333333333333",
+    "0x4004cccccccccccd",
+    "0x400599999999999a"
+  ],
+  "sun": [
+    "0x41a1e1a300000000",
+    "0x415ab3f000000000",
+    "0x417312d000000000"
+  ],
+  "moon": [
+    "0x4117764000000000",
+    "0xc0fe240000000000",
+    "0x4087180000000000"
+  ],
+  "yaw": {
+    "yaw_rad": "0xbff348978beed990",
+    "beta_rad": "0x3fb98a6d16a6fcd0",
+    "body_x": [
+      "0x3f7b3c6c6be99310",
+      "0xbfdb1487964d4716",
+      "0x3fecfe53242cbd7c"
+    ],
+    "body_y": [
+      "0xbfb9297fdfedfcc0",
+      "0x3fecd847f26f8408",
+      "0x3fdafcd09a29c3f9"
+    ],
+    "body_z": [
+      "0xbfefd826b83da29a",
+      "0xbfb7840cd6d2ee3b",
+      "0xbfa23989f349df07"
+    ]
+  },
+  "dyb": {
+    "d": [
+      "0x3fefaf734d0d19f2",
+      "0x3fa7a785d102b7f8",
+      "0x3fc0e6a7d9c63d39"
+    ],
+    "y": [
+      "0xbfb9297fdfedfcc0",
+      "0x3fecd847f26f840b",
+      "0x3fdafcd09a29c3e0"
+    ],
+    "b": [
+      "0xbfb97b5c0c1768eb",
+      "0xbfdb8d83cadaa8d2",
+      "0x3fecb4df8672e617"
+    ]
+  },
+  "iers_tdb_epoch": "0x41c343169f579652",
+  "iers_at_tdb_quaternion": [
+    "0xbfee82f86af43525",
+    "0x3f332d9824b27db6",
+    "0xbf4e9ae6a6056904",
+    "0x3fd34aa3dac4dce9"
+  ],
+  "eop": {
+    "quaternion": [
+      "0xbfee82f86af43525",
+      "0x3f332d9824b27db6",
+      "0xbf4e9ae6a6056904",
+      "0x3fd34aa3dac4dce9"
+    ],
+    "rotation": [
+      [
+        "0x3fea2f5400e1eb1a",
+        "0xbfe264efbf2aeadf",
+        "0xbf5a4a879d2f2073"
+      ],
+      [
+        "0x3fe264ed743861a5",
+        "0x3fea2f574d9a8740",
+        "0xbf525e4c4e133b5e"
+      ],
+      [
+        "0x3f6009374cd62ad7",
+        "0xbed50f9022508200",
+        "0x3feffffbfb6109b8"
+      ]
+    ],
+    "rotation_rate": [
+      [
+        "0x3f05f9f1d96b5c82",
+        "0x3f0f48c021f7c6b5",
+        "0xbe75ee5df8d8dc77"
+      ],
+      [
+        "0xbf0f48bc3023fe71",
+        "0x3f05f9f495c04859",
+        "0x3e7f6ba87756b3cd"
+      ],
+      [
+        "0xbdd18b3b2a17c4df",
+        "0x3d7e5c39356d85b0",
+        "0x3d4195a840a02e4d"
+      ]
+    ],
+    "inverse_rotation": [
+      [
+        "0x3fea2f5400e1eb1a",
+        "0x3fe264ed743861a5",
+        "0x3f6009374cd62ad7"
+      ],
+      [
+        "0xbfe264efbf2aeadf",
+        "0x3fea2f574d9a8740",
+        "0xbed50f9022508200"
+      ],
+      [
+        "0xbf5a4a879d2f2073",
+        "0xbf525e4c4e133b5e",
+        "0x3feffffbfb6109b8"
+      ]
+    ],
+    "inverse_rotation_rate": [
+      [
+        "0x3f05f9f1d96b5c82",
+        "0xbf0f48bc3023fe71",
+        "0xbdd18b3b2a17c4df"
+      ],
+      [
+        "0x3f0f48c021f7c6b5",
+        "0x3f05f9f495c04859",
+        "0x3d7e5c39356d85b0"
+      ],
+      [
+        "0xbe75ee5df8d8dc77",
+        "0x3e7f6ba87756b3cd",
+        "0x3d4195a840a02e4d"
+      ]
+    ],
+    "earth_rotation_vector_itrf_rad_s": [
+      "0x3dc3649364cf2d2b",
+      "0xbdcd41c9961f3a48",
+      "0x3f131da7d3166a1e"
+    ]
+  },
+  "shadow_model_moon_gradient": [
+    "0x0000000000000000",
+    [
+      "0x8000000000000000",
+      "0x8000000000000000",
+      "0x8000000000000000"
+    ]
+  ]
+}

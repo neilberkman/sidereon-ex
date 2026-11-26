@@ -75,23 +75,27 @@ defmodule Sidereon.GNSS.PreciseEphemerisSample do
     }
   end
 
-  defp epoch_to_nif(%{time_scale: scale, jd_whole: whole, jd_fraction: fraction} = epoch)
-       when is_binary(scale) and is_number(whole) and is_number(fraction) and not is_map_key(epoch, :nanos_since_j2000) do
+  @doc false
+  @spec epoch_to_nif(epoch()) :: {:ok, map()} | {:error, :bad_epoch}
+  def epoch_to_nif(%{time_scale: scale, jd_whole: whole, jd_fraction: fraction} = epoch)
+      when is_binary(scale) and is_number(whole) and is_number(fraction) and not is_map_key(epoch, :nanos_since_j2000) do
     {:ok, %{time_scale: scale, julian_date: {whole * 1.0, fraction * 1.0}, nanos_since_j2000: nil}}
   end
 
-  defp epoch_to_nif(%{time_scale: scale, nanos_since_j2000: nanos} = epoch)
-       when is_binary(scale) and is_integer(nanos) and not is_map_key(epoch, :jd_whole) and
-              not is_map_key(epoch, :jd_fraction) do
+  def epoch_to_nif(%{time_scale: scale, nanos_since_j2000: nanos} = epoch)
+      when is_binary(scale) and is_integer(nanos) and not is_map_key(epoch, :jd_whole) and
+             not is_map_key(epoch, :jd_fraction) do
     {:ok, %{time_scale: scale, julian_date: nil, nanos_since_j2000: Integer.to_string(nanos)}}
   end
 
-  defp epoch_to_nif(_epoch), do: {:error, :bad_epoch}
+  def epoch_to_nif(_epoch), do: {:error, :bad_epoch}
 
-  defp epoch_from_nif(%{time_scale: scale, julian_date: {whole, fraction}}),
+  @doc false
+  @spec epoch_from_nif(map()) :: epoch()
+  def epoch_from_nif(%{time_scale: scale, julian_date: {whole, fraction}}),
     do: %{time_scale: scale, jd_whole: whole, jd_fraction: fraction}
 
-  defp epoch_from_nif(%{time_scale: scale, nanos_since_j2000: nanos}) when is_binary(nanos),
+  def epoch_from_nif(%{time_scale: scale, nanos_since_j2000: nanos}) when is_binary(nanos),
     do: %{time_scale: scale, nanos_since_j2000: String.to_integer(nanos)}
 
   defp sat_token(letter, prn) do

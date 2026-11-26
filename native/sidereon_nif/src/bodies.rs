@@ -215,3 +215,78 @@ fn bodies_find_moon_transits<'a>(
         Err(_) => (atoms::error(), atoms::invalid_input()).encode(env),
     }
 }
+
+fn gcrs_result(
+    env: Env<'_>,
+    positions: Result<
+        sidereon_core::astro::bodies::sun_moon::SunMoon,
+        sidereon_core::astro::bodies::sun_moon::SunMoonError,
+    >,
+) -> Term<'_> {
+    use crate::errors::{detail_map, encode_result, Refusal};
+    use sidereon_core::astro::bodies::sun_moon::SunMoonError;
+    rustler::atoms! { field, reason }
+    encode_result(
+        env,
+        positions
+            .map(|positions| {
+                (
+                    crate::vector_tuple(positions.sun),
+                    crate::vector_tuple(positions.moon),
+                )
+            })
+            .map_err(|error| match error {
+                SunMoonError::InvalidInput {
+                    field: label,
+                    reason: message,
+                } => Refusal {
+                    kind: atoms::invalid_input(),
+                    detail: detail_map(
+                        env,
+                        &[
+                            (field(), label.encode(env)),
+                            (reason(), message.encode(env)),
+                        ],
+                    ),
+                    message: error.to_string(),
+                },
+                SunMoonError::FrameTransform(frame) => Refusal {
+                    message: error.to_string(),
+                    ..crate::earth_orientation::frame_error(env, frame)
+                },
+            }),
+    )
+}
+
+#[rustler::nif]
+fn bodies_sun_moon_gcrs(env: Env<'_>, epoch: f64) -> Term<'_> {
+    gcrs_result(
+        env,
+        sidereon_core::astro::bodies::sun_moon::sun_moon_gcrs(epoch),
+    )
+}
+
+#[rustler::nif]
+fn bodies_sun_moon_gcrs_at<'a>(env: Env<'a>, datetime: Term<'a>) -> rustler::NifResult<Term<'a>> {
+    use sidereon_core::astro::bodies::sun_moon::SunMoonError;
+    let scales = match crate::try_time_scales_from_tuple(datetime)? {
+        Ok(scales) => scales,
+        Err(error) => {
+            return Ok(crate::errors::encode_result(
+                env,
+                Err::<(), _>(crate::earth_orientation::time_error(env, error)),
+            ))
+        }
+    };
+    let positions: Result<_, SunMoonError> =
+        sidereon_core::astro::bodies::sun_moon::sun_moon_gcrs_at(&scales);
+    Ok(gcrs_result(env, positions))
+}
+
+#[rustler::nif]
+fn bodies_sun_moon_gcrs_at_tdb_seconds(env: Env<'_>, epoch: f64) -> Term<'_> {
+    gcrs_result(
+        env,
+        sidereon_core::astro::bodies::sun_moon::sun_moon_gcrs_at_tdb_seconds(epoch),
+    )
+}

@@ -1,0 +1,479 @@
+{
+  "source": "sidereon-core 3c61740 orbit score and parameter fit",
+  "score": {
+    "scored": 73,
+    "clocked": 0,
+    "max_abs_m": "0x0000000000000000"
+  },
+  "broadcast_score": {
+    "count": 26,
+    "radial": [
+      "0x3ff1bdfd27623caa",
+      "0xbff1af2a1dfe1dfe",
+      "0x3ff517845d4bbfae"
+    ],
+    "transverse": [
+      "0x3fd748b6d40ff47a",
+      "0x3fcaa6cebc95799e",
+      "0x3ff3038ae9cfec82"
+    ],
+    "normal": [
+      "0x3feaf52db3cb72f3",
+      "0x3fea2f50838c2080",
+      "0x3fee9785b1eb2770"
+    ],
+    "orbit_3d": [
+      "0x3ff7077eb8a67a91",
+      "0x3ff6f4415fd0cbce",
+      "0x3ffc9fd3a804e06c"
+    ],
+    "sisre_orbit": [
+      "0x3ff1836b0d7085f4",
+      "0x3ff174f7b464d6a2",
+      "0x3ff4daa4ce807675"
+    ]
+  },
+  "late_fit_samples": [
+    [
+      1577880000000000000,
+      [
+        "0x4159db2400000000",
+        "0x0000000000000000",
+        "0x0000000000000000"
+      ]
+    ],
+    [
+      1577880120000000000,
+      [
+        "0x41599e38bbf12b42",
+        "0x412b61a9f38bef4a",
+        "0x40fd34f98ba0d217"
+      ]
+    ],
+    [
+      1577880240000000000,
+      [
+        "0x4158e87f94909fcb",
+        "0x413b21167e460010",
+        "0x410cf017fccee5d7"
+      ]
+    ],
+    [
+      1577880360000000000,
+      [
+        "0x4157bd1055e6c1de",
+        "0x4144088d41ccb542",
+        "0x41155e7488f59167"
+      ]
+    ],
+    [
+      1577880480000000000,
+      [
+        "0x4156210b6ba92e55",
+        "0x414a2185978009e7",
+        "0x411bdf7d6bc83d37"
+      ]
+    ],
+    [
+      1577880600000000000,
+      [
+        "0x41541b8e91d50c34",
+        "0x414fbdea175d63bb",
+        "0x4120edd22c928a55"
+      ]
+    ],
+    [
+      1577880720000000000,
+      [
+        "0x4151b5a41e676a39",
+        "0x41526104cbe6932d",
+        "0x41239aafc589f7ae"
+      ]
+    ]
+  ],
+  "permissive_tide_fit": {
+    "initial_state": [
+      "0x3db0000000000000",
+      [
+        "0x40bb57ffeb5a5ff0",
+        "0xbf1bf927cac07530",
+        "0xbeeb69c7663921d3"
+      ],
+      [
+        "0x3eccae1c5c9598c4",
+        "0x401e000034d092d3",
+        "0x3ff00000198c6127"
+      ]
+    ],
+    "condition_number": "0x4034e093e5deec6b",
+    "iterations": 2
+  },
+  "fit_defaults": {
+    "observation_sigma_m": "0x3ff0000000000000",
+    "max_iterations": 25,
+    "convergence_threshold": "0x3f50624dd2f1a9fc",
+    "max_condition_number": "0x426d1a94a2000000",
+    "min_ledger_samples": 3
+  },
+  "sp3_fit": {
+    "initial_state": [
+      "0x41c342fe79979674",
+      [
+        "0x40d29c79c0f2d4e9",
+        "0x40c7472138f769f7",
+        "0xc0cb8b7a52df0589"
+      ],
+      [
+        "0xbfac39b121ad2949",
+        "0x4007b2db076a067a",
+        "0x400402e6f42352ba"
+      ]
+    ],
+    "condition_number": "0x40936678dd89c10a",
+    "iterations": 2,
+    "rms_3d_m": "0x401bedbecd51b559"
+  },
+  "ill_conditioned": {
+    "condition_number": "0x4070c8ec05d70df9",
+    "limit": "0x3ff8000000000000",
+    "weakest": [
+      [
+        "vx_km_s",
+        "0x3fe843b4ecaf5c9d"
+      ],
+      [
+        "empirical.radial.constant",
+        "0xbfe2fe2fcdf18f07"
+      ],
+      [
+        "x_km",
+        "0xbfcb8db90951a978"
+      ],
+      [
+        "vy_km_s",
+        "0x3fc3a016bbd2f039"
+      ]
+    ]
+  },
+  "singular": {
+    "condition_number": "0x46bd48b3e9eb1fc5",
+    "weakest": [
+      [
+        "ecom2.d0",
+        "0x3fe6a09e667f3bcd"
+      ],
+      [
+        "ecom1.d0",
+        "0xbfe6a09e667f3bcc"
+      ]
+    ]
+  },
+  "no_convergence": {
+    "iterations": 1,
+    "last_step_sigmas": "0x40472b945ddba601"
+  },
+  "radial_seed": [
+    "0x3db0000000000000",
+    [
+      "0x40bb580000000000",
+      "0x0000000000000000",
+      "0x0000000000000000"
+    ],
+    [
+      "0xbf50624dd2f1a9fc",
+      "0x0000000000000000",
+      "0x0000000000000000"
+    ]
+  ],
+  "radial_position_1s_m": [
+    "0x415ab3eebbb07ea4",
+    "0x0000000000000000",
+    "0x0000000000000000"
+  ],
+  "fit": {
+    "initial_state": [
+      "0x3db0000000000000",
+      [
+        "0x40bb57ffffffffef",
+        "0x3dd35f6a2689dd40",
+        "0x3da4ad068ac69610"
+      ],
+      [
+        "0xbd043ba3f00eac00",
+        "0x401e00000000008f",
+        "0x3ff000000000004c"
+      ]
+    ],
+    "names": [
+      "x_km",
+      "y_km",
+      "z_km",
+      "vx_km_s",
+      "vy_km_s",
+      "vz_km_s",
+      "empirical.radial.constant"
+    ],
+    "force_parameter": "0x3e45798ed5ed001b",
+    "sigmas": [
+      "0x3dbabc0f04da5caf",
+      "0x3db59ddf8fa68bc4",
+      "0x3db4e1de31dd2a43",
+      "0x3d46a028191f92ff",
+      "0x3d2f91773c0cafb5",
+      "0x3d2801fcba5150d8",
+      "0x3cc04cc6ed4c36c5"
+    ],
+    "covariance": {
+      "matrix": [
+        [
+          "0x3b8655e99862e8eb",
+          "0x3b572d2bd92cc83e",
+          "0x3b28b8b74e0da181",
+          "0xbb0d5d2fc912700a",
+          "0xbae573f321bb9df4",
+          "0xbab6e214683f97ec",
+          "0x3a7f5c8ed00fcea6"
+        ],
+        [
+          "0x3b572d2bd92cc83e",
+          "0x3b7d348098ac0ca5",
+          "0x3b10f27b44e66cd0",
+          "0xbaeea0fbda2eb326",
+          "0xbaef89764e70c073",
+          "0xba9f20a6f9af453c",
+          "0x3a6618ed4bc065e2"
+        ],
+        [
+          "0x3b28b8b74e0da181",
+          "0x3b10f27b44e66cd0",
+          "0x3b7b412001f0fe40",
+          "0xbac055dba7905eeb",
+          "0xba9f20a6f9af4324",
+          "0xbae85f03113a4557",
+          "0x3a37920e2eab1665"
+        ],
+        [
+          "0xbb0d5d2fc912700a",
+          "0xbaeea0fbda2eb326",
+          "0xbac055dba7905eeb",
+          "0x3a9ffeb16771c97f",
+          "0x3a7c2f5a3bf9b027",
+          "0x3a4e10603ff944f2",
+          "0xba15e2daa614c9fe"
+        ],
+        [
+          "0xbae573f321bb9df4",
+          "0xbaef89764e70c073",
+          "0xba9f20a6f9af4324",
+          "0x3a7c2f5a3bf9b027",
+          "0x3a6f246c46a50e77",
+          "0x3a2c84de65040a0d",
+          "0xb9f5320e87c5d3d1"
+        ],
+        [
+          "0xbab6e214683f97ec",
+          "0xba9f20a6f9af453c",
+          "0xbae85f03113a4557",
+          "0x3a4e10603ff944f2",
+          "0x3a2c84de65040a0d",
+          "0x3a6202fb37119917",
+          "0xb9c69bcb3b7daf16"
+        ],
+        [
+          "0x3a7f5c8ed00fcea6",
+          "0x3a6618ed4bc065e2",
+          "0x3a37920e2eab1665",
+          "0xba15e2daa614c9fe",
+          "0xb9f5320e87c5d3d1",
+          "0xb9c69bcb3b7daf16",
+          "0x39909afe46100071"
+        ]
+      ],
+      "correlation": [
+        [
+          "0x3ff0000000000000",
+          "0x3fc488773eede32e",
+          "0x3f96ac1507c965b8",
+          "0xbfe8dad7cc502af6",
+          "0xbfda0780b2dbc9c0",
+          "0xbfb2410b0cb181e8",
+          "0x3fe26c7c5de4363d"
+        ],
+        [
+          "0x3fc488773eede32e",
+          "0x3ff0000000000000",
+          "0x3f8338d9d49312cd",
+          "0xbfd00820e1c900be",
+          "0xbfe7a9750d3c4ca9",
+          "0xbf9eb5a75120fe6b",
+          "0x3fd00e0a4c9f8f28"
+        ],
+        [
+          "0x3f96ac1507c965b8",
+          "0x3f8338d9d49312cd",
+          "0x3ff0000000000000",
+          "0xbfa1b3b1dd2b060e",
+          "0xbf982d159874c0cb",
+          "0xbfe8e3b51fa274b9",
+          "0x3fa1ba38f2cd09a8"
+        ],
+        [
+          "0xbfe8dad7cc502af6",
+          "0xbfd00820e1c900be",
+          "0xbfa1b3b1dd2b060e",
+          "0x3ff0000000000000",
+          "0x3fe4343860d41ee6",
+          "0x3fbc567205e3f27c",
+          "0xbfee62763abcbecd"
+        ],
+        [
+          "0xbfda0780b2dbc9c0",
+          "0xbfe7a9750d3c4ca9",
+          "0xbf982d159874c0cb",
+          "0x3fe4343860d41ee6",
+          "0x3ff0000000000000",
+          "0x3fb34438e7efaaa0",
+          "0xbfe51711bff4a310"
+        ],
+        [
+          "0xbfb2410b0cb181e8",
+          "0xbf9eb5a75120fe6b",
+          "0xbfe8e3b51fa274b9",
+          "0x3fbc567205e3f27c",
+          "0x3fb34438e7efaaa0",
+          "0x3ff0000000000000",
+          "0xbfbd949e7dbefe99"
+        ],
+        [
+          "0x3fe26c7c5de4363d",
+          "0x3fd00e0a4c9f8f28",
+          "0x3fa1ba38f2cd09a8",
+          "0xbfee62763abcbecd",
+          "0xbfe51711bff4a310",
+          "0xbfbd949e7dbefe99",
+          "0x3ff0000000000000"
+        ]
+      ],
+      "variance_factor": "0x3cccee3cff715679",
+      "degrees_of_freedom": 14
+    },
+    "residuals": [
+      [
+        "0x3db0000000000000",
+        "0x0000000000000000",
+        "0x3e5099ffffffff26",
+        "0xbe7316165aa27be5",
+        "0xbd971a2eeebe7000"
+      ],
+      [
+        "0x405e0000000000c1",
+        "0x405dffffffd513b3",
+        "0x3e43ede7cbd8e4be",
+        "0x3e578ad9ebebb051",
+        "0x3db9d02f9dfe8780"
+      ],
+      [
+        "0x406dffffffffff8b",
+        "0x406dffffffd514d9",
+        "0x3e2facfc67147b90",
+        "0x3e6c66b9c25ad26b",
+        "0x3dcce92b175a8380"
+      ],
+      [
+        "0x40767fffffffffdb",
+        "0x40767fffffdfd06d",
+        "0xbe19e190e0b3b8f0",
+        "0x3e600cd7d9a7326f",
+        "0x3de7bf87f7c134c0"
+      ],
+      [
+        "0x407dfffffffffff2",
+        "0x407dffffffd5166c",
+        "0xbe305ca18600d5ef",
+        "0x3e41305202b7a7d2",
+        "0x3de18d9105093d24"
+      ],
+      [
+        "0x4082c00000000005",
+        "0x4082bfffffe52e36",
+        "0xbe3cb76d5468dbdb",
+        "0xbe4cab7bcbd2131e",
+        "0x3da0853d31ea9200"
+      ],
+      [
+        "0x4086800000000011",
+        "0x40867fffffdfd136",
+        "0xbe404b876c323200",
+        "0xbe637407dd854ffc",
+        "0x3df94c05b46f3238"
+      ]
+    ],
+    "seed_rms_3d_m": "0x403183da496ca89f",
+    "iterations": 2,
+    "residual_stats": [
+      "0x3e415e15fbde478c",
+      "0x3e65127064e61b41",
+      "0x3de6591dd3a74ddd",
+      "0x3e6583ceeaf01cc3"
+    ],
+    "condition_number": "0x4070c8eb369d0a56",
+    "samples": [
+      [
+        0,
+        [
+          "0x415ab3f000000000",
+          "0x0000000000000000",
+          "0x0000000000000000"
+        ]
+      ],
+      [
+        120000000000,
+        [
+          "0x415a7ad24a1dd5bf",
+          "0x412b63a82251493f",
+          "0x40fd3719be349267"
+        ]
+      ],
+      [
+        240000000000,
+        [
+          "0x4159d07161bf2afa",
+          "0x413b291542d89236",
+          "0x410cf89f363c57b3"
+        ]
+      ],
+      [
+        360000000000,
+        [
+          "0x4158b7b15709ed1c",
+          "0x4144161b945c7cee",
+          "0x41156cea37da1ede"
+        ]
+      ],
+      [
+        480000000000,
+        [
+          "0x415735545abfceaa",
+          "0x414a41da6acbd390",
+          "0x411c01fa0b8414de"
+        ]
+      ],
+      [
+        600000000000,
+        [
+          "0x41554fe442b2d541",
+          "0x414ffd83a1f85d22",
+          "0x41210fbdabb7a924"
+        ]
+      ],
+      [
+        720000000000,
+        [
+          "0x41530f93d3370f55",
+          "0x415298630c79434e",
+          "0x4123d5befc3d149b"
+        ]
+      ]
+    ]
+  }
+}

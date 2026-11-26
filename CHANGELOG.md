@@ -6,6 +6,63 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Closed-form Eckstein–Hechler and Brouwer–Lyddane propagation and
+  mean/osculating element conversion.
+- JPL DE binary ephemerides, daily IERS 2010 Earth orientation,
+  analytic GCRS Sun and Moon positions, and TT/TDB conversions.
+- ICGEM gravity fields with static and time-variable coefficients, uncertainty
+  columns, tide-system conversion, and body-fixed potential and acceleration.
+- ECOM1, ECOM2, empirical RTN accelerations, ordered force composition,
+  estimable force parameters, variational propagation, and batch
+  initial-state and force-parameter fits.
+- SP3, broadcast, and sampled orbit scoring by prediction horizon, with
+  radial, transverse, normal and SISRE statistics and coverage counts.
+- Earth and lunar eclipse fractions, position gradients, GNSS block
+  identification, published yaw laws, nominal yaw and Sun-fixed DYB axes.
+- GNSS attitude along SP3, broadcast, sampled, analytic and continuous DP5(4)
+  trajectories, with GCRF samples at TDB seconds past J2000 and optional JPL
+  DE Sun positions. Earth-fixed sources support strict or permissive UT1
+  validity with the built-in TDB provider.
+- Ordered additional force objects for numerical state propagation with
+  built-in gravity and fixed or table-driven drag.
+- Full numerical propagation results with optional DP5(4) dense evaluation
+  and coverage endpoints.
+- Built-in TDB Earth orientation for contexts used by tides and other
+  body-fixed forces, with explicit strict or permissive UT1 validity.
+
+### Changed
+
+- Numerical propagation integrates in elapsed TT and evaluates forces at
+  absolute TDB epochs. Drag uses UT1 Earth orientation and UTC space weather.
+- Solar radiation pressure defaults to apparent-disc occultation with WGS84
+  oblate Earth and the Moon. Radiation and third-body forces use GCRS
+  Sun and Moon positions. Solar flux uses the satellite–Sun distance.
+- Spherical-harmonic gravity uses Holmes–Featherstone recursion, including
+  on the polar axis.
+- State-only orbit fits carry the first observation's TDB epoch on the fitted
+  initial state and accept integer-nanosecond observation epochs.
+- J2 gravity uses the Orekit J2 perturbation evaluation order.
+- Omitted scoring, parameter-fit and radiation settings use core defaults.
+
+### Fixed
+
+- Covariance propagation honours the selected built-in forces, including
+  `:twobody_j2`, and reports force selector refusals with their reasons.
+- `propagate_state/3` and `propagate_to_with_context/3` require an explicit
+  body-fixed frame provider for configured and additional tide forces.
+- Numerical state, state-transition and covariance propagation with a context
+  return `PropagationError` for rejected selectors and propagation failures,
+  including `:invalid_dimensions` for a covariance with dimensions other than 6×6.
+- Context-based decay estimates and orbit scoring return structured input
+  refusals. Force-model decoding also reports invalid drag as `PropagationError`.
+- Force evaluations retain core input and numerical refusals and recover
+  finite results when intermediate arithmetic exceeds the floating-point range.
+- Sun and Moon ephemerides and frame transforms retain structured refusal
+  details. Both orbit parameter fits report rejected options and fit failures
+  as `OrbitParameterFitError`.
+
 ## [4.1.0] - 2026-11-19
 
 ### Changed
