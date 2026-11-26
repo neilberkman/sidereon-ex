@@ -13,7 +13,7 @@
       "0x3daf030e1c4df584"
     ]
   ],
-  "source": "sidereon-core 3c61740 TT propagation, UT1 drag and covariance evolution",
+  "source": "sidereon-core 17b493fe8cf6d1b45ecc0982e7d594b88cdd2b7b TT propagation, UT1 drag and covariance evolution",
   "circular_end": [
     "0x40b6c484425e0d51",
     [
@@ -70,6 +70,10 @@
     "coverage": [
       "0x40fa5e0000000000",
       "0x40fa61c000000000"
+    ],
+    "backward_coverage": [
+      "0x40fa5a4000000000",
+      "0x40fa5e0000000000"
     ],
     "dense_sample": [
       "0x40fa5fe000000000",
